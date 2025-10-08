@@ -1,0 +1,452 @@
+use crate::{
+    config::{ProfileFieldType, UserConfig},
+    models::{AuditEventType, NewAuditLog, AuditLog},
+    schema::audit_logs,
+    database::{Database, DatabaseManager},
+};
+use anyhow::{anyhow, Result};
+use chrono::Utc;
+use diesel::prelude::*;
+use regex::Regex;
+use serde_json::Value;
+use std::{collections::HashMap, net::IpAddr};
+use tracing::{debug, info, warn};
+use url::Url;
+use uuid::Uuid;
+
+/// Profile validation service
+#[derive(Clone)]
+pub struct ProfileValidator {
+    field_definitions: HashMap<String, ProfileFieldType>,
+}
+
+impl ProfileValidator {
+    /// Create a new profile validator from user configuration
+    pub fn new(user_config: &UserConfig) -> Self {
+        Self {
+            field_definitions: user_config.profile_fields.clone(),
+        }
+    }
+
+    /// Validate a complete profile object
+    pub fn validate_profile(&self, profile: &Value) -> Result<()> {
+        let profile_obj = profile.as_object()
+            .ok_or_else(|| anyhow!("Profile must be a JSON object"))?;
+
+        // Check for unknown fields
+        for field_name in profile_obj.keys() {
+            if !self.field_definitions.contains_key(field_name) {
+                return Err(anyhow!("Unknown profile field: {}", field_name));
+            }
+        }
+
+        // Validate each field according to its definition
+        for (field_name, field_def) in &self.field_definitions {
+            if let Some(field_value) = profile_obj.get(field_name) {
+                self.validate_field(field_name, field_value, field_def)?;
+            } else if self.is_required_field(field_def) {
+                return Err(anyhow!("Required field missing: {}", field_name));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate a single field value
+    fn validate_field(&self, field_name: &str, value: &Value, field_def: &ProfileFieldType) -> Result<()> {
+        match field_def {
+            ProfileFieldType::String { max_length, pattern, .. } => {
+                let string_val = value.as_str()
+                    .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
+                
+                if let Some(max_len) = max_length {
+                    if string_val.len() > *max_len {
+                        return Err(anyhow!("Field '{}' exceeds maximum length of {}", field_name, max_len));
+                    }
+                }
+
+                if let Some(pattern_str) = pattern {
+                    let regex = Regex::new(pattern_str)
+                        .map_err(|_| anyhow!("Invalid regex pattern for field '{}'", field_name))?;
+                    if !regex.is_match(string_val) {
+                        return Err(anyhow!("Field '{}' does not match required pattern", field_name));
+                    }
+                }
+            }
+            
+            ProfileFieldType::StringArray { max_items, max_length_per_item, .. } => {
+                let array_val = value.as_array()
+                    .ok_or_else(|| anyhow!("Field '{}' must be an array", field_name))?;
+                
+                if let Some(max_items) = max_items {
+                    if array_val.len() > *max_items {
+                        return Err(anyhow!("Field '{}' exceeds maximum of {} items", field_name, max_items));
+                    }
+                }
+
+                for item in array_val {
+                    let item_str = item.as_str()
+                        .ok_or_else(|| anyhow!("All items in field '{}' must be strings", field_name))?;
+                    
+                    if let Some(max_len) = max_length_per_item {
+                        if item_str.len() > *max_len {
+                            return Err(anyhow!("Item in field '{}' exceeds maximum length of {}", field_name, max_len));
+                        }
+                    }
+                }
+            }
+
+            ProfileFieldType::Integer { min_value, max_value, .. } => {
+                let int_val = value.as_i64()
+                    .ok_or_else(|| anyhow!("Field '{}' must be an integer", field_name))?;
+                
+                if let Some(min) = min_value {
+                    if int_val < *min {
+                        return Err(anyhow!("Field '{}' must be at least {}", field_name, min));
+                    }
+                }
+
+                if let Some(max) = max_value {
+                    if int_val > *max {
+                        return Err(anyhow!("Field '{}' must be at most {}", field_name, max));
+                    }
+                }
+            }
+
+            ProfileFieldType::Boolean { .. } => {
+                if !value.is_boolean() {
+                    return Err(anyhow!("Field '{}' must be a boolean", field_name));
+                }
+            }
+
+            ProfileFieldType::Email { .. } => {
+                let email_str = value.as_str()
+                    .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
+                
+                if !email_str.contains('@') || !email_str.contains('.') {
+                    return Err(anyhow!("Field '{}' must be a valid email address", field_name));
+                }
+            }
+
+            ProfileFieldType::Phone { format, .. } => {
+                let phone_str = value.as_str()
+                    .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
+                
+                // Basic phone validation - in production, use a proper phone validation library
+                let phone_regex = match format.as_deref() {
+                    Some("us") => Regex::new(r"^\+?1?[-.\s]?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})$"),
+                    Some("international") => Regex::new(r"^\+?[1-9]\d{1,14}$"),
+                    _ => Regex::new(r"^[\+]?[0-9\s\-\(\)]{7,15}$"),
+                }.map_err(|_| anyhow!("Invalid phone format configuration"))?;
+
+                if !phone_regex.is_match(phone_str) {
+                    return Err(anyhow!("Field '{}' must be a valid phone number", field_name));
+                }
+            }
+
+            ProfileFieldType::Url { schemes, .. } => {
+                let url_str = value.as_str()
+                    .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
+                
+                let parsed_url = Url::parse(url_str)
+                    .map_err(|_| anyhow!("Field '{}' must be a valid URL", field_name))?;
+
+                if let Some(allowed_schemes) = schemes {
+                    if !allowed_schemes.contains(&parsed_url.scheme().to_string()) {
+                        return Err(anyhow!("Field '{}' URL must use one of these schemes: {:?}", field_name, allowed_schemes));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if a field is required
+    fn is_required_field(&self, field_def: &ProfileFieldType) -> bool {
+        match field_def {
+            ProfileFieldType::String { required, .. } => *required,
+            ProfileFieldType::StringArray { required, .. } => *required,
+            ProfileFieldType::Integer { required, .. } => *required,
+            ProfileFieldType::Boolean { required, .. } => *required,
+            ProfileFieldType::Email { required, .. } => *required,
+            ProfileFieldType::Phone { required, .. } => *required,
+            ProfileFieldType::Url { required, .. } => *required,
+        }
+    }
+}
+
+/// Audit logging service
+#[derive(Clone)]
+pub struct AuditLogger {
+    db: Database,
+}
+
+impl AuditLogger {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    /// Log an audit event
+    pub async fn log_event(
+        &self,
+        event_type: String,
+        user_id: Option<Uuid>,
+        actor_id: Option<Uuid>,
+        event_data: Value,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+    ) -> Result<()> {
+        let new_audit_log = NewAuditLog {
+            event_type,
+            user_id,
+            actor_id,
+            event_data,
+            ip_address,
+            user_agent,
+        };
+
+        match self.create_audit_log(&new_audit_log) {
+            Ok(audit_log) => {
+                debug!("Audit log created: {:?}", audit_log.id);
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to create audit log: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Log user registration event
+    pub async fn log_user_registration(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        email: &str,
+        role: &str,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+    ) -> Result<()> {
+        let event_data = serde_json::json!({
+            "username": username,
+            "email": email,
+            "role": role,
+            "action": "User registered successfully"
+        });
+
+        self.log_event(
+            AuditEventType::UserRegistration.as_str().to_string(),
+            Some(user_id),
+            None, // Self-registration has no actor
+            event_data,
+            ip_address,
+            user_agent,
+        ).await
+    }
+
+    /// Log user login event
+    pub async fn log_user_login(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+        success: bool,
+    ) -> Result<()> {
+        let event_type_str = if success {
+            AuditEventType::UserLogin.as_str()
+        } else {
+            AuditEventType::FailedLoginAttempt.as_str()
+        };
+
+        let event_data = serde_json::json!({
+            "username": username,
+            "success": success,
+            "action": if success { "User logged in successfully" } else { "Failed login attempt" }
+        });
+
+        self.log_event(
+            event_type_str.to_string(),
+            Some(user_id),
+            None,
+            event_data,
+            ip_address,
+            user_agent,
+        ).await
+    }
+
+    /// Log user role change event
+    pub async fn log_role_change(
+        &self,
+        user_id: Uuid,
+        actor_id: Uuid,
+        old_role: &str,
+        new_role: &str,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+    ) -> Result<()> {
+        let event_data = serde_json::json!({
+            "old_role": old_role,
+            "new_role": new_role,
+            "action": "User role changed"
+        });
+
+        self.log_event(
+            AuditEventType::UserRoleChange.as_str().to_string(),
+            Some(user_id),
+            Some(actor_id),
+            event_data,
+            ip_address,
+            user_agent,
+        ).await
+    }
+
+    /// Log profile update event
+    pub async fn log_profile_update(
+        &self,
+        user_id: Uuid,
+        actor_id: Option<Uuid>,
+        old_profile: &Value,
+        new_profile: &Value,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+    ) -> Result<()> {
+        let event_data = serde_json::json!({
+            "old_profile": old_profile,
+            "new_profile": new_profile,
+            "action": "User profile updated"
+        });
+
+        self.log_event(
+            AuditEventType::UserProfileUpdate.as_str().to_string(),
+            Some(user_id),
+            actor_id.or(Some(user_id)), // If no actor, assume self-update
+            event_data,
+            ip_address,
+            user_agent,
+        ).await
+    }
+
+    /// Create audit log in database
+    fn create_audit_log(&self, new_audit_log: &NewAuditLog) -> Result<AuditLog> {
+        use diesel::prelude::*;
+
+        let mut conn = self.db.get_connection()?;
+        
+        let audit_log = diesel::insert_into(audit_logs::table)
+            .values(new_audit_log)
+            .returning(AuditLog::as_returning())
+            .get_result(&mut conn)
+            .map_err(|e| anyhow!("Database error creating audit log: {}", e))?;
+
+        Ok(audit_log)
+    }
+
+    /// Get audit logs with pagination and filtering
+    pub fn get_audit_logs(
+        &self,
+        user_id_filter: Option<Uuid>,
+        event_type_filter: Option<AuditEventType>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AuditLog>> {
+        use diesel::prelude::*;
+
+        let mut conn = self.db.get_connection()?;
+        let mut query = audit_logs::table.into_boxed();
+
+        if let Some(user_id) = user_id_filter {
+            query = query.filter(audit_logs::user_id.eq(user_id));
+        }
+
+        if let Some(event_type) = event_type_filter {
+            query = query.filter(audit_logs::event_type.eq(event_type.as_str()));
+        }
+
+        let logs = query
+            .order(audit_logs::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load::<AuditLog>(&mut conn)
+            .map_err(|e| anyhow!("Failed to get audit logs: {}", e))?;
+
+        Ok(logs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::UserConfig;
+
+    #[test]
+    fn test_profile_validator_string_field() {
+        let mut config = UserConfig::default();
+        config.profile_fields.insert(
+            "test_field".to_string(),
+            ProfileFieldType::String {
+                max_length: Some(10),
+                required: true,
+                pattern: Some("^[a-z]+$".to_string()),
+            }
+        );
+
+        let validator = ProfileValidator::new(&config);
+
+        // Valid value
+        let profile = serde_json::json!({
+            "test_field": "hello"
+        });
+        assert!(validator.validate_profile(&profile).is_ok());
+
+        // Too long
+        let profile = serde_json::json!({
+            "test_field": "this_is_too_long"
+        });
+        assert!(validator.validate_profile(&profile).is_err());
+
+        // Invalid pattern
+        let profile = serde_json::json!({
+            "test_field": "HELLO"
+        });
+        assert!(validator.validate_profile(&profile).is_err());
+
+        // Missing required field
+        let profile = serde_json::json!({});
+        assert!(validator.validate_profile(&profile).is_err());
+    }
+
+    #[test]
+    fn test_profile_validator_array_field() {
+        let mut config = UserConfig::default();
+        config.profile_fields.insert(
+            "tags".to_string(),
+            ProfileFieldType::StringArray {
+                max_items: Some(3),
+                max_length_per_item: Some(5),
+                required: false,
+            }
+        );
+
+        let validator = ProfileValidator::new(&config);
+
+        // Valid array
+        let profile = serde_json::json!({
+            "tags": ["rust", "web", "api"]
+        });
+        assert!(validator.validate_profile(&profile).is_ok());
+
+        // Too many items
+        let profile = serde_json::json!({
+            "tags": ["rust", "web", "api", "extra"]
+        });
+        assert!(validator.validate_profile(&profile).is_err());
+
+        // Item too long
+        let profile = serde_json::json!({
+            "tags": ["rust", "toolong"]
+        });
+        assert!(validator.validate_profile(&profile).is_err());
+    }
+}

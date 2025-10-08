@@ -1,0 +1,16 @@
+version: "2"
+services:
+  postgres:
+    image: postgres:17
+    container_name: dms_postgres
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_DB: css
+      POSTGRES_USER: css_user
+      POSTGRES_PASSWORD: css_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

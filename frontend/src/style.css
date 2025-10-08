@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom CSS for Cooperative Systems Spaces */
+@layer base {
+  body {
+    @apply bg-base-100 text-base-content;
+  }
+}
+
+@layer components {
+  .btn-css-primary {
+    @apply btn btn-primary;
+  }
+  
+  .card-css {
+    @apply card bg-base-200 shadow-md;
+  }
+  
+  .navbar-css {
+    @apply navbar bg-base-200 border-b border-base-300;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-base-200;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-base-300 rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-primary;
+}
