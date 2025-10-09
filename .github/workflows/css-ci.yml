@@ -40,7 +40,11 @@ jobs:
       # BACKEND JOBS (SERVER & CLI)
       - name: Set up Rust
         if: matrix.job == 'server' || matrix.job == 'cli'
-        uses: actions/setup-rust@v1
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          profile: minimal
 
       - name: Run server checks
         if: matrix.job == 'server'
