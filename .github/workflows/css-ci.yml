@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        job: [frontend, server, cli]
+    steps:
+      - uses: actions/checkout@v4
+
+      # FRONTEND JOBS
+      - name: Set up Node.js
+        if: matrix.job == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        if: matrix.job == 'frontend'
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend lint
+        if: matrix.job == 'frontend'
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run frontend tests
+        if: matrix.job == 'frontend'
+        working-directory: frontend
+        run: npm run test -- --ci --coverage
+
+      # BACKEND JOBS (SERVER & CLI)
+      - name: Set up Rust
+        if: matrix.job == 'server' || matrix.job == 'cli'
+        uses: actions/setup-rust@v1
+
+      - name: Run server checks
+        if: matrix.job == 'server'
+        working-directory: server
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all
+
+      - name: Run cli checks
+        if: matrix.job == 'cli'
+        working-directory: cli
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all
+
+  docker:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} .
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}

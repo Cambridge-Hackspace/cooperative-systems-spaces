@@ -190,9 +190,9 @@ performance_monitoring = false
 # PostgreSQL database connection settings
 [database]
 # Full database connection URL
-url = "postgresql://css_user:css_pass@localhost:5432/css"
+url = "postgresql://css_user:css_pass@postgres:5432/css"
 # Individual connection parameters (used if url is not provided)
-host = "localhost"
+host = "postgres"
 port = 5432
 database = "css"
 username = "css_user"
