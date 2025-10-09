@@ -81,37 +81,19 @@ cli-check:
 
 # Build Docker image
 build-docker:
+  retry: 1
   stage: build
-  services:
-    - docker:dind
-  before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
   script:
-    - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --force --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE --registry-mirror us0.regi.kube.gmp.io
+
+
   dependencies:
     - frontend-check
     - server-check
     - cli-check
   only:
     - master
-    - main
-
-# Push Docker image
-push-docker:
-  stage: push
-  services:
-    - docker:dind
-  before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-  script:
-    - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
-    - docker push $IMAGE_TAG
-    - docker push $IMAGE_LATEST
-  dependencies:
-    - build-docker
-  only:
-    - master
-    - main
-  environment:
-    name: production
-    url: https://your-app-url.com
