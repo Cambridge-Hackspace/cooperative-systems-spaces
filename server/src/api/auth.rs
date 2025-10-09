@@ -28,13 +28,94 @@ async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
+    // Check if registration is allowed
+    let config = state.config_manager.get_config();
+    if !config.auth.allow_registration {
+        return Err(ApiError::Forbidden("User registration is disabled".to_string()));
+    }
+
+    // Get client identifier for throttling (using email as identifier)
+    let throttle_identifier = payload.email.to_lowercase();
+
+    // Check registration challenge if enabled
+    if config.registration_challenge.enabled {
+        let challenge_phrase = payload.challenge_phrase.as_deref().unwrap_or("");
+
+        // Check throttling before processing the challenge
+        if config.registration_challenge.throttle_enabled {
+            if let Err(remaining_seconds) = state.throttle_service.check_attempt(
+                &throttle_identifier,
+                config.registration_challenge.throttle_attempts,
+                config.registration_challenge.throttle_seconds,
+            ) {
+                return Err(ApiError::TooManyRequests(
+                    format!("Too many failed registration attempts. Try again in {} seconds", remaining_seconds)
+                ));
+            }
+        }
+
+        // Validate the challenge phrase
+        if challenge_phrase != config.registration_challenge.phrase {
+            // Record failed attempt if throttling is enabled
+            if config.registration_challenge.throttle_enabled {
+                state.throttle_service.record_failed_attempt(
+                    &throttle_identifier,
+                    config.registration_challenge.throttle_attempts,
+                    config.registration_challenge.throttle_seconds,
+                );
+            }
+            return Err(ApiError::BadRequest("Invalid registration phrase".to_string()));
+        }
+    }
+
+    // Check terms of service acceptance if required
+    if config.registration_challenge.terms_of_service_checkbox {
+        if !payload.terms_of_service_accepted.unwrap_or(false) {
+            return Err(ApiError::BadRequest("You must accept the terms of service to register".to_string()));
+        }
+    }
+
+    // Check reCAPTCHA if enabled
+    if config.registration_challenge.recaptcha_enabled {
+        let recaptcha_token = payload.recaptcha_token.as_deref().unwrap_or("");
+
+        if recaptcha_token.is_empty() {
+            return Err(ApiError::BadRequest("reCAPTCHA verification is required".to_string()));
+        }
+
+        // Verify reCAPTCHA token
+        match state.recaptcha_service.verify_token(recaptcha_token, None).await {
+            Ok(true) => {
+                tracing::debug!("reCAPTCHA verification successful for registration");
+            }
+            Ok(false) => {
+                tracing::warn!("reCAPTCHA verification failed for registration");
+                // Record failed attempt if throttling is enabled
+                if config.registration_challenge.throttle_enabled {
+                    state.throttle_service.record_failed_attempt(
+                        &throttle_identifier,
+                        config.registration_challenge.throttle_attempts,
+                        config.registration_challenge.throttle_seconds,
+                    );
+                }
+                return Err(ApiError::BadRequest("reCAPTCHA verification failed. Please try again.".to_string()));
+            }
+            Err(e) => {
+                tracing::error!("reCAPTCHA verification error: {}", e);
+                return Err(ApiError::InternalServerError("reCAPTCHA verification service unavailable".to_string()));
+            }
+        }
+    }
+
     // Basic validation
     if payload.username.is_empty() || payload.email.is_empty() || payload.password.is_empty() {
         return Err(ApiError::BadRequest("Username, email, and password are required".to_string()));
     }
 
-    if payload.password.len() < 8 {
-        return Err(ApiError::BadRequest("Password must be at least 8 characters long".to_string()));
+    if payload.password.len() < config.auth.password_min_length {
+        return Err(ApiError::BadRequest(
+            format!("Password must be at least {} characters long", config.auth.password_min_length)
+        ));
     }
 
     if !payload.email.contains('@') {
@@ -80,6 +161,11 @@ async fn register(
 
     let created_user = state.db.create_user(&new_user)
         .map_err(ApiError::from)?;
+
+    // Clear throttle on successful registration
+    if config.registration_challenge.enabled && config.registration_challenge.throttle_enabled {
+        state.throttle_service.record_successful_attempt(&throttle_identifier);
+    }
 
     // Log the registration event
     if let Err(e) = state.audit_logger.log_user_registration(

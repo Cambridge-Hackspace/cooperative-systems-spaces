@@ -39,6 +39,10 @@ export interface Tool {
   created_by: string;
   created_at: string;
   updated_at: string;
+  // Additional fields that may be present
+  manufacturer?: string;
+  model?: string;
+  notes?: string;
 }
 
 export interface CreateToolRequest {
@@ -52,7 +56,13 @@ export interface CreateToolRequest {
   purchase_price?: number;
   maintenance_notes?: string;
   requires_training?: boolean;
+  manufacturer?: string;
+  model?: string;
+  notes?: string;
+  status?: string;
 }
+
+export type NewTool = CreateToolRequest;
 
 export interface UpdateToolRequest {
   name?: string;
@@ -66,6 +76,9 @@ export interface UpdateToolRequest {
   purchase_price?: number;
   maintenance_notes?: string;
   requires_training?: boolean;
+  manufacturer?: string;
+  model?: string;
+  notes?: string;
 }
 
 export interface ChangeToolStatusRequest {
@@ -85,6 +98,9 @@ export interface ToolEvent {
   notes?: string;
   scan_data?: any;
   created_at: string;
+  // Additional fields that may be present
+  user_username?: string;
+  metadata?: any;
 }
 
 export interface ToolQuery {

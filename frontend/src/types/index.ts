@@ -103,6 +103,9 @@ export interface RegisterRequest {
   email: string
   password: string
   full_name: string
+  challenge_phrase?: string
+  terms_of_service_accepted?: boolean
+  recaptcha_token?: string
 }
 
 export interface UpdateUserRequest {

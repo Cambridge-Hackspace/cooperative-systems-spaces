@@ -101,12 +101,54 @@
         </div>
       </div>
 
+      <!-- Configuration Management -->
+      <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h2 class="card-title">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Configuration
+          </h2>
+          <p>Reload configuration from disk without restarting the server.</p>
+          <div class="card-actions justify-end">
+            <button
+              @click="reloadConfig"
+              class="btn btn-secondary btn-sm"
+              :disabled="isReloading"
+            >
+              <span v-if="isReloading" class="loading loading-spinner loading-sm"></span>
+              <span v-else>Reload Config</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Success/Error Messages -->
+    <div v-if="reloadMessage" class="alert mt-6" :class="reloadSuccess ? 'alert-success' : 'alert-error'">
+      <svg v-if="reloadSuccess" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+      </svg>
+      <svg v-else class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <div>
+        <h3 class="font-bold">{{ reloadSuccess ? 'Configuration Reloaded' : 'Reload Failed' }}</h3>
+        <div class="text-xs">{{ reloadMessage }}</div>
+      </div>
+      <button @click="clearMessage" class="btn btn-ghost btn-xs">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { UserRole } from '@/types'
 
@@ -115,4 +157,71 @@ const authStore = useAuthStore()
 const canAccessAdmin = computed(() => {
   return authStore.isAdmin || authStore.hasRole(UserRole.Admin)
 })
+
+// Configuration reload state
+const isReloading = ref(false)
+const reloadMessage = ref('')
+const reloadSuccess = ref(false)
+
+const reloadConfig = async () => {
+  if (!canAccessAdmin.value) return
+
+  isReloading.value = true
+  reloadMessage.value = ''
+
+  try {
+    const token = authStore.token
+    if (!token) {
+      throw new Error('Authentication token not found')
+    }
+
+    const response = await fetch('/api/admin/reload-config', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    })
+
+    const result = await response.json()
+
+    if (response.ok && result.success) {
+      reloadSuccess.value = true
+      reloadMessage.value = result.message || 'Configuration reloaded successfully'
+
+      // Show some config info if available
+      if (result.data) {
+        const configInfo = []
+        if (result.data.site_name) configInfo.push(`Site: ${result.data.site_name}`)
+        if (result.data.debug_mode !== undefined) configInfo.push(`Debug: ${result.data.debug_mode ? 'enabled' : 'disabled'}`)
+        if (result.data.auth_config?.allow_registration !== undefined) {
+          configInfo.push(`Registration: ${result.data.auth_config.allow_registration ? 'enabled' : 'disabled'}`)
+        }
+
+        if (configInfo.length > 0) {
+          reloadMessage.value += `. ${configInfo.join(', ')}`
+        }
+      }
+    } else {
+      reloadSuccess.value = false
+      reloadMessage.value = result.error || result.message || 'Failed to reload configuration'
+    }
+  } catch (error) {
+    console.error('Config reload error:', error)
+    reloadSuccess.value = false
+    reloadMessage.value = error instanceof Error ? error.message : 'Network error occurred'
+  } finally {
+    isReloading.value = false
+
+    // Auto-clear the message after 5 seconds
+    setTimeout(() => {
+      clearMessage()
+    }, 5000)
+  }
+}
+
+const clearMessage = () => {
+  reloadMessage.value = ''
+  reloadSuccess.value = false
+}
 </script>

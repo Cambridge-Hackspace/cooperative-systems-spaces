@@ -530,10 +530,10 @@ import type {
   TrainingStepWithProgress,
   AssessmentType,
   CreateTrainingRecordRequest,
-  TrainingCompletionStatus
+  TrainingCompletionStatus, User
 }
 
- from '../types'
+  from '../types'
 import StartTrainingModal from './StartTrainingModal.vue'
 import CompleteTrainingModal from './CompleteTrainingModal.vue'
 import ToolTrainingSetupModal from './ToolTrainingSetupModal.vue'
@@ -989,7 +989,7 @@ const loadUsersForRecord = async () => {
     const response = await userApi.getUsersForTraining(props.tool.id)
 
     if (response.success && response.data?.items) {
-      usersForRecord.value = response.data.items.filter(user => user.is_active)
+      usersForRecord.value = response.data.items.filter((user: User) => user.is_active)
     }
 
  else {

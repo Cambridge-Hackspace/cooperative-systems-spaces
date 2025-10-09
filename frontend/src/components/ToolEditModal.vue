@@ -187,7 +187,7 @@ const form = ref({
   barcode: '',
   location: '',
   purchase_date: '',
-  purchase_price: null as number | null,
+  purchase_price: undefined as number | undefined,
   requires_training: false,
   notes: ''
 })

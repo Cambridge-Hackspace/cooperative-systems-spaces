@@ -19,6 +19,32 @@ session_timeout_minutes = 1440
 # Enable password reset functionality
 password_reset_enabled = true
 
+# Registration Challenge Configuration
+# Use this to require a passphrase or challenge question for new registrations
+[registration_challenge]
+# Enable the registration challenge requirement
+enabled = false
+# Hint to display to users about what the challenge might be
+hint = "Ask a current member for the registration phrase"
+# The exact phrase users must enter (case-sensitive)
+phrase = "makers welcome here"
+# Enable Throttling
+throttle_enabled = true
+# How many attempts before throttling
+throttle_attempts = 3
+# cooloff period
+throttle_seconds = 180
+# Enable the terms of service checkbox
+terms_of_service_checkbox = true
+# The TOS markdown
+terms_of_service_md = "By registering, you agree to our [Terms of Service](https://example.com/terms) and [Privacy Policy](https://example.com/privacy)."
+# Enable the recaptcha integration
+recaptcha_enabled = false
+# site key
+recaptcha_site_key = ""
+# secret key
+recaptcha_secret_key = ""
+
 # Initial Setup Configuration
 [initial_setup]
 # Enable initial setup mode - first user with matching email gets admin role

@@ -80,7 +80,6 @@
             <button 
               @click="deleteStep(step)" 
               class="btn btn-sm btn-danger"
-              :disabled="step.has_users_with_progress"
             >
               Delete
             </button>
@@ -112,9 +111,10 @@
     <EditTrainingStepModal
       v-if="editingStep"
       :step="editingStep"
-      :tools="tools"
+      :tool="tools.find(t => t.id === editingStep?.tool_id) || tools[0]"
+      :existing-steps="trainingSteps"
       @close="editingStep = null"
-      @updated="onStepUpdated"
+      @step-updated="onStepUpdated"
     />
 
     <!-- Prerequisites Management Modal -->

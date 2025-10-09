@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod config;
 pub mod errors;
 pub mod responses;
 pub mod users;
@@ -20,4 +21,5 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/tools", tools::tools_routes())
         .nest("/training", training::training_router())
         .nest("/trainers", trainers::trainers_router())
+        .nest("/config", config::config_routes())
 }

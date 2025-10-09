@@ -278,6 +278,51 @@ pub struct DatabaseConfig {
 }
 
 /// Authentication configuration
+/// Registration challenge configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistrationChallengeConfig {
+    /// Enable the registration challenge requirement
+    pub enabled: bool,
+    /// Hint to display to users about what the challenge might be
+    pub hint: String,
+    /// The exact phrase users must enter (case-sensitive)
+    pub phrase: String,
+    /// Enable throttling of failed attempts
+    pub throttle_enabled: bool,
+    /// The number of attempts allowed before the user is locked out
+    pub throttle_attempts: u32,
+    /// The number of seconds before the user is allowed to retry,
+    pub throttle_seconds: u32,
+    /// Enable the terms of service checkbox
+    pub terms_of_service_checkbox: bool,
+    /// Terms of service markdown text to display to users
+    pub terms_of_service_md: String,
+    /// Enable ReCaptcha-Style Challenges
+    pub recaptcha_enabled: bool,
+    /// reCAPTCHA site key
+    pub recaptcha_site_key: String,
+    /// reCAPTCHA secret key
+    pub recaptcha_secret_key: String,
+}
+
+impl Default for RegistrationChallengeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hint: "Ask a current member for the registration phrase".to_string(),
+            phrase: "makers welcome here".to_string(),
+            throttle_enabled: true,
+            throttle_attempts: 5,
+            throttle_seconds: 300,
+            terms_of_service_checkbox: true,
+            terms_of_service_md: "By registering, you agree to the [terms of service](https://example.com/terms-of-service)".to_string(),
+            recaptcha_enabled: false,
+            recaptcha_site_key: String::new(),
+            recaptcha_secret_key: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// JWT secret key for signing tokens
@@ -481,6 +526,8 @@ pub struct AppConfig {
     pub server: ServerConfig,
     /// Authentication configuration
     pub auth: AuthConfig,
+    /// Registration challenge configuration
+    pub registration_challenge: RegistrationChallengeConfig,
     /// Initial setup configuration
     pub initial_setup: InitialSetupConfig,
     /// User profile configuration
@@ -500,6 +547,7 @@ impl Default for AppConfig {
             database: DatabaseConfig::default(),
             server: ServerConfig::default(),
             auth: AuthConfig::default(),
+            registration_challenge: RegistrationChallengeConfig::default(),
             initial_setup: InitialSetupConfig::default(),
             user: UserConfig::default(),
         }

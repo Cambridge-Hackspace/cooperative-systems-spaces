@@ -85,7 +85,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { toolsApi } from '../utils/api'
-import type { Tool, ToolCategory, ToolStatus } from '../types/tools'
+import { ToolCategory, ToolStatus, type Tool } from '../types/tools'
 import ToolCard from '../components/ToolCard.vue'
 import ToolCreateModal from '../components/ToolCreateModal.vue'
 import ToolEditModal from '../components/ToolEditModal.vue'
@@ -115,11 +115,21 @@ const canManageTools = computed(() => {
 const currentUser = computed(() => auth.user)
 
 const categories: ToolCategory[] = [
-  'saw', 'powertool', 'handtool', 'measuring', 'safety', 'other'
+  ToolCategory.Saw,
+  ToolCategory.PowerTool,
+  ToolCategory.HandTools,
+  ToolCategory.Measuring,
+  ToolCategory.Safety,
+  ToolCategory.Other
 ]
 
 const statuses: ToolStatus[] = [
-  'idle', 'in_use', 'maintenance', 'broken', 'repair', 'retired'
+  ToolStatus.Idle,
+  ToolStatus.InUse,
+  ToolStatus.Maintenance,
+  ToolStatus.Broken,
+  ToolStatus.Repair,
+  ToolStatus.Retired
 ]
 
 // Methods
@@ -135,9 +145,9 @@ const loadTools = async () => {
     
     const response = canManageTools.value 
       ? await toolsApi.getTools(params)
-      : await toolsApi.getAvailableTools(params)
-    
-    tools.value = response.data
+      : await toolsApi.getAvailableTools?.() || await toolsApi.getTools(params)
+
+    tools.value = response.data || []
 
     // Check which tools have training steps
     await checkToolsForTraining()

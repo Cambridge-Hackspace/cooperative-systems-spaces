@@ -16,9 +16,13 @@ mod schema;
 mod auth;
 mod api;
 mod profile;
+mod throttle;
+mod recaptcha;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
+use throttle::RegistrationThrottleService;
+use recaptcha::RecaptchaService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -38,6 +42,8 @@ pub struct AppState {
     pub db: Arc<DatabaseManager>,
     pub profile_validator: ProfileValidator,
     pub audit_logger: AuditLogger,
+    pub throttle_service: Arc<RegistrationThrottleService>,
+    pub recaptcha_service: Arc<RecaptchaService>,
 }
 
 // Main dashboard handler
@@ -104,12 +110,18 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let profile_validator = ProfileValidator::new(&app_config.user);
     let audit_logger = AuditLogger::new(db_manager.clone());
+    let throttle_service = Arc::new(RegistrationThrottleService::new());
+    let recaptcha_service = Arc::new(RecaptchaService::new(
+        app_config.registration_challenge.recaptcha_secret_key.clone()
+    ));
 
     let app_state = AppState {
         config_manager: config_manager,
         db: db_manager,
         profile_validator,
         audit_logger,
+        throttle_service,
+        recaptcha_service,
     };
 
     let general_route = Router::new()

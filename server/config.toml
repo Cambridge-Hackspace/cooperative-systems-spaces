@@ -19,6 +19,16 @@ session_timeout_minutes = 1440
 # Enable password reset functionality
 password_reset_enabled = true
 
+# Registration Challenge Configuration
+# Use this to require a passphrase or challenge question for new registrations
+[registration_challenge]
+# Enable the registration challenge requirement
+enabled = false
+# Hint to display to users about what the challenge might be
+hint = "Ask a current member for the registration phrase"
+# The exact phrase users must enter (case-sensitive)
+phrase = "makers welcome here"
+
 # Initial Setup Configuration
 [initial_setup]
 # Enable initial setup mode - first user with matching email gets admin role

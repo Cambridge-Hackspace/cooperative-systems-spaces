@@ -20,6 +20,9 @@ pub enum ApiError {
     NotFound(String),
     Conflict(String),
     
+    // Rate limiting errors
+    TooManyRequests(String),
+
     // Server errors
     InternalServerError(String),
     DatabaseError(String),
@@ -35,6 +38,7 @@ impl Display for ApiError {
             ApiError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
             ApiError::NotFound(msg) => write!(f, "Not found: {}", msg),
             ApiError::Conflict(msg) => write!(f, "Conflict: {}", msg),
+            ApiError::TooManyRequests(msg) => write!(f, "Too many requests: {}", msg),
             ApiError::InternalServerError(msg) => write!(f, "Internal server error: {}", msg),
             ApiError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
             ApiError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
@@ -51,6 +55,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            ApiError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             ApiError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
             ApiError::DatabaseError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

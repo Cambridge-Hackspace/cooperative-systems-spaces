@@ -73,6 +73,9 @@ pub struct RegisterRequest {
     pub email: String,
     pub password: String,
     pub full_name: String,
+    pub challenge_phrase: Option<String>,
+    pub terms_of_service_accepted: Option<bool>,
+    pub recaptcha_token: Option<String>,
 }
 
 // User response model (public user data - no password hash)

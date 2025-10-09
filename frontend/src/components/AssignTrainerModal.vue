@@ -82,7 +82,6 @@ import type { Tool, AssignTrainerRequest, User } from '../types'
 
 interface Props {
   tool: Tool
-  tool: Tool
   existingTrainers: string[]
 }
 
@@ -155,8 +154,7 @@ const submitForm = async () => {
 
     const response = await trainerApi.assignToolTrainer(requestData)
     
-    if (response.success && response.data?.items) {
-      users.value = response.data.items
+    if (response.success) {
       console.log('Loaded users:', users.value.length)
     } else {
       error.value = response.error || 'Failed to load users'

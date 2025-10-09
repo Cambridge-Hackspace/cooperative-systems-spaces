@@ -135,10 +135,10 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { trainingApi } from '../utils/api'
-import type { 
+import {
   Tool,
-  CreateTrainingStepRequest, 
-  TrainingStep
+  CreateTrainingStepRequest,
+  TrainingStep, AssessmentType
 } from '../types'
 
 interface Props {
@@ -159,7 +159,7 @@ const form = reactive<CreateTrainingStepRequest>({
   step_number: 1,
   step_name: '',
   description: '',
-  assessment_type: 'practical',
+  assessment_type: AssessmentType.Practical,
   passing_score: undefined,
   expiry_days: undefined,
   is_active: true

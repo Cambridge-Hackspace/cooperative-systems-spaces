@@ -81,7 +81,52 @@
               <span class="label-text-alt">Password must be at least 8 characters</span>
             </label>
           </div>
-          
+
+          <div v-if="challengeConfig?.enabled" class="form-control">
+            <label class="label">
+              <span class="label-text">Registration Phrase</span>
+            </label>
+            <input
+              v-model="userData.challenge_phrase"
+              type="text"
+              :placeholder="challengeConfig?.hint || 'Enter the registration phrase'"
+              class="input input-bordered"
+              :disabled="authStore.isLoading"
+              required
+            />
+            <label class="label">
+              <span class="label-text-alt">{{ challengeConfig?.hint }}</span>
+            </label>
+          </div>
+
+          <!-- Terms of Service checkbox -->
+          <div v-if="challengeConfig?.terms_of_service_checkbox" class="form-control">
+            <label class="cursor-pointer label justify-start">
+              <input
+                v-model="userData.terms_of_service_accepted"
+                type="checkbox"
+                class="checkbox checkbox-primary"
+                :disabled="authStore.isLoading"
+                required
+              />
+              <span class="label-text ml-3" v-html="challengeConfig?.terms_of_service_md"></span>
+            </label>
+          </div>
+
+          <!-- reCAPTCHA placeholder (would need reCAPTCHA library integration) -->
+          <div v-if="challengeConfig?.recaptcha_enabled" class="form-control">
+            <div class="alert alert-info">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <span>reCAPTCHA verification would appear here</span>
+            </div>
+            <!-- This would be replaced with actual reCAPTCHA component -->
+            <div class="text-sm text-base-content/70 mt-2">
+              Site key: {{ challengeConfig?.recaptcha_site_key || 'Not configured' }}
+            </div>
+          </div>
+
           <div class="form-control mt-6">
             <button 
               type="submit" 
@@ -106,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import type { RegisterRequest } from '@/types'
 
@@ -116,10 +161,38 @@ const userData = ref<RegisterRequest>({
   username: '',
   email: '',
   password: '',
-  full_name: ''
+  full_name: '',
+  challenge_phrase: '',
+  terms_of_service_accepted: false,
+  recaptcha_token: undefined
 })
 
 const registrationSuccess = ref(false)
+const challengeConfig = ref<{
+  enabled: boolean;
+  hint: string;
+  throttle_enabled: boolean;
+  terms_of_service_checkbox: boolean;
+  terms_of_service_md: string;
+  recaptcha_enabled: boolean;
+  recaptcha_site_key: string;
+} | null>(null)
+
+// Fetch registration challenge configuration on mount
+onMounted(async () => {
+  try {
+    // We'll need to create an endpoint to get this configuration
+    // For now, assume it's available from a config endpoint
+    const response = await fetch('/api/config/registration')
+    if (response.ok) {
+      const config = await response.json()
+      challengeConfig.value = config.data.registration_challenge
+    }
+  } catch (error) {
+    // If we can't fetch config, assume no challenge is needed
+    console.warn('Could not fetch registration challenge config:', error)
+  }
+})
 
 async function handleRegister() {
   authStore.clearError()

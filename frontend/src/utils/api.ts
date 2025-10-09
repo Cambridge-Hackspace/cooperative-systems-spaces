@@ -169,7 +169,7 @@ export const userApi = {
     return apiClient.get(endpoint)
       .then(response => {
         if (response.success && response.data) {
-          const users = Array.isArray(response.data) ? response.data : (response.data.items || [])
+          const users = Array.isArray(response.data) ? response.data : ((response.data as any).items || [])
           return {
             success: true,
             data: {
@@ -190,7 +190,7 @@ export const userApi = {
           return apiClient.get('/trainers/users')
             .then(response => {
               if (response.success && response.data) {
-                const users = Array.isArray(response.data) ? response.data : (response.data.items || [])
+                const users = Array.isArray(response.data) ? response.data : ((response.data as any).items || [])
                 return {
                   success: true,
                   data: {

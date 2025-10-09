@@ -171,7 +171,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { toolsApi } from '../utils/api'
-import type { NewTool, ToolCategory, ToolStatus } from '../types/tools'
+import type { NewTool, ToolCategory } from '../types/tools'
 
 interface Emits {
   (e: 'close'): void

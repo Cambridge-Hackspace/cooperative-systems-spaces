@@ -117,13 +117,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
-import { trainingApi } from '../utils/api'
-import type { 
-  Tool,
-  TrainingStep,
-  UpdateTrainingStepRequest
-} from '../types'
+import {reactive, ref, watch} from 'vue'
+import {trainingApi} from '../utils/api'
+import {AssessmentType, Tool, TrainingStep, UpdateTrainingStepRequest} from '../types'
 
 interface Props {
   step: TrainingStep | null
@@ -147,7 +143,7 @@ const form = reactive<UpdateTrainingStepRequest>({
   step_number: 1,
   step_name: '',
   description: '',
-  assessment_type: 'practical',
+  assessment_type: AssessmentType.Practical,
   passing_score: undefined,
   expiry_days: undefined,
   is_active: true

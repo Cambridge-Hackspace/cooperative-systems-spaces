@@ -289,9 +289,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
-import { toolsApi, trainingApi } from '../utils/api'
-import type { Tool, AssessmentType, CreateTrainingStepRequest } from '../types'
+import {computed, reactive, ref} from 'vue'
+import {toolsApi, trainingApi} from '../utils/api'
+import {AssessmentType, CreateTrainingStepRequest, Tool} from '../types'
 
 interface TrainingStepConfig {
   step_name: string  // Changed from 'title' to match backend
@@ -331,7 +331,7 @@ const trainingConfig = reactive<TrainingConfig>({
     {
       step_name: '',
       description: '',
-      assessment_type: 'practical',
+      assessment_type: AssessmentType.Practical,
       passing_score: 80,
       expiry_days: undefined,
       is_active: true,
@@ -383,7 +383,7 @@ const addStep = () => {
   trainingConfig.steps.push({
     step_name: '',
     description: '',
-    assessment_type: 'practical',
+    assessment_type: AssessmentType.Practical,
     passing_score: 80,
     expiry_days: undefined,
     is_active: true,

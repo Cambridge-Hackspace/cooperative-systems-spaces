@@ -27,6 +27,8 @@ config = "0.14"
 tower-http = { version = "0.6.6", features = ["fs", "trace"] }
 # axum-prometheus = { version = "0.9.0" }  # Temporarily disabled due to version conflicts
 metrics-process = "2.4.0"
+reqwest = { version = "0.11", features = ["json"] }
+thiserror = "1.0"
 
 # Diesel ORM and database dependencies
 diesel = { version = "2.1.4", features = ["postgres", "chrono", "uuid", "r2d2", "serde_json", "numeric"] }

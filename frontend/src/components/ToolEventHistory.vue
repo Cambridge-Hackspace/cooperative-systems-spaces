@@ -103,7 +103,7 @@ const loadEvents = async () => {
     error.value = ''
     
     const response = await toolsApi.getToolEvents(props.tool.id)
-    events.value = response.data
+    events.value = response.data || []
   } catch (err: any) {
     error.value = err.response?.data?.message || 'Failed to load tool events'
   } finally {

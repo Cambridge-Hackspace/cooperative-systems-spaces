@@ -81,6 +81,9 @@ export interface UserTrainingProgress {
   notes?: string;
   created_at: string;
   updated_at: string;
+  // Additional fields for compatibility
+  user?: any;  // User information when joined
+  instructor?: any;  // Instructor information when joined
 }
 
 export interface StartTrainingRequest {
@@ -117,8 +120,12 @@ export interface TrainingStepWithProgress {
   step: TrainingStep;
   user_progress?: UserTrainingProgress;  // Backend uses 'user_progress', not 'progress'
   prerequisites: TrainingStep[];
-  is_available: boolean;
-  instructor_required: boolean;
+  is_available?: boolean;
+  instructor_required?: boolean;
+  // Additional fields for compatibility
+  progress?: UserTrainingProgress;  // Alias for user_progress
+  can_start?: boolean;  // Alias for is_available
+  has_users_with_progress?: boolean;
 }
 
 export interface ToolTrainingOverview {
