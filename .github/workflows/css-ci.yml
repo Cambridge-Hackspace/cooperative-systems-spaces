@@ -27,10 +27,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Run frontend lint
+      - name: Run frontend build
         if: matrix.job == 'frontend'
         working-directory: frontend
-        run: npm run lint
+        run: npm run build
 
       - name: Run frontend tests
         if: matrix.job == 'frontend'
