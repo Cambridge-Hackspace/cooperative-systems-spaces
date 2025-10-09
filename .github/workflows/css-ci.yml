@@ -61,7 +61,7 @@ jobs:
         run: |
           cargo test --all
 #          cargo fmt --all -- --check
-#          cargo clippy --all-targets --all-features -- -D warnings
+#          cargo clippy --all-targets --all-features -- -D warnings=
 
   docker:
     needs: checks

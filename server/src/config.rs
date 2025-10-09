@@ -560,10 +560,28 @@ impl AppConfig {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
         
-        let config: AppConfig = toml::from_str(&content)
+        let mut config: AppConfig = toml::from_str(&content)
             .with_context(|| "Failed to parse TOML configuration")?;
+
+        // Apply environment variable overrides
+        config.apply_env_overrides()?;
         
         Ok(config)
+    }
+
+    /// Apply environment variable overrides to configuration
+    /// Supports nested configuration using double underscore separator
+    /// Example: DATABASE__URL, DATABASE__HOST, AUTH__JWT_SECRET
+    fn apply_env_overrides(&mut self) -> Result<()> {
+        use std::env;
+
+        // Database overrides
+        if let Ok(val) = env::var("DATABASE__URL") {
+            info!("Overriding database.url from environment");
+            self.database.url = Some(val);
+        }
+
+        Ok(())
     }
 
     /// Save configuration to a TOML file

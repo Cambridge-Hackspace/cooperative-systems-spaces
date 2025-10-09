@@ -1,0 +1,117 @@
+
+image: docker:latest
+
+stages:
+  - check
+  - build
+  - push
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  IMAGE_LATEST: $CI_REGISTRY_IMAGE:latest
+
+# Frontend checks
+frontend-check:
+  stage: check
+  image: node:20-alpine
+  before_script:
+    - cd frontend
+    - npm ci
+  script:
+    - npm run build
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-frontend
+    paths:
+      - frontend/node_modules/
+  artifacts:
+    paths:
+      - frontend/dist/
+    expire_in: 1 hour
+  only:
+    - merge_requests
+    - master
+    - main
+
+# Server checks
+server-check:
+  stage: check
+  image: rust:1.90.0
+  before_script:
+    - cd server
+    - apt-get update && apt-get install -y libpq-dev
+  script:
+    - cargo test --all
+    # Uncomment when ready:
+    # - cargo fmt --all -- --check
+    # - cargo clippy --all-targets --all-features -- -D warnings
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-server
+    paths:
+      - server/target/
+      - $CARGO_HOME/registry/
+      - $CARGO_HOME/git/
+  only:
+    - merge_requests
+    - master
+    - main
+
+# CLI checks
+cli-check:
+  stage: check
+  image: rust:1.90.0
+  before_script:
+    - cd cli
+  script:
+    - cargo test --all
+    # Uncomment when ready:
+    # - cargo fmt --all -- --check
+    # - cargo clippy --all-targets --all-features -- -D warnings
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-cli
+    paths:
+      - cli/target/
+      - $CARGO_HOME/registry/
+      - $CARGO_HOME/git/
+  only:
+    - merge_requests
+    - master
+    - main
+
+# Build Docker image
+build-docker:
+  stage: build
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+  dependencies:
+    - frontend-check
+    - server-check
+    - cli-check
+  only:
+    - master
+    - main
+
+# Push Docker image
+push-docker:
+  stage: push
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+    - docker push $IMAGE_TAG
+    - docker push $IMAGE_LATEST
+  dependencies:
+    - build-docker
+  only:
+    - master
+    - main
+  environment:
+    name: production
+    url: https://your-app-url.com

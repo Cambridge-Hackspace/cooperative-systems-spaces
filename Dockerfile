@@ -62,6 +62,7 @@ USER appuser
 
 # Set CONFIG_PATH environment variable to point to mountable directory
 ENV CONFIG_PATH=/app/config/config.toml
+ENV FRONTEND_PATH=/app/frontend/dist
 
 # Expose port
 EXPOSE 8080

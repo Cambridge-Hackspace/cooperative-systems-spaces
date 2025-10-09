@@ -24,7 +24,6 @@ tracing-subscriber = { workspace = true }
 axum = "0.7"
 log = "0.4.28"
 config = "0.14"
-tower-http = { version = "0.6.6", features = ["fs", "trace"] }
 # axum-prometheus = { version = "0.9.0" }  # Temporarily disabled due to version conflicts
 metrics-process = "2.4.0"
 reqwest = { version = "0.11", features = ["json"] }
@@ -44,7 +43,8 @@ argon2 = "0.5.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
 validator = { version = "0.18.1", features = ["derive"] }
 # axum-extra = { version = "0.9", default-features = false, features = ["typed-header"] }  # Temporarily disabled
-tower = "0.5.0"
+tower = { version = "0.5.2", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
 hyper = "0.14"
 async-trait = "0.1"
 

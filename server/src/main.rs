@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use clap::Parser;
 use serde_json::json;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -34,6 +35,10 @@ struct Args {
     /// Generate a sample configuration file and exit
     #[arg(long)]
     generate_config: bool,
+
+    /// FRONTEND_PATH environment variable
+    #[arg(long, env = "FRONTEND_PATH", default_value = "./frontend/dist")]
+    frontend_path: String,
 }
 
 #[derive(Clone)]
@@ -124,8 +129,13 @@ async fn main() -> Result<(), anyhow::Error> {
         recaptcha_service,
     };
 
+    // Serve frontend static files
+    let frontend_path = args.frontend_path.clone();
+    let serve_dir = ServeDir::new(&frontend_path)
+        .not_found_service(ServeFile::new(format!("{}/index.html", frontend_path)));
+
     let general_route = Router::new()
-        .route("/", get(root));
+        .route("/status", get(root));
         // .route("/profile", get(handlers::show_profile))
         // .layer(axum::middleware::from_fn_with_state(
         //     app_state.db.clone(),
@@ -135,6 +145,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let app = Router::new()
         .merge(general_route)
         .nest("/api", api::api_routes())
+        .fallback_service(serve_dir)
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(&app_config.server.bind_address).await?;
