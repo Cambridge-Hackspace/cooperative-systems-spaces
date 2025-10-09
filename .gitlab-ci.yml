@@ -25,10 +25,10 @@ frontend-check:
     key: ${CI_COMMIT_REF_SLUG}-frontend
     paths:
       - frontend/node_modules/
-  artifacts:
-    paths:
-      - frontend/dist/
-    expire_in: 1 hour
+#  artifacts:
+#    paths:
+#      - frontend/dist/
+#    expire_in: 1 hour
   only:
     - merge_requests
     - master
