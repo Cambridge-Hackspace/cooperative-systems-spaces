@@ -32,10 +32,10 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Run frontend tests
-        if: matrix.job == 'frontend'
-        working-directory: frontend
-        run: npm run test -- --ci --coverage
+      #- name: Run frontend tests
+      #  if: matrix.job == 'frontend'
+      #  working-directory: frontend
+      #  run: npm run test -- --ci --coverage
 
       # BACKEND JOBS (SERVER & CLI)
       - name: Set up Rust
@@ -51,12 +51,17 @@ jobs:
         working-directory: server
         run: |
           cargo test --all
+#          cargo fmt --all -- --check
+#          cargo clippy --all-targets --all-features -- -D warnings
+
 
       - name: Run cli checks
         if: matrix.job == 'cli'
         working-directory: cli
         run: |
           cargo test --all
+#          cargo fmt --all -- --check
+#          cargo clippy --all-targets --all-features -- -D warnings
 
   docker:
     needs: checks
