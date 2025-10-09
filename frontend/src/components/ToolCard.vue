@@ -38,8 +38,8 @@
 
     <div class="tool-actions" v-if="canManage">
       <div class="status-controls">
-        <select 
-          :value="tool.status" 
+        <select
+          :value="tool.status"
           @change="onStatusChange"
           class="status-select"
         >
@@ -50,7 +50,7 @@
           <option value="repair">Repair</option>
           <option value="retired">Retired</option>
         </select>
-        <button 
+        <button
           v-if="selectedStatus"
           @click="confirmStatusChange"
           class="btn btn-sm btn-primary"
@@ -58,8 +58,8 @@
           Update
         </button>
       </div>
-      
-      <textarea 
+
+      <textarea
         v-if="selectedStatus"
         v-model="statusChangeNotes"
         placeholder="Notes for status change..."
@@ -74,28 +74,37 @@
         <button @click="$emit('view-history', tool)" class="btn btn-sm btn-info">
           History
         </button>
-        <button 
+        <button
           v-if="hasTrainingSteps"
-          @click="showTraining" 
+          @click="showTraining"
           class="btn btn-sm btn-info"
         >
           <span class="training-icon">🎓</span>
           Manage Training
         </button>
-        <button 
+        <button
           v-else
-          @click="showSetupTraining" 
+          @click="showSetupTraining"
           class="btn btn-sm btn-primary"
         >
           <span class="training-icon">🎓</span>
           Set Up Training
         </button>
-        <button 
-          @click="$emit('delete', tool)" 
+        <button
+          @click="$emit('delete', tool)"
           class="btn btn-sm btn-danger"
           :disabled="tool.status === 'in_use'"
         >
           Delete
+        </button>
+
+        <button
+            v-if="tool.status === 'idle' && canUseBasedOnTraining"
+            @click="checkCanUse"
+            class="btn btn-primary"
+            :disabled="loading"
+        >
+          Usable
         </button>
       </div>
     </div>
@@ -128,7 +137,7 @@
         class="btn btn-primary"
         :disabled="loading"
       >
-        {{ loading ? 'Checking...' : 'Check Out' }}
+        Usable
       </button>
 
       <div v-else-if="tool.status === 'idle' && hasTrainingSteps && !canUseBasedOnTraining" class="training-warning">
@@ -187,7 +196,7 @@ const showTrainingModal = ref(false)
 const onStatusChange = (event: Event) => {
   const target = event.target as HTMLSelectElement
   const newStatus = target.value as ToolStatus
-  
+
   if (newStatus !== props.tool.status) {
     statusChangeNotes.value = ''
     selectedStatus.value = newStatus  // Store the selected status
@@ -206,7 +215,7 @@ const checkCanUse = async () => {
   try {
     loading.value = true
     const response = await toolsApi.canUseTool(props.tool.id)
-    
+
     if (response.success && response.data) {
       if (response.data.can_use) {
         // TODO: Implement checkout flow
@@ -262,6 +271,9 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   border-left: 4px solid #ddd;
   transition: all 0.2s;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .tool-card:hover {
@@ -352,6 +364,7 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
 
 .tool-info {
   margin-bottom: 1rem;
+  flex: 1;
 }
 
 .info-row {
@@ -372,6 +385,7 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
 .tool-actions, .member-actions {
   border-top: 1px solid #ecf0f1;
   padding-top: 1rem;
+  margin-top: auto;
 }
 
 .status-controls {

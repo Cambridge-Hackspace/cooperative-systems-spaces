@@ -38,7 +38,8 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libpq5 \
-    ca-certificates \
+    ca-certificates  \
+    vi \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled server binary (with embedded migrations)

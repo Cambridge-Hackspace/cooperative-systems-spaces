@@ -1,51 +1,63 @@
 <template>
-  <div class="tools-view">
-    <div class="tools-header">
-      <h2>Tool Management</h2>
-      <div class="tools-controls">
-        <div class="filters">
-          <select v-model="selectedCategory" @change="loadTools">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="flex flex-wrap justify-between items-center mb-8 gap-4">
+      <h2 class="text-2xl font-bold text-gray-800">Tool Management</h2>
+      <div class="flex flex-wrap gap-4 items-center">
+        <div class="flex flex-wrap gap-2 items-center">
+          <select
+              v-model="selectedCategory"
+              @change="loadTools"
+              class="select select-bordered select-sm"
+          >
             <option value="">All Categories</option>
             <option v-for="category in categories" :key="category" :value="category">
               {{ formatCategory(category) }}
             </option>
           </select>
-          
-          <select v-model="selectedStatus" @change="loadTools">
+
+          <select
+              v-model="selectedStatus"
+              @change="loadTools"
+              class="select select-bordered select-sm"
+          >
             <option value="">All Statuses</option>
             <option v-for="status in statuses" :key="status" :value="status">
               {{ formatStatus(status) }}
             </option>
           </select>
-          
-          <input 
-            v-model="searchQuery" 
-            @input="loadTools"
-            type="text" 
-            placeholder="Search tools..." 
-            class="search-input"
+
+          <input
+              v-model="searchQuery"
+              @input="loadTools"
+              type="text"
+              placeholder="Search tools..."
+              class="input input-bordered input-sm w-48"
           />
         </div>
-        
-        <button 
-          v-if="canManageTools" 
-          @click="showCreateModal = true"
-          class="btn btn-primary"
+
+        <button
+            v-if="canManageTools"
+            @click="showCreateModal = true"
+            class="btn btn-primary btn-sm"
         >
           Add Tool
         </button>
       </div>
     </div>
 
-    <div class="loading" v-if="loading">Loading tools...</div>
-    
-    <div class="error" v-else-if="error">
-      {{ error }}
+    <div v-if="loading" class="text-center py-12 text-lg">
+      Loading tools...
     </div>
 
-    <div class="tools-grid" v-else>
-      <div v-for="tool in tools" :key="tool.id" class="tool-item">
-        <ToolCard 
+    <div v-else-if="error" class="alert alert-error">
+      <span>{{ error }}</span>
+    </div>
+
+    <div
+        v-else
+        class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch"
+    >
+      <ToolCard
           :tool="tool"
           :can-manage="canManageTools"
           :can-use-based-on-training="getCanUseBasedOnTraining(tool)"
@@ -56,27 +68,29 @@
           @view-history="viewToolHistory"
           @training-updated="onTrainingUpdated"
           @training-status-changed="onTrainingStatusChanged"
-        />
-      </div>
+          v-for="tool in tools"
+          :key="tool.id"
+          class="h-full"
+      />
     </div>
 
-    <ToolCreateModal 
-      v-if="showCreateModal"
-      @close="showCreateModal = false"
-      @created="onToolCreated"
+    <ToolCreateModal
+        v-if="showCreateModal"
+        @close="showCreateModal = false"
+        @created="onToolCreated"
     />
 
-    <ToolEditModal 
-      v-if="editingTool"
-      :tool="editingTool"
-      @close="editingTool = null"
-      @updated="onToolUpdated"
+    <ToolEditModal
+        v-if="editingTool"
+        :tool="editingTool"
+        @close="editingTool = null"
+        @updated="onToolUpdated"
     />
 
     <ToolEventHistory
-      v-if="viewingHistory"
-      :tool="viewingHistory"
-      @close="viewingHistory = null"
+        v-if="viewingHistory"
+        :tool="viewingHistory"
+        @close="viewingHistory = null"
     />
   </div>
 </template>
@@ -331,6 +345,7 @@ onMounted(() => {
 .tool-item {
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 .tools-grid {
@@ -338,6 +353,7 @@ onMounted(() => {
   grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
   gap: 1.5rem;
   margin-top: 1rem;
+  align-items: stretch;
 }
 
 @media (max-width: 768px) {

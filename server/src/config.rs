@@ -576,9 +576,14 @@ impl AppConfig {
         use std::env;
 
         // Database overrides
-        if let Ok(val) = env::var("DATABASE__URL") {
+        if let Ok(val) = env::var("DATABASE__seURL") {
             info!("Overriding database.url from environment");
             self.database.url = Some(val);
+        }
+
+        if let Ok(val) = env::var("SERVER__BIND_ADDRESS") {
+            info!("Overriding server.bind_address from environment");
+            self.server.bind_address = val;
         }
 
         Ok(())
