@@ -10,9 +10,9 @@ use uuid::Uuid;
 use crate::{
     api::{
         errors::ApiError,
-        responses::{ApiResponse, PaginatedResponse, PaginationParams, UpdateUserRequest, UserResponse},
+        responses::{ApiResponse, PaginatedResponse, UpdateUserRequest, UserResponse, PaginationParams},
     },
-    auth::{AdminUser, AuthUser, StaffUser, PasswordHashUtil},
+    auth::{AdminUser, AuthUser, PasswordHashUtil},
     models::{UpdateUser, UserRole},
     AppState,
 };
@@ -42,7 +42,7 @@ async fn list_users(
     let limit = per_page as i64;
 
     // Get total count
-    let total_count = state.db.count_users()
+    let total_count = state.db.count_active_users()
         .map_err(ApiError::from)? as u32;
 
     // Get users (we'll implement this method in database.rs)
@@ -119,6 +119,7 @@ async fn update_user(
         password_hash: None,
         is_active: payload.is_active,
         role: payload.role,
+        profile: None, // For now, profile updates will be handled separately
         updated_at: Some(Utc::now().naive_utc()),
     };
 

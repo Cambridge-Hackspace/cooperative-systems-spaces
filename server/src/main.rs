@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::extract::State;
+use axum::extract::{State, FromRef};
 use axum::{Json, Router};
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -15,8 +15,10 @@ mod models;
 mod schema;
 mod auth;
 mod api;
-use config::{AppConfig, ConfigManager, load_config};
+mod profile;
+use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
+use profile::{ProfileValidator, AuditLogger};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -32,15 +34,17 @@ struct Args {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub config: Arc<ConfigManager>,
+    pub config_manager: Arc<ConfigManager>,
     pub db: Arc<DatabaseManager>,
+    pub profile_validator: ProfileValidator,
+    pub audit_logger: AuditLogger,
 }
 
 // Main dashboard handler
 async fn root(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let config = state.config.get_config();
+    let config = state.config_manager.get_config();
     Ok(Json(json!({
         "status": "ok",
         "site_name": config.site.site_name,
@@ -98,9 +102,14 @@ async fn main() -> Result<(), anyhow::Error> {
     //collector.describe();
     //let (prometheus_layer, _metric_handle) = PrometheusMetricLayer::pair();
 
+    let profile_validator = ProfileValidator::new(&app_config.user);
+    let audit_logger = AuditLogger::new(db_manager.clone());
+
     let app_state = AppState {
-        config: config_manager,
+        config_manager: config_manager,
         db: db_manager,
+        profile_validator,
+        audit_logger,
     };
 
     let general_route = Router::new()
@@ -120,8 +129,7 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Server starting on {}", app_config.server.bind_address);
     info!("Site URL: {}", app_config.site.site_url);
 
-    axum::Server::from_tcp(listener.into_std()?)?.serve(app.into_make_service()).await?;
-
+    axum::serve(listener, app).await?;
     Ok(())
 }
 

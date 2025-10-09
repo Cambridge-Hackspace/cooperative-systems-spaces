@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { User, LoginRequest, LoginResponse, RegisterRequest, UserRole } from '@/types'
+import type { User, LoginRequest, LoginResponse, RegisterRequest } from '@/types'
+import { UserRole } from '@/types'
 import { apiClient } from '@/utils/api'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -9,12 +10,25 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('css_token'))
   const isLoading = ref(false)
   const error = ref<string | null>(null)
+  const initialized = ref(false)
 
   // Getters
   const isAuthenticated = computed(() => !!token.value && !!user.value)
-  const isAdmin = computed(() => user.value?.role === 'admin')
-  const isStaff = computed(() => ['staff', 'admin'].includes(user.value?.role ?? ''))
-  const isMember = computed(() => ['member', 'staff', 'admin'].includes(user.value?.role ?? ''))
+  const isAdmin = computed(() => {
+    if (!user.value?.role) return false
+    const role = String(user.value.role).toLowerCase()
+    return role === 'admin'
+  })
+  const isStaff = computed(() => {
+    if (!user.value?.role) return false
+    const role = String(user.value.role).toLowerCase()
+    return role === 'staff' || role === 'admin'
+  })
+  const isMember = computed(() => {
+    if (!user.value?.role) return false
+    const role = String(user.value.role).toLowerCase()
+    return role === 'member' || role === 'staff' || role === 'admin'
+  })
   const userRole = computed(() => user.value?.role)
   const userName = computed(() => user.value?.username)
   const userFullName = computed(() => user.value?.full_name)
@@ -131,16 +145,19 @@ export const useAuthStore = defineStore('auth', () => {
   const hasRole = (requiredRole: UserRole): boolean => {
     if (!user.value) return false
     
-    const roleHierarchy = {
-      unknown: 0,
-      newbie: 1,
-      member: 2,
-      staff: 3,
-      admin: 4
+    const roleHierarchy: Record<string, number> = {
+      'unknown': 0,
+      'newbie': 1,
+      'member': 2,
+      'staff': 3,
+      'admin': 4
     }
     
-    const userRoleLevel = roleHierarchy[user.value.role as keyof typeof roleHierarchy] || 0
-    const requiredRoleLevel = roleHierarchy[requiredRole as keyof typeof roleHierarchy] || 0
+    const userRoleString = String(user.value.role).toLowerCase()
+    const requiredRoleString = String(requiredRole).toLowerCase()
+    
+    const userRoleLevel = roleHierarchy[userRoleString] || 0
+    const requiredRoleLevel = roleHierarchy[requiredRoleString] || 0
     
     return userRoleLevel >= requiredRoleLevel
   }
@@ -154,6 +171,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (token.value) {
       await getCurrentUser()
     }
+    initialized.value = true
   }
 
   return {
@@ -162,6 +180,7 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     isLoading,
     error,
+    initialized,
     
     // Getters
     isAuthenticated,

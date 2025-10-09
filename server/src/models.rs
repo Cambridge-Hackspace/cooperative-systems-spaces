@@ -1,4 +1,12 @@
-use crate::schema::{users, sql_types};
+mod tools;
+mod training;
+pub(crate) mod trainers;
+pub use tools::*;
+pub use training::*;
+pub use trainers::*;
+
+use std::io::Write;
+use crate::schema::{users, audit_logs, sql_types};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -87,6 +95,7 @@ pub struct User {
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub role: UserRole,
+    pub profile: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -99,6 +108,7 @@ pub struct NewUser {
     pub full_name: String,
     pub is_active: Option<bool>,
     pub role: Option<UserRole>,
+    pub profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, AsChangeset, Serialize, Deserialize)]
@@ -111,6 +121,7 @@ pub struct UpdateUser {
     pub full_name: Option<String>,
     pub is_active: Option<bool>,
     pub role: Option<UserRole>,
+    pub profile: Option<serde_json::Value>,
     pub updated_at: Option<NaiveDateTime>,
 }
 
@@ -123,6 +134,7 @@ impl NewUser {
             full_name,
             is_active: Some(true),
             role: Some(UserRole::Newbie),
+            profile: Some(serde_json::json!({})),
         }
     }
 
@@ -134,6 +146,88 @@ impl NewUser {
             full_name,
             is_active: Some(true),
             role: Some(role),
+            profile: Some(serde_json::json!({})),
+        }
+    }
+}
+
+/// Audit log entry for tracking user operations
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = audit_logs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct AuditLog {
+    pub id: uuid::Uuid,
+    pub event_type: String,
+    pub user_id: Option<uuid::Uuid>,
+    pub actor_id: Option<uuid::Uuid>,
+    pub event_data: serde_json::Value,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// New audit log entry for insertion
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = audit_logs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewAuditLog {
+    pub event_type: String,
+    pub user_id: Option<uuid::Uuid>,
+    pub actor_id: Option<uuid::Uuid>,
+    pub event_data: serde_json::Value,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+/// Audit event types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuditEventType {
+    UserRegistration,
+    UserLogin,
+    UserLogout,
+    UserRoleChange,
+    UserProfileUpdate,
+    UserPasswordChange,
+    UserActivation,
+    UserDeactivation,
+    UserDeletion,
+    AdminConfigReload,
+    FailedLoginAttempt,
+    // Training-related events
+    TrainingSessionStarted,
+    TrainingSessionCompleted,
+    TrainingStepCreated,
+    TrainingStepUpdated,
+    TrainingStepDeleted,
+    TrainerAssigned,
+    TrainerRemoved,
+    InstructorCertified,
+    InstructorRevoked,
+}
+
+impl AuditEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::UserRegistration => "user_registration",
+            Self::UserLogin => "user_login",
+            Self::UserLogout => "user_logout",
+            Self::UserRoleChange => "user_role_change",
+            Self::UserProfileUpdate => "user_profile_update",
+            Self::UserPasswordChange => "user_password_change",
+            Self::UserActivation => "user_activation",
+            Self::UserDeactivation => "user_deactivation",
+            Self::UserDeletion => "user_deletion",
+            Self::AdminConfigReload => "admin_config_reload",
+            Self::FailedLoginAttempt => "failed_login_attempt",
+            Self::TrainingSessionStarted => "training_session_started",
+            Self::TrainingSessionCompleted => "training_session_completed",
+            Self::TrainingStepCreated => "training_step_created",
+            Self::TrainingStepUpdated => "training_step_updated",
+            Self::TrainingStepDeleted => "training_step_deleted",
+            Self::TrainerAssigned => "trainer_assigned",
+            Self::TrainerRemoved => "trainer_removed",
+            Self::InstructorCertified => "instructor_certified",
+            Self::InstructorRevoked => "instructor_revoked",
         }
     }
 }

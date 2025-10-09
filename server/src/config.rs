@@ -388,6 +388,74 @@ impl Default for ServerConfig {
             cors_origins: vec!["http://localhost:3000".to_string()],
         }
     }
+
+}
+
+/// Profile field configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileField {
+    /// Field name/key
+    pub key: String,
+    /// Human readable label
+    pub label: String,
+    /// Field type
+    pub field_type: ProfileFieldType,
+    /// Is this field required
+    pub required: bool,
+    /// Help text for the field
+    pub help_text: Option<String>,
+}
+
+/// User profile field configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserConfig {
+    /// Profile field definitions
+    pub profile_fields: Vec<ProfileField>,
+    /// Enable user profile functionality
+    pub profiles_enabled: bool,
+}
+
+/// Profile field type specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProfileFieldType {
+    Text,
+    Email,
+    Phone,
+    Number,
+    Date,
+    Boolean,
+    Select { options: Vec<String> },
+}
+
+impl Default for UserConfig {
+    fn default() -> Self {
+        Self {
+            profile_fields: vec![
+                ProfileField {
+                    key: "bio".to_string(),
+                    label: "Bio".to_string(),
+                    field_type: ProfileFieldType::Text,
+                    required: false,
+                    help_text: Some("Tell us about yourself".to_string()),
+                },
+                ProfileField {
+                    key: "phone".to_string(),
+                    label: "Phone Number".to_string(),
+                    field_type: ProfileFieldType::Phone,
+                    required: false,
+                    help_text: Some("Your contact phone number".to_string()),
+                },
+                ProfileField {
+                    key: "emergency_contact".to_string(),
+                    label: "Emergency Contact".to_string(),
+                    field_type: ProfileFieldType::Text,
+                    required: false,
+                    help_text: Some("Emergency contact information".to_string()),
+                },
+            ],
+            profiles_enabled: true,
+        }
+    }
 }
 
 /// Main application configuration
@@ -415,6 +483,8 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     /// Initial setup configuration
     pub initial_setup: InitialSetupConfig,
+    /// User profile configuration
+    pub user: UserConfig,
 }
 
 impl Default for AppConfig {
@@ -431,6 +501,7 @@ impl Default for AppConfig {
             server: ServerConfig::default(),
             auth: AuthConfig::default(),
             initial_setup: InitialSetupConfig::default(),
+            user: UserConfig::default(),
         }
     }
 }

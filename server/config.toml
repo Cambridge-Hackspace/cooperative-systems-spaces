@@ -184,6 +184,14 @@ log_statements = false
 # Automatically run database migrations on startup
 auto_migrate = true
 
+# User Configuration
+# Settings for user profiles and management
+[user]
+# Enable user profiles
+profiles_enabled = true
+# Default profile fields configuration
+profile_fields = []
+
 # Server Configuration
 # Settings for the web server itself
 [server]

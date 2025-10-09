@@ -23,6 +23,7 @@ pub enum ApiError {
     // Server errors
     InternalServerError(String),
     DatabaseError(String),
+    NotImplemented(String),
 }
 
 impl Display for ApiError {
@@ -36,6 +37,7 @@ impl Display for ApiError {
             ApiError::Conflict(msg) => write!(f, "Conflict: {}", msg),
             ApiError::InternalServerError(msg) => write!(f, "Internal server error: {}", msg),
             ApiError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            ApiError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
         }
     }
 }
@@ -54,6 +56,7 @@ impl IntoResponse for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Database operation failed".to_string(),
             ),
+            ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg.clone()),
         };
 
         let body = Json(json!({

@@ -1,0 +1,264 @@
+<template>
+  <div id="app" class="min-h-screen bg-base-100">
+    <!-- Navigation -->
+    <nav class="navbar bg-base-300 shadow-lg">
+      <div class="navbar-start">
+        <div class="dropdown">
+          <div tabindex="0" role="button" class="btn btn-ghost lg:hidden">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"/>
+            </svg>
+          </div>
+          <ul tabindex="0" class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow">
+            <li><router-link to="/">Home</router-link></li>
+            <li v-if="authStore.isAuthenticated">
+              <router-link :to="`/profile/me`">My Profile</router-link>
+            </li>
+            <li v-if="authStore.isAuthenticated">
+              <router-link to="/tools">Tools</router-link>
+            </li>
+            <li v-if="authStore.isAuthenticated && canAccessStaff">
+              <router-link to="/users">Users</router-link>
+            </li>
+            <li v-if="authStore.isAuthenticated && canAccessAdmin">
+              <details>
+                <summary>Admin</summary>
+                <ul class="p-2">
+                  <li><router-link to="/admin">Dashboard</router-link></li>
+                  <li><router-link to="/admin/roster">Roster</router-link></li>
+                  <li><router-link to="/admin/audit">Audit Log</router-link></li>
+                </ul>
+              </details>
+            </li>
+          </ul>
+        </div>
+        <router-link to="/" class="btn btn-ghost text-xl">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-4m-5 0H9m0 0H7m2 0v-4a2 2 0 012-2h2a2 2 0 012 2v4"/>
+          </svg>
+          CSS
+        </router-link>
+      </div>
+      
+      <div class="navbar-center hidden lg:flex">
+        <ul class="menu menu-horizontal px-1">
+          <li><router-link to="/" :class="{ 'active': $route.name === 'home' }">Home</router-link></li>
+          <li v-if="authStore.isAuthenticated">
+            <router-link 
+              :to="`/profile/me`" 
+              :class="{ 'active': $route.name === 'profile' && $route.params.userId === 'me' }"
+            >
+              My Profile
+            </router-link>
+          </li>
+          <li v-if="authStore.isAuthenticated">
+            <router-link to="/tools" :class="{ 'active': $route.name === 'tools' }">Tools</router-link>
+          </li>
+          <li v-if="authStore.isAuthenticated && canAccessStaff">
+            <router-link to="/users" :class="{ 'active': $route.name === 'users' }">Users</router-link>
+          </li>
+          <li v-if="authStore.isAuthenticated && canAccessAdmin">
+            <details>
+              <summary>Admin</summary>
+              <ul class="p-2 bg-base-100 rounded-box">
+                <li><router-link to="/admin">Dashboard</router-link></li>
+                <li><router-link to="/admin/roster">Roster</router-link></li>
+                <li><router-link to="/admin/audit">Audit Log</router-link></li>
+              </ul>
+            </details>
+          </li>
+        </ul>
+      </div>
+      
+      <div class="navbar-end">
+        <div v-if="!authStore.isAuthenticated" class="flex gap-2">
+          <router-link to="/login" class="btn btn-ghost btn-sm">Login</router-link>
+          <router-link to="/register" class="btn btn-primary btn-sm">Register</router-link>
+        </div>
+        <div v-else class="dropdown dropdown-end">
+          <div tabindex="0" role="button" class="btn btn-ghost btn-circle avatar">
+            <div class="w-10 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
+              <div class="w-full h-full bg-primary/20 flex items-center justify-center">
+                <span class="text-primary font-semibold">
+                  {{ authStore.user?.full_name?.charAt(0) || authStore.user?.username?.charAt(0) || '?' }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <ul tabindex="0" class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow">
+            <li>
+              <router-link :to="`/profile/me`" class="justify-between">
+                My Profile
+                <span class="badge">{{ authStore.user?.role }}</span>
+              </router-link>
+            </li>
+            <li><a>Settings</a></li>
+            <li><a @click="logout">Logout</a></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="min-h-screen">
+      <router-view />
+    </main>
+
+    <!-- Notifications -->
+    <div class="toast toast-top toast-end z-50">
+      <div
+        v-for="notification in notifications"
+        :key="notification.id"
+        class="alert"
+        :class="{
+          'alert-success': notification.type === 'success',
+          'alert-error': notification.type === 'error',
+          'alert-warning': notification.type === 'warning',
+          'alert-info': notification.type === 'info'
+        }"
+      >
+        <svg 
+          v-if="notification.type === 'success'"
+          class="w-6 h-6" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+        <svg 
+          v-else-if="notification.type === 'error'"
+          class="w-6 h-6" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <svg 
+          v-else-if="notification.type === 'warning'"
+          class="w-6 h-6" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16c-.77.833.192 2.5 1.732 2.5z"/>
+        </svg>
+        <svg 
+          v-else
+          class="w-6 h-6" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div>
+          <h3 class="font-bold">{{ notification.title }}</h3>
+          <div class="text-xs">{{ notification.message }}</div>
+        </div>
+        <button 
+          @click="removeNotification(notification.id)" 
+          class="btn btn-sm btn-ghost"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div v-if="globalLoading" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-base-100 p-8 rounded-lg shadow-xl text-center">
+        <div class="loading loading-spinner loading-lg mb-4"></div>
+        <p class="text-lg">Loading...</p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import type { Notification } from '@/types'
+import { UserRole as UserRoleEnum } from '@/types'
+
+const router = useRouter()
+const authStore = useAuthStore()
+
+// Local state
+const notifications = ref<Notification[]>([])
+const globalLoading = ref(false)
+
+// Computed properties
+const canAccessStaff = computed(() => {
+  const user = authStore.user
+  return user && (user.role === UserRoleEnum.Staff || user.role === UserRoleEnum.Admin)
+})
+
+const canAccessAdmin = computed(() => {
+  const user = authStore.user
+  return user && user.role === UserRoleEnum.Admin
+})
+
+// Methods
+async function logout() {
+  globalLoading.value = true
+  try {
+    await authStore.logout()
+    await router.push('/')
+  } finally {
+    globalLoading.value = false
+  }
+}
+
+function addNotification(notification: Omit<Notification, 'id'>) {
+  const id = Date.now().toString() + Math.random().toString(36).substr(2, 9)
+  const newNotification: Notification = { id, ...notification }
+
+  notifications.value.push(newNotification)
+
+  // Auto-remove after duration
+  if (notification.duration !== 0) {
+    setTimeout(() => {
+      removeNotification(id)
+    }, notification.duration || 5000)
+  }
+}
+
+function removeNotification(id: string) {
+  const index = notifications.value.findIndex(n => n.id === id)
+  if (index > -1) {
+    notifications.value.splice(index, 1)
+  }
+}
+
+// Lifecycle
+onMounted(async () => {
+  globalLoading.value = true
+  try {
+    await authStore.initialize()
+  } catch (error) {
+    addNotification({
+      type: 'error',
+      title: 'Initialization Error',
+      message: 'Failed to initialize application',
+      duration: 8000
+    })
+  } finally {
+    globalLoading.value = false
+  }
+})
+</script>
+
+<style scoped>
+.router-link-active {
+  @apply bg-primary text-primary-content;
+}
+
+.toast {
+  max-width: 24rem;
+}
+</style>

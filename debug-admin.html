@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Admin Access</title>
+</head>
+<body>
+    <h1>Debug Admin Access</h1>
+    <p>Open your browser's developer console (F12) and paste this JavaScript to debug your admin access:</p>
+    
+    <code>
+        // Check your current authentication status
+        const authStore = JSON.parse(localStorage.getItem('css_token') || 'null');
+        console.log('Auth Token:', authStore);
+        
+        // Make a request to check your current user
+        fetch('/api/auth/me', {
+            headers: {
+                'Authorization': 'Bearer ' + authStore,
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Current User:', data);
+            if (data.success && data.data) {
+                console.log('User Role:', data.data.role);
+                console.log('Is Admin?', data.data.role === 'admin');
+                console.log('Role Type:', typeof data.data.role);
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    </code>
+    
+    <p>This will help us see what role your user actually has and debug the admin access issue.</p>
+</body>
+</html>

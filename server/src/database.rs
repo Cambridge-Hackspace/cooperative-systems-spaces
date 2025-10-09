@@ -248,6 +248,42 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Update a tool
+    pub fn update_tool(&self, tool_id: uuid::Uuid, payload: &crate::api::tools::UpdateToolRequest) -> Result<crate::models::Tool, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        // Create a modified payload that includes the updated_at timestamp
+        let update_payload = payload.clone();
+
+        // Use the AsChangeset implementation to only update non-None fields
+        diesel::update(tools.filter(id.eq(tool_id)))
+            .set((
+                &update_payload,
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .returning(crate::models::Tool::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Update tool status
+    pub fn update_tool_status(&self, tool_id: uuid::Uuid, new_status: &crate::models::ToolStatus) -> Result<crate::models::Tool, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(tools.filter(id.eq(tool_id)))
+            .set((
+                status.eq(new_status),
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .returning(crate::models::Tool::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Find user by ID
     pub fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, DatabaseError> {
         let mut conn = self.get_connection()?;
@@ -306,6 +342,22 @@ impl DatabaseManager {
         Ok(updated_user)
     }
 
+    /// Update user profile only
+    pub fn update_user_profile(&self, user_id: uuid::Uuid, profile: &serde_json::Value) -> Result<User, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        let updated_user = diesel::update(users::table.filter(users::id.eq(user_id)))
+            .set((
+                users::profile.eq(profile),
+                users::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .returning(User::as_returning())
+            .get_result::<User>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(updated_user)
+    }
+
     /// Delete a user
     /// Delete user (soft delete by setting is_active = false)
     pub fn deactivate_user(&self, user_id: uuid::Uuid) -> Result<User, DatabaseError> {
@@ -336,11 +388,14 @@ impl DatabaseManager {
         let mut conn = self.get_connection()?;
         
         let users = users::table
+            .select(User::as_select())
             .filter(users::is_active.eq(true))
-            .count()
-            .get_result(&mut conn)
+            .order(users::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load(&mut conn)
             .map_err(DatabaseError::Diesel)?;
-        Ok(count)
+        Ok(users)
     }
 
     /// List users with pagination (alias for compatibility)
@@ -349,13 +404,76 @@ impl DatabaseManager {
     }
 
     /// Count total users
-    pub fn count_active_users(&self) -> Result<i64, DatabaseError> {
+    pub fn count_users(&self) -> Result<i64, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        let count = users::table
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(count)
+    }
+
+    /// List all users
+    pub fn get_all_users(&self) -> Result<Vec<User>, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        let users = users::table
+            .select(User::as_select())
+            .order(users::created_at.desc())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(users)
+    }
+
+    /// Get all active users (for training roster)
+    pub fn get_all_active_users(&self) -> Result<Vec<User>, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        let users = users::table
+            .select(User::as_select())
+            .filter(users::is_active.eq(true))
+            .order(users::created_at.desc())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(users)
+    }
+
+    /// Check if a user is a trainer for a specific tool
+    pub fn is_user_trainer_for_tool(&self, user_id: uuid::Uuid, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_trainers;
+        let mut conn = self.get_connection()?;
+
+        let count: i64 = tool_trainers::table
+            .filter(tool_trainers::user_id.eq(user_id))
+            .filter(tool_trainers::tool_id.eq(tool_id))
+            .filter(tool_trainers::is_active.eq(true))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(count > 0)
+    }
+
+    /// Check if a user is a trainer for any tool
+    pub fn is_user_trainer_for_any_tool(&self, user_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_trainers;
+        let mut conn = self.get_connection()?;
+
+        let count: i64 = tool_trainers::table
+            .filter(tool_trainers::user_id.eq(user_id))
+            .filter(tool_trainers::is_active.eq(true))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(count > 0)
     }
 
     /// Count active users
     pub fn count_active_users(&self) -> Result<i64, DatabaseError> {
         let mut conn = self.get_connection()?;
-        
+
         let count = users::table
             .filter(users::is_active.eq(true))
             .count()
@@ -363,14 +481,1151 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)?;
         Ok(count)
     }
+
+    /// Get audit logs with pagination and filtering
+    pub fn get_audit_logs(&self, offset: i64, limit: i64, event_type_filter: Option<String>) -> Result<Vec<crate::models::AuditLog>, diesel::result::Error> {
+        use crate::schema::audit_logs::dsl::*;
+
+        let mut conn = self.pool.get().map_err(|_| diesel::result::Error::NotFound)?;
+
+        let mut query = audit_logs
+            .order(created_at.desc())
+            .into_boxed();
+
+        if let Some(event_filter) = event_type_filter {
+            query = query.filter(event_type.eq(event_filter));
+        }
+
+        query
+            .limit(limit)
+            .offset(offset)
+            .load::<crate::models::AuditLog>(&mut conn)
+    }
+
+    /// Create a new audit log entry
+    pub fn create_audit_log(&self, new_audit_log: &crate::models::NewAuditLog) -> Result<crate::models::AuditLog, DatabaseError> {
+        use crate::schema::audit_logs;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(audit_logs::table)
+            .values(new_audit_log)
+            .returning(crate::models::AuditLog::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get tools with filtering
+    pub fn get_tools(&self, query: crate::api::tools::ToolQuery) -> Result<Vec<crate::models::Tool>, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        let mut diesel_query = tools.into_boxed();
+
+        if let Some(cat) = query.category {
+            diesel_query = diesel_query.filter(category.eq(cat));
+        }
+
+        if let Some(stat) = query.status {
+            diesel_query = diesel_query.filter(status.eq(stat));
+        }
+
+        if let Some(training_required) = query.requires_training {
+            diesel_query = diesel_query.filter(requires_training.eq(training_required));
+        }
+
+        // Apply pagination
+        let page = query.page.unwrap_or(1);
+        let per_page = std::cmp::min(query.per_page.unwrap_or(50), 100);
+        let offset = (page - 1) * per_page;
+
+        diesel_query
+            .order(created_at.desc())
+            .limit(per_page as i64)
+            .offset(offset as i64)
+            .load::<crate::models::Tool>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get a tool by ID
+    pub fn get_tool_by_id(&self, tool_id: uuid::Uuid) -> Result<Option<crate::models::Tool>, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        tools
+            .find(tool_id)
+            .first::<crate::models::Tool>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Create a new tool
+    pub fn create_tool(&self, new_tool: &crate::models::NewTool) -> Result<crate::models::Tool, DatabaseError> {
+        use crate::schema::tools;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(tools::table)
+            .values(new_tool)
+            .returning(crate::models::Tool::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Delete a tool
+    pub fn delete_tool(&self, tool_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(tools.find(tool_id))
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Create a tool event
+    pub fn create_tool_event(&self, new_event: &crate::models::NewToolEvent) -> Result<crate::models::ToolEvent, DatabaseError> {
+        use crate::schema::tool_events;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(tool_events::table)
+            .values(new_event)
+            .returning(crate::models::ToolEvent::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+    /// Get tool events
+    pub fn get_tool_events(&self, _tool_id: uuid::Uuid) -> Result<Vec<crate::models::ToolEvent>, DatabaseError> {
+        use crate::schema::tool_events::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        tool_events
+            .filter(tool_id.eq(_tool_id))
+            .order(created_at.desc())
+            .load::<crate::models::ToolEvent>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Check if user has valid training for a tool
+    pub fn user_has_valid_training(&self, user_id: uuid::Uuid, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::{user_tool_training, tool_training_types};
+
+        let mut conn = self.get_connection()?;
+
+        let training_count: i64 = user_tool_training::table
+            .inner_join(tool_training_types::table)
+            .filter(user_tool_training::user_id.eq(user_id))
+            .filter(tool_training_types::tool_id.eq(tool_id))
+            .filter(
+                user_tool_training::expires_at.is_null()
+                    .or(user_tool_training::expires_at.gt(chrono::Utc::now()))
+            )
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(training_count > 0)
+    }
+
+    // ==================== TRAINING SYSTEM DATABASE METHODS ====================
+
+    /// Create a new training step
+    pub fn create_training_step(&self, new_step: &crate::models::NewTrainingStep) -> Result<crate::models::TrainingStep, DatabaseError> {
+        use crate::schema::training_steps;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(training_steps::table)
+            .values(new_step)
+            .returning(crate::models::TrainingStep::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get training steps with optional filtering
+    pub fn get_training_steps(&self, query: &crate::api::training::TrainingQuery) -> Result<Vec<crate::models::TrainingStep>, DatabaseError> {
+        use crate::schema::training_steps::dsl::*;
+
+        let mut conn = self.get_connection()?;
+        let mut diesel_query = training_steps.into_boxed();
+
+        if let Some(tool_id_filter) = query.tool_id {
+            diesel_query = diesel_query.filter(tool_id.eq(tool_id_filter));
+        }
+
+        let steps = diesel_query
+            .order(step_number.asc())
+            .select(crate::models::TrainingStep::as_select())
+            .load::<crate::models::TrainingStep>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(steps)
+    }
+
+    /// Get a specific training step by ID
+    pub fn get_training_step_by_id(&self, step_id: uuid::Uuid) -> Result<Option<crate::models::TrainingStep>, DatabaseError> {
+        use crate::schema::training_steps::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        let step = training_steps
+            .filter(id.eq(step_id))
+            .select(crate::models::TrainingStep::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(step)
+    }
+
+    /// Update a training step
+    pub fn update_training_step(&self, step_id: uuid::Uuid, update_step: &crate::models::UpdateTrainingStep) -> Result<crate::models::TrainingStep, DatabaseError> {
+        use crate::schema::training_steps::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(training_steps.filter(id.eq(step_id)))
+            .set((
+                update_step,
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .returning(crate::models::TrainingStep::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Update training step position/order
+    pub fn update_training_step_position(&self, step_id: uuid::Uuid, new_step_number: i32) -> Result<(), DatabaseError> {
+        use crate::schema::training_steps::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(training_steps.filter(id.eq(step_id)))
+            .set((
+                step_number.eq(new_step_number),
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(())
+    }
+
+    /// Check if any users have progress for this training step
+    pub fn has_user_progress_for_step(&self, step_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        let count: i64 = crate::schema::user_training_progress::table
+            .filter(crate::schema::user_training_progress::training_step_id.eq(step_id))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(count > 0)
+    }
+
+    /// Delete a training step
+    pub fn delete_training_step(&self, step_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::training_steps::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(training_steps.filter(id.eq(step_id)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(())
+    }
+
+    /// Add a training prerequisite
+    pub fn add_training_prerequisite(&self, new_prereq: &crate::models::NewTrainingPrerequisite) -> Result<crate::models::TrainingPrerequisite, DatabaseError> {
+        use crate::schema::training_prerequisites;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(training_prerequisites::table)
+            .values(new_prereq)
+            .returning(crate::models::TrainingPrerequisite::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get training prerequisites for a step
+    pub fn get_training_prerequisites(&self, step_id: uuid::Uuid) -> Result<Vec<crate::models::TrainingStep>, DatabaseError> {
+        use crate::schema::{training_prerequisites, training_steps};
+
+        let mut conn = self.get_connection()?;
+
+        let prerequisites = training_prerequisites::table
+            .inner_join(training_steps::table.on(training_steps::id.eq(training_prerequisites::prerequisite_step_id)))
+            .filter(training_prerequisites::training_step_id.eq(step_id))
+            .select(crate::models::TrainingStep::as_select())
+            .load::<crate::models::TrainingStep>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(prerequisites)
+    }
+
+    /// Remove a training prerequisite
+    pub fn remove_training_prerequisite(&self, prereq_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::training_prerequisites::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(training_prerequisites.filter(id.eq(prereq_id)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(())
+    }
+
+    /// Get user training progress with filtering
+    pub fn get_user_training_progress(&self, user_id_param: uuid::Uuid, query: &crate::api::training::TrainingQuery) -> Result<Vec<crate::models::UserTrainingProgress>, DatabaseError> {
+        use crate::schema::user_training_progress::dsl::*;
+
+        let mut conn = self.get_connection()?;
+        let mut diesel_query = user_training_progress.into_boxed();
+
+        diesel_query = diesel_query.filter(user_id.eq(user_id_param));
+
+        if let Some(status_filter) = &query.status {
+            diesel_query = diesel_query.filter(status.eq(status_filter));
+        }
+
+        if let Some(instructor_filter) = query.instructor_id {
+            diesel_query = diesel_query.filter(instructor_id.eq(instructor_filter));
+        }
+
+        let progress = diesel_query
+            .select(crate::models::UserTrainingProgress::as_select())
+            .load::<crate::models::UserTrainingProgress>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(progress)
+    }
+
+    /// Get specific user training progress for a step
+    pub fn get_user_training_progress_for_step(&self, user_id_param: uuid::Uuid, step_id: uuid::Uuid) -> Result<Option<crate::models::UserTrainingProgress>, DatabaseError> {
+        use crate::schema::user_training_progress::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        let progress = user_training_progress
+            .filter(user_id.eq(user_id_param))
+            .filter(training_step_id.eq(step_id))
+            .select(crate::models::UserTrainingProgress::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(progress)
+    }
+
+    /// Update user training progress
+    pub fn update_user_training_progress(&self, user_id_param: uuid::Uuid, step_id: uuid::Uuid, update_progress: &crate::models::UpdateUserTrainingProgress) -> Result<crate::models::UserTrainingProgress, DatabaseError> {
+        use crate::schema::user_training_progress::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(
+            user_training_progress
+                .filter(user_id.eq(user_id_param))
+                .filter(training_step_id.eq(step_id))
+        )
+        .set((
+            update_progress,
+            updated_at.eq(chrono::Utc::now())
+        ))
+        .returning(crate::models::UserTrainingProgress::as_returning())
+        .get_result(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Check if user is a certified instructor for a training step
+    pub fn is_certified_instructor(&self, user_id: uuid::Uuid, step_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::training_instructors;
+
+        let mut conn = self.get_connection()?;
+
+        let count: i64 = training_instructors::table
+            .filter(training_instructors::user_id.eq(user_id))
+            .filter(training_instructors::training_step_id.eq(step_id))
+            .filter(
+                training_instructors::expires_at.is_null()
+                    .or(training_instructors::expires_at.gt(chrono::Utc::now()))
+            )
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(count > 0)
+    }
+
+    /// Certify a user as instructor
+    pub fn certify_instructor(&self, new_instructor: &crate::models::NewTrainingInstructor) -> Result<crate::models::TrainingInstructor, DatabaseError> {
+        use crate::schema::training_instructors;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(training_instructors::table)
+            .values(new_instructor)
+            .returning(crate::models::TrainingInstructor::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get training instructors with filtering
+    pub fn get_training_instructors(&self, query: &crate::api::training::TrainingQuery) -> Result<Vec<crate::models::TrainingInstructor>, DatabaseError> {
+        use crate::schema::training_instructors::dsl::*;
+
+        let mut conn = self.get_connection()?;
+        let mut diesel_query = training_instructors.into_boxed();
+
+        if let Some(user_filter) = query.user_id {
+            diesel_query = diesel_query.filter(user_id.eq(user_filter));
+        }
+
+        let instructors = diesel_query
+            .select(crate::models::TrainingInstructor::as_select())
+            .load::<crate::models::TrainingInstructor>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(instructors)
+    }
+
+    /// Revoke instructor certification
+    pub fn revoke_instructor_certification(&self, instructor_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::training_instructors::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::delete(training_instructors.filter(id.eq(instructor_id)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(())
+    }
+
+    // ==================== TRAINERS DATABASE METHODS ====================
+
+    /// Create a new training record
+    pub fn create_training_record(&self, new_record: &crate::models::trainers::NewTrainingRecord) -> Result<crate::models::trainers::TrainingRecord, DatabaseError> {
+        use crate::schema::{training_records, user_training_progress};
+
+        let mut conn = self.get_connection()?;
+
+        // Start a transaction to ensure both operations succeed or both fail
+        conn.build_transaction().run::<_, DatabaseError, _>(|conn| {
+            // Create the training record
+            let training_record = diesel::insert_into(training_records::table)
+                .values(new_record)
+                .returning(crate::models::trainers::TrainingRecord::as_returning())
+                .get_result(conn)
+                .map_err(DatabaseError::Diesel)?;
+
+            // Map training record completion status to training progress status
+            let training_status = match new_record.completion_status.as_str() {
+                "completed" => crate::models::TrainingStatus::Completed,
+                "partial" => crate::models::TrainingStatus::InProgress,
+                "failed" => crate::models::TrainingStatus::Failed,
+                _ => crate::models::TrainingStatus::InProgress,
+            };
+
+            // If there's a specific training step, create progress for that step
+            if let Some(step_id) = new_record.training_step_id {
+                // Calculate expiry date for completed training
+                let expires_at = if training_status == crate::models::TrainingStatus::Completed {
+                    if let Some(step) = self.get_training_step_by_id(step_id)? {
+                        step.calculate_expiry_date()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let completed_at = if training_status == crate::models::TrainingStatus::Completed {
+                    Some(chrono::Utc::now())
+                } else {
+                    None
+                };
+
+                // Create or update user training progress
+                let new_progress = crate::models::NewUserTrainingProgress {
+                    user_id: new_record.trainee_user_id,
+                    training_step_id: step_id,
+                    status: Some(training_status.clone()),
+                    instructor_id: Some(new_record.trainer_user_id),
+                    started_at: Some(chrono::Utc::now()),
+                    notes: new_record.notes.clone(),
+                };
+
+                diesel::insert_into(user_training_progress::table)
+                    .values(&new_progress)
+                    .on_conflict((user_training_progress::user_id, user_training_progress::training_step_id))
+                    .do_update()
+                    .set((
+                        user_training_progress::status.eq(training_status),
+                        user_training_progress::instructor_id.eq(new_record.trainer_user_id),
+                        user_training_progress::completed_at.eq(completed_at),
+                        user_training_progress::expires_at.eq(expires_at),
+                        user_training_progress::notes.eq(&new_record.notes),
+                        user_training_progress::updated_at.eq(chrono::Utc::now()),
+                    ))
+                    .execute(conn)
+                    .map_err(DatabaseError::Diesel)?;
+            } else {
+                // If no specific training step is provided, we need to find or create
+                // a general training step for this tool, or handle this case appropriately
+                // For now, we'll log a warning and continue without creating progress
+                warn!("Training record created without specific training_step_id for tool {}", new_record.tool_id);
+            }
+
+            Ok(training_record)
+        })
+    }
+
+    /// Get training records with users information
+    pub fn get_training_records_with_users(
+        &self,
+        query: &crate::api::trainers::TrainingRecordsQuery,
+    ) -> Result<Vec<crate::models::trainers::TrainingRecordWithUsers>, DatabaseError> {
+        use crate::schema::{training_records, users, tools};
+
+        let mut conn = self.get_connection()?;
+
+        // Build the query based on filters
+        let mut diesel_query = training_records::table
+            .inner_join(users::table.on(users::id.eq(training_records::trainee_user_id)))
+            .inner_join(tools::table.on(tools::id.eq(training_records::tool_id)))
+            .into_boxed();
+
+        if let Some(tool_filter) = query.tool_id {
+            diesel_query = diesel_query.filter(training_records::tool_id.eq(tool_filter));
+        }
+
+        if let Some(trainer_filter) = query.trainer_id {
+            diesel_query = diesel_query.filter(training_records::trainer_user_id.eq(trainer_filter));
+        }
+
+        if let Some(trainee_filter) = query.trainee_id {
+            diesel_query = diesel_query.filter(training_records::trainee_user_id.eq(trainee_filter));
+        }
+
+        // Execute the query with joins to get the data we need
+        let query = diesel_query.select((
+            crate::models::trainers::TrainingRecord::as_select(),
+            crate::models::User::as_select(),
+            crate::models::Tool::as_select(),
+        ));
+
+        let results: Vec<(crate::models::trainers::TrainingRecord, crate::models::User, crate::models::Tool)> = query
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        // Transform the results to include the trainer names
+        let mut records_with_users = Vec::new();
+
+        for (record, trainee_user, tool) in results {
+            // Get trainer info
+            let trainer_user = users::table
+                .filter(users::id.eq(record.trainer_user_id))
+                .select(crate::models::User::as_select())
+                .first::<crate::models::User>(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+
+            records_with_users.push(crate::models::trainers::TrainingRecordWithUsers {
+                record,
+                trainee_name: trainee_user.full_name,
+                trainer_name: trainer_user.full_name,
+                tool_name: tool.name,
+            });
+        }
+
+        Ok(records_with_users)
+    }
+
+    /// Get training records for a specific user (either as trainer or trainee)
+    pub fn get_user_training_records(&self, user_id_param: uuid::Uuid, as_trainer: bool) -> Result<Vec<crate::models::trainers::TrainingRecordWithUsers>, DatabaseError> {
+        let query = crate::api::trainers::TrainingRecordsQuery {
+            tool_id: None,
+            trainer_id: if as_trainer { Some(user_id_param) } else { None },
+            trainee_id: if !as_trainer { Some(user_id_param) } else { None },
+            limit: Some(100),
+            offset: Some(0),
+        };
+        
+        self.get_training_records_with_users(&query)
+    }
+
+    /// Update a training record
+    pub fn update_training_record(&self, record_id: uuid::Uuid, updates: &crate::models::trainers::UpdateTrainingRecord) -> Result<crate::models::trainers::TrainingRecord, DatabaseError> {
+        use crate::schema::training_records::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(training_records.filter(id.eq(record_id)))
+            .set((
+                updates,
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .returning(crate::models::trainers::TrainingRecord::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Create a new tool trainer assignment
+    pub fn create_tool_trainer(&self, new_trainer: &crate::models::trainers::NewToolTrainer) -> Result<crate::models::trainers::ToolTrainer, DatabaseError> {
+        use crate::schema::tool_trainers;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(tool_trainers::table)
+            .values(new_trainer)
+            .returning(crate::models::trainers::ToolTrainer::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get tool trainers with optional filtering
+    pub fn get_tool_trainers_list(&self, tool_id_param: Option<uuid::Uuid>, user_id_param: Option<uuid::Uuid>) -> Result<Vec<crate::models::trainers::ToolTrainer>, DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+
+        let mut conn = self.get_connection()?;
+        let mut query = tool_trainers.into_boxed();
+
+        if let Some(tool_filter) = tool_id_param {
+            query = query.filter(tool_id.eq(tool_filter));
+        }
+
+        if let Some(user_filter) = user_id_param {
+            query = query.filter(user_id.eq(user_filter));
+        }
+
+        query
+            .filter(is_active.eq(true))
+            .select(crate::models::trainers::ToolTrainer::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Update tool trainer assignment
+    pub fn update_tool_trainer(&self, tool_id_param: uuid::Uuid, user_id_param: uuid::Uuid, updates: &crate::models::trainers::UpdateToolTrainer) -> Result<crate::models::trainers::ToolTrainer, DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(tool_trainers
+            .filter(tool_id.eq(tool_id_param))
+            .filter(user_id.eq(user_id_param)))
+            .set((
+                updates,
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .returning(crate::models::trainers::ToolTrainer::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Remove tool trainer assignment (soft delete)
+    pub fn remove_tool_trainer(&self, tool_id_param: uuid::Uuid, user_id_param: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(tool_trainers
+            .filter(tool_id.eq(tool_id_param))
+            .filter(user_id.eq(user_id_param)))
+            .set((
+                is_active.eq(false),
+                updated_at.eq(chrono::Utc::now())
+            ))
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Remove tool trainer assignment by user and tool ID
+    pub fn remove_tool_trainer_by_user_tool(&self, user_id: uuid::Uuid, tool_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        diesel::update(tool_trainers
+            .filter(user_id.eq(user_id))
+            .filter(tool_id.eq(tool_id))
+            .filter(is_active.eq(true))
+        )
+        .set((
+            is_active.eq(false),
+            updated_at.eq(chrono::Utc::now())
+        ))
+        .execute(&mut conn)
+        .map(|_| ())
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get training history for a specific tool with detailed information
+    pub fn get_training_history_for_tool(&self, tool_id: uuid::Uuid, query: &crate::api::training::TrainingHistoryQuery) -> Result<Vec<crate::api::training::TrainingHistoryRecord>, DatabaseError> {
+        use crate::schema::{training_records, users, tools, training_steps};
+        let mut conn = self.get_connection()?;
+
+        // Note: Diesel doesn't support joining the same table twice with different aliases easily,
+        // so we'll do a simpler query and then enrich the data
+        let results = training_records::table
+            .filter(training_records::tool_id.eq(tool_id))
+            .select((
+                training_records::id,
+                training_records::tool_id,
+                training_records::training_step_id,
+                training_records::trainee_user_id,
+                training_records::trainer_user_id,
+                training_records::training_date,
+                training_records::completion_status,
+                training_records::minutes_trained,
+                training_records::notes,
+                training_records::created_at,
+                training_records::updated_at,
+            ))
+            .order_by(training_records::training_date.desc())
+            .load::<(
+                uuid::Uuid,  // record id
+                uuid::Uuid,  // tool_id
+                Option<uuid::Uuid>,  // training_step_id (nullable)
+                uuid::Uuid,  // trainee_user_id
+                uuid::Uuid,  // trainer_user_id
+                chrono::NaiveDate,      // training_date
+                String,      // completion_status
+                Option<i32>, // minutes_trained
+                Option<String>, // notes
+                chrono::NaiveDateTime, // created_at
+                chrono::NaiveDateTime, // updated_at
+            )>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        // Now we need to enrich this data with tool, user, and step information
+        let mut history_records = Vec::new();
+
+        for (id, tool_id, training_step_id, trainee_user_id, trainer_user_id, training_date, completion_status, minutes_trained, notes, created_at, updated_at) in results {
+            // Get tool info
+            let tool = tools::table
+                .filter(tools::id.eq(tool_id))
+                .select(tools::name)
+                .first::<String>(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+
+            // Get trainee info
+            let (trainee_name, trainee_email) = users::table
+                .filter(users::id.eq(trainee_user_id))
+                .select((users::full_name, users::email))
+                .first::<(String, String)>(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+
+            // Get trainer info
+            let (trainer_name, trainer_email) = users::table
+                .filter(users::id.eq(trainer_user_id))
+                .select((users::full_name, users::email))
+                .first::<(String, String)>(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+
+            // Get training step info (handle nullable training_step_id)
+            let (step_name, step_number, actual_training_step_id) = if let Some(step_id) = training_step_id {
+                let (name, number) = training_steps::table
+                    .filter(training_steps::id.eq(step_id))
+                    .select((training_steps::step_name, training_steps::step_number))
+                    .first::<(String, i32)>(&mut conn)
+                    .map_err(DatabaseError::Diesel)?;
+                (name, number, step_id)
+            } else {
+                ("General Training".to_string(), 0, uuid::Uuid::nil())
+            };
+
+            history_records.push(crate::api::training::TrainingHistoryRecord {
+                id,
+                tool_id,
+                tool_name: tool,
+                training_step_id: actual_training_step_id,
+                step_name,
+                step_number,
+                trainee_user_id,
+                trainee_name,
+                trainee_email,
+                trainer_user_id,
+                trainer_name,
+                trainer_email,
+                training_date,
+                completion_status,
+                minutes_trained,
+                notes,
+                created_at,
+                updated_at,
+            });
+        }
+
+        Ok(history_records)
+    }
+
+    /// Check if user can access a tool (all training complete and valid)
+    pub fn can_access_tool(&self, user_id: uuid::Uuid, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        // First check if tool requires training
+        let tool = self.get_tool_by_id(tool_id)?
+            .ok_or_else(|| DatabaseError::Other("Tool not found".to_string()))?;
+
+        if !tool.requires_training {
+            return Ok(true); // No training required
+        }
+
+        // Get all required training steps for this tool
+        use crate::schema::training_steps;
+        let mut conn = self.get_connection()?;
+
+        let required_steps: Vec<uuid::Uuid> = training_steps::table
+            .filter(training_steps::tool_id.eq(tool_id))
+            .select(training_steps::id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        // Check if user has completed all required steps with valid (non-expired) certifications
+        for step_id in required_steps {
+            // Check for any completed training for this step
+            let has_completed_training = crate::schema::user_training_progress::table
+                .filter(crate::schema::user_training_progress::user_id.eq(user_id))
+                .filter(crate::schema::user_training_progress::training_step_id.eq(step_id))
+                .count()
+                .get_result::<i64>(&mut conn)
+                .map_err(DatabaseError::Diesel)?
+                > 0;
+
+            if !has_completed_training {
+                return Ok(false); // Missing training for this step
+            }
+        }
+
+        Ok(true) // All required training is complete and valid
+    }
+
+    // Placeholder implementations for complex training methods
+    // These would need full business logic implementation
+
+    /// Get comprehensive training overview for a tool
+    pub fn get_tool_training_overview(&self, tool_id: uuid::Uuid, user_id: uuid::Uuid) -> Result<crate::models::ToolTrainingOverview, DatabaseError> {
+        // Implementation: Get tool and training steps
+        let tool = self.get_tool_by_id(tool_id)?
+            .ok_or_else(|| DatabaseError::Other("Tool not found".to_string()))?;
+
+        // Get all training steps for this tool with user progress
+        let steps = self.get_tool_training_steps_with_progress(tool_id, user_id)?;
+
+        // Calculate overall progress
+        let overall_progress = if steps.is_empty() {
+            0.0_f32
+        } else {
+            let completed_steps = steps.iter().filter(|s| {
+                s.user_progress.as_ref().map_or(false, |p| p.status == crate::models::TrainingStatus::Completed)
+            }).count();
+            // Convert to percentage (0.25 becomes 25.0)
+            (completed_steps as f32 / steps.len() as f32) * 100.0
+        };
+
+        // Find next step to complete - any step that's available and not completed
+        let next_step = steps.iter()
+            .find(|s| {
+                // Step is available and either has no progress or progress is not completed
+                s.is_available && 
+                s.user_progress.as_ref().map_or(true, |p| p.status != crate::models::TrainingStatus::Completed)
+            })
+            .map(|s| s.step.clone());
+
+        Ok(crate::models::ToolTrainingOverview {
+            tool_id,
+            tool_name: tool.name,
+            steps,
+            overall_progress,
+            can_access_tool: self.can_access_tool(user_id, tool_id)?,
+            next_step,
+        })
+    }
+
+    /// Get tool training steps with user progress
+    pub fn get_tool_training_steps_with_progress(&self, tool_id_param: uuid::Uuid, user_id_param: uuid::Uuid) -> Result<Vec<crate::models::TrainingStepWithProgress>, DatabaseError> {
+        use crate::schema::{training_steps, user_training_progress};
+        
+        let mut conn = self.get_connection()?;
+        
+        // Get all training steps for the tool
+        let steps: Vec<crate::models::TrainingStep> = training_steps::table
+            .filter(training_steps::tool_id.eq(tool_id_param))
+            .order(training_steps::step_number.asc())
+            .select(crate::models::TrainingStep::as_select())
+            .load::<crate::models::TrainingStep>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        
+        let mut result = Vec::new();
+        
+        for step in steps {
+            // Get user's progress for this step (if any)
+            let user_progress: Option<crate::models::UserTrainingProgress> = user_training_progress::table
+                .filter(user_training_progress::user_id.eq(user_id_param))
+                .filter(user_training_progress::training_step_id.eq(step.id))
+                .select(crate::models::UserTrainingProgress::as_select())
+                .first(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?;
+            
+            // Prerequisites concept removed - return empty vector
+            let prerequisites = Vec::new();
+            
+            // All training steps are available by default (no prerequisites)
+            let is_available = true;
+            
+            // Check if instructor is required for this step
+            let instructor_required = step.requires_instructor();
+            
+            result.push(crate::models::TrainingStepWithProgress {
+                step: step,
+                prerequisites: prerequisites,
+                user_progress: user_progress,
+                is_available: is_available,
+                instructor_required: instructor_required,
+            });
+        }
+        
+        Ok(result)
+    }
+
+    /// Check if user can start a training step (no prerequisites - all steps available)
+    pub fn can_start_training_step(&self, _user_id: uuid::Uuid, _step_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        // Prerequisites concept removed - all training steps are available by default
+        // Users can start any training step regardless of other completed steps
+        Ok(true)
+    }
+
+    /// Start a training session
+    pub fn start_training_session(&self, user_id_param: uuid::Uuid, request: &crate::models::StartTrainingRequest) -> Result<crate::models::UserTrainingProgress, DatabaseError> {
+        use crate::schema::user_training_progress;
+
+        let mut conn = self.get_connection()?;
+
+        // Create or update progress record
+        let new_progress = crate::models::NewUserTrainingProgress {
+            user_id: user_id_param,
+            training_step_id: request.training_step_id,
+            status: Some(crate::models::TrainingStatus::InProgress),
+            instructor_id: request.instructor_id,
+            started_at: Some(chrono::Utc::now()),
+            notes: request.notes.clone(),
+        };
+
+        diesel::insert_into(user_training_progress::table)
+            .values(&new_progress)
+            .on_conflict((user_training_progress::user_id, user_training_progress::training_step_id))
+            .do_update()
+            .set((
+                user_training_progress::status.eq(crate::models::TrainingStatus::InProgress),
+                user_training_progress::instructor_id.eq(request.instructor_id),
+                user_training_progress::started_at.eq(chrono::Utc::now()),
+                user_training_progress::updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::UserTrainingProgress::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Complete a training session
+    pub fn complete_training_session(&self, user_id_param: uuid::Uuid, request: &crate::models::CompleteTrainingRequest) -> Result<crate::models::UserTrainingProgress, DatabaseError> {
+        use crate::schema::user_training_progress;
+
+        let mut conn = self.get_connection()?;
+
+        let final_status = if request.passed {
+            crate::models::TrainingStatus::Completed
+        } else {
+            crate::models::TrainingStatus::Failed
+        };
+
+        // Calculate expiry date if training was passed
+        let expires_at = if request.passed {
+            // Get the training step to check expiry days
+            if let Some(step) = self.get_training_step_by_id(request.training_step_id)? {
+                step.calculate_expiry_date()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let res = diesel::update(
+            user_training_progress::table
+                .filter(user_training_progress::user_id.eq(user_id_param))
+                .filter(user_training_progress::training_step_id.eq(request.training_step_id))
+        )
+        .set((
+            user_training_progress::status.eq(final_status),
+            user_training_progress::completed_at.eq(chrono::Utc::now()),
+            user_training_progress::expires_at.eq(expires_at),
+            user_training_progress::assessment_score.eq(request.assessment_score),
+            user_training_progress::notes.eq(&request.notes),
+            user_training_progress::updated_at.eq(chrono::Utc::now()),
+        ))
+        .returning(crate::models::UserTrainingProgress::as_returning())
+        .get_result(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(res)
+    }
 }
 
-/// Helper function to mask database passwords in URLs for logging
-fn mask_password(url: &str) -> String {
-    url.split('@').nth(1).map_or_else(
-        || url.to_string(),
-        |host_part| format!("postgresql://***:***@{}", host_part)
-    )
+// ==================== TRAINER ASSIGNMENT METHODS ====================
+
+impl DatabaseManager {
+    /// Assign a user as a trainer for a specific tool
+    pub fn assign_tool_trainer(&self, new_trainer: &crate::models::NewToolTrainer) -> Result<crate::models::trainers::ToolTrainer, DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        diesel::insert_into(tool_trainers)
+            .values(new_trainer)
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get all active trainers for a specific tool
+    pub fn get_tool_trainers(&self, tool_id_param: uuid::Uuid, include_inactive: bool) -> Result<Vec<crate::models::trainers::ToolTrainerWithUser>, DatabaseError> {
+        use crate::schema::{tool_trainers, users};
+        let mut conn = self.get_connection()?;
+
+        let mut query = tool_trainers::table
+            .inner_join(users::table.on(tool_trainers::user_id.eq(users::id)))
+            .filter(tool_trainers::tool_id.eq(tool_id_param))
+            .into_boxed();
+
+        if !include_inactive {
+            query = query.filter(tool_trainers::is_active.eq(true));
+        }
+
+        let results: Vec<(crate::models::trainers::ToolTrainer, crate::models::User)> = query
+            .select((crate::models::trainers::ToolTrainer::as_select(), crate::models::User::as_select()))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(results.into_iter().map(|(trainer, user)| {
+            crate::models::trainers::ToolTrainerWithUser {
+                trainer,
+                user_name: user.username,
+                user_email: user.email,
+                user_full_name: Some(user.full_name),
+            }
+        }).collect())
+    }
+
+    /// Get a specific tool trainer assignment
+    pub fn get_tool_trainer(&self, tool_id_param: uuid::Uuid, user_id_param: uuid::Uuid) -> Result<Option<crate::models::trainers::ToolTrainer>, DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        tool_trainers
+            .filter(tool_id.eq(tool_id_param))
+            .filter(user_id.eq(user_id_param))
+            .select(crate::models::trainers::ToolTrainer::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+
+
+
+
+    /// Check if a user is an active trainer for a specific tool
+    pub fn is_active_tool_trainer(&self, tool_id_param: uuid::Uuid, user_id_param: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_trainers::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        let trainer = tool_trainers
+            .filter(tool_id.eq(tool_id_param))
+            .filter(user_id.eq(user_id_param))
+            .filter(is_active.eq(true))
+            .select(crate::models::trainers::ToolTrainer::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(trainer.map_or(false, |t| t.is_currently_active()))
+    }
+
+
+
+    /// Get training records with optional filters
+    pub fn get_training_records(
+        &self, 
+        tool_id_filter: Option<uuid::Uuid>,
+        trainer_id_filter: Option<uuid::Uuid>,
+        trainee_id_filter: Option<uuid::Uuid>,
+        limit: Option<i64>,
+        offset: Option<i64>
+    ) -> Result<Vec<crate::models::trainers::TrainingRecordWithUsers>, DatabaseError> {
+        use crate::schema::{training_records, users, tools};
+        let mut conn = self.get_connection()?;
+
+        let mut query = training_records::table
+            .inner_join(users::table.on(training_records::trainee_user_id.eq(users::id)))
+            .inner_join(tools::table.on(training_records::tool_id.eq(tools::id)))
+            .into_boxed();
+
+        // Apply filters
+        if let Some(tool_id) = tool_id_filter {
+            query = query.filter(training_records::tool_id.eq(tool_id));
+        }
+        if let Some(trainer_id) = trainer_id_filter {
+            query = query.filter(training_records::trainer_user_id.eq(trainer_id));
+        }
+        if let Some(trainee_id) = trainee_id_filter {
+            query = query.filter(training_records::trainee_user_id.eq(trainee_id));
+        }
+
+        // Apply pagination
+        if let Some(limit_val) = limit {
+            query = query.limit(limit_val);
+        }
+        if let Some(offset_val) = offset {
+            query = query.offset(offset_val);
+        }
+
+        let results: Vec<(crate::models::trainers::TrainingRecord, crate::models::User, crate::models::Tool)> = query
+            .select((
+                crate::models::trainers::TrainingRecord::as_select(),
+                crate::models::User::as_select(),
+                crate::models::Tool::as_select()
+            ))
+            .order_by(training_records::training_date.desc())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        // Get trainer names for each record
+        let mut records_with_users = Vec::new();
+        for (record, trainee_user, tool) in results {
+            let trainer_user = self.find_user_by_id(record.trainer_user_id)?
+                .ok_or_else(|| DatabaseError::Other("Trainer user not found".to_string()))?;
+
+            records_with_users.push(crate::models::trainers::TrainingRecordWithUsers {
+                record,
+                trainee_name: trainee_user.full_name,
+                trainer_name: trainer_user.full_name,
+                tool_name: tool.name,
+            });
+        }
+
+        Ok(records_with_users)
+    }
+
+
+
+
 }
 
 #[cfg(test)]

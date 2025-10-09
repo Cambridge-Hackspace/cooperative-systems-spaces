@@ -1,3 +1,7 @@
+// Tool and training types for the frontend
+export * from './tools';
+export * from './training';
+
 // API Response types
 export interface ApiResponse<T> {
   success: boolean
@@ -16,11 +20,11 @@ export interface PaginatedResponse<T> {
 
 // User types
 export enum UserRole {
-  Unknown = 'unknown',
-  Newbie = 'newbie',
-  Member = 'member',
-  Staff = 'staff',
-  Admin = 'admin'
+  Unknown = 'Unknown',
+  Newbie = 'Newbie',
+  Member = 'Member',
+  Staff = 'Staff',
+  Admin = 'Admin'
 }
 
 export interface User {
@@ -32,6 +36,54 @@ export interface User {
   role: UserRole
   created_at: string
   updated_at: string
+  profile: Record<string, any>
+}
+
+// Profile types
+export enum ProfileFieldType {
+  Text = 'Text',
+  Email = 'Email',
+  Phone = 'Phone',
+  Number = 'Number',
+  Date = 'Date',
+  Boolean = 'Boolean',
+  Select = 'Select'
+}
+
+export interface ProfileFieldSelectOptions {
+  options: string[]
+}
+
+export interface ProfileField {
+  key: string
+  label: string
+  field_type: ProfileFieldType | { Select: ProfileFieldSelectOptions }
+  required: boolean
+  help_text?: string
+}
+
+export interface UserConfig {
+  profile_fields: ProfileField[]
+  profiles_enabled: boolean
+}
+
+export interface ProfileResponse {
+  user_id: string
+  profile: Record<string, any>
+}
+
+export interface UpdateProfileRequest {
+  profile: Record<string, any>
+}
+
+export interface ProfileConfigResponse {
+  profile_fields: ProfileField[]
+  profiles_enabled: boolean
+}
+
+export interface UpdateProfileConfigRequest {
+  profile_fields: ProfileField[]
+  profiles_enabled: boolean
 }
 
 // Auth types
@@ -71,6 +123,18 @@ export interface NavigationItem {
   requiresAuth?: boolean
   requiredRole?: UserRole
   children?: NavigationItem[]
+}
+
+// Audit Log types
+export interface AuditLog {
+  id: string
+  event_type: string
+  user_id: string | null
+  actor_id: string | null
+  event_data: any
+  ip_address: string | null
+  user_agent: string | null
+  created_at: string
 }
 
 // Theme types

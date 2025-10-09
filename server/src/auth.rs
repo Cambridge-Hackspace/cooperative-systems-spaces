@@ -1,6 +1,6 @@
 use std::fmt::Display;
 use axum::{
-    extract::{FromRequestParts},
+    extract::{FromRef, FromRequestParts},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -224,7 +224,7 @@ where
             .ok_or(AuthError::InvalidToken)?;
 
         // Create auth service
-        let config = app_state.config.get_config();
+        let config = app_state.config_manager.get_config();
         let auth_service = AuthService::new(
             &app_state.db,
             &config.auth.jwt_secret,
@@ -234,17 +234,6 @@ where
         let user = auth_service.get_user_from_token(token)?;
 
         Ok(AuthUser(user))
-    }
-}
-
-// Utility trait for extracting AppState from state
-pub trait FromRef<T> {
-    fn from_ref(input: &T) -> Self;
-}
-
-impl FromRef<AppState> for AppState {
-    fn from_ref(input: &AppState) -> Self {
-        input.clone()
     }
 }
 

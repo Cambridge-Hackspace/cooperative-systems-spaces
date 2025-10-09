@@ -4,7 +4,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use validator::Validate;
 
 use crate::{
     api::{
@@ -12,7 +11,6 @@ use crate::{
         responses::{ApiResponse, LoginRequest, LoginResponse, RegisterRequest, UserResponse},
     },
     auth::{AuthService, AuthUser, PasswordHashUtil},
-    database::DatabaseError,
     models::NewUser,
     AppState,
 };
@@ -58,7 +56,7 @@ async fn register(
         .map_err(|_| ApiError::InternalServerError("Failed to hash password".to_string()))?;
 
     // Check if this should be the first admin user
-    let config = state.config.get_config();
+    let config = state.config_manager.get_config();
     let should_be_admin = config.should_grant_admin_role(&payload.email);
 
     // Create new user with appropriate role
@@ -83,6 +81,18 @@ async fn register(
     let created_user = state.db.create_user(&new_user)
         .map_err(ApiError::from)?;
 
+    // Log the registration event
+    if let Err(e) = state.audit_logger.log_user_registration(
+        created_user.id,
+        &created_user.username,
+        &created_user.email,
+        "Newbie", // Default role for new users
+        None, // No IP tracking for now
+        None, // No User-Agent tracking for now
+    ).await {
+        tracing::warn!("Failed to log user registration: {}", e);
+    }
+
     let message = if should_be_admin {
         "Admin user registered successfully".to_string()
     } else {
@@ -104,7 +114,7 @@ async fn login(
         return Err(ApiError::BadRequest("Username/email and password are required".to_string()));
     }
 
-    let config = state.config.get_config();
+    let config = state.config_manager.get_config();
     let auth_service = AuthService::new(
         &state.db,
         &config.auth.jwt_secret,
@@ -120,9 +130,21 @@ async fn login(
 
     let response = LoginResponse {
         token,
-        user: UserResponse::from(user),
+        user: UserResponse::from(user.clone()),
         expires_in: 24 * 60 * 60, // 24 hours in seconds
     };
+
+    // Log the successful login
+    if let Err(e) = state.audit_logger.log_event(
+        crate::models::AuditEventType::UserLogin,
+        Some(user.id),
+        None,
+        serde_json::json!({"username": user.username, "action": "User logged in successfully"}),
+        None, // No IP tracking for now
+        None, // No User-Agent tracking for now
+    ).await {
+        tracing::warn!("Failed to log user login: {}", e);
+    }
 
     Ok(Json(ApiResponse::success_with_message(
         response,
