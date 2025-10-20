@@ -121,13 +121,13 @@ jobs:
         run: cargo build --release
 
       - name: Upload CLI artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.artifact_name }}
           path: cli/target/release/${{ matrix.asset_name }}
 
       - name: Upload Server artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: server-${{ matrix.artifact_name }}
           path: server/target/release/${{ matrix.asset_name }}
