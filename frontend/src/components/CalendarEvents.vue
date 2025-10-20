@@ -21,7 +21,7 @@
 
     <div v-else-if="error" class="error-state">
       <p>{{ error }}</p>
-      <button @click="fetchEvents" class="retry-btn">Try Again</button>
+      <button @click="() => fetchEvents()" class="retry-btn">Try Again</button>
     </div>
 
     <div v-else-if="events.length === 0" class="empty-state">
@@ -75,97 +75,100 @@
   </div>
 </template>
 
-<script>
-export default {
-  name: 'CalendarEvents',
-  
-  data() {
-    return {
-      events: [],
-      loading: true,
-      refreshing: false,
-      error: null,
-      refreshInterval: null,
-    };
-  },
+<script setup lang="ts">
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 
-  mounted() {
-    this.fetchEvents();
-    // Auto-refresh every 15 minutes
-    this.refreshInterval = setInterval(() => {
-      this.fetchEvents(true); // Silent refresh
-    }, 15 * 60 * 1000);
-  },
+interface CalendarEvent {
+  title: string
+  description?: string
+  start: string
+  end?: string
+  location?: string
+  calendar_name: string
+  calendar_color: string
+  all_day: boolean
+}
 
-  beforeUnmount() {
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
+const events = ref<CalendarEvent[]>([])
+const loading = ref(true)
+const refreshing = ref(false)
+const error = ref<string | null>(null)
+let refreshInterval: number | null = null
+
+onMounted(() => {
+  fetchEvents()
+  // Auto-refresh every 15 minutes
+  refreshInterval = window.setInterval(() => {
+    fetchEvents(true) // Silent refresh
+  }, 15 * 60 * 1000)
+})
+
+onBeforeUnmount(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+  }
+})
+
+async function fetchEvents(silent = false) {
+  if (!silent) {
+    loading.value = true
+  }
+  error.value = null
+
+  try {
+    const response = await fetch('/api/calendar/events')
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch events: ${response.statusText}`)
     }
-  },
 
-  methods: {
-    async fetchEvents(silent = false) {
-      if (!silent) {
-        this.loading = true;
-      }
-      this.error = null;
+    events.value = await response.json()
+  } catch (err) {
+    console.error('Error fetching calendar events:', err)
+    error.value = err instanceof Error ? err.message : 'Failed to load calendar events'
+  } finally {
+    loading.value = false
+  }
+}
 
-      try {
-        const response = await fetch('/api/calendar/events');
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch events: ${response.statusText}`);
-        }
+async function refreshEvents() {
+  refreshing.value = true
+  error.value = null
 
-        this.events = await response.json();
-      } catch (err) {
-        console.error('Error fetching calendar events:', err);
-        this.error = err.message || 'Failed to load calendar events';
-      } finally {
-        this.loading = false;
-      }
-    },
+  try {
+    const response = await fetch('/api/calendar/events/refresh')
+    
+    if (!response.ok) {
+      throw new Error(`Failed to refresh events: ${response.statusText}`)
+    }
 
-    async refreshEvents() {
-      this.refreshing = true;
-      this.error = null;
+    events.value = await response.json()
+  } catch (err) {
+    console.error('Error refreshing calendar events:', err)
+    error.value = err instanceof Error ? err.message : 'Failed to refresh calendar events'
+  } finally {
+    refreshing.value = false
+  }
+}
 
-      try {
-        const response = await fetch('/api/calendar/events/refresh');
-        
-        if (!response.ok) {
-          throw new Error(`Failed to refresh events: ${response.statusText}`);
-        }
+function formatDay(dateString: string): number {
+  const date = new Date(dateString)
+  return date.getDate()
+}
 
-        this.events = await response.json();
-      } catch (err) {
-        console.error('Error refreshing calendar events:', err);
-        this.error = err.message || 'Failed to refresh calendar events';
-      } finally {
-        this.refreshing = false;
-      }
-    },
+function formatMonth(dateString: string): string {
+  const date = new Date(dateString)
+  return date.toLocaleDateString('en-US', { month: 'short' })
+}
 
-    formatDay(dateString) {
-      const date = new Date(dateString);
-      return date.getDate();
-    },
-
-    formatMonth(dateString) {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { month: 'short' });
-    },
-
-    formatTime(dateString) {
-      const date = new Date(dateString);
-      return date.toLocaleTimeString('en-US', { 
-        hour: 'numeric', 
-        minute: '2-digit',
-        hour12: true 
-      });
-    },
-  },
-};
+function formatTime(dateString: string): string {
+  const date = new Date(dateString)
+  return date.toLocaleTimeString('en-US', { 
+    hour: 'numeric', 
+    minute: '2-digit',
+    hour12: true 
+  })
+}
 </script>
 
 <style scoped>
