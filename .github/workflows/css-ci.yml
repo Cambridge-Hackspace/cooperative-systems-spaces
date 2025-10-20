@@ -113,6 +113,36 @@ jobs:
           override: true
           profile: minimal
 
+      - name: Install PostgreSQL client library (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install postgresql --yes --no-progress
+          $pg = Get-ChildItem 'C:\Program Files\PostgreSQL' -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $pg) { Write-Error "PostgreSQL not found in C:\Program Files\PostgreSQL"; exit 1 }
+          $prefix = $pg.FullName
+          Write-Host "Postgres prefix: $prefix"
+          Add-Content -Path $env:GITHUB_ENV -Value "PG_PREFIX=$prefix"
+          Add-Content -Path $env:GITHUB_ENV -Value "PATH=${prefix}\bin;${env:PATH}"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=${prefix}\lib;${env:LIB}"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=${prefix}\include;${env:INCLUDE}"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIBRARY_PATH=${prefix}\lib;${env:LIBRARY_PATH}"
+
+      - name: Install PostgreSQL client library (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install libpq
+          prefix=$(brew --prefix libpq)
+          echo "LDFLAGS=-L${prefix}/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I${prefix}/include" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${prefix}/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Install PostgreSQL client library (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+
       - name: Build CLI
         working-directory: cli
         run: cargo build --release
