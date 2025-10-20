@@ -2,8 +2,35 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
+
+/// Merge two TOML values, with the first taking precedence
+/// This is used to merge existing config with defaults for missing fields
+fn merge_toml_values(existing: toml::Value, defaults: toml::Value) -> toml::Value {
+    use toml::Value;
+    
+    match (existing, defaults) {
+        (Value::Table(mut existing_table), Value::Table(defaults_table)) => {
+            // For tables, merge recursively
+            for (key, default_value) in defaults_table {
+                if let Some(existing_value) = existing_table.remove(&key) {
+                    // Key exists, merge recursively
+                    existing_table.insert(key, merge_toml_values(existing_value, default_value));
+                } else {
+                    // Key missing, use default
+                    existing_table.insert(key, default_value);
+                }
+            }
+            Value::Table(existing_table)
+        }
+        (existing_val, _) => {
+            // For non-tables, existing value takes precedence
+            existing_val
+        }
+    }
+}
 
 /// Site-specific configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -659,8 +686,60 @@ impl AppConfig {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
         
-        let mut config: AppConfig = toml::from_str(&content)
-            .with_context(|| "Failed to parse TOML configuration")?;
+        // Try to parse the configuration
+        let config_result: Result<AppConfig, toml::de::Error> = toml::from_str(&content);
+        
+        let mut config = match config_result {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // Check if error is about missing fields
+                let error_msg = e.to_string();
+                if error_msg.contains("missing field") {
+                    eprintln!("\n⚠️  Configuration file is missing required fields!");
+                    eprintln!("Error: {}\n", e);
+                    
+                    // Create a backup of the old config with unix timestamp
+                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
+                        .unwrap_or_default().as_secs();
+                    let backup_path = format!("{}.{}.backup", path.as_ref().display(), timestamp);
+                    fs::copy(&path, &backup_path)
+                        .with_context(|| format!("Failed to create backup at: {}", backup_path))?;
+                    eprintln!("📦 Backed up old config to: {}\n", backup_path);
+                    
+                    // Generate updated config with defaults for missing fields
+                    let default_config = AppConfig::default();
+                    
+                    // Try to parse as a partial config to preserve existing values
+                    // We'll use toml::Value to merge configs
+                    let existing_value: toml::Value = toml::from_str(&content)
+                        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+                    let default_value: toml::Value = match toml::to_string(&default_config) {
+                        Ok(s) => toml::from_str(&s).unwrap_or(toml::Value::Table(toml::map::Map::new())),
+                        Err(_) => toml::Value::Table(toml::map::Map::new()),
+                    };
+                    
+                    // Merge: existing values take precedence, defaults fill in missing fields
+                    let merged_value = merge_toml_values(existing_value, default_value);
+                    
+                    // Parse the merged config
+                    let merged_config: AppConfig = toml::from_str(&toml::to_string(&merged_value).unwrap())
+                        .with_context(|| "Failed to parse merged configuration")?;
+                    
+                    // Write the updated config back to file
+                    merged_config.to_file(&path)
+                        .with_context(|| "Failed to write updated configuration")?;
+                    
+                    eprintln!("✅ Updated configuration file with default values for missing fields.");
+                    eprintln!("📝 Please review the configuration at: {}", path.as_ref().display());
+                    eprintln!("\n🛑 Server will now exit. Please restart after reviewing the configuration.\n");
+                    
+                    std::process::exit(0);
+                } else {
+                    // Some other parsing error
+                    return Err(e).with_context(|| "Failed to parse TOML configuration");
+                }
+            }
+        };
 
         // Apply environment variable overrides
         config.apply_env_overrides()?;
