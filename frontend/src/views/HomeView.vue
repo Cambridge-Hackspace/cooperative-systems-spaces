@@ -42,6 +42,11 @@
       </div>
     </div>
 
+    <!-- Calendar Events Section -->
+    <div class="mt-16">
+      <CalendarEvents />
+    </div>
+
     <!-- Features Section -->
     <div class="grid gap-8 md:grid-cols-3 mt-16">
       <div class="card bg-base-200 shadow-xl">
@@ -79,6 +84,7 @@
 
 <script setup lang="ts">
 import { useAuthStore } from '@/stores/auth'
+import CalendarEvents from '@/components/CalendarEvents.vue'
 
 const authStore = useAuthStore()
 </script>

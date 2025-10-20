@@ -552,6 +552,53 @@ impl Default for ToolPassConfig {
     }
 }
 
+/// Calendar aggregation configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalendarConfig {
+    /// Enable calendar display on home page
+    pub enabled: bool,
+    /// List of calendar sources
+    pub calendars: Vec<CalendarSource>,
+    /// Cache duration in minutes
+    pub cache_duration_minutes: u64,
+    /// Maximum number of events to display
+    pub max_events_display: usize,
+    /// Number of days to look ahead for events
+    pub lookahead_days: i64,
+}
+
+/// Individual calendar source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalendarSource {
+    /// iCal/ICS feed URL
+    pub ical_link: String,
+    /// Display name for this calendar
+    pub name: String,
+    /// Color for calendar events (hex format, e.g., "#FF5733")
+    pub color: String,
+    /// Whether this calendar is enabled
+    pub enabled: bool,
+}
+
+impl Default for CalendarConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            calendars: vec![
+                CalendarSource {
+                    ical_link: "https://example.com/calendar.ics".to_string(),
+                    name: "Example Calendar".to_string(),
+                    color: "#3788d8".to_string(),
+                    enabled: false,
+                },
+            ],
+            cache_duration_minutes: 15,
+            max_events_display: 10,
+            lookahead_days: 30,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCategoryMapping {
     /// The internal enum value (e.g., "saw", "powertool", "hand_tools")
@@ -656,6 +703,8 @@ pub struct AppConfig {
     pub tools: ToolConfig,
     /// Toolpass Compat Configuration
     pub toolpass: ToolPassConfig,
+    /// Calendar configuration
+    pub calendar: CalendarConfig,
 }
 
 impl Default for AppConfig {
@@ -676,6 +725,7 @@ impl Default for AppConfig {
             user: UserConfig::default(),
             tools: ToolConfig::default(),
             toolpass: ToolPassConfig::default(),
+            calendar: CalendarConfig::default(),
         }
     }
 }

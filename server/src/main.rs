@@ -19,11 +19,13 @@ mod api;
 mod profile;
 mod throttle;
 mod recaptcha;
+mod calendar;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
 use throttle::RegistrationThrottleService;
 use recaptcha::RecaptchaService;
+use calendar::CalendarService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -49,6 +51,7 @@ pub struct AppState {
     pub audit_logger: AuditLogger,
     pub throttle_service: Arc<RegistrationThrottleService>,
     pub recaptcha_service: Arc<RecaptchaService>,
+    pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
 }
 
 // Main dashboard handler
@@ -119,6 +122,13 @@ async fn main() -> Result<(), anyhow::Error> {
     let recaptcha_service = Arc::new(RecaptchaService::new(
         app_config.registration_challenge.recaptcha_secret_key.clone()
     ));
+    
+    // Initialize calendar service
+    info!("Initializing calendar service...");
+    let calendar_service = Arc::new(tokio::sync::RwLock::new(
+        CalendarService::new(app_config.calendar.clone())
+    ));
+    info!("Calendar service initialized");
 
     let app_state = AppState {
         config_manager: config_manager,
@@ -127,6 +137,7 @@ async fn main() -> Result<(), anyhow::Error> {
         audit_logger,
         throttle_service,
         recaptcha_service,
+        calendar_service,
     };
 
     // Serve frontend static files

@@ -130,7 +130,7 @@ spec:
                   key: superuser-password
 
             - name: DATABASE__URL
-              value: ecto://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/css
+              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/css
 
           #            - name: RABBIT_URL
           #              value: amqp://$(AMQP_USER):$(AMQP_PASS)@rabbitmq:5672

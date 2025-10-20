@@ -98,14 +98,6 @@
           Delete
         </button>
 
-        <button
-            v-if="tool.status === 'idle' && canUseBasedOnTraining"
-            @click="checkCanUse"
-            class="btn btn-primary"
-            :disabled="loading"
-        >
-          Usable
-        </button>
       </div>
     </div>
 
@@ -129,15 +121,6 @@
       >
         <span class="training-icon">🎓</span>
         View Training
-      </button>
-
-      <button
-        v-if="tool.status === 'idle' && canUseBasedOnTraining"
-        @click="checkCanUse"
-        class="btn btn-primary"
-        :disabled="loading"
-      >
-        Usable
       </button>
 
       <div v-else-if="tool.status === 'idle' && hasTrainingSteps && !canUseBasedOnTraining" class="training-warning">

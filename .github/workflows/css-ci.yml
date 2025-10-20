@@ -86,3 +86,48 @@ jobs:
       - name: Push Docker image
         run: |
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}/app:latest
+  release:
+    needs: checks
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        include:
+          - os: ubuntu-latest
+            artifact_name: linux
+            asset_name: css-linux
+          - os: windows-latest
+            artifact_name: windows
+            asset_name: css-windows.exe
+          - os: macos-latest
+            artifact_name: macos
+            asset_name: css-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          profile: minimal
+
+      - name: Build CLI
+        working-directory: cli
+        run: cargo build --release
+
+      - name: Build Server
+        run: cargo build --release
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: cli-${{ matrix.artifact_name }}
+          path: cli/target/release/${{ matrix.asset_name }}
+
+      - name: Upload Server artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: server-${{ matrix.artifact_name }}
+          path: server/target/release/${{ matrix.asset_name }}

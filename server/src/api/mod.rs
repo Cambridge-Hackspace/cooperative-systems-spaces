@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod calendar;
 pub mod config;
 pub mod errors;
 pub mod responses;
@@ -24,4 +25,5 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/trainers", trainers::trainers_router())
         .nest("/config", config::config_routes())
         .nest("/toolpass", toolpass::toolpass_routes())
+        .nest("/calendar", calendar::calendar_routes())
 }
