@@ -96,13 +96,16 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_name: linux
-            asset_name: css-linux
+            asset_name: css-server
+            asset_name_cli: css
           - os: windows-latest
             artifact_name: windows
-            asset_name: css-windows.exe
+            asset_name: css-server.exe
+            asset_name_cli: css.exe
           - os: macos-latest
             artifact_name: macos
-            asset_name: css-macos
+            asset_name: css-server
+            asset_name_cli: css
     steps:
       - uses: actions/checkout@v4
 
@@ -153,11 +156,11 @@ jobs:
       - name: Upload CLI artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cli-${{ matrix.artifact_name }}
-          path: cli/target/release/${{ matrix.asset_name }}
+          name: css-cli-${{ matrix.artifact_name }}
+          path: cli/target/release/${{ matrix.asset_name_cli }}
 
       - name: Upload Server artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: server-${{ matrix.artifact_name }}
-          path: server/target/release/${{ matrix.asset_name }}
+          name: css-server-${{ matrix.artifact_name }}
+          path: target/release/${{ matrix.asset_name }}
