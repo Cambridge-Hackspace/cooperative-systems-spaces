@@ -503,6 +503,96 @@ impl Default for UserConfig {
     }
 }
 
+
+/// Toolpass Compatability Configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPassConfig {
+    /// is it enabled?
+    pub enabled: bool,
+    /// what profile field we should pull this out of
+    pub profile_field: String,
+}
+
+impl Default for ToolPassConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            profile_field: "card_id".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCategoryMapping {
+    /// The internal enum value (e.g., "saw", "powertool", "hand_tools")
+    pub value: String,
+    /// The display label (e.g., "Saw", "Power Tools", "Hand Tools")
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolConfig {
+    /// List of tool categories with their internal values and display labels
+    pub tool_categories: Vec<ToolCategoryMapping>,
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        Self {
+            tool_categories: vec![
+                ToolCategoryMapping {
+                    value: "saw".to_string(),
+                    label: "Saw".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "powertool".to_string(),
+                    label: "Power Tools".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "hand_tools".to_string(),
+                    label: "Hand Tools".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "measuring".to_string(),
+                    label: "Measuring".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "safety".to_string(),
+                    label: "Safety".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "electronics".to_string(),
+                    label: "Electronics".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "woodworking".to_string(),
+                    label: "Woodworking".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "metalworking".to_string(),
+                    label: "Metalworking".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "3d_printing".to_string(),
+                    label: "3D Printing".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "laser_cutting".to_string(),
+                    label: "Laser Cutting".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "welding".to_string(),
+                    label: "Welding".to_string(),
+                },
+                ToolCategoryMapping {
+                    value: "other".to_string(),
+                    label: "Other".to_string(),
+                },
+            ],
+        }
+    }
+}
+
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -532,6 +622,10 @@ pub struct AppConfig {
     pub initial_setup: InitialSetupConfig,
     /// User profile configuration
     pub user: UserConfig,
+    /// Tool Configs
+    pub tools: ToolConfig,
+    /// Toolpass Compat Configuration
+    pub toolpass: ToolPassConfig,
 }
 
 impl Default for AppConfig {
@@ -550,6 +644,8 @@ impl Default for AppConfig {
             registration_challenge: RegistrationChallengeConfig::default(),
             initial_setup: InitialSetupConfig::default(),
             user: UserConfig::default(),
+            tools: ToolConfig::default(),
+            toolpass: ToolPassConfig::default(),
         }
     }
 }

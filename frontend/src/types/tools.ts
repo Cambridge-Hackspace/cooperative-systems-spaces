@@ -39,6 +39,7 @@ export interface Tool {
   created_by: string;
   created_at: string;
   updated_at: string;
+  external_id?: string;
   // Additional fields that may be present
   manufacturer?: string;
   model?: string;
@@ -56,6 +57,7 @@ export interface CreateToolRequest {
   purchase_price?: number;
   maintenance_notes?: string;
   requires_training?: boolean;
+  external_id?: string;
   manufacturer?: string;
   model?: string;
   notes?: string;
@@ -76,6 +78,7 @@ export interface UpdateToolRequest {
   purchase_price?: number;
   maintenance_notes?: string;
   requires_training?: boolean;
+  external_id?: string;
   manufacturer?: string;
   model?: string;
   notes?: string;

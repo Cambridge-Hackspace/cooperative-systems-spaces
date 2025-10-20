@@ -323,6 +323,28 @@ impl DatabaseManager {
         Ok(user)
     }
 
+    /// Find a user by a value in their profile JSON field
+    /// Uses PostgreSQL JSONB operators to query efficiently
+    pub fn find_user_by_profile_field(&self, field_name: &str, field_value: &str) -> Result<Option<User>, DatabaseError> {
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Text, Bool};
+        
+        let mut conn = self.get_connection()?;
+        
+        // Query using PostgreSQL's JSONB ->> operator (get as text)
+        // This checks if profile->>'field_name' equals the value as a string
+        let query_string = format!("profile->>'{}'", field_name);
+        
+        let user = users::table
+            .select(User::as_select())
+            .filter(sql::<Bool>(&format!("{} = ", query_string)).bind::<Text, _>(field_value))
+            .first::<User>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+            
+        Ok(user)
+    }
+
     /// Update user information
     pub fn update_user(&self, user_id: uuid::Uuid, updates: &UpdateUser) -> Result<User, DatabaseError> {
         let mut conn = self.get_connection()?;
@@ -556,6 +578,19 @@ impl DatabaseManager {
 
         tools
             .find(tool_id)
+            .first::<crate::models::Tool>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get a tool by external_id (for ToolPass integration)
+    pub fn get_tool_by_external_id(&self, external_id_value: &str) -> Result<Option<crate::models::Tool>, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        tools
+            .filter(external_id.eq(external_id_value))
             .first::<crate::models::Tool>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)

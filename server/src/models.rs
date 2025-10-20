@@ -203,6 +203,12 @@ pub enum AuditEventType {
     TrainerRemoved,
     InstructorCertified,
     InstructorRevoked,
+    // ToolPass/Tool usage events
+    ToolAccessGranted,
+    ToolAccessDenied,
+    ToolActivated,
+    ToolDeactivated,
+    ToolUsageLogged,
 }
 
 impl AuditEventType {
@@ -228,6 +234,11 @@ impl AuditEventType {
             Self::TrainerRemoved => "trainer_removed",
             Self::InstructorCertified => "instructor_certified",
             Self::InstructorRevoked => "instructor_revoked",
+            Self::ToolAccessGranted => "tool_access_granted",
+            Self::ToolAccessDenied => "tool_access_denied",
+            Self::ToolActivated => "tool_activated",
+            Self::ToolDeactivated => "tool_deactivated",
+            Self::ToolUsageLogged => "tool_usage_logged",
         }
     }
 }

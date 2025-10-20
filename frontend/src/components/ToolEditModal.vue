@@ -23,12 +23,9 @@
             <label for="category">Category *</label>
             <select id="category" v-model="form.category" required>
               <option value="">Select Category</option>
-              <option value="saw">Saw</option>
-              <option value="powertool">Power Tool</option>
-              <option value="hand_tools">Hand Tools</option>
-              <option value="measuring">Measuring</option>
-              <option value="safety">Safety</option>
-              <option value="other">Other</option>
+              <option v-for="category in categories" :key="category.value" :value="category.value">
+                {{ category.label }}
+              </option>
             </select>
           </div>
         </div>
@@ -85,6 +82,17 @@
               placeholder="Barcode or QR code"
             />
           </div>
+        </div>
+
+        <div class="form-group">
+          <label for="external_id">External ID</label>
+          <input 
+            id="external_id"
+            v-model="form.external_id" 
+            type="text" 
+            placeholder="External system ID (e.g., ToolPass device ID)"
+          />
+          <small class="help-text">Optional ID for external system integration (ToolPass, etc.)</small>
         </div>
 
         <div class="form-group">
@@ -160,6 +168,7 @@
 import { ref, onMounted } from 'vue'
 import { toolsApi } from '../utils/api'
 import type { Tool, ToolCategory } from '../types/tools'
+import axios from 'axios'
 
 interface Props {
   tool: Tool
@@ -176,6 +185,11 @@ const emit = defineEmits<Emits>()
 // State
 const loading = ref(false)
 const error = ref('')
+interface CategoryMapping {
+  value: string
+  label: string
+}
+const categories = ref<CategoryMapping[]>([])
 
 const form = ref({
   name: '',
@@ -185,6 +199,7 @@ const form = ref({
   model: '',
   serial_number: '',
   barcode: '',
+  external_id: '',
   location: '',
   purchase_date: '',
   purchase_price: undefined as number | undefined,
@@ -193,6 +208,23 @@ const form = ref({
 })
 
 // Methods
+const loadCategories = async () => {
+  try {
+    const response = await axios.get('/api/config/tools')
+    categories.value = response.data.data.tool_categories
+  } catch (err) {
+    console.error('Failed to load tool categories:', err)
+    // Fallback to default categories if API fails
+    categories.value = [
+      { value: 'powertool', label: 'Power Tools' },
+      { value: 'hand_tools', label: 'Hand Tools' },
+      { value: 'measuring', label: 'Measuring' },
+      { value: 'safety', label: 'Safety' },
+      { value: 'other', label: 'Other' }
+    ]
+  }
+}
+
 const loadToolData = () => {
   form.value = {
     name: props.tool.name || '',
@@ -202,6 +234,7 @@ const loadToolData = () => {
     model: props.tool.model || '',
     serial_number: props.tool.serial_number || '',
     barcode: props.tool.barcode || '',
+    external_id: props.tool.external_id || '',
     location: props.tool.location || '',
     purchase_date: props.tool.purchase_date || '',
     purchase_price: props.tool.purchase_price,
@@ -235,7 +268,8 @@ const updateTool = async () => {
 }
 
 // Lifecycle
-onMounted(() => {
+onMounted(async () => {
+  await loadCategories()
   loadToolData()
 })
 </script>
@@ -347,6 +381,13 @@ onMounted(() => {
 
 .form-group textarea {
   resize: vertical;
+}
+
+.help-text {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: #7f8c8d;
 }
 
 .error {

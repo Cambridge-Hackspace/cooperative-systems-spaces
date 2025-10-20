@@ -7,6 +7,10 @@ edition = "2021"
 name = "css"
 path = "src/main.rs"
 
+[[bin]]
+name = "toolpass-client"
+path = "src/bin/toolpass_client.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }

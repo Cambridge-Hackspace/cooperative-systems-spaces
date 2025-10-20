@@ -25,6 +25,7 @@ pub enum ToolCategory {
     Saw,
     #[serde(rename = "powertool")]
     PowerTool,
+    #[serde(rename = "hand_tools")]
     HandTools,
     Measuring,
     Safety,
@@ -33,6 +34,7 @@ pub enum ToolCategory {
     Metalworking,
     #[serde(rename = "3d_printing")]
     ThreeDPrinting,
+    #[serde(rename = "laser_cutting")]
     LaserCutting,
     Welding,
     Other,
@@ -162,6 +164,7 @@ pub struct Tool {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub external_id: Option<String>,
 }
 
 /// New tool for creation
@@ -180,6 +183,7 @@ pub struct NewTool {
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
     pub created_by: Uuid,
+    pub external_id: Option<String>,
 }
 
 /// Tool event model

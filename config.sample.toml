@@ -225,3 +225,98 @@ max_request_body_size = 16777216
 cors_enabled = true
 # List of allowed origins for CORS requests
 cors_origins = ["http://localhost:3000"]
+
+[[user.profile_fields]]
+key = "bio"
+label = "Bio"
+field_type = "Text"
+required = false
+help_text = "Tell us about yourself"
+
+[[user.profile_fields]]
+key = "phone"
+label = "Phone Number"
+field_type = "Phone"
+required = false
+help_text = "Your contact phone number"
+
+[[user.profile_fields]]
+key = "emergency_contact"
+label = "Emergency Contact"
+field_type = "Text"
+required = false
+help_text = "Emergency contact information"
+
+[[user.profile_fields]]
+key = "favorite_bird"
+label = "Fav Bird"
+field_type = "Text"
+required = false
+help_text = "BIRD"
+
+[[user.profile_fields]]
+key = "card_id"
+label = "Transit Card ID for Toolpass"
+field_type = "Text"
+required = false
+help_text = "0x"
+
+
+[user]
+profiles_enabled = true
+
+[tools]
+
+[[tools.tool_categories]]
+value = "saw"
+label = "Saw"
+
+[[tools.tool_categories]]
+value = "powertool"
+label = "Power Tools"
+
+[[tools.tool_categories]]
+value = "hand_tools"
+label = "Hand Tools"
+
+[[tools.tool_categories]]
+value = "measuring"
+label = "Measuring"
+
+[[tools.tool_categories]]
+value = "safety"
+label = "Safety"
+
+[[tools.tool_categories]]
+value = "electronics"
+label = "Electronics"
+
+[[tools.tool_categories]]
+value = "woodworking"
+label = "Woodworking"
+
+[[tools.tool_categories]]
+value = "metalworking"
+label = "Metalworking"
+
+[[tools.tool_categories]]
+value = "3d_printing"
+label = "3D Printing"
+
+[[tools.tool_categories]]
+value = "laser_cutting"
+label = "Laser Cutting"
+
+[[tools.tool_categories]]
+value = "welding"
+label = "Welding"
+
+[[tools.tool_categories]]
+value = "other"
+label = "Other"
+
+
+
+[toolpass]
+enabled = true
+profile_field = "card_id"

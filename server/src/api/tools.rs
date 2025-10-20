@@ -31,6 +31,7 @@ pub struct CreateToolRequest {
     pub purchase_price: Option<bigdecimal::BigDecimal>,
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, diesel::AsChangeset)]
@@ -47,6 +48,7 @@ pub struct UpdateToolRequest {
     pub purchase_price: Option<bigdecimal::BigDecimal>,
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
+    pub external_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -139,6 +141,7 @@ async fn create_tool(
         maintenance_notes: payload.maintenance_notes,
         requires_training: payload.requires_training,
         created_by: staff.0.id,
+        external_id: payload.external_id,
     };
 
     let created_tool = state.db.create_tool(&new_tool)

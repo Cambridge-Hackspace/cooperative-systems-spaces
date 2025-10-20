@@ -1,0 +1,148 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cs-spaces-config
+  namespace: neiam-cs-spaces
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard  # Adjust this based on your cluster's storage classes
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cs-spaces
+  namespace: neiam-cs-spaces
+  labels:
+    name: cs-spaces
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: cs-spaces
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        name: cs-spaces
+    #      annotations:
+    spec:
+      # Set fsGroup to match appuser UID (1000)
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      
+      initContainers:
+        - name: init-config
+          image: r.g.gmp.io/neiam/cooperative-systems-spaces:latest
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "Checking config directory permissions..."
+              ls -la /app/config || true
+              
+              if [ ! -f /app/config/config.toml ]; then
+                echo "Config file not found. Copying sample config..."
+                cp /app/config.sample.toml /app/config/config.toml
+                echo "Config file initialized from sample"
+              else
+                echo "Config file already exists"
+              fi
+              
+              echo "Final permissions:"
+              ls -la /app/config
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+      
+      containers:
+        - image: r.g.gmp.io/neiam/cooperative-systems-spaces:latest
+          resources:
+            requests:
+              memory: "1536Mi"
+              cpu: "250m"
+            limits:
+              memory: "3000Mi"
+              cpu: "500m"
+
+          imagePullPolicy: Always
+          #          livenessProbe:
+          #            httpGet:
+          #              path: /health/live
+          #              port: 4040
+          #
+          #            initialDelaySeconds: 90
+          #            periodSeconds: 3
+          #
+          #          readinessProbe:
+          #            httpGet:
+          #              path: /health/ready
+          #              port: 4040
+          #
+          #            initialDelaySeconds: 90
+          #            periodSeconds: 3
+          
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+          
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+          
+          env:
+            - name: CONFIG_PATH
+              value: /app/config/config.toml
+            
+            - name: FRONTEND_PATH
+              value: /app/frontend/dist
+            
+            - name: SENTRY_DSN
+              value: ""
+
+            - name: POSTGRES_HOST
+              value: postgres-cs-spaces
+
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-cs-spaces
+                  key: superuser-username
+
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-cs-spaces
+                  key: superuser-password
+
+            - name: DATABASE__URL
+              value: ecto://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/css
+
+          #            - name: RABBIT_URL
+          #              value: amqp://$(AMQP_USER):$(AMQP_PASS)@rabbitmq:5672
+
+          name: cs-spaces
+          ports:
+            - containerPort: 4399
+
+      volumes:
+        - name: config-volume
+          persistentVolumeClaim:
+            claimName: cs-spaces-config
+
+      imagePullSecrets:
+        - name: gitlabgmp

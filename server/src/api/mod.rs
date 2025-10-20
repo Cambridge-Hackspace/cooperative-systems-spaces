@@ -8,6 +8,7 @@ pub mod profiles;
 pub mod tools;
 pub mod training;
 pub mod trainers;
+pub mod toolpass;
 
 use axum::Router;
 use crate::AppState;
@@ -22,4 +23,5 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/training", training::training_router())
         .nest("/trainers", trainers::trainers_router())
         .nest("/config", config::config_routes())
+        .nest("/toolpass", toolpass::toolpass_routes())
 }
