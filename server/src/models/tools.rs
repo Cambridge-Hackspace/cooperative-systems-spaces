@@ -165,6 +165,7 @@ pub struct Tool {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub external_id: Option<String>,
+    pub external_api_key: Option<String>,
 }
 
 /// New tool for creation
@@ -184,6 +185,7 @@ pub struct NewTool {
     pub requires_training: Option<bool>,
     pub created_by: Uuid,
     pub external_id: Option<String>,
+    pub external_api_key: Option<String>,
 }
 
 /// Tool event model

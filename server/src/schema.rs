@@ -123,6 +123,7 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
         external_id -> Nullable<Varchar>,
+        external_api_key -> Nullable<Text>,
     }
 }
 

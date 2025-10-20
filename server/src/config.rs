@@ -511,6 +511,8 @@ pub struct ToolPassConfig {
     pub enabled: bool,
     /// what profile field we should pull this out of
     pub profile_field: String,
+    /// global-api-key
+    pub global_api_key: Option<String>,
 }
 
 impl Default for ToolPassConfig {
@@ -518,6 +520,7 @@ impl Default for ToolPassConfig {
         Self {
             enabled: true,
             profile_field: "card_id".to_string(),
+            global_api_key: None
         }
     }
 }

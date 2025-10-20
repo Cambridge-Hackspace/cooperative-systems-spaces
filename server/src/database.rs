@@ -667,6 +667,90 @@ impl DatabaseManager {
         Ok(training_count > 0)
     }
 
+    /// Check if a tool has any training types defined
+    pub fn tool_has_training_types(&self, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_training_types;
+
+        let mut conn = self.get_connection()?;
+
+        let training_type_count: i64 = tool_training_types::table
+            .filter(tool_training_types::tool_id.eq(tool_id))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(training_type_count > 0)
+    }
+
+    /// Check if a tool has any training steps defined
+    pub fn tool_has_training_steps(&self, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::training_steps;
+
+        let mut conn = self.get_connection()?;
+
+        let step_count: i64 = training_steps::table
+            .filter(training_steps::tool_id.eq(tool_id))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(step_count > 0)
+    }
+
+    /// Check if a user has completed all required training steps for a tool
+    /// Returns true if all steps are completed, false otherwise
+    pub fn user_has_completed_all_training_steps(&self, user_id: uuid::Uuid, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::{training_steps, user_training_progress};
+
+        let mut conn = self.get_connection()?;
+
+        // Get all training steps for the tool
+        let all_steps: Vec<uuid::Uuid> = training_steps::table
+            .filter(training_steps::tool_id.eq(tool_id))
+            .select(training_steps::id)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        // If no steps exist, consider it as "no training required"
+        if all_steps.is_empty() {
+            return Ok(true);
+        }
+
+        // For each step, check if the user has completed it
+        for step_id in &all_steps {
+            let progress = user_training_progress::table
+                .filter(user_training_progress::user_id.eq(user_id))
+                .filter(user_training_progress::training_step_id.eq(step_id))
+                .select((user_training_progress::status, user_training_progress::expires_at))
+                .first::<(crate::models::TrainingStatus, Option<chrono::DateTime<chrono::Utc>>)>(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?;
+
+            match progress {
+                Some((status, expires_at)) => {
+                    // Check if completed
+                    if status != crate::models::TrainingStatus::Completed {
+                        return Ok(false);
+                    }
+                    
+                    // Also check if it's expired
+                    if let Some(expiry) = expires_at {
+                        if expiry < chrono::Utc::now() {
+                            return Ok(false); // Training expired
+                        }
+                    }
+                }
+                None => {
+                    // User hasn't started this step
+                    return Ok(false);
+                }
+            }
+        }
+
+        // All steps completed and valid
+        Ok(true)
+    }
+
     // ==================== TRAINING SYSTEM DATABASE METHODS ====================
 
     /// Create a new training step

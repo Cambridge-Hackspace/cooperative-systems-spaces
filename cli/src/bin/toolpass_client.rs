@@ -17,6 +17,10 @@ struct Cli {
     #[arg(short, long, default_value = "http://localhost:4399")]
     server: String,
 
+    /// API key for authentication (can also be set via TOOLPASS_API_KEY env var)
+    #[arg(short, long, env = "TOOLPASS_API_KEY")]
+    api_key: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -34,7 +38,7 @@ enum Commands {
         
         /// Tool ID
         #[arg(short, long)]
-        tool_id: i32,
+        tool_id: String,
     },
     
     /// Simulate tool deactivation
@@ -45,7 +49,7 @@ enum Commands {
         
         /// Tool ID
         #[arg(short, long)]
-        tool_id: i32,
+        tool_id: String,
     },
     
     /// Log tool usage with duration
@@ -56,7 +60,7 @@ enum Commands {
         
         /// Tool ID
         #[arg(short, long)]
-        tool_id: i32,
+        tool_id: String,
         
         /// Usage duration in seconds
         #[arg(short, long)]
@@ -75,7 +79,7 @@ enum Commands {
         
         /// Tool ID
         #[arg(short, long)]
-        tool_id: i32,
+        tool_id: String,
         
         /// Session duration in seconds
         #[arg(short, long, default_value = "60")]
@@ -158,16 +162,16 @@ async fn main() -> Result<()> {
             check_status(&client, &cli.server).await?;
         }
         Commands::ToolOn { card, tool_id } => {
-            tool_on(&client, &cli.server, &card, tool_id).await?;
+            tool_on(&client, &cli.server, &card, &tool_id).await?;
         }
         Commands::ToolOff { card, tool_id } => {
-            tool_off(&client, &cli.server, &card, tool_id).await?;
+            tool_off(&client, &cli.server, &card, &tool_id).await?;
         }
         Commands::Log { card, tool_id, seconds, temperature } => {
-            tool_log(&client, &cli.server, &card, tool_id, seconds, temperature).await?;
+            tool_log(&client, &cli.server, &card, &tool_id, seconds, temperature).await?;
         }
         Commands::Session { card, tool_id, duration, temperature } => {
-            simulate_session(&client, &cli.server, &card, tool_id, duration, temperature).await?;
+            simulate_session(&client, &cli.server, &card, &tool_id, duration, temperature).await?;
         }
         Commands::AddUser { api_key, email, first_name, last_name } => {
             add_user(&client, &cli.server, api_key, email, first_name, last_name).await?;
@@ -198,18 +202,27 @@ async fn check_status(client: &Client, server: &str) -> Result<()> {
     Ok(())
 }
 
-async fn tool_on(client: &Client, server: &str, card: &str, tool_id: i32) -> Result<()> {
+async fn tool_on(client: &Client, server: &str, card: &str, tool_id: &str) -> Result<()> {
     println!("🔓 Requesting tool activation...");
     println!("   Card: {}", card);
     println!("   Tool ID: {}", tool_id);
     
     let url = format!("{}/api/toolpass/v1/tool-on?card={}&tool_id={}", server, card, tool_id);
+    println!("   URL: {}", url);
+    
     let response = client.get(&url)
         .send()
         .await
         .context("Failed to send request")?;
 
-    let body: ToolPassResponse = response.json().await?;
+    println!("   Response status: {}", response.status());
+    
+    // Debug: print raw response body
+    let response_text = response.text().await?;
+    println!("   Response body: {}", response_text);
+    
+    let body: ToolPassResponse = serde_json::from_str(&response_text)
+        .context("Failed to parse JSON response")?;
 
     match body.status.as_str() {
         "ok" => {
@@ -233,7 +246,7 @@ async fn tool_on(client: &Client, server: &str, card: &str, tool_id: i32) -> Res
     Ok(())
 }
 
-async fn tool_off(client: &Client, server: &str, card: &str, tool_id: i32) -> Result<()> {
+async fn tool_off(client: &Client, server: &str, card: &str, tool_id: &str) -> Result<()> {
     println!("🔒 Deactivating tool...");
     println!("   Card: {}", card);
     println!("   Tool ID: {}", tool_id);
@@ -268,7 +281,7 @@ async fn tool_log(
     client: &Client,
     server: &str,
     card: &str,
-    tool_id: i32,
+    tool_id: &str,
     seconds: f32,
     temperature: Option<f32>,
 ) -> Result<()> {
@@ -315,7 +328,7 @@ async fn simulate_session(
     client: &Client,
     server: &str,
     card: &str,
-    tool_id: i32,
+    tool_id: &str,
     duration: u64,
     temperature: Option<f32>,
 ) -> Result<()> {
@@ -323,7 +336,7 @@ async fn simulate_session(
     println!();
     
     // Step 1: Tool On
-    tool_on(client, server, card, tool_id).await?;
+    tool_on(client, server, card, &tool_id).await?;
     
     println!();
     println!("⏳ Using tool for {} seconds...", duration);
@@ -332,12 +345,12 @@ async fn simulate_session(
     println!();
     
     // Step 2: Tool Off
-    tool_off(client, server, card, tool_id).await?;
+    tool_off(client, server, card, &tool_id).await?;
     
     println!();
     
     // Step 3: Log usage
-    tool_log(client, server, card, tool_id, duration as f32, temperature).await?;
+    tool_log(client, server, card, &tool_id, duration as f32, temperature).await?;
     
     println!();
     println!("✅ Session complete!");

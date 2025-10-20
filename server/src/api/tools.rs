@@ -32,6 +32,7 @@ pub struct CreateToolRequest {
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
     pub external_id: Option<String>,
+    pub external_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, diesel::AsChangeset)]
@@ -49,6 +50,7 @@ pub struct UpdateToolRequest {
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
     pub external_id: Option<String>,
+    pub external_api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -142,6 +144,7 @@ async fn create_tool(
         requires_training: payload.requires_training,
         created_by: staff.0.id,
         external_id: payload.external_id,
+        external_api_key: payload.external_api_key,
     };
 
     let created_tool = state.db.create_tool(&new_tool)

@@ -106,17 +106,21 @@ pub struct RemoveUserRequest {
 #[derive(Debug, Deserialize)]
 pub struct ToolRequest {
     pub card: String,      // RFID card ID or user identifier
-    pub tool_id: i32,      // Tool ID
+    pub tool_id: String,      // Tool ID
+    #[serde(default)]
+    pub api_key: Option<String>, // Optional API key for authentication
 }
 
 /// Request parameters for tool logging
 #[derive(Debug, Deserialize)]
 pub struct ToolLogRequest {
     pub card: String,
-    pub tool_id: i32,
+    pub tool_id: String,
     pub seconds: f32,
     #[serde(default)]
     pub temperature: Option<f32>,
+    #[serde(default)]
+    pub api_key: Option<String>, // Optional API key for authentication
 }
 
 /// Configure ToolPass API routes
@@ -140,8 +144,8 @@ async fn add_user(
     State(state): State<AppState>,
     Json(req): Json<AddUserRequest>,
 ) -> Result<Json<ToolPassResponse>, ApiError> {
-    // Validate API key
-    if !validate_api_key(&state, &req.api_key).await? {
+    // Validate API key (no specific tool context for user management)
+    if !validate_api_key(&state, &req.api_key, None).await? {
         return Ok(Json(ToolPassResponse::error("Invalid API key")));
     }
 
@@ -176,8 +180,8 @@ async fn remove_user(
     State(state): State<AppState>,
     Json(req): Json<RemoveUserRequest>,
 ) -> Result<Json<ToolPassResponse>, ApiError> {
-    // Validate API key
-    if !validate_api_key(&state, &req.api_key).await? {
+    // Validate API key (no specific tool context for user management)
+    if !validate_api_key(&state, &req.api_key, None).await? {
         return Ok(Json(ToolPassResponse::error("Invalid API key")));
     }
 
@@ -205,56 +209,95 @@ async fn tool_on(
         Some(user) => user,
         None => {
             // Log denied access attempt
-            log_tool_access_denied(&state, None, req.tool_id, "Unknown card").await?;
+            log_tool_access_denied(&state, None, &req.tool_id, "Unknown card").await?;
             return Ok(Json(ToolPassResponse::tool_denied("Unknown card")));
         }
     };
 
     // Check if user is active
     if !user.is_active {
-        log_tool_access_denied(&state, Some(&user), req.tool_id, "User is not active").await?;
+        log_tool_access_denied(&state, Some(&user), &req.tool_id, "User is not active").await?;
         return Ok(Json(ToolPassResponse::tool_denied("User is not active")));
     }
 
-    // Find tool by ID
-    // Note: ToolPass uses integer tool_id, but we use UUID
-    // We'll need to either add an integer ID field or use a mapping
-    let query = ToolQuery {
-        category: None,
-        status: None,
-        requires_training: None,
-        page: None,
-        per_page: None,
-    };
-    let tools = state.db.get_tools(query)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to list tools: {}", e)))?;
-
-    let tool = tools.iter()
-        .enumerate()
-        .find(|(idx, _)| *idx as i32 == req.tool_id)
-        .map(|(_, tool)| tool);
-
-    let tool = match tool {
+    // Find tool by ID or external_id
+    let tool = match find_tool_by_toolpass_id(&state, &req.tool_id).await? {
         Some(tool) => tool,
         None => {
-            log_tool_access_denied(&state, Some(&user), req.tool_id, "Tool not found").await?;
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool not found").await?;
             return Ok(Json(ToolPassResponse::tool_denied("Tool not found")));
         }
     };
 
-    // Check if tool requires training
-    if tool.requires_training {
-        let has_training = state.db.user_has_valid_training(user.id, tool.id)
-            .map_err(|e| ApiError::InternalServerError(format!("Failed to check training: {}", e)))?;
-
-        if !has_training {
-            log_tool_access_denied(&state, Some(&user), req.tool_id, "Training required").await?;
-            return Ok(Json(ToolPassResponse::tool_denied("Training required")));
+    // Check if tool is available - must be in Idle status
+    // Reject if tool is in any state other than Idle (InUse, Maintenance, Broken, Repair, Retired)
+    match tool.status {
+        crate::models::ToolStatus::Idle => {
+            // Tool is available, continue with checks
+        }
+        crate::models::ToolStatus::InUse => {
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use").await?;
+            return Ok(Json(ToolPassResponse::tool_denied("Tool is already in use")));
+        }
+        crate::models::ToolStatus::Maintenance => {
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is under maintenance").await?;
+            return Ok(Json(ToolPassResponse::tool_denied("Tool is under maintenance")));
+        }
+        crate::models::ToolStatus::Broken => {
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is broken").await?;
+            return Ok(Json(ToolPassResponse::tool_denied("Tool is broken")));
+        }
+        crate::models::ToolStatus::Repair => {
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is in repair").await?;
+            return Ok(Json(ToolPassResponse::tool_denied("Tool is in repair")));
+        }
+        crate::models::ToolStatus::Retired => {
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is retired").await?;
+            return Ok(Json(ToolPassResponse::tool_denied("Tool is retired")));
         }
     }
 
+    // Check if tool has training steps defined
+    let has_training_steps = state.db.tool_has_training_steps(tool.id)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to check training steps: {}", e)))?;
+    
+    // If training steps exist, check if user has completed all of them
+    if has_training_steps {
+        let has_completed_training = state.db.user_has_completed_all_training_steps(user.id, tool.id)
+            .map_err(|e| ApiError::InternalServerError(format!("Failed to check training completion: {}", e)))?;
+
+        if !has_completed_training {
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Training required").await?;
+            return Ok(Json(ToolPassResponse::tool_denied("Training required")));
+        }
+    }
+    // If no training steps are defined, allow access
+
+    // Update tool status to InUse
+    state.db.update_tool_status(tool.id, &crate::models::ToolStatus::InUse)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to update tool status: {}", e)))?;
+
+    // Create tool event for activation
+    use crate::models::NewToolEvent;
+    let event = NewToolEvent {
+        tool_id: tool.id,
+        event_type: "activated".to_string(),
+        old_status: Some(tool.status.clone()),
+        new_status: Some(crate::models::ToolStatus::InUse),
+        user_id: Some(user.id),
+        actor_id: Some(user.id),
+        notes: Some(format!("Activated via ToolPass (tool_id: {})", req.tool_id)),
+        scan_data: Some(serde_json::json!({
+            "toolpass_id": req.tool_id,
+            "card": req.card,
+        })),
+    };
+    
+    state.db.create_tool_event(&event)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
+
     // Log the tool activation
-    log_tool_activated(&state, &user, tool.id, req.tool_id).await?;
+    log_tool_activated(&state, &user, tool.id, &req.tool_id).await?;
 
     Ok(Json(ToolPassResponse::tool_authorized()))
 }
@@ -274,25 +317,39 @@ async fn tool_off(
         }
     };
 
-    // Find tool (same logic as tool_on)
-    let query = ToolQuery {
-        category: None,
-        status: None,
-        requires_training: None,
-        page: None,
-        per_page: None,
+    // Find tool by ID or external_id
+    let tool = match find_tool_by_toolpass_id(&state, &req.tool_id).await? {
+        Some(tool) => tool,
+        None => {
+            return Ok(Json(ToolPassResponse::error("Tool not found")));
+        }
     };
-    let tools = state.db.get_tools(query)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to list tools: {}", e)))?;
 
-    let tool = tools.iter()
-        .enumerate()
-        .find(|(idx, _)| *idx as i32 == req.tool_id)
-        .map(|(_, tool)| tool);
+    // Update tool status to Idle
+    state.db.update_tool_status(tool.id, &crate::models::ToolStatus::Idle)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to update tool status: {}", e)))?;
 
-    if let Some(tool) = tool {
-        log_tool_deactivated(&state, &user, tool.id, req.tool_id).await?;
-    }
+    // Create tool event for deactivation
+    use crate::models::NewToolEvent;
+    let event = NewToolEvent {
+        tool_id: tool.id,
+        event_type: "deactivated".to_string(),
+        old_status: Some(tool.status.clone()),
+        new_status: Some(crate::models::ToolStatus::Idle),
+        user_id: Some(user.id),
+        actor_id: Some(user.id),
+        notes: Some(format!("Deactivated via ToolPass (tool_id: {})", req.tool_id)),
+        scan_data: Some(serde_json::json!({
+            "toolpass_id": req.tool_id,
+            "card": req.card,
+        })),
+    };
+    
+    state.db.create_tool_event(&event)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
+
+    // Log the tool deactivation
+    log_tool_deactivated(&state, &user, tool.id, &req.tool_id).await?;
 
     Ok(Json(ToolPassResponse::tool_off_ok()))
 }
@@ -315,38 +372,70 @@ async fn tool_log(
         }
     };
 
-    // Find tool
-    let query = ToolQuery {
-        category: None,
-        status: None,
-        requires_training: None,
-        page: None,
-        per_page: None,
+    // Find tool by ID or external_id
+    let tool = match find_tool_by_toolpass_id(&state, &req.tool_id).await? {
+        Some(tool) => tool,
+        None => {
+            return Ok(Json(ToolPassResponse::error("Tool not found")));
+        }
     };
-    let tools = state.db.get_tools(query)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to list tools: {}", e)))?;
 
-    let tool = tools.iter()
-        .enumerate()
-        .find(|(idx, _)| *idx as i32 == req.tool_id)
-        .map(|(_, tool)| tool);
+    // Create tool event for usage logging
+    use crate::models::NewToolEvent;
+    let event = NewToolEvent {
+        tool_id: tool.id,
+        event_type: "usage_logged".to_string(),
+        old_status: None,
+        new_status: None,
+        user_id: Some(user.id),
+        actor_id: Some(user.id),
+        notes: Some(format!("Usage logged: {:.1} minutes", req.seconds / 60.0)),
+        scan_data: Some(serde_json::json!({
+            "toolpass_id": req.tool_id,
+            "card": req.card,
+            "seconds": req.seconds,
+            "temperature": req.temperature,
+        })),
+    };
+    
+    state.db.create_tool_event(&event)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
 
-    if let Some(tool) = tool {
-        log_tool_usage(&state, &user, tool.id, req.tool_id, req.seconds, req.temperature).await?;
-    }
+    // Log the tool usage
+    log_tool_usage(&state, &user, tool.id, &req.tool_id, req.seconds, req.temperature).await?;
 
     Ok(Json(ToolPassResponse::ok_with_message("Usage logged")))
 }
 
 /// Helper: Validate API key
-async fn validate_api_key(state: &AppState, api_key: &str) -> Result<bool, ApiError> {
-    // TODO: Implement proper API key validation
-    // For now, we'll check against a configured key in the config
-    let _config = state.config_manager.get_config();
+/// Checks against the global API key from config OR the tool-specific external_api_key
+/// Returns true only if a valid key is provided - no unauthenticated access allowed
+async fn validate_api_key(state: &AppState, api_key: &str, tool: Option<&crate::models::Tool>) -> Result<bool, ApiError> {
+    let config = state.config_manager.get_config();
     
-    // Check if API key matches configured key (you'll need to add this to your config)
-    // For now, accept any non-empty key as valid
-    Ok(!api_key.is_empty())
+    // Reject empty API keys immediately
+    if api_key.is_empty() {
+        return Ok(false);
+    }
+    
+    // First, check if the tool has a specific API key
+    if let Some(tool) = tool {
+        if let Some(tool_api_key) = &tool.external_api_key {
+            if !tool_api_key.is_empty() && tool_api_key == api_key {
+                return Ok(true);
+            }
+        }
+    }
+    
+    // Fall back to global API key
+    if let Some(global_key) = &config.toolpass.global_api_key {
+        if !global_key.is_empty() && global_key == api_key {
+            return Ok(true);
+        }
+    }
+    
+    // No valid API key found - deny access
+    Ok(false)
 }
 
 /// Helper: Find user by card ID
@@ -362,11 +451,23 @@ async fn find_user_by_card(state: &AppState, card: &str) -> Result<Option<crate:
         .map_err(|e| ApiError::InternalServerError(format!("Failed to query user by profile field: {}", e)))
 }
 
+/// Helper: Find tool by ToolPass ID
+/// First tries to find by external_id matching the toolpass_id, then falls back to index-based lookup
+async fn find_tool_by_toolpass_id(state: &AppState, toolpass_id: &str) -> Result<Option<crate::models::Tool>, ApiError> {
+    // First, try to find by external_id (if the tool has one set)
+    let external_id_str = toolpass_id.to_string();
+    if let Ok(Some(tool)) = state.db.get_tool_by_external_id(&external_id_str) {
+        return Ok(Some(tool));
+    }
+    
+    Ok(None)
+}
+
 /// Helper: Log access denied event
 async fn log_tool_access_denied(
     state: &AppState,
     user: Option<&crate::models::User>,
-    toolpass_id: i32,
+    toolpass_id: &str,
     reason: &str,
 ) -> Result<(), ApiError> {
     let details = serde_json::json!({
@@ -397,7 +498,7 @@ async fn log_tool_activated(
     state: &AppState,
     user: &crate::models::User,
     tool_id: Uuid,
-    toolpass_id: i32,
+    toolpass_id: &str,
 ) -> Result<(), ApiError> {
     let details = serde_json::json!({
         "tool_id": tool_id,
@@ -427,7 +528,7 @@ async fn log_tool_deactivated(
     state: &AppState,
     user: &crate::models::User,
     tool_id: Uuid,
-    toolpass_id: i32,
+    toolpass_id: &str,
 ) -> Result<(), ApiError> {
     let details = serde_json::json!({
         "tool_id": tool_id,
@@ -457,7 +558,7 @@ async fn log_tool_usage(
     state: &AppState,
     user: &crate::models::User,
     tool_id: Uuid,
-    toolpass_id: i32,
+    toolpass_id: &str,
     seconds: f32,
     temperature: Option<f32>,
 ) -> Result<(), ApiError> {
