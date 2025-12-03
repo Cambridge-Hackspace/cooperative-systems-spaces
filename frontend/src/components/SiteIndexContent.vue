@@ -28,7 +28,7 @@ async function fetchSiteIndex() {
   loading.value = true
 
   try {
-    const response = await fetch('/api/pages/site/index')
+    const response = await fetch('/api/pages/page/index')
     
     if (response.ok) {
       content.value = await response.json()

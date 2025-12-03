@@ -59,9 +59,9 @@ pub fn pages_routes() -> Router<AppState> {
     Router::new()
         .route("/wiki", get(list_wiki_pages))
         .route("/wiki/*slug", get(get_wiki_page))
-        .route("/site", get(list_site_pages))
-        .route("/site/index", get(get_site_index))
-        .route("/site/*slug", get(get_site_page))
+        .route("/page", get(list_site_pages))
+        .route("/page/index", get(get_site_index))
+        .route("/page/*slug", get(get_site_page))
         .route("/navigation", get(get_navigation))
 }
 

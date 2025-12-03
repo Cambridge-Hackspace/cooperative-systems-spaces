@@ -435,7 +435,7 @@ impl PagesService {
         // Determine the route prefix based on page type
         let route_prefix = match page_type {
             PageType::Wiki => "/wiki",
-            PageType::Site => "/site",
+            PageType::Site => "/page",
         };
         
         // Match markdown file links: href="something.md" or href="./path/file.md"
