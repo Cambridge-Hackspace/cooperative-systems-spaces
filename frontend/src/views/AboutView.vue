@@ -3,7 +3,7 @@
     <div class="hero min-h-96">
       <div class="hero-content text-center">
         <div class="max-w-md">
-          <h1 class="text-5xl font-bold">About Cooperative Systems Spaces</h1>
+          <h1 class="text-5xl">About <strong>Cooperative Systems:</strong> <i>Spaces</i></h1>
           <p class="py-6">
             Welcome to your collaborative workspace management system. 
             Manage your makerspace, hackerspace, or community workspace with ease.
@@ -47,21 +47,24 @@
 
     <!-- Additional Information Section -->
     <div class="mt-16 prose lg:prose-xl mx-auto">
-      <h2 class="text-2xl font-bold text-gray-800">What is Cooperative Systems Spaces?</h2>
+      <h2 class="text-2xl text-gray-800">What is <strong>Cooperative Systems:</strong> <i>Spaces</i>?</h2>
       <p>
-        Cooperative Systems Spaces is a comprehensive management platform designed specifically for 
-        makerspaces, hackerspaces, and community workshops. Our system provides all the tools you need 
+        <strong>Cooperative Systems:</strong> <i>Spaces</i> is a comprehensive management platform designed specifically for
+        makerspaces, hackerspaces, and community workshops. Our system provides the tools you need
         to efficiently manage your collaborative workspace.
       </p>
 
       <h3 class="text-lg font-medium mb-2 mt-4">Key Features</h3>
       <ul>
+        <li><strong>Single Configuration File:</strong> Important Settings, Customization, and Feature Control in a single place, with the server supporting configuration hot-reloads. </li>
         <li><strong>User Management:</strong> Flexible user profiles with customizable fields tailored to your community's needs.</li>
         <li><strong>Tool Tracking:</strong> Keep track of all your equipment with checkout systems and training requirements</li>
         <li><strong>Access Control:</strong> Role-based permissions ensure the right people have access to the right resources</li>
         <li><strong>Analytics & Reporting:</strong> Gain insights into usage patterns and member activity</li>
         <li><strong>Calendar Integration:</strong> Schedule events, workshops, and equipment reservations</li>
         <li><strong>Notification Platform:</strong> Webhooks / MQTT publishing for any kind of system event</li>
+        <li><strong>Secure Edge Component:</strong> Talk to devices on the edge directly and build new automations</li>
+        <li><strong>Edge Kiosk Component:</strong> Show Calendar Events, Tool Statuses and more on multiple displays within your space </li>
       </ul>
 
       <h3 class="text-lg font-medium mb-2 mt-4">Built for Communities</h3>
@@ -69,6 +72,10 @@
         Whether you're running a small community workshop or a large makerspace, Cooperative Systems Spaces 
         scales to meet your needs. Our component-based open-source approach means you can customize and extend the platform
         to fit your unique requirements.
+      </p>
+      <h3 class="text-lg font-medium mb-2 mt-4">Free Software</h3>
+      <p>
+        <strong>Cooperative Systems</strong>: <i>Spaces</i> is free software under the AGPL. The source code for this release is served by the server @TODO. Contributions are presently accepted on GitHub at <a href="https://github.com/neiam/cooperative-systems-spaces">https://github.com/neiam/cooperative-systems-spaces</a>.
       </p>
     </div>
   </div>
