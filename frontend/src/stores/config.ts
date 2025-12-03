@@ -56,25 +56,24 @@ export const useConfigStore = defineStore('config', () => {
     
     try {
       console.log('Fetching config from /config/public...')
-      const response = await apiClient.get('/config/public')
+      const response = await apiClient.get<PublicConfig>('/config/public')
       console.log('Raw API response:', response)
       console.log('Response data:', response.data)
       
       // Check if data is wrapped in ApiResponse structure
-      if (response.data && response.data.success !== undefined) {
+      if (response.success && response.data) {
         // Wrapped response: { success: true, data: { ... } }
-        if (response.data.success && response.data.data) {
-          config.value = response.data.data
-        } else {
-          console.error('API returned unsuccessful response:', response.data)
-          throw new Error(response.data.error || 'Failed to fetch config')
-        }
-      } else if (response.data && response.data.pages) {
-        // Direct response: { registration_challenge: {...}, tools: {...}, site: {...}, pages: {...} }
         config.value = response.data
       } else {
-        console.error('Invalid response structure:', response.data)
-        throw new Error('Failed to fetch config - invalid response structure')
+        // Handle error case
+        if (!response.success) {
+          console.error('API returned unsuccessful response:', response)
+          throw new Error(response.error || 'Failed to fetch config')
+        }
+        
+        // This shouldn't happen, but handle it just in case
+        console.error('Invalid response structure:', response)
+        throw new Error('Failed to fetch config - no data in response')
       }
       
       console.log('Config loaded successfully:', config.value)
