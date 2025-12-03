@@ -33,9 +33,15 @@ pub struct PublicToolConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicSiteConfig {
+    pub site_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicConfig {
     pub registration_challenge: PublicRegistrationChallengeConfig,
     pub tools: PublicToolConfig,
+    pub site: PublicSiteConfig,
 }
 
 pub fn config_routes() -> Router<AppState> {
@@ -63,6 +69,7 @@ async fn get_registration_config(
         tools: PublicToolConfig {
             tool_categories: config.tools.tool_categories.clone(),
         },
+        site: PublicSiteConfig { site_name: config.site.site_name.clone() },
     };
 
     Ok(Json(ApiResponse::success(public_config)))
@@ -98,6 +105,7 @@ async fn get_public_config(
         tools: PublicToolConfig {
             tool_categories: config.tools.tool_categories.clone(),
         },
+        site: PublicSiteConfig { site_name: config.site.site_name },
     };
 
     Ok(Json(ApiResponse::success(public_config)))

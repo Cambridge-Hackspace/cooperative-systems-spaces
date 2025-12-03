@@ -599,6 +599,50 @@ impl Default for CalendarConfig {
     }
 }
 
+/// Configuration for git-pages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PagesConfig {
+    /// Path to the Wiki Git Repository
+    wiki_repo: Option<String>,
+    /// Do we run the wiki update & polling system
+    wiki_auto_enabled: bool,
+    /// How often to poll the wiki repo for changes
+    wiki_period: usize,
+
+    /// Path to the Site Git Repository
+    site_repo: Option<String>,
+    /// Do we run the site update & polling system
+    site_auto_enabled: bool,
+    /// How often to poll the site repo for changes
+    site_period: usize,
+    /// Which file to embed in your index
+    site_embed_index: String,
+
+    /// User Pages
+    users_pages_enabled: bool,
+    /// User Profile Fields
+    user_profile_field: String,
+    /// User Period
+    user_period: usize,
+}
+
+impl Default for PagesConfig {
+    fn default() -> Self {
+        Self {
+            wiki_repo: None,
+            wiki_auto_enabled: false,
+            wiki_period: 600,
+            site_repo: None,
+            site_auto_enabled: false,
+            site_period: 600,
+            site_embed_index: "INDEX.md".to_string(),
+            users_pages_enabled: false,
+            user_profile_field: "user_page_repository".to_string(),
+            user_period: 900
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCategoryMapping {
     /// The internal enum value (e.g., "saw", "powertool", "hand_tools")
@@ -705,6 +749,8 @@ pub struct AppConfig {
     pub toolpass: ToolPassConfig,
     /// Calendar configuration
     pub calendar: CalendarConfig,
+    /// Pages Configuration
+    pub pages: PagesConfig,
 }
 
 impl Default for AppConfig {
@@ -726,6 +772,7 @@ impl Default for AppConfig {
             tools: ToolConfig::default(),
             toolpass: ToolPassConfig::default(),
             calendar: CalendarConfig::default(),
+            pages: PagesConfig::default(),
         }
     }
 }

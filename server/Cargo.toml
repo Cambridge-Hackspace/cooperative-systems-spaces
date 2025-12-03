@@ -48,6 +48,7 @@ tower = { version = "0.5.2", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "trace"] }
 hyper = "0.14"
 async-trait = "0.1"
+comrak = "0.48.0"
 
 [dev-dependencies]
 tempfile = "3.0"

@@ -20,12 +20,14 @@ mod profile;
 mod throttle;
 mod recaptcha;
 mod calendar;
+mod pages;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
 use throttle::RegistrationThrottleService;
 use recaptcha::RecaptchaService;
 use calendar::CalendarService;
+use crate::pages::PagesService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -52,6 +54,7 @@ pub struct AppState {
     pub throttle_service: Arc<RegistrationThrottleService>,
     pub recaptcha_service: Arc<RecaptchaService>,
     pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
+    pub pages_service: Arc<tokio::sync::RwLock<PagesService>>,
 }
 
 // Main dashboard handler
@@ -130,6 +133,13 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
     info!("Calendar service initialized");
 
+    // Initialize pages service
+    info!("Initializing pages service...");
+    let pages_service = Arc::new(tokio::sync::RwLock::new(
+        PagesService::new(app_config.pages.clone())
+    ));
+    info!("Pages service initialized");
+
     let app_state = AppState {
         config_manager: config_manager,
         db: db_manager,
@@ -138,6 +148,7 @@ async fn main() -> Result<(), anyhow::Error> {
         throttle_service,
         recaptcha_service,
         calendar_service,
+        pages_service,
     };
 
     // Serve frontend static files
