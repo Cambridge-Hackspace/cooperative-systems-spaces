@@ -721,6 +721,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "css-edge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "css-server"
 version = "0.1.0"
 dependencies = [

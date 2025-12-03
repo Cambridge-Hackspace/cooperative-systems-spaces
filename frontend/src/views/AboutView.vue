@@ -47,26 +47,27 @@
 
     <!-- Additional Information Section -->
     <div class="mt-16 prose lg:prose-xl mx-auto">
-      <h2>What is Cooperative Systems Spaces?</h2>
+      <h2 class="text-2xl font-bold text-gray-800">What is Cooperative Systems Spaces?</h2>
       <p>
         Cooperative Systems Spaces is a comprehensive management platform designed specifically for 
         makerspaces, hackerspaces, and community workshops. Our system provides all the tools you need 
         to efficiently manage your collaborative workspace.
       </p>
-      
-      <h3>Key Features</h3>
+
+      <h3 class="text-lg font-medium mb-2 mt-4">Key Features</h3>
       <ul>
-        <li><strong>User Management:</strong> Flexible user profiles with customizable fields tailored to your community's needs</li>
+        <li><strong>User Management:</strong> Flexible user profiles with customizable fields tailored to your community's needs.</li>
         <li><strong>Tool Tracking:</strong> Keep track of all your equipment with checkout systems and training requirements</li>
         <li><strong>Access Control:</strong> Role-based permissions ensure the right people have access to the right resources</li>
         <li><strong>Analytics & Reporting:</strong> Gain insights into usage patterns and member activity</li>
         <li><strong>Calendar Integration:</strong> Schedule events, workshops, and equipment reservations</li>
+        <li><strong>Notification Platform:</strong> Webhooks / MQTT publishing for any kind of system event</li>
       </ul>
 
-      <h3>Built for Communities</h3>
+      <h3 class="text-lg font-medium mb-2 mt-4">Built for Communities</h3>
       <p>
         Whether you're running a small community workshop or a large makerspace, Cooperative Systems Spaces 
-        scales to meet your needs. Our open-source approach means you can customize and extend the platform 
+        scales to meet your needs. Our component-based open-source approach means you can customize and extend the platform
         to fit your unique requirements.
       </p>
     </div>

@@ -1,4 +1,4 @@
-# **Collaborative Systems**: _Spaces_
+# **Cooperative Systems**: _Spaces_
 
 Welcome to your collaborative workspace management system. Manage your makerspace, hackerspace, or community workspace with ease. 
 
@@ -59,7 +59,7 @@ Build a release binary with `cargo build --release` or download a pre-built bina
 
 ## LICENSE
 
-**Collaborative Systems**: _Spaces_ is Free Software under the AGPL
+**Cooperative Systems**: _Spaces_ is Free Software under the AGPL
 
 ## Shoutouts
 

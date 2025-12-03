@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["server", "cli"]
+members = ["server", "cli", "edge"]
 
 [workspace.dependencies]
 # Shared dependencies across workspace
