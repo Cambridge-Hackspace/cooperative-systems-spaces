@@ -101,6 +101,16 @@ const router = createRouter({
       }
     },
     {
+      path: '/wiki/:slug(.*)*',
+      name: 'wiki',
+      component: () => import('@/views/WikiView.vue')
+    },
+    {
+      path: '/page/:slug(.*)*',
+      name: 'site',
+      component: () => import('@/views/SiteView.vue')
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       component: () => import('@/views/NotFoundView.vue')

@@ -136,7 +136,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize pages service
     info!("Initializing pages service...");
     let pages_service = Arc::new(tokio::sync::RwLock::new(
-        PagesService::new(app_config.pages.clone())
+        PagesService::new(app_config.pages.clone()).await?
     ));
     info!("Pages service initialized");
 

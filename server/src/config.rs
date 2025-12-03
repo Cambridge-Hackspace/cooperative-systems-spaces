@@ -599,46 +599,68 @@ impl Default for CalendarConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LinkLocation {
+    Navigation,
+    HomePage,
+    Both,
+}
+
 /// Configuration for git-pages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PagesConfig {
     /// Path to the Wiki Git Repository
-    wiki_repo: Option<String>,
+    pub wiki_repo: Option<String>,
+    /// Link on the ...
+    pub wiki_link: LinkLocation,
     /// Do we run the wiki update & polling system
-    wiki_auto_enabled: bool,
+    pub wiki_auto_enabled: bool,
     /// How often to poll the wiki repo for changes
-    wiki_period: usize,
+    pub wiki_period: usize,
+    /// Include the README.md in the wiki
+    pub wiki_readme: bool,
 
     /// Path to the Site Git Repository
-    site_repo: Option<String>,
+    pub site_repo: Option<String>,
+    /// Link on the...
+    pub site_link: LinkLocation,
     /// Do we run the site update & polling system
-    site_auto_enabled: bool,
+    pub site_auto_enabled: bool,
     /// How often to poll the site repo for changes
-    site_period: usize,
+    pub site_period: usize,
     /// Which file to embed in your index
-    site_embed_index: String,
+    pub site_embed_index: String,
+    /// Include the README.md in the site
+    pub site_readme: bool,
 
     /// User Pages
-    users_pages_enabled: bool,
+    pub users_pages_enabled: bool,
     /// User Profile Fields
-    user_profile_field: String,
+    pub user_profile_field: String,
     /// User Period
-    user_period: usize,
+    pub user_period: usize,
+    /// User README
+    pub user_readme: bool,
 }
 
 impl Default for PagesConfig {
     fn default() -> Self {
         Self {
-            wiki_repo: None,
+            wiki_repo: Some("https://github.com/neiam/css-wiki-example".to_string()),
             wiki_auto_enabled: false,
+            wiki_link: LinkLocation::Both,
             wiki_period: 600,
-            site_repo: None,
+            wiki_readme: false,
+            site_repo: Some("https://github.com/neiam/css-site-example".to_string()),
             site_auto_enabled: false,
+            site_link: LinkLocation::Both,
             site_period: 600,
+            site_readme: false,
             site_embed_index: "INDEX.md".to_string(),
             users_pages_enabled: false,
             user_profile_field: "user_page_repository".to_string(),
-            user_period: 900
+            user_period: 900,
+            user_readme: true
         }
     }
 }

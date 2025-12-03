@@ -742,6 +742,7 @@ dependencies = [
  "log",
  "metrics-process",
  "rand_core",
+ "regex",
  "reqwest",
  "rust_decimal",
  "serde",

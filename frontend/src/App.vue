@@ -17,6 +17,12 @@
             <li v-if="authStore.isAuthenticated">
               <router-link to="/tools">Tools</router-link>
             </li>
+            <li v-if="showWikiInNav">
+              <router-link to="/wiki">Wiki</router-link>
+            </li>
+            <li v-if="showSiteInNav">
+              <router-link to="/page">Pages</router-link>
+            </li>
             <li v-if="authStore.isAuthenticated && canAccessStaff">
               <router-link to="/users">Users</router-link>
             </li>
@@ -53,6 +59,12 @@
           </li>
           <li v-if="authStore.isAuthenticated">
             <router-link to="/tools" :class="{ 'active': $route.name === 'tools' }">Tools</router-link>
+          </li>
+          <li v-if="showWikiInNav">
+            <router-link to="/wiki" :class="{ 'active': $route.path.startsWith('/wiki') }">Wiki</router-link>
+          </li>
+          <li v-if="showSiteInNav">
+            <router-link to="/page" :class="{ 'active': $route.path.startsWith('/page') }">Pages</router-link>
           </li>
           <li v-if="authStore.isAuthenticated && canAccessStaff">
             <router-link to="/users" :class="{ 'active': $route.name === 'users' }">Users</router-link>
@@ -182,11 +194,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 import type { Notification } from '@/types'
 import { UserRole as UserRoleEnum } from '@/types'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 // Local state
 const notifications = ref<Notification[]>([])
@@ -201,6 +215,18 @@ const canAccessStaff = computed(() => {
 const canAccessAdmin = computed(() => {
   const user = authStore.user
   return user && user.role === UserRoleEnum.Admin
+})
+
+// Pages visibility
+const showWikiInNav = computed(() => {
+  const result = configStore.shouldShowWikiInNav()
+  console.log('showWikiInNav computed:', result)
+  return result
+})
+const showSiteInNav = computed(() => {
+  const result = configStore.shouldShowSiteInNav()
+  console.log('showSiteInNav computed:', result)
+  return result
 })
 
 // Methods
@@ -239,7 +265,10 @@ function removeNotification(id: string) {
 onMounted(async () => {
   globalLoading.value = true
   try {
-    await authStore.initialize()
+    await Promise.all([
+      authStore.initialize(),
+      configStore.fetchConfig()
+    ])
   } catch (error) {
     addNotification({
       type: 'error',

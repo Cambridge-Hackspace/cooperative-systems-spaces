@@ -11,7 +11,7 @@ use crate::{
         errors::ApiError,
         responses::ApiResponse,
     },
-    config::ToolCategoryMapping,
+    config::{ToolCategoryMapping, LinkLocation},
     AppState,
 };
 
@@ -38,10 +38,19 @@ pub struct PublicSiteConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicPagesConfig {
+    pub wiki_enabled: bool,
+    pub wiki_link: LinkLocation,
+    pub site_enabled: bool,
+    pub site_link: LinkLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicConfig {
     pub registration_challenge: PublicRegistrationChallengeConfig,
     pub tools: PublicToolConfig,
     pub site: PublicSiteConfig,
+    pub pages: PublicPagesConfig,
 }
 
 pub fn config_routes() -> Router<AppState> {
@@ -70,6 +79,12 @@ async fn get_registration_config(
             tool_categories: config.tools.tool_categories.clone(),
         },
         site: PublicSiteConfig { site_name: config.site.site_name.clone() },
+        pages: PublicPagesConfig {
+            wiki_enabled: config.pages.wiki_repo.is_some(),
+            wiki_link: config.pages.wiki_link.clone(),
+            site_enabled: config.pages.site_repo.is_some(),
+            site_link: config.pages.site_link.clone(),
+        },
     };
 
     Ok(Json(ApiResponse::success(public_config)))
@@ -106,6 +121,12 @@ async fn get_public_config(
             tool_categories: config.tools.tool_categories.clone(),
         },
         site: PublicSiteConfig { site_name: config.site.site_name },
+        pages: PublicPagesConfig {
+            wiki_enabled: config.pages.wiki_repo.is_some(),
+            wiki_link: config.pages.wiki_link.clone(),
+            site_enabled: config.pages.site_repo.is_some(),
+            site_link: config.pages.site_link.clone(),
+        },
     };
 
     Ok(Json(ApiResponse::success(public_config)))

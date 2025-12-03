@@ -124,6 +124,52 @@
         </div>
       </div>
 
+      <!-- Wiki Pages Management -->
+      <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h2 class="card-title">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+            </svg>
+            Wiki Pages
+          </h2>
+          <p>Refresh wiki pages from the Git repository.</p>
+          <div class="card-actions justify-end">
+            <button
+              @click="refreshWikiPages"
+              class="btn btn-secondary btn-sm"
+              :disabled="isRefreshingWiki"
+            >
+              <span v-if="isRefreshingWiki" class="loading loading-spinner loading-sm"></span>
+              <span v-else>Refresh Wiki</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Site Pages Management -->
+      <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h2 class="card-title">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+            </svg>
+            Site Pages
+          </h2>
+          <p>Refresh site pages from the Git repository.</p>
+          <div class="card-actions justify-end">
+            <button
+              @click="refreshSitePages"
+              class="btn btn-secondary btn-sm"
+              :disabled="isRefreshingSite"
+            >
+              <span v-if="isRefreshingSite" class="loading loading-spinner loading-sm"></span>
+              <span v-else>Refresh Site</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- Success/Error Messages -->
@@ -162,6 +208,10 @@ const canAccessAdmin = computed(() => {
 const isReloading = ref(false)
 const reloadMessage = ref('')
 const reloadSuccess = ref(false)
+
+// Pages refresh state
+const isRefreshingWiki = ref(false)
+const isRefreshingSite = ref(false)
 
 const reloadConfig = async () => {
   if (!canAccessAdmin.value) return
@@ -224,4 +274,91 @@ const clearMessage = () => {
   reloadMessage.value = ''
   reloadSuccess.value = false
 }
+
+const refreshWikiPages = async () => {
+  if (!canAccessAdmin.value) return
+
+  isRefreshingWiki.value = true
+  reloadMessage.value = ''
+
+  try {
+    const token = authStore.token
+    if (!token) {
+      throw new Error('Authentication token not found')
+    }
+
+    const response = await fetch('/api/admin/pages/wiki/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    })
+
+    const result = await response.json()
+
+    if (response.ok && result.success) {
+      reloadSuccess.value = true
+      reloadMessage.value = result.message || 'Wiki pages refreshed successfully'
+    } else {
+      reloadSuccess.value = false
+      reloadMessage.value = result.error || result.message || 'Failed to refresh wiki pages'
+    }
+  } catch (error) {
+    console.error('Wiki refresh error:', error)
+    reloadSuccess.value = false
+    reloadMessage.value = error instanceof Error ? error.message : 'Network error occurred'
+  } finally {
+    isRefreshingWiki.value = false
+
+    // Auto-clear the message after 5 seconds
+    setTimeout(() => {
+      clearMessage()
+    }, 5000)
+  }
+}
+
+const refreshSitePages = async () => {
+  if (!canAccessAdmin.value) return
+
+  isRefreshingSite.value = true
+  reloadMessage.value = ''
+
+  try {
+    const token = authStore.token
+    if (!token) {
+      throw new Error('Authentication token not found')
+    }
+
+    const response = await fetch('/api/admin/pages/site/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    })
+
+    const result = await response.json()
+
+    if (response.ok && result.success) {
+      reloadSuccess.value = true
+      reloadMessage.value = result.message || 'Site pages refreshed successfully'
+    } else {
+      reloadSuccess.value = false
+      reloadMessage.value = result.error || result.message || 'Failed to refresh site pages'
+    }
+  } catch (error) {
+    console.error('Site refresh error:', error)
+    reloadSuccess.value = false
+    reloadMessage.value = error instanceof Error ? error.message : 'Network error occurred'
+  } finally {
+    isRefreshingSite.value = false
+
+    // Auto-clear the message after 5 seconds
+    setTimeout(() => {
+      clearMessage()
+    }, 5000)
+  }
+}
+
 </script>

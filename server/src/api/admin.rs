@@ -41,6 +41,8 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/users/:user_id/activate", put(activate_user))
         .route("/users/:user_id/deactivate", put(deactivate_user))
         .route("/audit-logs", get(get_audit_logs))
+        .route("/pages/wiki/refresh", post(refresh_wiki_pages))
+        .route("/pages/site/refresh", post(refresh_site_pages))
 }
 
 /// Reload configuration from disk (admin only)
@@ -319,4 +321,59 @@ async fn get_audit_logs(
         })?;
 
     Ok(Json(ApiResponse::success(logs)))
+}
+
+/// Refresh wiki pages from repository (admin only)
+async fn refresh_wiki_pages(
+    _admin_user: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let mut pages_service = state.pages_service.write().await;
+    
+    match pages_service.trigger_wiki_update().await {
+        Ok(()) => {
+            let store = pages_service.get_store();
+            Ok(Json(ApiResponse::success_with_message(
+                serde_json::json!({
+                    "wiki_pages_count": store.wiki_pages.len(),
+                    "updated_at": chrono::Utc::now().to_rfc3339(),
+                }),
+                format!("Wiki pages refreshed successfully. {} pages loaded.", store.wiki_pages.len()),
+            )))
+        }
+        Err(e) => {
+            tracing::error!("Failed to refresh wiki pages: {}", e);
+            Err(ApiError::InternalServerError(
+                format!("Failed to refresh wiki pages: {}", e)
+            ))
+        }
+    }
+}
+
+/// Refresh site pages from repository (admin only)
+async fn refresh_site_pages(
+    _admin_user: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let mut pages_service = state.pages_service.write().await;
+    
+    match pages_service.trigger_site_update().await {
+        Ok(()) => {
+            let store = pages_service.get_store();
+            Ok(Json(ApiResponse::success_with_message(
+                serde_json::json!({
+                    "site_pages_count": store.site_pages.len(),
+                    "has_index": store.site_index.is_some(),
+                    "updated_at": chrono::Utc::now().to_rfc3339(),
+                }),
+                format!("Site pages refreshed successfully. {} pages loaded.", store.site_pages.len()),
+            )))
+        }
+        Err(e) => {
+            tracing::error!("Failed to refresh site pages: {}", e);
+            Err(ApiError::InternalServerError(
+                format!("Failed to refresh site pages: {}", e)
+            ))
+        }
+    }
 }
