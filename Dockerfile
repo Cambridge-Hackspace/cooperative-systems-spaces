@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y \
     libpq5 \
     ca-certificates  \
     vim \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled server binary (with embedded migrations)
