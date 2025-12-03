@@ -64,7 +64,7 @@
         <li><strong>Calendar Integration:</strong> Schedule events, workshops, and equipment reservations</li>
         <li><strong>Notification Platform:</strong> Webhooks / MQTT publishing for any kind of system event</li>
         <li><strong>Secure Edge Component:</strong> Talk to devices on the edge directly and build new automations</li>
-        <li><strong>Edge Kiosk Component:</strong> Show Calendar Events, Tool Statuses and more on multiple displays within your space </li>
+        <li><strong>Edge Kiosk Component:</strong> Show Calendar Events, Tool Statuses and more on multiple displays within your space</li>
       </ul>
 
       <h3 class="text-lg font-medium mb-2 mt-4">Built for Communities</h3>
