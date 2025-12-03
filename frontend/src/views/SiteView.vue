@@ -13,7 +13,7 @@
           type="site"
           title="Pages"
           :current-slug="currentSlug"
-          base-url="/site"
+          base-url="/page"
           @select="handlePageSelect"
         />
       </aside>

@@ -31,7 +31,7 @@ COPY . .
 RUN cargo build --release
 
 # ==================== RUNTIME STAGE ====================
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 WORKDIR /app
 

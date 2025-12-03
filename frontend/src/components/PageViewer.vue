@@ -133,7 +133,7 @@ async function fetchPage(slug: string) {
   try {
     const endpoint = props.type === 'wiki' 
       ? `/api/pages/wiki/${slug}`
-      : `/api/pages/site/${slug}`
+      : `/api/pages/page/${slug}`
     
     const response = await fetch(endpoint)
     
