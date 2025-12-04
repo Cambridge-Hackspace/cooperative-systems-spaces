@@ -1006,12 +1006,13 @@ pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
 
 /// Generate a sample configuration file with comments
 pub fn generate_sample_config<P: AsRef<Path>>(path: P) -> Result<()> {
-    let sample_config = include_str!("../../config.sample.toml");
+    let default_config = AppConfig::default();
     
-    fs::write(&path, sample_config)
-        .with_context(|| format!("Failed to write sample config file: {}", path.as_ref().display()))?;
+    default_config.to_file(&path)
+        .with_context(|| "Failed to write sample configuration file")?;
     
     println!("Sample configuration file generated at: {}", path.as_ref().display());
+    println!("Please review and modify the configuration as needed.");
     Ok(())
 }
 

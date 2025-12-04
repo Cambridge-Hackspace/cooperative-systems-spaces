@@ -1,6 +1,8 @@
 mod tools;
 mod training;
 pub(crate) mod trainers;
+mod devices;
+
 pub use tools::*;
 pub use training::*;
 pub use trainers::*;
