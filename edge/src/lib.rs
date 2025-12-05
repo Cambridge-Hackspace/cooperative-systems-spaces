@@ -4,12 +4,19 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use include_dir::{include_dir, Dir};
+use include_dir::Dir;
 use mime_guess::from_path;
 use tower::Service;
 use tracing::warn;
 
+#[cfg(not(test))]
+use include_dir::include_dir;
+#[cfg(not(test))]
 static ASSETS_DIR_EDGE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../frontend_edge/dist");
+
+// In test mode, use an empty directory since we don't need the assets for tests
+#[cfg(test)]
+static ASSETS_DIR_EDGE: Dir<'_> = Dir::new("/", &[]);
 
 // static ASSETS_DIR_SERVER: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/frontend/dist");
 #[derive(Clone)]
@@ -19,7 +26,7 @@ impl Service<Request<Body>> for StaticFileServiceEdge {
     type Error = Infallible;
     type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
