@@ -36,7 +36,7 @@ frontend-check:
 
 
 # Frontend checks
-frontend-edge--check:
+frontend-edge-check:
   stage: check
   image: node:20-alpine
   before_script:
@@ -162,7 +162,7 @@ build-docker:
 
   dependencies:
     - frontend-check
-    - server-check
-    - cli-check
+    - frontend-edge-check
+    - rust-check
   only:
     - master
