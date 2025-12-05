@@ -27,8 +27,8 @@ RUN apt-get update && apt-get install -y \
 
 COPY . .
 
-# Build server in release mode
-RUN cargo build --release
+# Build only the server in release mode (skip edge components in dockerfile)
+RUN cargo build --release --package css-server --package css-cli
 
 # ==================== RUNTIME STAGE ====================
 FROM debian:trixie-slim
