@@ -62,9 +62,8 @@ rust-check:
   stage: check
   image: rust:1.90.0
   before_script:
-
-    - apt-get update && apt-get install -y libpq-dev cmake build-essential npm
-    - cd frontend && npm run build && cd .. # the macro complains a lot
+    - mkdir -p /builds/neiam/cooperative-systems-spaces/edge/../frontend_edge/dist
+    - apt-get update && apt-get install -y libpq-dev cmake build-essentialremov
   script:
     - cargo test --all
     # Uncomment when ready:
