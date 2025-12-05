@@ -290,237 +290,247 @@
   </div>
 </template>
 
-<script>
-import { ref, onMounted } from "vue";
-import { apiClient } from "@/utils/api";
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { apiClient } from '@/utils/api'
 
-export default {
-  name: "DeviceManagement",
-  setup() {
-    const activeTab = ref("devices");
-    const loading = ref(false);
-    const error = ref(null);
-    const devices = ref([]);
+// Type definitions
+interface Device {
+  id: string
+  name: string
+  kind: string
+  mac_address: string | null
+  platform: string | null
+  software_version: string | null
+  ipv4_address: string | null
+  ipv6_address: string | null
+  uptime: number
+  last_seen_at: string | null
+  is_online: boolean
+}
 
-    const loadingInvites = ref(false);
-    const invitesError = ref(null);
-    const invites = ref([]);
+interface Invite {
+  device_code: string
+  expires_at: string
+  used_at: string | null
+  used_by_device_name: string | null
+}
 
-    const showInviteModal = ref(false);
-    const generating = ref(false);
-    const generatedInvite = ref(null);
+interface GeneratedInvite {
+  device_code: string
+  expires_at: string
+}
 
-    const renameModal = ref({
-      show: false,
-      device: null,
-      newName: "",
-    });
-    const renaming = ref(false);
+interface RenameModal {
+  show: boolean
+  device: Device | null
+  newName: string
+}
 
-    const deleteModal = ref({
-      show: false,
-      device: null,
-    });
-    const deleting = ref(false);
+interface DeleteModal {
+  show: boolean
+  device: Device | null
+}
 
-    const loadDevices = async () => {
-      loading.value = true;
-      error.value = null;
-      try {
-        const response = await apiClient.raw.get("/admin/devices");
-        devices.value = response.data.data || [];
-      } catch (err) {
-        error.value = "Failed to load devices: " + err.message;
-      } finally {
-        loading.value = false;
-      }
-    };
+// State
+const activeTab = ref<'devices' | 'invites'>('devices')
+const loading = ref(false)
+const error = ref<string | null>(null)
+const devices = ref<Device[]>([])
 
-    const loadInvites = async () => {
-      loadingInvites.value = true;
-      invitesError.value = null;
-      try {
-        const response = await apiClient.raw.get("/admin/devices/invites");
-        invites.value = response.data.data || [];
-      } catch (err) {
-        invitesError.value = "Failed to load invites: " + err.message;
-      } finally {
-        loadingInvites.value = false;
-      }
-    };
+const loadingInvites = ref(false)
+const invitesError = ref<string | null>(null)
+const invites = ref<Invite[]>([])
 
-    const generateInvite = async () => {
-      generating.value = true;
-      try {
-        const response = await apiClient.raw.post("/admin/devices/invite", {});
-        generatedInvite.value = response.data.data;
-        loadInvites(); // Refresh invites list
-      } catch (err) {
-        alert("Failed to generate invite: " + err.message);
-      } finally {
-        generating.value = false;
-      }
-    };
+const showInviteModal = ref(false)
+const generating = ref(false)
+const generatedInvite = ref<GeneratedInvite | null>(null)
 
-    const copyInviteCode = () => {
-      navigator.clipboard.writeText(generatedInvite.value.device_code);
-      alert("Invite code copied to clipboard!");
-    };
+const renameModal = ref<RenameModal>({
+  show: false,
+  device: null,
+  newName: '',
+})
+const renaming = ref(false)
 
-    const closeInviteModal = () => {
-      showInviteModal.value = false;
-      generatedInvite.value = null;
-    };
+const deleteModal = ref<DeleteModal>({
+  show: false,
+  device: null,
+})
+const deleting = ref(false)
 
-    const expireInvite = async (code) => {
-      if (!confirm("Are you sure you want to expire this invite code?")) return;
+// Functions
+const loadDevices = async () => {
+  loading.value = true
+  error.value = null
+  try {
+    const response = await apiClient.raw.get('/admin/devices')
+    devices.value = response.data.data || []
+  } catch (err: any) {
+    error.value = 'Failed to load devices: ' + err.message
+  } finally {
+    loading.value = false
+  }
+}
 
-      try {
-        await apiClient.raw.delete(`/admin/devices/invites/${code}`);
-        loadInvites(); // Refresh list
-      } catch (err) {
-        alert("Failed to expire invite: " + err.message);
-      }
-    };
+const loadInvites = async () => {
+  loadingInvites.value = true
+  invitesError.value = null
+  try {
+    const response = await apiClient.raw.get('/admin/devices/invites')
+    invites.value = response.data.data || []
+  } catch (err: any) {
+    invitesError.value = 'Failed to load invites: ' + err.message
+  } finally {
+    loadingInvites.value = false
+  }
+}
 
-    const renameDevice = (device) => {
-      renameModal.value = {
-        show: true,
-        device,
-        newName: device.name,
-      };
-    };
+const generateInvite = async () => {
+  generating.value = true
+  try {
+    const response = await apiClient.raw.post('/admin/devices/invite', {})
+    generatedInvite.value = response.data.data
+    loadInvites() // Refresh invites list
+  } catch (err: any) {
+    alert('Failed to generate invite: ' + err.message)
+  } finally {
+    generating.value = false
+  }
+}
 
-    const closeRenameModal = () => {
-      renameModal.value = {
-        show: false,
-        device: null,
-        newName: "",
-      };
-    };
+const copyInviteCode = () => {
+  if (generatedInvite.value) {
+    navigator.clipboard.writeText(generatedInvite.value.device_code)
+    alert('Invite code copied to clipboard!')
+  }
+}
 
-    const submitRename = async () => {
-      renaming.value = true;
-      try {
-        await apiClient.raw.patch(
-          `/admin/devices/${renameModal.value.device.id}/name`,
-          { name: renameModal.value.newName }
-        );
-        loadDevices(); // Refresh devices
-        closeRenameModal();
-      } catch (err) {
-        alert("Failed to rename device: " + err.message);
-      } finally {
-        renaming.value = false;
-      }
-    };
+const closeInviteModal = () => {
+  showInviteModal.value = false
+  generatedInvite.value = null
+}
 
-    const confirmDelete = (device) => {
-      deleteModal.value = {
-        show: true,
-        device,
-      };
-    };
+const expireInvite = async (code: string) => {
+  if (!confirm('Are you sure you want to expire this invite code?')) return
 
-    const closeDeleteModal = () => {
-      deleteModal.value = {
-        show: false,
-        device: null,
-      };
-    };
+  try {
+    await apiClient.raw.delete(`/admin/devices/invites/${code}`)
+    loadInvites() // Refresh list
+  } catch (err: any) {
+    alert('Failed to expire invite: ' + err.message)
+  }
+}
 
-    const submitDelete = async () => {
-      deleting.value = true;
-      try {
-        await apiClient.raw.delete(`/admin/devices/${deleteModal.value.device.id}`);
-        loadDevices(); // Refresh devices
-        closeDeleteModal();
-      } catch (err) {
-        alert("Failed to delete device: " + err.message);
-      } finally {
-        deleting.value = false;
-      }
-    };
+const renameDevice = (device: Device) => {
+  renameModal.value = {
+    show: true,
+    device,
+    newName: device.name,
+  }
+}
 
-    const formatUptime = (seconds) => {
-      if (!seconds) return "N/A";
-      const days = Math.floor(seconds / 86400);
-      const hours = Math.floor((seconds % 86400) / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
+const closeRenameModal = () => {
+  renameModal.value = {
+    show: false,
+    device: null,
+    newName: '',
+  }
+}
 
-      if (days > 0) return `${days}d ${hours}h`;
-      if (hours > 0) return `${hours}h ${minutes}m`;
-      return `${minutes}m`;
-    };
+const submitRename = async () => {
+  if (!renameModal.value.device) return
+  
+  renaming.value = true
+  try {
+    await apiClient.raw.patch(
+      `/admin/devices/${renameModal.value.device.id}/name`,
+      { name: renameModal.value.newName }
+    )
+    loadDevices() // Refresh devices
+    closeRenameModal()
+  } catch (err: any) {
+    alert('Failed to rename device: ' + err.message)
+  } finally {
+    renaming.value = false
+  }
+}
 
-    const formatLastSeen = (timestamp) => {
-      if (!timestamp) return "Never";
-      const date = new Date(timestamp);
-      const now = new Date();
-      const diffMs = now - date;
-      const diffMins = Math.floor(diffMs / 60000);
+const confirmDelete = (device: Device) => {
+  deleteModal.value = {
+    show: true,
+    device,
+  }
+}
 
-      if (diffMins < 1) return "Just now";
-      if (diffMins < 60) return `${diffMins} minutes ago`;
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours < 24) return `${diffHours} hours ago`;
-      const diffDays = Math.floor(diffHours / 24);
-      return `${diffDays} days ago`;
-    };
+const closeDeleteModal = () => {
+  deleteModal.value = {
+    show: false,
+    device: null,
+  }
+}
 
-    const formatExpiry = (timestamp) => {
-      const date = new Date(timestamp);
-      return date.toLocaleString();
-    };
+const submitDelete = async () => {
+  if (!deleteModal.value.device) return
+  
+  deleting.value = true
+  try {
+    await apiClient.raw.delete(`/admin/devices/${deleteModal.value.device.id}`)
+    loadDevices() // Refresh devices
+    closeDeleteModal()
+  } catch (err: any) {
+    alert('Failed to delete device: ' + err.message)
+  } finally {
+    deleting.value = false
+  }
+}
 
-    const isExpired = (timestamp) => {
-      return new Date(timestamp) < new Date();
-    };
+const formatUptime = (seconds: number): string => {
+  if (!seconds) return 'N/A'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
 
-    const getInviteStatus = (invite) => {
-      if (invite.used_at) return "used";
-      if (isExpired(invite.expires_at)) return "expired";
-      return "active";
-    };
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
 
-    onMounted(() => {
-      loadDevices();
-      loadInvites();
-    });
+const formatLastSeen = (timestamp: string | null): string => {
+  if (!timestamp) return 'Never'
+  const date = new Date(timestamp)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
 
-    return {
-      activeTab,
-      loading,
-      error,
-      devices,
-      loadingInvites,
-      invitesError,
-      invites,
-      showInviteModal,
-      generating,
-      generatedInvite,
-      renameModal,
-      renaming,
-      deleteModal,
-      deleting,
-      generateInvite,
-      copyInviteCode,
-      closeInviteModal,
-      expireInvite,
-      renameDevice,
-      closeRenameModal,
-      submitRename,
-      confirmDelete,
-      closeDeleteModal,
-      submitDelete,
-      formatUptime,
-      formatLastSeen,
-      formatExpiry,
-      isExpired,
-      getInviteStatus,
-    };
-  },
-};
+  if (diffMins < 1) return 'Just now'
+  if (diffMins < 60) return `${diffMins} minutes ago`
+  const diffHours = Math.floor(diffMins / 60)
+  if (diffHours < 24) return `${diffHours} hours ago`
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays} days ago`
+}
+
+const formatExpiry = (timestamp: string): string => {
+  const date = new Date(timestamp)
+  return date.toLocaleString()
+}
+
+const isExpired = (timestamp: string): boolean => {
+  return new Date(timestamp) < new Date()
+}
+
+const getInviteStatus = (invite: Invite): 'used' | 'expired' | 'active' => {
+  if (invite.used_at) return 'used'
+  if (isExpired(invite.expires_at)) return 'expired'
+  return 'active'
+}
+
+// Lifecycle
+onMounted(() => {
+  loadDevices()
+  loadInvites()
+})
 </script>
 
 <style scoped>

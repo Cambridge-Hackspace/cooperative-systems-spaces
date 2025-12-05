@@ -97,6 +97,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { apiClient } from '@/utils/api'
+import type { User } from '@/types'
 
 interface Props {
   userId?: string
@@ -169,7 +170,7 @@ async function selectTheme(theme: string) {
   errorMessage.value = ''
 
   try {
-    const response = await apiClient.patch(`/users/${effectiveUserId.value}/theme`, {
+    const response = await apiClient.patch<User>(`/users/${effectiveUserId.value}/theme`, {
       theme
     })
 

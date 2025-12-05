@@ -127,9 +127,9 @@ mod tests {
         assert!(!platform.is_empty());
         // Should be one of the known platforms
         assert!(
-            platform.contains("linux") || 
-            platform.contains("macos") || 
-            platform.contains("windows")
+            platform.contains("Linux") ||
+            platform.contains("MacOs") ||
+            platform.contains("Windows")
         );
     }
 

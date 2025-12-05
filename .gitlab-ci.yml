@@ -57,12 +57,11 @@ frontend-edge--check:
     - master
     - main
 
-# Server checks
-server-check:
+# All-Rust checks
+rust-check:
   stage: check
   image: rust:1.90.0
   before_script:
-    - cd server
     - apt-get update && apt-get install -y libpq-dev cmake build-essential
   script:
     - cargo test --all
@@ -70,9 +69,9 @@ server-check:
     # - cargo fmt --all -- --check
     # - cargo clippy --all-targets --all-features -- -D warnings
   cache:
-    key: ${CI_COMMIT_REF_SLUG}-server
+    key: ${CI_COMMIT_REF_SLUG}-all
     paths:
-      - server/target/
+      - target/
       - $CARGO_HOME/registry/
       - $CARGO_HOME/git/
   only:
@@ -80,50 +79,74 @@ server-check:
     - master
     - main
 
-# CLI checks
-cli-check:
-  stage: check
-  image: rust:1.90.0
-  before_script:
-    - cd cli
-  script:
-    - cargo test --all
-    # Uncomment when ready:
-    # - cargo fmt --all -- --check
-    # - cargo clippy --all-targets --all-features -- -D warnings
-  cache:
-    key: ${CI_COMMIT_REF_SLUG}-cli
-    paths:
-      - cli/target/
-      - $CARGO_HOME/registry/
-      - $CARGO_HOME/git/
-  only:
-    - merge_requests
-    - master
-    - main
-
-# Edge checks
-edge-check:
-  stage: check
-  image: rust:1.90.0
-  before_script:
-    - cd edge
-    - apt-get update && apt-get install -y libpq-dev cmake build-essential
-  script:
-    - cargo test --all
-    # Uncomment when ready:
-    # - cargo fmt --all -- --check
-    # - cargo clippy --all-targets --all-features -- -D warnings
-  cache:
-    key: ${CI_COMMIT_REF_SLUG}-cli
-    paths:
-      - cli/target/
-      - $CARGO_HOME/registry/
-      - $CARGO_HOME/git/
-  only:
-    - merge_requests
-    - master
-    - main
+## Server checks
+#server-check:
+#  stage: check
+#  image: rust:1.90.0
+#  before_script:
+#    - cd server
+#    - apt-get update && apt-get install -y libpq-dev cmake build-essential
+#  script:
+#    - cargo test --all
+#    # Uncomment when ready:
+#    # - cargo fmt --all -- --check
+#    # - cargo clippy --all-targets --all-features -- -D warnings
+#  cache:
+#    key: ${CI_COMMIT_REF_SLUG}-server
+#    paths:
+#      - server/target/
+#      - $CARGO_HOME/registry/
+#      - $CARGO_HOME/git/
+#  only:
+#    - merge_requests
+#    - master
+#    - main
+#
+## CLI checks
+#cli-check:
+#  stage: check
+#  image: rust:1.90.0
+#  before_script:
+#    - cd cli
+#    - apt-get update && apt-get install -y libpq-dev cmake build-essential
+#  script:
+#    - cargo test --all
+#    # Uncomment when ready:
+#    # - cargo fmt --all -- --check
+#    # - cargo clippy --all-targets --all-features -- -D warnings
+#  cache:
+#    key: ${CI_COMMIT_REF_SLUG}-cli
+#    paths:
+#      - cli/target/
+#      - $CARGO_HOME/registry/
+#      - $CARGO_HOME/git/
+#  only:
+#    - merge_requests
+#    - master
+#    - main
+#
+## Edge checks
+#edge-check:
+#  stage: check
+#  image: rust:1.90.0
+#  before_script:
+#    - cd edge
+#    - apt-get update && apt-get install -y libpq-dev cmake build-essential
+#  script:
+#    - cargo test --all
+#    # Uncomment when ready:
+#    # - cargo fmt --all -- --check
+#    # - cargo clippy --all-targets --all-features -- -D warnings
+#  cache:
+#    key: ${CI_COMMIT_REF_SLUG}-cli
+#    paths:
+#      - cli/target/
+#      - $CARGO_HOME/registry/
+#      - $CARGO_HOME/git/
+#  only:
+#    - merge_requests
+#    - master
+#    - main
 
 # Build Docker image
 build-docker:
