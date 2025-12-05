@@ -63,7 +63,7 @@ rust-check:
   image: rust:1.90.0
   before_script:
     - mkdir -p /builds/neiam/cooperative-systems-spaces/edge/../frontend_edge/dist
-    - apt-get update && apt-get install -y libpq-dev cmake build-essentialremov
+    - apt-get update && apt-get install -y libpq-dev cmake build-essential
   script:
     - cargo test --all
     # Uncomment when ready:
