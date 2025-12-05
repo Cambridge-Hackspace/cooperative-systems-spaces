@@ -1,5 +1,5 @@
 <template>
-  <div class="page-navigation">
+  <div class="page-navigation bg-base-300">
     <div class="nav-header">
       <h3>{{ title }}</h3>
     </div>
@@ -26,7 +26,7 @@
           <a
             :href="`${baseUrl}/${item.slug}`"
             @click.prevent="$emit('select', item.slug)"
-            class="nav-item"
+            class="nav-item active:bg-primary hover:bg-secondary"
             :class="{ active: currentSlug === item.slug }"
           >
             <span class="nav-title">{{ item.title }}</span>
@@ -132,7 +132,6 @@ function toggleExpanded(slug: string) {
 
 <style scoped>
 .page-navigation {
-  background: white;
   border-radius: 8px;
   padding: 1rem;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -148,7 +147,6 @@ function toggleExpanded(slug: string) {
 .nav-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: #333;
   font-weight: 600;
 }
 
@@ -157,7 +155,6 @@ function toggleExpanded(slug: string) {
 .empty-state {
   text-align: center;
   padding: 2rem 1rem;
-  color: #666;
 }
 
 .spinner {
@@ -195,21 +192,16 @@ function toggleExpanded(slug: string) {
   justify-content: space-between;
   padding: 0.75rem 1rem;
   text-decoration: none;
-  color: #555;
   border-radius: 6px;
   transition: all 0.2s;
   cursor: pointer;
 }
 
 .nav-item:hover {
-  background: #f5f5f5;
-  color: #3788d8;
   transform: translateX(4px);
 }
 
 .nav-item.active {
-  background: #e3f2fd;
-  color: #3788d8;
   font-weight: 600;
   border-left: 3px solid #3788d8;
 }

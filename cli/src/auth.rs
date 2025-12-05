@@ -185,7 +185,7 @@ async fn handle_register(
     };
 
     let response: ApiResponse<UserResponse> = client
-        .post("/api/auth/register", &register_request)
+        .post("/auth/register", &register_request)
         .await
         .context("Registration request failed")?;
 

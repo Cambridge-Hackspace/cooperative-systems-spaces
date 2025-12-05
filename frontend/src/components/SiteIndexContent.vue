@@ -1,5 +1,5 @@
 <template>
-  <div v-if="content" class="site-index-content">
+  <div v-if="content" class="site-index-content bg-base-300 text-base-content">
     <div class="markdown-content" v-html="content.html_content"></div>
   </div>
   <div v-else-if="loading" class="loading-state">
@@ -43,7 +43,6 @@ async function fetchSiteIndex() {
 
 <style scoped>
 .site-index-content {
-  background: white;
   border-radius: 8px;
   padding: 2rem;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -80,7 +79,6 @@ async function fetchSiteIndex() {
   margin-bottom: 0.75rem;
   font-weight: 600;
   line-height: 1.3;
-  color: #222;
 }
 
 .markdown-content :deep(h1) {
@@ -101,9 +99,7 @@ async function fetchSiteIndex() {
 }
 
 .markdown-content :deep(a) {
-  color: #3788d8;
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
+  border-bottom: 1px solid;
   transition: border-color 0.2s;
 }
 

@@ -67,6 +67,15 @@ const router = createRouter({
       }
     },
     {
+      path: '/admin/devices',
+      name: 'admin-devices',
+      component: () => import('@/components/DeviceManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    {
       path: '/tools',
       name: 'tools',
       component: () => import('@/views/ToolsView.vue'),

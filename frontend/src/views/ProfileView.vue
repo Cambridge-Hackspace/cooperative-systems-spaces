@@ -15,6 +15,12 @@
       :user="user || undefined"
       class="mb-8"
     />
+
+    <!-- Theme Picker (only shown for own profile) -->
+    <ThemePicker
+      v-if="isOwnProfile"
+      :user-id="userId"
+    />
   </div>
 </template>
 
@@ -23,6 +29,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import UserProfile from '@/components/UserProfile.vue'
+import ThemePicker from '@/components/ThemePicker.vue'
 import { apiClient } from '@/utils/api'
 import type { User } from '@/types'
 

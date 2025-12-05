@@ -1,5 +1,5 @@
 <template>
-  <div class="calendar-events">
+  <div class="calendar-events bg-base-300">
     <div class="calendar-header">
       <h2>📅 Upcoming Events</h2>
       <button 
@@ -32,15 +32,15 @@
       <div 
         v-for="event in events" 
         :key="event.title + event.start"
-        class="event-card"
+        class="event-card bg-base-200 text-base-content"
         :style="{ borderLeftColor: event.calendar_color }"
       >
-        <div class="event-date">
+        <div class="event-date bg-secondary text-secondary-content">
           <div class="event-day">{{ formatDay(event.start) }}</div>
           <div class="event-month">{{ formatMonth(event.start) }}</div>
         </div>
 
-        <div class="event-details">
+        <div class="event-details text-accent">
           <h3 class="event-title">{{ event.title }}</h3>
           
           <div class="event-meta">
@@ -173,7 +173,6 @@ function formatTime(dateString: string): string {
 
 <style scoped>
 .calendar-events {
-  background: white;
   border-radius: 8px;
   padding: 1.5rem;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -189,7 +188,6 @@ function formatTime(dateString: string): string {
 .calendar-header h2 {
   margin: 0;
   font-size: 1.5rem;
-  color: #333;
 }
 
 .refresh-btn {
@@ -268,7 +266,6 @@ function formatTime(dateString: string): string {
   border-left: 4px solid;
   border-radius: 6px;
   transition: all 0.2s;
-  background: #fafafa;
 }
 
 .event-card:hover {
@@ -283,7 +280,6 @@ function formatTime(dateString: string): string {
   justify-content: center;
   min-width: 60px;
   padding: 0.5rem;
-  background: white;
   border-radius: 4px;
   border: 1px solid #e0e0e0;
 }
@@ -292,13 +288,11 @@ function formatTime(dateString: string): string {
   font-size: 1.75rem;
   font-weight: bold;
   line-height: 1;
-  color: #333;
 }
 
 .event-month {
   font-size: 0.875rem;
   text-transform: uppercase;
-  color: #666;
   margin-top: 0.25rem;
 }
 
@@ -310,7 +304,6 @@ function formatTime(dateString: string): string {
 .event-title {
   margin: 0 0 0.5rem 0;
   font-size: 1.125rem;
-  color: #333;
   font-weight: 600;
 }
 
@@ -320,7 +313,6 @@ function formatTime(dateString: string): string {
   gap: 1rem;
   margin-bottom: 0.5rem;
   font-size: 0.875rem;
-  color: #666;
 }
 
 .event-time,

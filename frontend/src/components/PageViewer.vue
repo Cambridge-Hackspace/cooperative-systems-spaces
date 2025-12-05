@@ -1,5 +1,5 @@
 <template>
-  <div class="page-viewer">
+  <div class="page-viewer bg-base-300">
     <div v-if="loading" class="loading-state">
       <div class="spinner"></div>
       <p>Loading page...</p>
@@ -15,15 +15,15 @@
       <header class="page-header">
         <h1>{{ page.title }}</h1>
         <div class="page-meta">
-          <span class="page-path">📄 {{ page.relative_path }}</span>
+          <span class="page-path bg-secondary text-secondary-content">📄 {{ page.relative_path }}</span>
         </div>
       </header>
 
-      <div class="page-body markdown-content" v-html="page.html_content"></div>
+      <div class="page-body markdown-content text-base-content" v-html="page.html_content"></div>
 
       <!-- Edit link in bottom right -->
       <div v-if="editUrl" class="edit-link-container">
-        <a :href="editUrl" target="_blank" rel="noopener noreferrer" class="edit-link">
+        <a :href="editUrl" target="_blank" rel="noopener noreferrer" class="edit-link bg-primary text-primary-content">
           ✏️ Edit on {{ platformName }}
         </a>
       </div>
@@ -156,7 +156,6 @@ async function fetchPage(slug: string) {
 
 <style scoped>
 .page-viewer {
-  background: white;
   border-radius: 8px;
   padding: 2rem;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -168,7 +167,6 @@ async function fetchPage(slug: string) {
 .empty-state {
   text-align: center;
   padding: 4rem 2rem;
-  color: #666;
 }
 
 .spinner {
@@ -225,7 +223,6 @@ async function fetchPage(slug: string) {
 .page-header h1 {
   margin: 0 0 0.5rem 0;
   font-size: 2.5rem;
-  color: #333;
   font-weight: 700;
   line-height: 1.2;
 }
@@ -234,19 +231,16 @@ async function fetchPage(slug: string) {
   display: flex;
   gap: 1rem;
   font-size: 0.875rem;
-  color: #666;
 }
 
 .page-path {
   font-family: monospace;
-  background: #f5f5f5;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
 }
 
 .page-body {
   line-height: 1.7;
-  color: #333;
 }
 
 /* Edit link styling */
@@ -263,8 +257,6 @@ async function fetchPage(slug: string) {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  background: #f8f9fa;
-  color: #666;
   text-decoration: none;
   border-radius: 6px;
   font-size: 0.875rem;
@@ -289,18 +281,15 @@ async function fetchPage(slug: string) {
   margin-bottom: 1rem;
   font-weight: 600;
   line-height: 1.3;
-  color: #222;
 }
 
 .markdown-content :deep(h1) {
   font-size: 2rem;
-  border-bottom: 2px solid #e0e0e0;
   padding-bottom: 0.5rem;
 }
 
 .markdown-content :deep(h2) {
   font-size: 1.75rem;
-  border-bottom: 1px solid #e8e8e8;
   padding-bottom: 0.4rem;
 }
 
@@ -317,9 +306,7 @@ async function fetchPage(slug: string) {
 }
 
 .markdown-content :deep(a) {
-  color: #3788d8;
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
+  border-bottom: 1px solid;
   transition: border-color 0.2s;
 }
 
@@ -347,7 +334,6 @@ async function fetchPage(slug: string) {
 }
 
 .markdown-content :deep(pre) {
-  background: #f8f9fa;
   padding: 1rem;
   border-radius: 6px;
   overflow-x: auto;
@@ -358,7 +344,6 @@ async function fetchPage(slug: string) {
 .markdown-content :deep(pre code) {
   background: none;
   padding: 0;
-  color: #333;
   font-size: 0.875rem;
 }
 

@@ -1,9 +1,9 @@
 <template>
-  <div class="tool-card" :class="`status-${tool.status}`">
+  <div class="tool-card" :class="`status-${tool.status} bg-base-300`">
     <div class="tool-header">
-      <div class="tool-title">
+      <div class="tool-title text-base-content">
         <h3>{{ tool.name }}</h3>
-        <span class="tool-category">{{ formatCategory(tool.category) }}</span>
+        <span class="tool-category text-secondary">{{ formatCategory(tool.category) }}</span>
       </div>
       <div class="tool-status">
         <span class="status-badge" :class="`status-${tool.status}`">
@@ -41,7 +41,7 @@
         <select
           :value="tool.status"
           @change="onStatusChange"
-          class="status-select"
+          class="status-select select select-primary"
         >
           <option value="idle">Idle</option>
           <option value="in_use">In Use</option>
@@ -248,7 +248,7 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
 
 <style scoped>
 .tool-card {
-  background: white;
+  //background: white;
   border-radius: 8px;
   padding: 1.5rem;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -296,13 +296,13 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
 
 .tool-title h3 {
   margin: 0 0 0.25rem 0;
-  color: #2c3e50;
+  //color: #2c3e50;
   font-size: 1.2rem;
 }
 
 .tool-category {
   font-size: 0.8rem;
-  color: #7f8c8d;
+  //color: #7f8c8d;
   text-transform: uppercase;
   font-weight: 600;
 }
@@ -400,63 +400,6 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
-}
-
-.btn {
-  padding: 0.375rem 0.75rem;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.85rem;
-  transition: background-color 0.2s;
-  text-decoration: none;
-  display: inline-block;
-}
-
-.btn-sm {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.8rem;
-}
-
-.btn-primary {
-  background-color: #3498db;
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: #2980b9;
-}
-
-.btn-secondary {
-  background-color: #95a5a6;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #7f8c8d;
-}
-
-.btn-info {
-  background-color: #17a2b8;
-  color: white;
-}
-
-.btn-info:hover {
-  background-color: #138496;
-}
-
-.btn-danger {
-  background-color: #e74c3c;
-  color: white;
-}
-
-.btn-danger:hover {
-  background-color: #c0392b;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .availability-info {

@@ -1,8 +1,8 @@
 <template>
   <div class="modal-overlay" @click="$emit('close')">
-    <div class="modal-content" @click.stop>
+    <div class="modal-content bg-base-100" @click.stop>
       <div class="modal-header">
-        <h3>Edit Tool</h3>
+        <h3 class="text-accent">Edit Tool</h3>
         <button @click="$emit('close')" class="close-btn">&times;</button>
       </div>
 
@@ -16,12 +16,13 @@
               type="text" 
               required
               placeholder="Tool name"
+              class="input"
             />
           </div>
 
           <div class="form-group">
             <label for="category">Category *</label>
-            <select id="category" v-model="form.category" required>
+            <select id="category" v-model="form.category" required class="input">
               <option value="">Select Category</option>
               <option v-for="category in categories" :key="category.value" :value="category.value">
                 {{ category.label }}
@@ -37,6 +38,7 @@
             v-model="form.description" 
             placeholder="Brief description of the tool"
             rows="3"
+            class="input"
           ></textarea>
         </div>
 
@@ -48,6 +50,7 @@
               v-model="form.manufacturer" 
               type="text" 
               placeholder="e.g., DeWalt, Milwaukee"
+              class="input"
             />
           </div>
 
@@ -58,6 +61,7 @@
               v-model="form.model" 
               type="text" 
               placeholder="Model number"
+              class="input"
             />
           </div>
         </div>
@@ -70,6 +74,7 @@
               v-model="form.serial_number" 
               type="text" 
               placeholder="Serial number"
+              class="input"
             />
           </div>
 
@@ -80,6 +85,7 @@
               v-model="form.barcode" 
               type="text" 
               placeholder="Barcode or QR code"
+              class="input"
             />
           </div>
         </div>
@@ -91,6 +97,7 @@
             v-model="form.external_id" 
             type="text" 
             placeholder="External system ID (e.g., ToolPass device ID)"
+            class="input"
           />
           <small class="help-text">Optional ID for external system integration (ToolPass, etc.)</small>
         </div>
@@ -102,6 +109,7 @@
             v-model="form.location" 
             type="text" 
             placeholder="Where the tool is stored"
+            class="input"
           />
         </div>
 
@@ -112,6 +120,7 @@
               id="purchase_date"
               v-model="form.purchase_date" 
               type="date"
+              class="input"
             />
           </div>
 
@@ -123,6 +132,7 @@
               type="number" 
               step="0.01"
               placeholder="0.00"
+              class="input"
             />
           </div>
         </div>
@@ -132,6 +142,7 @@
             <input 
               v-model="form.requires_training" 
               type="checkbox"
+              class="checkbox"
             />
             Requires Training
           </label>
@@ -144,6 +155,7 @@
             v-model="form.notes" 
             placeholder="Additional notes about the tool"
             rows="3"
+            class="textarea"
           ></textarea>
         </div>
 
@@ -289,7 +301,6 @@ onMounted(async () => {
 }
 
 .modal-content {
-  background: white;
   border-radius: 8px;
   width: 90%;
   max-width: 600px;
@@ -307,7 +318,6 @@ onMounted(async () => {
 
 .modal-header h3 {
   margin: 0;
-  color: #2c3e50;
 }
 
 .close-btn {
@@ -346,7 +356,6 @@ onMounted(async () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
   font-weight: 600;
 }
 
@@ -414,24 +423,6 @@ onMounted(async () => {
   cursor: pointer;
   font-size: 0.9rem;
   transition: background-color 0.2s;
-}
-
-.btn-secondary {
-  background-color: #95a5a6;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #7f8c8d;
-}
-
-.btn-primary {
-  background-color: #3498db;
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: #2980b9;
 }
 
 .btn:disabled {

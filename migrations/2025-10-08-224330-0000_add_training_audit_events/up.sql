@@ -19,6 +19,12 @@ CHECK (event_type IN (
     'user_deletion', 
     'admin_config_reload',
     'failed_login_attempt',
+    -- Tool-related events (pre-existing)
+    'tool_access_granted',
+    'tool_access_denied',
+    'tool_activated',
+    'tool_deactivated',
+    'tool_usage_logged',
     -- New training-related events
     'training_session_started',
     'training_session_completed',

@@ -1,7 +1,7 @@
 <template>
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex flex-wrap justify-between items-center mb-8 gap-4">
-      <h2 class="text-2xl font-bold text-gray-800">Tool Management</h2>
+      <h2 class="text-2xl font-bold text-secondary">Tool Management</h2>
       <div class="flex flex-wrap gap-4 items-center">
         <div class="flex flex-wrap gap-2 items-center">
           <select
@@ -70,7 +70,7 @@
           @training-status-changed="onTrainingStatusChanged"
           v-for="tool in tools"
           :key="tool.id"
-          class="h-full"
+          class="h-full background-secondary"
       />
     </div>
 
@@ -321,12 +321,12 @@ onMounted(() => {
 }
 
 .btn-primary {
-  background-color: #3498db;
-  color: white;
+  //background-color: #3498db;
+  //color: white;
 }
 
 .btn-primary:hover {
-  background-color: #2980b9;
+  //background-color: #2980b9;
 }
 
 .loading, .error {

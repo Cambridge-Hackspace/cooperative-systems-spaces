@@ -127,3 +127,10 @@ impl From<diesel::result::Error> for ApiError {
 pub fn validation_error(message: &str) -> ApiError {
     ApiError::ValidationError(message.to_string())
 }
+
+// Convert r2d2 Pool errors to ApiError
+impl From<diesel::r2d2::PoolError> for ApiError {
+    fn from(err: diesel::r2d2::PoolError) -> Self {
+        ApiError::InternalServerError(format!("Database connection pool error: {}", err))
+    }
+}

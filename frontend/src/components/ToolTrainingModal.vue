@@ -1,7 +1,7 @@
 <template>
   <div class="modal-overlay" @click="closeModal">
     <div class="modal-content" @click.stop>
-      <div class="modal-header">
+      <div class="modal-header bg-gradient-to-br from-primary via-secondary to-primary">
         <div>
           <h3>{{ tool.name }}</h3>
           <p class="subtitle">Complete training to access this tool</p>
@@ -9,7 +9,7 @@
         <button @click="closeModal" class="close-btn">&times;</button>
       </div>
 
-      <div class="modal-body">
+      <div class="modal-body bg-base-100">
         <!-- Admin Actions -->
         <div v-if="canManageTraining && (trainingOverview?.steps?.length || 0) > 0" class="admin-section">
           <h4>Training Management</h4>
@@ -17,7 +17,7 @@
             <button @click="addNewStep" class="btn btn-primary">
               Add Training Step
             </button>
-<!--            <button @click="viewAllProgress" class="btn btn-secondary">-->
+<!--            <button @click="viewAllProgress" class="btn fondary">-->
 <!--              View All Users' Progress-->
 <!--            </button>-->
             <button @click="showTrainerManagement = true" class="btn btn-info">
@@ -120,7 +120,7 @@
         </div>
 
         <!-- Inline Record Training Form -->
-        <div v-if="showRecordTrainingForm" class="record-training-form">
+        <div v-if="showRecordTrainingForm" class="record-training-form bg-primary text-primary-content">
           <h4>📝 Record Training Session</h4>
 
           <div v-if="loadingUsersForRecord" class="loading">
@@ -135,7 +135,7 @@
                 <select
                     id="record-step"
                     v-model="recordFormData.training_step_id"
-                    class="form-control"
+                    class="form-control select select-secondary"
                     required
                 >
                   <option value="">Select training step...</option>
@@ -158,7 +158,7 @@
                 <select
                     id="record-trainee"
                     v-model="recordFormData.trainee_user_id"
-                    class="form-control"
+                    class="form-control select select-secondary"
                     required
                 >
                   <option value="">Select trainee...</option>
@@ -182,7 +182,7 @@
                     id="record-date"
                     v-model="recordFormData.training_date"
                     type="date"
-                    class="form-control"
+                    class="form-control input"
                     :max="today"
                     required
                 />
@@ -195,7 +195,7 @@
                 <select
                     id="record-status"
                     v-model="recordFormData.completion_status"
-                    class="form-control"
+                    class="form-control select"
                     required
                 >
                   <option value="completed">✅ Completed</option>
@@ -212,7 +212,7 @@
                     type="number"
                     min="1"
                     max="480"
-                    class="form-control"
+                    class="form-control input"
                     placeholder="e.g. 60"
                 />
               </div>
@@ -223,7 +223,7 @@
               <textarea
                   id="record-notes"
                   v-model="recordFormData.notes"
-                  class="form-control"
+                  class="form-control textarea"
                   rows="3"
                   placeholder="Notes about the training session..."
               ></textarea>
@@ -232,7 +232,7 @@
             <div v-if="recordError" class="error">{{ recordError }}</div>
 
             <div class="form-actions">
-              <button type="submit" :disabled="recordSubmitting" class="btn btn-primary">
+              <button type="submit" :disabled="recordSubmitting" class="btn btn-secondary">
                 {{ recordSubmitting ? 'Recording...' : 'Record Training' }}
               </button>
             </div>
@@ -276,7 +276,7 @@
           <!-- Training Overview -->
           <div class="training-overview ">
             <!-- Overall Progress -->
-            <div class="progress-section">
+            <div class="progress-section bg-secondary text-secondary-content mt-4">
               <div class="progress-header">
                 <h4>Your Training Progress</h4>
                 <div class="progress-percentage">
@@ -294,14 +294,14 @@
               </div>
 
               <div class="access-status">
-                <div v-if="trainingOverview.can_access_tool" class="access-granted">
+                <div v-if="trainingOverview.can_access_tool" class="access-granted rounded-md p-3">
                   <div class="status-icon">✅</div>
                   <div class="status-text">
                     <strong>Training Complete - Tool Access Granted</strong>
                     <p>You have completed all required training and can now use this tool.</p>
                   </div>
                 </div>
-                <div v-else class="access-pending">
+                <div v-else class="access-pending rounded-md p-3">
                   <div class="status-icon">⏳</div>
                   <div class="status-text">
                     <strong>Training Required</strong>
@@ -318,7 +318,7 @@
                 <div
                   v-for="stepWithProgress in trainingOverview.steps"
                   :key="stepWithProgress.step.id"
-                  class="step-item"
+                  class="step-item bg-secondary text-secondary-content rounded-md"
                   :class="getStepStatusClass(stepWithProgress)"
                 >
                   <div class="step-number" :class="getStepNumberClass(stepWithProgress)">
@@ -432,7 +432,7 @@
 
 
       </div>
-      <div class="modal-footer">
+      <div class="modal-footer bg-base-300">
         <button @click="closeModal" class="btn btn-secondary">
           Close
         </button>
@@ -1133,7 +1133,6 @@ watch(() => props.tool.id, () => {
   align-items: flex-start;
   padding: 2rem;
   border-bottom: 1px solid #e1e5e9;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border-radius: 12px 12px 0 0;
 }
@@ -1264,7 +1263,6 @@ watch(() => props.tool.id, () => {
 
 .no-training h4 {
   margin: 0 0 1rem 0;
-  color: #2c3e50;
 }
 
 
@@ -1296,7 +1294,6 @@ watch(() => props.tool.id, () => {
 
 
 .progress-section {
-  background: #f8f9fa;
   padding: 1.5rem;
   border-radius: 8px;
   border: 1px solid #e9ecef;
@@ -1315,7 +1312,6 @@ watch(() => props.tool.id, () => {
 
 .progress-header h4 {
   margin: 0;
-  color: #2c3e50;
 }
 
 
@@ -1399,7 +1395,6 @@ watch(() => props.tool.id, () => {
 
 
 .steps-section h4 {
-  color: #2c3e50;
   margin-bottom: 1rem;
 }
 
@@ -1643,7 +1638,6 @@ watch(() => props.tool.id, () => {
 
 
 .progress-item.notes {
-  background: white;
   padding: 0.5rem;
   border-radius: 4px;
   border: 1px solid #e9ecef;
@@ -1685,7 +1679,6 @@ watch(() => props.tool.id, () => {
 
 
 .admin-section h4 {
-  color: #2c3e50;
   margin-bottom: 1rem;
 }
 
@@ -1708,7 +1701,6 @@ watch(() => props.tool.id, () => {
 
 
 .trainer-section h4 {
-  color: #2c3e50;
   margin-bottom: 1rem;
   display: flex;
   align-items: center;
@@ -1732,20 +1724,6 @@ watch(() => props.tool.id, () => {
 
 
 
-.btn-info {
-  background: #17a2b8;
-  color: white;
-  border-color: #17a2b8;
-}
-
-
-
-.btn-info:hover:not(:disabled) {
-  background: #138496;
-  border-color: #117a8b;
-}
-
-
 
 /* Additional trainer-specific styling */
 .trainer-section .btn {
@@ -1756,7 +1734,6 @@ watch(() => props.tool.id, () => {
 
 /* Record Training Form Styles */
 .record-training-form {
-  background: #f1f8ff;
   border: 1px solid #b3d9ff;
   border-radius: 8px;
   padding: 1.5rem;
@@ -1798,7 +1775,6 @@ watch(() => props.tool.id, () => {
 
 .form-group label {
   font-weight: 500;
-  color: #2c3e50;
   margin-bottom: 0.5rem;
 }
 
@@ -1909,7 +1885,6 @@ textarea.form-control {
   align-items: center;
   padding: 1.5rem 2rem;
   border-top: 1px solid #e1e5e9;
-  background: #f8f9fa;
   border-radius: 0 0 12px 12px;
 }
 
@@ -1939,52 +1914,6 @@ textarea.form-control {
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-
-
-.btn-primary {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
-}
-
-
-
-.btn-primary:hover:not(:disabled) {
-  background: #0056b3;
-  border-color: #0056b3;
-  transform: translateY(-1px);
-}
-
-
-
-.btn-secondary {
-  background: #6c757d;
-  color: white;
-  border-color: #6c757d;
-}
-
-
-
-.btn-secondary:hover:not(:disabled) {
-  background: #545b62;
-  border-color: #545b62;
-}
-
-
-
-.btn-success {
-  background: #28a745;
-  color: white;
-  border-color: #28a745;
-}
-
-
-
-.btn-success:hover:not(:disabled) {
-  background: #1e7e34;
-  border-color: #1e7e34;
 }
 
 

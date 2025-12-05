@@ -59,3 +59,25 @@ The server UI should implement controls for devices under a new admin section.  
 - Listing devices and showing their last seen time
 - Renaming a device
 - Deleting device
+
+### Other
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeConfig {
+edge_enabled: bool,
+edge_mqtt_config: Option<MqttConfig>
+}
+
+
+has been added to our server config.
+
+
+### Audit Events
+
+SpaceDeviceAuthRequest creation, consumption and manual expiry should produce audit events in the existing audit system
+
+Device Name Change should produce audit events in the existing audit system
+
+Device Deletion should produce audit events in the existing audit system
+
+Device Version Field changeshould produce audit events in the existing audit system

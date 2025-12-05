@@ -1,10 +1,10 @@
 <template>
   <div class="modal-overlay" @click="closeModal">
-    <div class="modal-content" @click.stop>
-      <div class="modal-header">
+    <div class="modal-content bg-base-100 text-base-content" @click.stop>
+      <div class="modal-header bg-gradient-to-br from-primary via-secondary to-primary">
         <div>
-          <h3>Set Up Training for {{ tool.name }}</h3>
-          <p class="subtitle">Create a comprehensive training program for this tool</p>
+          <h3 class="font">Set Up Training for {{ tool.name }}</h3>
+          <p class="subtitle font-bold">Create a comprehensive training program for this tool</p>
         </div>
         <button @click="closeModal" class="close-btn">&times;</button>
       </div>
@@ -22,16 +22,16 @@
                 v-model="trainingConfig.requiresTraining"
                 class="checkbox"
               >
-              <span class="checkbox-text">This tool requires training before use</span>
+              <span class="checkbox-text text-secondary">&nbsp; This tool requires training before use</span>
             </label>
-            <div class="help-text">
+            <div class="help-text text-accent">
               If checked, users will need to complete training steps before they can access this tool.
             </div>
           </div>
 
           <div v-if="trainingConfig.requiresTraining" class="training-explanation">
-            <div class="info-box">
-              <h5>What happens when training is required?</h5>
+            <div class="info-box bg-secondary text-secondary-content">
+              <h5 class="font-bold">What happens when training is required?</h5>
               <ul>
                 <li>Tool will show as "Training Required" for untrained users</li>
                 <li>Users must complete all training steps to access the tool</li>
@@ -70,7 +70,7 @@
                   <input 
                     type="text"
                     v-model="step.step_name"
-                    class="form-control"
+                    class="form-control input"
                     :placeholder="`e.g., ${getStepTitleSuggestion(index)}`"
                     required
                   >
@@ -80,7 +80,7 @@
                   <label>Description:</label>
                   <textarea 
                     v-model="step.description"
-                    class="form-control"
+                    class="form-control input"
                     rows="2"
                     :placeholder="getStepDescriptionSuggestion(index)"
                     required
@@ -90,7 +90,7 @@
                 <div class="form-row">
                   <div class="form-group">
                     <label>Assessment Type:</label>
-                    <select v-model="step.assessment_type" class="form-control">
+                    <select v-model="step.assessment_type" class="form-control select">
                       <option value="observation_only">Observation Only</option>
                       <option value="practical">Practical Test</option>
                       <option value="written">Written Test</option>
@@ -103,7 +103,7 @@
                     <input 
                       type="number"
                       v-model.number="step.passing_score"
-                      class="form-control"
+                      class="form-control input"
                       min="1"
                       max="100"
                       placeholder="80"
@@ -117,7 +117,7 @@
                     <input 
                       type="number"
                       v-model.number="step.expiry_days"
-                      class="form-control"
+                      class="form-control input"
                       min="1"
                       placeholder="365 (leave blank for no expiration)"
                     >
@@ -188,7 +188,7 @@
           <h4>Step 4: Review Training Setup</h4>
           <p>Review your training configuration before creating the training steps.</p>
 
-          <div class="review-section">
+          <div class="review-section bg-secondary text-secondary-content">
             <div class="review-item">
               <strong>Tool:</strong> {{ tool.name }}
             </div>
@@ -510,7 +510,6 @@ const createTrainingSetup = async () => {
 }
 
 .modal-content {
-  background: white;
   border-radius: 8px;
   max-width: 800px;
   width: 90%;
@@ -528,12 +527,11 @@ const createTrainingSetup = async () => {
 
 .modal-header h3 {
   margin: 0 0 0.25rem 0;
-  color: #2c3e50;
+  font-size: 1.5rem;
 }
 
 .subtitle {
   margin: 0;
-  color: #7f8c8d;
   font-size: 0.9rem;
 }
 
@@ -562,12 +560,10 @@ const createTrainingSetup = async () => {
 }
 
 .setup-step h4 {
-  color: #2c3e50;
   margin-bottom: 0.5rem;
 }
 
 .setup-step > p {
-  color: #6c757d;
   margin-bottom: 1.5rem;
 }
 
@@ -587,7 +583,6 @@ const createTrainingSetup = async () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
   font-weight: 500;
 }
 
@@ -605,7 +600,6 @@ const createTrainingSetup = async () => {
 }
 
 .checkbox-text {
-  color: #2c3e50;
 }
 
 .form-control {
@@ -624,7 +618,6 @@ const createTrainingSetup = async () => {
 
 .help-text {
   font-size: 0.8rem;
-  color: #6c757d;
   margin-top: 0.25rem;
 }
 
@@ -633,7 +626,6 @@ const createTrainingSetup = async () => {
 }
 
 .info-box {
-  background: #e8f4fd;
   border: 1px solid #bee5eb;
   border-radius: 4px;
   padding: 1rem;
@@ -670,7 +662,7 @@ const createTrainingSetup = async () => {
 
 .step-header h5 {
   margin: 0;
-  color: #2c3e50;
+  //color: #2c3e50;
 }
 
 .step-form {
@@ -707,11 +699,9 @@ const createTrainingSetup = async () => {
 
 .prerequisite-config h5 {
   margin: 0 0 1rem 0;
-  color: #2c3e50;
 }
 
 .review-section {
-  background: #f8f9fa;
   border-radius: 6px;
   padding: 1rem;
 }
@@ -733,7 +723,6 @@ const createTrainingSetup = async () => {
 }
 
 .step-review {
-  background: white;
   border: 1px solid #e1e5e9;
   border-radius: 4px;
   padding: 1rem;
@@ -742,12 +731,11 @@ const createTrainingSetup = async () => {
 
 .step-title {
   font-weight: 500;
-  color: #2c3e50;
   margin-bottom: 0.5rem;
 }
 
 .step-details {
-  color: #6c757d;
+  //color: #6c757d;
   font-size: 0.9rem;
 }
 
@@ -824,61 +812,6 @@ const createTrainingSetup = async () => {
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.btn-primary {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #0056b3;
-  border-color: #0056b3;
-}
-
-.btn-secondary {
-  background: #6c757d;
-  color: white;
-  border-color: #6c757d;
-}
-
-.btn-secondary:hover {
-  background: #545b62;
-  border-color: #545b62;
-}
-
-.btn-success {
-  background: #28a745;
-  color: white;
-  border-color: #28a745;
-}
-
-.btn-success:hover:not(:disabled) {
-  background: #1e7e34;
-  border-color: #1e7e34;
-}
-
-.btn-danger {
-  background: #dc3545;
-  color: white;
-  border-color: #dc3545;
-}
-
-.btn-danger:hover {
-  background: #c82333;
-  border-color: #bd2130;
-}
-
-.btn-outline {
-  background: transparent;
-  color: #6c757d;
-  border-color: #6c757d;
-}
-
-.btn-outline:hover {
-  background: #6c757d;
-  color: white;
 }
 
 .error-message {

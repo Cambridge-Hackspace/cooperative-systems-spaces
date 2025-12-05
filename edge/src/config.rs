@@ -4,39 +4,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
+pub(crate) use css_lib::MqttConfig;
 
-/// MQTT Configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MqttConfig {
-    /// MQTT broker URL used by the CSS Instance
-    pub mqtt_instance_url: String,
-
-    /// MQTT broker URL used by the CSS Edge Client
-    pub mqtt_edge_url: String,
-
-    /// MQTT Client ID used by the CSS Edge Client
-    pub mqtt_client_id: String,
-
-    /// MQTT username used by the CSS Edge Client
-    pub mqtt_username: Option<String>,
-
-    /// MQTT password used by the CSS Edge Client
-    pub mqtt_password: Option<String>,
-}
-
-impl Default for MqttConfig {
-    fn default() -> Self {
-        Self {
-            mqtt_instance_url: "mqtt://localhost:1883".to_string(),
-            mqtt_edge_url: "mqtt://localhost:1883".to_string(),
-            mqtt_client_id: "css-edge-001".to_string(),
-            mqtt_username: None,
-            mqtt_password: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AuthStatus {
     Unauthenticated,
     Pending,
@@ -46,8 +16,8 @@ pub enum AuthStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct  DeviceInfo {
-    remote_id: String,
-    remote_auth_token: String,
+    pub remote_id: String,
+    pub remote_auth_token: String,
 }
 
 /// Main edge configuration
@@ -173,9 +143,6 @@ impl ConfigManager {
                 return Err(anyhow::anyhow!("MQTT instance URL cannot be empty"));
             }
 
-            if mqtt.mqtt_edge_url.is_empty() {
-                return Err(anyhow::anyhow!("MQTT edge URL cannot be empty"));
-            }
         }
 
         // Validate MQTT configuration if present
@@ -190,10 +157,6 @@ impl ConfigManager {
 
             if mqtt.mqtt_instance_url.is_empty() {
                 return Err(anyhow::anyhow!("MQTT instance URL cannot be empty"));
-            }
-
-            if mqtt.mqtt_edge_url.is_empty() {
-                return Err(anyhow::anyhow!("MQTT edge URL cannot be empty"));
             }
         }
 

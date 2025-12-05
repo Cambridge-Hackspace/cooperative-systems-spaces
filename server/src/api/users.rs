@@ -1,11 +1,12 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{delete, get, put},
+    routing::{delete, get, patch, put},
     Router,
 };
 use chrono::Utc;
 use uuid::Uuid;
+use serde::Deserialize;
 
 use crate::{
     api::{
@@ -23,6 +24,7 @@ pub fn user_routes() -> Router<AppState> {
         .route("/:id", get(get_user_by_id))
         .route("/:id", put(update_user))
         .route("/:id", delete(delete_user))
+        .route("/:id/theme", patch(update_user_theme))
 }
 
 // List all users (admin only)
@@ -121,6 +123,7 @@ async fn update_user(
         role: payload.role,
         profile: None, // For now, profile updates will be handled separately
         updated_at: Some(Utc::now().naive_utc()),
+        meta: None, // Meta is system-managed, not user-editable via this endpoint
     };
 
     // Hash new password if provided
@@ -195,4 +198,59 @@ async fn delete_user(
         (),
         "User deleted successfully".to_string(),
     )))
+}
+
+// Request body for updating theme
+#[derive(Debug, Deserialize)]
+pub struct UpdateThemeRequest {
+    pub theme: String,
+}
+
+// Update user theme preference (authenticated user can update their own)
+async fn update_user_theme(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateThemeRequest>,
+) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
+    // Users can only update their own theme (unless admin)
+    if auth_user.0.id != user_id && auth_user.0.role != UserRole::Admin {
+        return Err(ApiError::Forbidden("You can only update your own theme".to_string()));
+    }
+
+    // Validate theme value (must match themes in tailwind.config.js)
+    let valid_themes = ["css-light", "css-dark", "afterdark", "her",
+                        "forest", "sky", "clays", "stones",
+                        "lofi", "black", "light", "dark", "cupcake", "corporate"];
+    
+    if !valid_themes.contains(&payload.theme.as_str()) {
+        return Err(ApiError::BadRequest(format!("Invalid theme: {}. Must be one of: {}", 
+            payload.theme, valid_themes.join(", "))));
+    }
+
+    // Get existing user
+    let existing_user = state.db.find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    // Update meta with new theme
+    let mut meta = existing_user.meta.clone();
+    meta["theme"] = serde_json::json!(payload.theme);
+
+    let update_data = UpdateUser {
+        username: None,
+        email: None,
+        password_hash: None,
+        full_name: None,
+        is_active: None,
+        role: None,
+        profile: None,
+        meta: Some(meta),
+        updated_at: Some(Utc::now().naive_utc()),
+    };
+
+    let updated_user = state.db.update_user(user_id, &update_data)
+        .map_err(ApiError::from)?;
+
+    Ok(Json(ApiResponse::success(UserResponse::from(updated_user))))
 }

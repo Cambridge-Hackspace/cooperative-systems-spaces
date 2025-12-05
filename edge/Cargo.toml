@@ -22,7 +22,20 @@ tracing-subscriber = { workspace = true }
 
 # Edge-specific dependencies
 rand = "0.8"
-log = "0.4.28"
+reqwest = { version = "0.12", features = ["json"] }
+mac_address = "1.1"
+get_if_addrs = "0.5"
+paho-mqtt = "0.13"
 
+# Web server dependencies
+axum = "0.7"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+mime_guess = "2.0"
+rust-embed = "8.0"
+axum-embed = "0.1"
+include_dir = "0.7.4"
+
+css_lib = {path = "../css_lib"}
 [dev-dependencies]
 tempfile = "3.8"

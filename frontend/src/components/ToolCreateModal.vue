@@ -1,7 +1,7 @@
 <template>
   <div class="modal-overlay" @click="$emit('close')">
-    <div class="modal-content" @click.stop>
-      <div class="modal-header">
+    <div class="modal-content bg-base-100" @click.stop>
+      <div class="modal-header  bg-gradient-to-br from-primary via-secondary to-primary">
         <h3>Create New Tool</h3>
         <button @click="$emit('close')" class="close-btn">&times;</button>
       </div>
@@ -16,12 +16,13 @@
               type="text" 
               required
               placeholder="Tool name"
+              class="input"
             />
           </div>
 
           <div class="form-group">
             <label for="category">Category *</label>
-            <select id="category" v-model="form.category" required>
+            <select id="category" class="select" v-model="form.category" required>
               <option value="">Select Category</option>
               <option value="saw">Saw</option>
               <option value="powertool">Power Tool</option>
@@ -40,6 +41,7 @@
             v-model="form.description" 
             placeholder="Brief description of the tool"
             rows="3"
+            class="textarea"
           ></textarea>
         </div>
 
@@ -51,6 +53,7 @@
               v-model="form.manufacturer" 
               type="text" 
               placeholder="e.g., DeWalt, Milwaukee"
+              class="input"
             />
           </div>
 
@@ -61,6 +64,7 @@
               v-model="form.model" 
               type="text" 
               placeholder="Model number"
+              class="input"
             />
           </div>
         </div>
@@ -73,6 +77,7 @@
               v-model="form.serial_number" 
               type="text" 
               placeholder="Serial number"
+              class="input"
             />
           </div>
 
@@ -83,6 +88,7 @@
               v-model="form.barcode" 
               type="text" 
               placeholder="Barcode or QR code"
+              class="input"
             />
           </div>
         </div>
@@ -95,12 +101,13 @@
               v-model="form.location" 
               type="text" 
               placeholder="Where the tool is stored"
+              class="input"
             />
           </div>
 
           <div class="form-group">
             <label for="status">Initial Status</label>
-            <select id="status" v-model="form.status">
+            <select id="status" class="select" v-model="form.status">
               <option value="idle">Idle</option>
               <option value="maintenance">Maintenance</option>
               <option value="broken">Broken</option>
@@ -116,6 +123,7 @@
               id="purchase_date"
               v-model="form.purchase_date" 
               type="date"
+              class="input"
             />
           </div>
 
@@ -127,6 +135,7 @@
               type="number" 
               step="0.01"
               placeholder="0.00"
+              class="input"
             />
           </div>
         </div>
@@ -136,6 +145,7 @@
             <input 
               v-model="form.requires_training" 
               type="checkbox"
+              class="checkbox"
             />
             Requires Training
           </label>
@@ -148,6 +158,7 @@
             v-model="form.notes" 
             placeholder="Additional notes about the tool"
             rows="3"
+            class="textarea"
           ></textarea>
         </div>
 
@@ -241,7 +252,6 @@ const createTool = async () => {
 }
 
 .modal-content {
-  background: white;
   border-radius: 8px;
   width: 90%;
   max-width: 600px;
@@ -298,7 +308,6 @@ const createTool = async () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
   font-weight: 600;
 }
 
@@ -359,24 +368,6 @@ const createTool = async () => {
   cursor: pointer;
   font-size: 0.9rem;
   transition: background-color 0.2s;
-}
-
-.btn-secondary {
-  background-color: #95a5a6;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #7f8c8d;
-}
-
-.btn-primary {
-  background-color: #3498db;
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: #2980b9;
 }
 
 .btn:disabled {

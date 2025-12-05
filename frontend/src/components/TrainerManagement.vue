@@ -1,17 +1,17 @@
 <template>
   <div class="modal-overlay" @click="closeModal">
-    <div class="modal-content trainer-modal" @click.stop>
-      <div class="modal-header">
+    <div class="modal-content trainer-modal bg-base-100" @click.stop>
+      <div class="modal-header bg-gradient-to-br from-primary via-secondary to-primary">
         <div>
-          <h3>Manage Trainers - {{ tool.name }}</h3>
-          <p class="subtitle">Assign and manage authorized trainers for this tool</p>
+          <h3 class="font-bold">Manage Trainers - {{ tool.name }}</h3>
+          <p class="subtitle font-bold">Assign and manage authorized trainers for this tool</p>
         </div>
         <button @click="closeModal" class="close-btn">&times;</button>
       </div>
 
       <div class="modal-body">
         <div class="trainer-management-content">
-  <div class="trainer-management">
+  <div class="trainer-management bg-secondary text-secondary-content">
     <div class="trainer-header">
       <button
         v-if="canManageTrainers"
@@ -24,7 +24,7 @@
     </div>
 
     <!-- Inline Assign Trainer Form -->
-    <div v-if="showAssignForm" class="assign-trainer-form">
+    <div v-if="showAssignForm" class="assign-trainer-form bg-primary text-primary-content">
       <h4>Assign New Trainer</h4>
       
       <div v-if="loadingUsers" class="loading">
@@ -42,7 +42,7 @@
           <select 
             id="user"
             v-model="assignFormData.user_id"
-            class="form-control"
+            class="form-control select"
             required
           >
             <option value="">Choose a user...</option>
@@ -62,7 +62,7 @@
             id="expires_at"
             v-model="assignFormData.expires_at"
             type="date"
-            class="form-control"
+            class="form-control input"
             :min="today"
           />
           <small class="form-text">Leave blank for no expiration</small>
@@ -73,7 +73,7 @@
           <textarea 
             id="notes"
             v-model="assignFormData.notes"
-            class="form-control"
+            class="form-control textarea"
             rows="3"
             placeholder="Add any notes about this trainer assignment..."
           ></textarea>
@@ -187,7 +187,7 @@
         </div>
       </div>
       
-      <div class="modal-footer">
+      <div class="modal-footer bg-base-200">
         <button @click="closeModal" class="btn btn-secondary">Close</button>
       </div>
     </div>
@@ -448,7 +448,6 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
   border-radius: 12px;
   max-width: 800px;
   width: 90%;
@@ -463,8 +462,6 @@ onMounted(() => {
   align-items: flex-start;
   padding: 2rem;
   border-bottom: 1px solid #e1e5e9;
-  background: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
-  color: white;
   border-radius: 12px 12px 0 0;
 }
 
@@ -510,7 +507,6 @@ onMounted(() => {
   align-items: center;
   padding: 1.5rem 2rem;
   border-top: 1px solid #e1e5e9;
-  background: #f8f9fa;
   border-radius: 0 0 12px 12px;
 }
 
@@ -519,7 +515,6 @@ onMounted(() => {
 }
 
 .assign-trainer-form {
-  background: #f8f9fa;
   border: 1px solid #e9ecef;
   border-radius: 8px;
   padding: 1.5rem;
@@ -528,7 +523,6 @@ onMounted(() => {
 
 .assign-trainer-form h4 {
   margin: 0 0 1.5rem 0;
-  color: #2c3e50;
   font-size: 1.1rem;
 }
 
@@ -545,7 +539,6 @@ onMounted(() => {
 
 .form-group label {
   font-weight: 500;
-  color: #2c3e50;
   margin-bottom: 0.5rem;
 }
 
@@ -565,7 +558,6 @@ onMounted(() => {
 
 .form-text {
   font-size: 0.875rem;
-  color: #6c757d;
   margin-top: 0.25rem;
 }
 
@@ -624,14 +616,12 @@ textarea.form-control {
 }
 
 .trainer-management {
-  background: white;
   border: 1px solid #e1e5e9;
   border-radius: 8px;
   overflow: hidden;
 }
 
 .trainer-header {
-  background: #f8f9fa;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid #e1e5e9;
   display: flex;
@@ -738,7 +728,6 @@ textarea.form-control {
 .no-trainers {
   text-align: center;
   padding: 2rem;
-  color: #6c757d;
 }
 
 .no-trainers p {
@@ -778,60 +767,6 @@ textarea.form-control {
   font-size: 0.8rem;
 }
 
-.btn-primary {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
-}
-
-.btn-primary:hover {
-  background: #0056b3;
-  border-color: #0056b3;
-}
-
-.btn-secondary {
-  background: #6c757d;
-  color: white;
-  border-color: #6c757d;
-}
-
-.btn-secondary:hover {
-  background: #545b62;
-  border-color: #545b62;
-}
-
-.btn-success {
-  background: #28a745;
-  color: white;
-  border-color: #28a745;
-}
-
-.btn-success:hover {
-  background: #1e7e34;
-  border-color: #1e7e34;
-}
-
-.btn-warning {
-  background: #ffc107;
-  color: #212529;
-  border-color: #ffc107;
-}
-
-.btn-warning:hover {
-  background: #e0a800;
-  border-color: #e0a800;
-}
-
-.btn-danger {
-  background: #dc3545;
-  color: white;
-  border-color: #dc3545;
-}
-
-.btn-danger:hover {
-  background: #c82333;
-  border-color: #c82333;
-}
 
 .icon-plus::before {
   content: '+';

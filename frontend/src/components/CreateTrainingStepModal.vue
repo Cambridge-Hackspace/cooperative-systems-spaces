@@ -1,19 +1,19 @@
 <template>
   <div class="modal-overlay" @click="$emit('close')">
-    <div class="modal-content" @click.stop>
-      <div class="modal-header">
-        <h3>Create Training Step</h3>
+    <div class="modal-content bg-base-100" @click.stop>
+      <div class="modal-header bg-gradient-to-br from-primary via-secondary to-primary">
+        <h3 class="font-bold">Create Training Step</h3>
         <button @click="$emit('close')" class="close-btn">&times;</button>
       </div>
 
-      <div class="modal-body">
+      <div class="modal-body bg-base-200">
         <form @submit.prevent="createStep">
           <div class="form-group">
             <label for="tool_id">Tool:</label>
             <select 
               id="tool_id" 
               v-model="form.tool_id"
-              class="form-control"
+              class="form-control select"
               required
             >
               <option value="">Select a tool</option>
@@ -33,7 +33,7 @@
               id="step_number"
               type="number"
               v-model.number="form.step_number"
-              class="form-control"
+              class="form-control input"
               min="1"
               required
             >
@@ -45,7 +45,7 @@
               id="step_name"
               type="text"
               v-model="form.step_name"
-              class="form-control"
+              class="form-control input"
               required
               placeholder="e.g., Safety Orientation"
             >
@@ -56,7 +56,7 @@
             <textarea 
               id="description"
               v-model="form.description"
-              class="form-control"
+              class="form-control textarea"
               rows="3"
               required
               placeholder="Detailed description of the training step..."
@@ -68,7 +68,7 @@
             <select 
               id="assessment_type" 
               v-model="form.assessment_type"
-              class="form-control"
+              class="form-control select"
               required
             >
               <option value="practical">Practical Assessment</option>
@@ -84,7 +84,7 @@
               id="passing_score"
               type="number"
               v-model.number="form.passing_score"
-              class="form-control"
+              class="form-control input"
               min="0"
               max="100"
               placeholder="e.g., 80"
@@ -97,7 +97,7 @@
               id="expiry_days"
               type="number"
               v-model.number="form.expiry_days"
-              class="form-control"
+              class="form-control input"
               min="1"
               placeholder="Leave blank for no expiration"
             >
@@ -110,7 +110,7 @@
                 v-model="form.is_active"
                 class="checkbox"
               >
-              <span class="checkbox-text">Active (visible to users)</span>
+              <span class="checkbox-text px-4">Active (visible to users)</span>
             </label>
           </div>
 
@@ -219,7 +219,7 @@ const createStep = async () => {
 
 .modal-header h3 {
   margin: 0;
-  color: #2c3e50;
+  font-size: 1.5rem;
 }
 
 .close-btn {
@@ -251,7 +251,6 @@ const createStep = async () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
   font-weight: 500;
 }
 
@@ -269,7 +268,7 @@ const createStep = async () => {
 }
 
 .checkbox-text {
-  color: #2c3e50;
+  //color: #2c3e50;
 }
 
 .form-control {
@@ -307,27 +306,6 @@ const createStep = async () => {
   cursor: not-allowed;
 }
 
-.btn-primary {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #0056b3;
-  border-color: #0056b3;
-}
-
-.btn-secondary {
-  background: #6c757d;
-  color: white;
-  border-color: #6c757d;
-}
-
-.btn-secondary:hover {
-  background: #545b62;
-  border-color: #545b62;
-}
 
 .error-message {
   background: #f8d7da;

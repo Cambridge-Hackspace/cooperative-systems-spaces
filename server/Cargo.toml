@@ -21,7 +21,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Server-specific dependencies
-axum = "0.7"
+axum = { version = "0.7" , features = ["macros"]}
 log = "0.4.28"
 config = "0.14"
 # axum-prometheus = { version = "0.9.0" }  # Temporarily disabled due to version conflicts
@@ -38,6 +38,9 @@ url = "2.5.7"
 rust_decimal = "1.33"
 bigdecimal = { version = "0.4", features = ["serde"] }
 
+# MQTT dependencies
+paho-mqtt = "0.13"
+
 # JWT and Authentication dependencies
 jsonwebtoken = "9.3.0"
 argon2 = "0.5.3"
@@ -51,6 +54,7 @@ async-trait = "0.1"
 comrak = "0.48.0"
 regex = "1.10"
 rand = "0.8.5"
+css_lib = {path = "../css_lib"}
 
 [dev-dependencies]
 tempfile = "3.0"

@@ -46,11 +46,24 @@ pub struct PublicPagesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicThemeConfig {
+    pub primary_color: String,
+    pub secondary_color: String,
+    pub accent_color: String,
+    pub background_color: String,
+    pub text_color: String,
+    pub logo_url: Option<String>,
+    pub favicon_url: Option<String>,
+    pub dark_mode_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicConfig {
     pub registration_challenge: PublicRegistrationChallengeConfig,
     pub tools: PublicToolConfig,
     pub site: PublicSiteConfig,
     pub pages: PublicPagesConfig,
+    pub theme: PublicThemeConfig,
 }
 
 pub fn config_routes() -> Router<AppState> {
@@ -84,6 +97,16 @@ async fn get_registration_config(
             wiki_link: config.pages.wiki_link.clone(),
             site_enabled: config.pages.site_repo.is_some(),
             site_link: config.pages.site_link.clone(),
+        },
+        theme: PublicThemeConfig {
+            primary_color: config.theme.primary_color.clone(),
+            secondary_color: config.theme.secondary_color.clone(),
+            accent_color: config.theme.accent_color.clone(),
+            background_color: config.theme.background_color.clone(),
+            text_color: config.theme.text_color.clone(),
+            logo_url: config.theme.logo_url.clone(),
+            favicon_url: config.theme.favicon_url.clone(),
+            dark_mode_enabled: config.theme.dark_mode_enabled,
         },
     };
 
@@ -126,6 +149,16 @@ async fn get_public_config(
             wiki_link: config.pages.wiki_link.clone(),
             site_enabled: config.pages.site_repo.is_some(),
             site_link: config.pages.site_link.clone(),
+        },
+        theme: PublicThemeConfig {
+            primary_color: config.theme.primary_color.clone(),
+            secondary_color: config.theme.secondary_color.clone(),
+            accent_color: config.theme.accent_color.clone(),
+            background_color: config.theme.background_color.clone(),
+            text_color: config.theme.text_color.clone(),
+            logo_url: config.theme.logo_url.clone(),
+            favicon_url: config.theme.favicon_url.clone(),
+            dark_mode_enabled: config.theme.dark_mode_enabled,
         },
     };
 

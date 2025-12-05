@@ -14,6 +14,22 @@ pub mod sql_types {
         serde::Deserialize,
         diesel::sql_types::SqlType,
     )]
+    #[diesel(postgres_type(name = "space_device_kind"))]
+    pub struct SpaceDeviceKind;
+
+    #[derive(
+        serde::Serialize,
+        serde::Deserialize,
+        diesel::sql_types::SqlType,
+    )]
+    #[diesel(postgres_type(name = "space_device_platform"))]
+    pub struct SpaceDevicePlatform;
+
+    #[derive(
+        serde::Serialize,
+        serde::Deserialize,
+        diesel::sql_types::SqlType,
+    )]
     #[diesel(postgres_type(name = "tool_category"))]
     pub struct ToolCategory;
 
@@ -52,6 +68,55 @@ diesel::table! {
         ip_address -> Nullable<Text>,
         user_agent -> Nullable<Text>,
         created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    space_device_auth (id) {
+        id -> Uuid,
+        device_id -> Uuid,
+        #[max_length = 255]
+        auth_token -> Varchar,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    space_device_auth_requests (id) {
+        id -> Uuid,
+        #[max_length = 32]
+        device_code -> Varchar,
+        expires_at -> Timestamptz,
+        used_at -> Nullable<Timestamptz>,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::SpaceDeviceKind;
+    use super::sql_types::SpaceDevicePlatform;
+
+    space_devices (id) {
+        id -> Uuid,
+        #[max_length = 255]
+        name -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
+        last_seen_at -> Nullable<Timestamptz>,
+        kind -> SpaceDeviceKind,
+        #[max_length = 17]
+        mac_address -> Varchar,
+        #[max_length = 50]
+        software_version -> Varchar,
+        #[max_length = 15]
+        ipv4_address -> Nullable<Varchar>,
+        #[max_length = 45]
+        ipv6_address -> Nullable<Varchar>,
+        uptime -> Int8,
+        platform -> SpaceDevicePlatform,
     }
 }
 
@@ -236,9 +301,12 @@ diesel::table! {
         updated_at -> Timestamp,
         role -> UserRole,
         profile -> Jsonb,
+        meta -> Jsonb,
     }
 }
 
+diesel::joinable!(space_device_auth -> space_devices (device_id));
+diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));
 diesel::joinable!(tool_trainers -> tools (tool_id));
 diesel::joinable!(tool_training_types -> tools (tool_id));
@@ -254,6 +322,9 @@ diesel::joinable!(user_training_progress -> training_steps (training_step_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
+    space_device_auth,
+    space_device_auth_requests,
+    space_devices,
     tool_events,
     tool_trainers,
     tool_training_types,

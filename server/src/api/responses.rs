@@ -89,6 +89,7 @@ pub struct UserResponse {
     pub role: UserRole,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub meta: serde_json::Value,
 }
 
 impl From<crate::models::User> for UserResponse {
@@ -102,6 +103,7 @@ impl From<crate::models::User> for UserResponse {
             role: user.role,
             created_at: user.created_at,
             updated_at: user.updated_at,
+            meta: user.meta,
         }
     }
 }

@@ -43,6 +43,7 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/audit-logs", get(get_audit_logs))
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
+        .nest("/devices", crate::api::devices::admin_devices_routes())
 }
 
 /// Reload configuration from disk (admin only)
@@ -130,6 +131,7 @@ async fn update_user_role(
         role: Some(payload.role),
         profile: None,
         updated_at: Some(chrono::Utc::now().naive_utc()),
+        meta: None,
     };
 
     let updated_user = state.db.update_user(user_id, &update_data)
@@ -195,6 +197,7 @@ async fn activate_user(
         role: None,
         profile: None,
         updated_at: Some(chrono::Utc::now().naive_utc()),
+        meta: None,
     };
 
     let updated_user = state.db.update_user(user_id, &update_data)
@@ -258,6 +261,7 @@ async fn deactivate_user(
         role: None,
         profile: None,
         updated_at: Some(chrono::Utc::now().naive_utc()),
+        meta: None,
     };
 
     let updated_user = state.db.update_user(user_id, &update_data)

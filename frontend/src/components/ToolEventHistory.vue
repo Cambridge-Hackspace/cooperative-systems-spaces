@@ -1,6 +1,6 @@
 <template>
   <div class="modal-overlay" @click="$emit('close')">
-    <div class="modal-content" @click.stop>
+    <div class="modal-content bg-base-100" @click.stop>
       <div class="modal-header">
         <h3>{{ tool.name }} - Event History</h3>
         <button @click="$emit('close')" class="close-btn">&times;</button>
@@ -21,7 +21,7 @@
           <div 
             v-for="event in events" 
             :key="event.id" 
-            class="event-item"
+            class="event-item bg-primary text-primary-content"
             :class="`event-${event.event_type}`"
           >
             <div class="event-header">
@@ -58,7 +58,7 @@
                 </div>
               </div>
 
-              <div v-if="event.notes" class="event-notes">
+              <div v-if="event.notes" class="event-notes bg-secondary">
                 <strong>Notes:</strong> {{ event.notes }}
               </div>
             </div>
@@ -158,7 +158,6 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
   border-radius: 8px;
   width: 90%;
   max-width: 700px;
@@ -178,7 +177,6 @@ onMounted(() => {
 
 .modal-header h3 {
   margin: 0;
-  color: #2c3e50;
 }
 
 .close-btn {
@@ -233,7 +231,6 @@ onMounted(() => {
 }
 
 .event-item {
-  background: #f8f9fa;
   border: 1px solid #e9ecef;
   border-radius: 8px;
   padding: 1rem;
@@ -333,7 +330,6 @@ onMounted(() => {
 }
 
 .event-notes {
-  background: white;
   padding: 0.75rem;
   border-radius: 4px;
   border: 1px solid #e9ecef;
@@ -359,14 +355,6 @@ onMounted(() => {
   transition: background-color 0.2s;
 }
 
-.btn-secondary {
-  background-color: #95a5a6;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #7f8c8d;
-}
 
 @media (max-width: 768px) {
   .modal-content {

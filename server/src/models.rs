@@ -6,6 +6,7 @@ mod devices;
 pub use tools::*;
 pub use training::*;
 pub use trainers::*;
+pub use devices::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};
@@ -98,6 +99,7 @@ pub struct User {
     pub updated_at: NaiveDateTime,
     pub role: UserRole,
     pub profile: serde_json::Value,
+    pub meta: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -111,6 +113,7 @@ pub struct NewUser {
     pub is_active: Option<bool>,
     pub role: Option<UserRole>,
     pub profile: Option<serde_json::Value>,
+    pub meta: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, AsChangeset, Serialize, Deserialize)]
@@ -125,6 +128,7 @@ pub struct UpdateUser {
     pub role: Option<UserRole>,
     pub profile: Option<serde_json::Value>,
     pub updated_at: Option<NaiveDateTime>,
+    pub meta: Option<serde_json::Value>,
 }
 
 impl NewUser {
@@ -137,6 +141,7 @@ impl NewUser {
             is_active: Some(true),
             role: Some(UserRole::Newbie),
             profile: Some(serde_json::json!({})),
+            meta: Some(serde_json::json!({})),
         }
     }
 
@@ -149,6 +154,7 @@ impl NewUser {
             is_active: Some(true),
             role: Some(role),
             profile: Some(serde_json::json!({})),
+            meta: Some(serde_json::json!({})),
         }
     }
 }
@@ -211,6 +217,14 @@ pub enum AuditEventType {
     ToolActivated,
     ToolDeactivated,
     ToolUsageLogged,
+    // Device-related events
+    DeviceInviteCreated,
+    DeviceInviteUsed,
+    DeviceInviteExpired,
+    DeviceRegistered,
+    DeviceNameChanged,
+    DeviceDeleted,
+    DeviceVersionChanged,
 }
 
 impl AuditEventType {
@@ -241,6 +255,13 @@ impl AuditEventType {
             Self::ToolActivated => "tool_activated",
             Self::ToolDeactivated => "tool_deactivated",
             Self::ToolUsageLogged => "tool_usage_logged",
+            Self::DeviceInviteCreated => "device_invite_created",
+            Self::DeviceInviteUsed => "device_invite_used",
+            Self::DeviceInviteExpired => "device_invite_expired",
+            Self::DeviceRegistered => "device_registered",
+            Self::DeviceNameChanged => "device_name_changed",
+            Self::DeviceDeleted => "device_deleted",
+            Self::DeviceVersionChanged => "device_version_changed",
         }
     }
 }

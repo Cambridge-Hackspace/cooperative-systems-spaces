@@ -2,7 +2,7 @@ version: "2"
 services:
   postgres:
     image: postgres:17
-    container_name: dms_postgres
+    container_name: css_postgres
     ports:
       - 5432:5432
     environment:
@@ -11,6 +11,19 @@ services:
       POSTGRES_PASSWORD: css_pass
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
+  mosquitto:
+    image: eclipse-mosquitto:2.0.18
+    container_name: css_mosquitto
+    ports:
+      - 1883:1883
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:Z
+  mosquitto-3883:
+    image: eclipse-mosquitto:2.0.18
+    container_name: css_mosquitto_3883
+    ports:
+      - 3883:3883
+    volumes:
+      - ./mosquitto-3883.conf:/mosquitto/config/mosquitto.conf:Z
 volumes:
   postgres_data:

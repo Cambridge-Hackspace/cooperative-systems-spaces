@@ -6,7 +6,7 @@ use axum::routing::get;
 use clap::Parser;
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::info;
+use tracing::{info, warn, error};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -21,6 +21,7 @@ mod throttle;
 mod recaptcha;
 mod calendar;
 mod pages;
+mod mqtt;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
@@ -28,6 +29,7 @@ use throttle::RegistrationThrottleService;
 use recaptcha::RecaptchaService;
 use calendar::CalendarService;
 use crate::pages::PagesService;
+use crate::mqtt::MqttService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -55,6 +57,7 @@ pub struct AppState {
     pub recaptcha_service: Arc<RecaptchaService>,
     pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
     pub pages_service: Arc<tokio::sync::RwLock<PagesService>>,
+    pub mqtt_service: Option<Arc<MqttService>>,
 }
 
 // Main dashboard handler
@@ -140,6 +143,36 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
     info!("Pages service initialized");
 
+    // Initialize MQTT service if edge is enabled
+    let mqtt_service_arc = if app_config.edge.edge_enabled {
+        if let Some(mqtt_config) = &app_config.edge.edge_mqtt_config {
+            info!("Initializing MQTT service...");
+            let (mqtt_service, rx) = MqttService::new(mqtt_config, db_manager.clone())
+                .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
+            
+            let mqtt_service_arc = Arc::new(mqtt_service);
+            let mqtt_service_for_task = mqtt_service_arc.as_ref().clone();
+            
+            info!("MQTT service initialized, starting event loop...");
+            
+            // Spawn MQTT service in background
+            tokio::spawn(async move {
+                if let Err(e) = mqtt_service_for_task.start(rx).await {
+                    error!("MQTT service error: {}", e);
+                }
+            });
+            
+            info!("MQTT service started");
+            Some(mqtt_service_arc)
+        } else {
+            warn!("Edge devices enabled but no MQTT configuration provided");
+            None
+        }
+    } else {
+        info!("Edge devices disabled, MQTT service not started");
+        None
+    };
+
     let app_state = AppState {
         config_manager: config_manager,
         db: db_manager,
@@ -149,6 +182,7 @@ async fn main() -> Result<(), anyhow::Error> {
         recaptcha_service,
         calendar_service,
         pages_service,
+        mqtt_service: mqtt_service_arc,
     };
 
     // Serve frontend static files

@@ -37,6 +37,7 @@ export interface User {
   created_at: string
   updated_at: string
   profile: Record<string, any>
+  meta: Record<string, any>
 }
 
 // Profile types

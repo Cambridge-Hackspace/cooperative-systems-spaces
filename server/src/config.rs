@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -5,6 +6,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
+pub(crate) use css_lib::{MqttConfig};
 
 /// Merge two TOML values, with the first taking precedence
 /// This is used to merge existing config with defaults for missing fields
@@ -666,6 +668,21 @@ impl Default for PagesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeConfig {
+    pub edge_enabled: bool,
+    pub edge_mqtt_config: Option<MqttConfig>
+}
+
+impl Default for EdgeConfig {
+    fn default() -> Self {
+        Self {
+            edge_enabled: false,
+            edge_mqtt_config: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCategoryMapping {
     /// The internal enum value (e.g., "saw", "powertool", "hand_tools")
     pub value: String,
@@ -773,6 +790,8 @@ pub struct AppConfig {
     pub calendar: CalendarConfig,
     /// Pages Configuration
     pub pages: PagesConfig,
+    /// Edge Config
+    pub edge: EdgeConfig,
 }
 
 impl Default for AppConfig {
@@ -795,6 +814,7 @@ impl Default for AppConfig {
             toolpass: ToolPassConfig::default(),
             calendar: CalendarConfig::default(),
             pages: PagesConfig::default(),
+            edge: EdgeConfig::default(),
         }
     }
 }
