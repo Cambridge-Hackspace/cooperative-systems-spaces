@@ -191,7 +191,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
@@ -261,6 +261,22 @@ function removeNotification(id: string) {
   }
 }
 
+// Apply theme from user meta
+function applyTheme() {
+  const user = authStore.user
+  if (user?.meta?.theme) {
+    document.documentElement.setAttribute('data-theme', user.meta.theme)
+  } else {
+    // Default theme
+    document.documentElement.setAttribute('data-theme', 'css-light')
+  }
+}
+
+// Watch for user changes to apply theme
+watch(() => authStore.user, () => {
+  applyTheme()
+}, { deep: true })
+
 // Lifecycle
 onMounted(async () => {
   globalLoading.value = true
@@ -279,6 +295,9 @@ onMounted(async () => {
   } finally {
     globalLoading.value = false
   }
+  
+  // Apply theme after initialization
+  applyTheme()
 })
 </script>
 
