@@ -62,6 +62,7 @@ rust-check:
   stage: check
   image: rust:1.90.0
   before_script:
+    - cd frontend && npm run build && cd .. # the macro complains a lot
     - apt-get update && apt-get install -y libpq-dev cmake build-essential
   script:
     - cargo test --all
