@@ -73,16 +73,16 @@ pub struct TrainingRecordsQuery {
 pub fn trainers_router() -> Router<AppState> {
     Router::new()
         // Tool trainer management (Staff only)
-        .route("/tools/:tool_id/trainers", post(assign_tool_trainer).get(get_tool_trainers))
-        .route("/tools/:tool_id/trainers/:user_id", put(update_tool_trainer).delete(remove_tool_trainer))
+        .route("/tools/{tool_id}/trainers", post(assign_tool_trainer).get(get_tool_trainers))
+        .route("/tools/{tool_id}/trainers/{user_id}", put(update_tool_trainer).delete(remove_tool_trainer))
         
         // Training records (Trainers can create, all can view with restrictions)
         .route("/training-records", post(create_training_record).get(get_training_records))
-        .route("/training-records/:record_id", put(update_training_record))
-        .route("/users/:user_id/training-records", get(get_user_training_records))
+        .route("/training-records/{record_id}", put(update_training_record))
+        .route("/users/{user_id}/training-records", get(get_user_training_records))
         
         // Utility endpoints
-        .route("/tools/:tool_id/trainers/check/:user_id", get(check_trainer_authorization))
+        .route("/tools/{tool_id}/trainers/check/{user_id}", get(check_trainer_authorization))
 }
 
 // ==================== TOOL TRAINER MANAGEMENT ====================

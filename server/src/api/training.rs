@@ -116,30 +116,30 @@ pub fn training_router() -> Router<AppState> {
     Router::new()
         // Training Roster - Users available for training (Trainers and Staff)
         .route("/roster", get(get_training_roster))
-        .route("/roster/:tool_id", get(get_training_roster_for_tool))
+        .route("/roster/{tool_id}", get(get_training_roster_for_tool))
 
         // Training History - Records of completed training (Trainers and Staff)
-        .route("/history/:tool_id", get(get_training_history_for_tool))
+        .route("/history/{tool_id}", get(get_training_history_for_tool))
 
         // Training Steps Management (Staff only)
         .route("/steps", post(create_training_step).get(get_training_steps))
-        .route("/steps/:step_id", get(get_training_step).put(update_training_step).delete(delete_training_step))
-        .route("/steps/:step_id/position", put(update_training_step_position))
+        .route("/steps/{step_id}", get(get_training_step).put(update_training_step).delete(delete_training_step))
+        .route("/steps/{step_id}/position", put(update_training_step_position))
         
         // Prerequisites Management (Staff only) 
-        .route("/steps/:step_id/prerequisites", post(add_prerequisite).get(get_prerequisites))
-        .route("/prerequisites/:prereq_id", delete(remove_prerequisite))
+        .route("/steps/{step_id}/prerequisites", post(add_prerequisite).get(get_prerequisites))
+        .route("/prerequisites/{prereq_id}", delete(remove_prerequisite))
         
         // Tool Training Overview (All authenticated users)
-        .route("/tools/:tool_id/overview", get(get_tool_training_overview))
-        .route("/tools/:tool_id/overview/me", get(get_my_tool_training_overview))
-        .route("/tools/:tool_id/overview/:user_id", get(get_user_tool_training_overview))
-        .route("/tools/:tool_id/steps", get(get_tool_training_steps))
+        .route("/tools/{tool_id}/overview", get(get_tool_training_overview))
+        .route("/tools/{tool_id}/overview/me", get(get_my_tool_training_overview))
+        .route("/tools/{tool_id}/overview/{user_id}", get(get_user_tool_training_overview))
+        .route("/tools/{tool_id}/steps", get(get_tool_training_steps))
         
         // User Training Progress (All authenticated users for self, staff for others)
         .route("/progress", get(get_user_training_progress))
-        .route("/progress/:user_id", get(get_user_training_progress_by_user))
-        .route("/progress/:user_id/:step_id", get(get_specific_progress).put(update_training_progress))
+        .route("/progress/{user_id}", get(get_user_training_progress_by_user))
+        .route("/progress/{user_id}/{step_id}", get(get_specific_progress).put(update_training_progress))
         
         // Training Session Management
         .route("/sessions/start", post(start_training_session))
@@ -147,11 +147,11 @@ pub fn training_router() -> Router<AppState> {
         
         // Instructor Certification (Staff only)
         .route("/instructors", post(certify_instructor).get(get_instructors))
-        .route("/instructors/:instructor_id", delete(revoke_instructor_certification))
+        .route("/instructors/{instructor_id}", delete(revoke_instructor_certification))
         
         // Tool Access Validation
-        .route("/access/:tool_id/:user_id", get(check_tool_access))
-        .route("/access/:tool_id", get(check_my_tool_access))
+        .route("/access/{tool_id}/{user_id}", get(check_tool_access))
+        .route("/access/{tool_id}", get(check_my_tool_access))
 }
 
 // ==================== TRAINING ROSTER ====================

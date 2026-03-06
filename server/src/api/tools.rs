@@ -73,24 +73,24 @@ pub fn tools_routes() -> Router<AppState> {
     Router::new()
         // Tool CRUD operations (staff only)
         .route("/", get(list_tools).post(create_tool))
-        .route("/:tool_id", get(get_tool).put(update_tool).delete(delete_tool))
+        .route("/{tool_id}", get(get_tool).put(update_tool).delete(delete_tool))
         
         // Tool status and event management
-        .route("/:tool_id/status", put(change_tool_status))
-        .route("/:tool_id/events", get(get_tool_events).post(add_tool_event))
+        .route("/{tool_id}/status", put(change_tool_status))
+        .route("/{tool_id}/events", get(get_tool_events).post(add_tool_event))
         
         // Tool training management
-        .route("/:tool_id/training-types", get(get_tool_training_types).post(create_training_type))
-        .route("/:tool_id/trainers", get(get_tool_trainers).post(authorize_trainer))
+        .route("/{tool_id}/training-types", get(get_tool_training_types).post(create_training_type))
+        .route("/{tool_id}/trainers", get(get_tool_trainers).post(authorize_trainer))
         
         // User training records
-        .route("/:tool_id/user-training", get(get_user_training_for_tool))
+        .route("/{tool_id}/user-training", get(get_user_training_for_tool))
         .route("/user-training", get(get_user_training))
-        .route("/user-training/:training_id", post(complete_training).delete(revoke_training))
+        .route("/user-training/{training_id}", post(complete_training).delete(revoke_training))
         
         // Public endpoints for members to view tools
         .route("/available", get(list_available_tools))
-        .route("/:tool_id/can-use", get(can_user_use_tool))
+        .route("/{tool_id}/can-use", get(can_user_use_tool))
 }
 
 /// List all tools with filtering (staff only)

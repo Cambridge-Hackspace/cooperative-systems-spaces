@@ -203,7 +203,6 @@ impl<'a> AuthService<'a> {
 #[derive(Clone)]
 pub struct AuthUser(pub User);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
@@ -241,7 +240,6 @@ where
 #[derive(Clone)]
 pub struct AdminUser(pub User);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AdminUser
 where
     S: Send + Sync,
@@ -264,7 +262,6 @@ where
 #[derive(Clone)]
 pub struct StaffUser(pub User);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for StaffUser
 where
     S: Send + Sync,
@@ -287,7 +284,6 @@ where
 #[derive(Clone)]
 pub struct MemberUser(pub User);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for MemberUser
 where
     S: Send + Sync,

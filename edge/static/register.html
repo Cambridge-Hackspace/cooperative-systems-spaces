@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge Device Registration</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #651d1d 0%, #d5abab 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        #app {
+            max-width: 700px;
+            width: 100%;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .device-icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .status-section {
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .status-approved {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .status-pending {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+
+        .status-unregistered {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .status-denied {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .info-grid {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+
+        .info-label {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .info-value {
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+            word-break: break-all;
+        }
+
+        .form-section {
+            margin-top: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .alert-error {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .alert-success {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .alert-info {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .help-text {
+            color: #666;
+            font-size: 13px;
+            margin-top: 8px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+            color: #666;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+
+        .tab:hover {
+            color: #333;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .cli-code {
+            background: #f5f5f5;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #333;
+            overflow-x: auto;
+            margin: 16px 0;
+            border-left: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="card">
+            <div class="header">
+                <div class="device-icon">📱</div>
+                <h1>{{ deviceName }}</h1>
+                <p class="subtitle">Edge Device Management</p>
+            </div>
+
+            <!-- Loading State -->
+            <div v-if="loading" class="loading">
+                <div class="loading-spinner"></div>
+                <p>Loading device status...</p>
+            </div>
+
+            <!-- Main Content -->
+            <div v-else>
+                <!-- Status Section -->
+                <div class="status-section">
+                    <span 
+                        class="status-badge" 
+                        :class="{
+                            'status-approved': status.auth_status === 'approved',
+                            'status-pending': status.auth_status === 'pending',
+                            'status-unregistered': status.auth_status === 'unauthenticated',
+                            'status-denied': status.auth_status === 'denied'
+                        }"
+                    >
+                        {{ statusText }}
+                    </span>
+                </div>
+
+                <!-- System Information -->
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="info-label">Status</span>
+                        <span class="info-value">{{ statusText }}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Platform</span>
+                        <span class="info-value">{{ status.system_info?.platform || 'Unknown' }}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">MAC Address</span>
+                        <span class="info-value">{{ status.system_info?.mac_address || 'N/A' }}</span>
+                    </div>
+                    <div class="info-item" v-if="status.system_info?.ipv4_address">
+                        <span class="info-label">IPv4 Address</span>
+                        <span class="info-value">{{ status.system_info.ipv4_address }}</span>
+                    </div>
+                    <div class="info-item" v-if="status.system_info?.software_version">
+                        <span class="info-label">Software Version</span>
+                        <span class="info-value">{{ status.system_info.software_version }}</span>
+                    </div>
+                </div>
+
+                <!-- Registration Form (only if not registered) -->
+                <div v-if="status.auth_status === 'unauthenticated'" class="form-section">
+                    <!-- Tabs -->
+                    <div class="tabs">
+                        <button 
+                            class="tab" 
+                            :class="{ active: activeTab === 'web' }"
+                            @click="activeTab = 'web'"
+                        >
+                            🌐 Web Registration
+                        </button>
+                        <button 
+                            class="tab" 
+                            :class="{ active: activeTab === 'cli' }"
+                            @click="activeTab = 'cli'"
+                        >
+                            💻 CLI Registration
+                        </button>
+                    </div>
+
+                    <!-- Web Registration -->
+                    <div v-if="activeTab === 'web'">
+                        <div v-if="registrationError" class="alert alert-error">
+                            {{ registrationError }}
+                        </div>
+
+                        <div v-if="registrationSuccess" class="alert alert-success">
+                            {{ registrationSuccess }}
+                        </div>
+
+                        <form @submit.prevent="registerDevice">
+                            <div class="form-group">
+                                <label for="instance-url">Space Server URL</label>
+                                <input
+                                    id="instance-url"
+                                    v-model="registrationForm.instanceUrl"
+                                    type="url"
+                                    placeholder="https://your-server.com"
+                                    required
+                                    :disabled="registering"
+                                />
+                                <p class="help-text">Enter the full URL of your Space Server</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="device-code">Device Invite Code</label>
+                                <input
+                                    id="device-code"
+                                    v-model="registrationForm.deviceCode"
+                                    type="text"
+                                    placeholder="8 emoji characters"
+                                    required
+                                    :disabled="registering"
+                                />
+                                <p class="help-text">Enter the 8-emoji invite code from your administrator</p>
+                            </div>
+
+                            <button 
+                                type="submit" 
+                                class="btn btn-primary"
+                                :disabled="registering"
+                            >
+                                {{ registering ? 'Registering...' : 'Register Device' }}
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- CLI Instructions -->
+                    <div v-if="activeTab === 'cli'">
+                        <div class="alert alert-info">
+                            To register this device using the command line:
+                        </div>
+                        <div class="cli-code">
+edge register --instance-url https://your-server.com --code &lt;8-emoji-code&gt;
+                        </div>
+                        <p class="help-text">
+                            Obtain the invite code from your Space Server administrator, then run the command above in your terminal.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Already Registered Info -->
+                <div v-if="status.auth_status === 'approved'" class="alert alert-success">
+                    <strong>✅ Device is registered!</strong>
+                    <p style="margin-top: 8px; font-size: 13px;">This device is connected and communicating with the <strong>CS</strong>: <i>Spaces</i> Server.</p>
+                </div>
+
+                <div v-if="status.auth_status === 'pending'" class="alert alert-info">
+                    <strong>⏳ Registration pending</strong>
+                    <p style="margin-top: 8px; font-size: 13px;">Your device registration is awaiting approval from an administrator.</p>
+                </div>
+
+                <div v-if="status.auth_status === 'denied'" class="alert alert-error">
+                    <strong>❌ Registration denied</strong>
+                    <p style="margin-top: 8px; font-size: 13px;">Your device registration was denied. Please contact your administrator.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    loading: true,
+                    status: {},
+                    registrationForm: {
+                        instanceUrl: '',
+                        deviceCode: ''
+                    },
+                    registering: false,
+                    registrationError: null,
+                    registrationSuccess: null,
+                    activeTab: 'web'
+                };
+            },
+            computed: {
+                deviceName() {
+                    return this.status.device_name || 'Edge Device';
+                },
+                statusText() {
+                    const statusMap = {
+                        'approved': 'Registered',
+                        'pending': 'Registration Pending',
+                        'unauthenticated': 'Not Registered',
+                        'denied': 'Registration Denied'
+                    };
+                    return statusMap[this.status.auth_status] || 'Unknown';
+                }
+            },
+            methods: {
+                async loadStatus() {
+                    this.loading = true;
+                    try {
+                        const response = await fetch('/api/status');
+                        const result = await response.json();
+                        
+                        if (result.success && result.data) {
+                            this.status = result.data;
+                        } else {
+                            console.error('Failed to load status:', result.error);
+                        }
+                    } catch (error) {
+                        console.error('Error loading status:', error);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                async registerDevice() {
+                    this.registering = true;
+                    this.registrationError = null;
+                    this.registrationSuccess = null;
+
+                    try {
+                        const response = await fetch('/api/register', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                instance_url: this.registrationForm.instanceUrl,
+                                device_code: this.registrationForm.deviceCode
+                            })
+                        });
+
+                        const result = await response.json();
+
+                        if (result.success) {
+                            this.registrationSuccess = result.data;
+                            // Reload status after a short delay
+                            setTimeout(() => {
+                                this.loadStatus();
+                            }, 2000);
+                        } else {
+                            this.registrationError = result.error || 'Registration failed';
+                        }
+                    } catch (error) {
+                        this.registrationError = 'Network error: ' + error.message;
+                    } finally {
+                        this.registering = false;
+                    }
+                }
+            },
+            mounted() {
+                this.loadStatus();
+                // Poll for status updates every 30 seconds
+                setInterval(() => {
+                    this.loadStatus();
+                }, 30000);
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

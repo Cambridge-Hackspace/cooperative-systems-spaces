@@ -23,8 +23,8 @@ use crate::auth::MemberUser;
 
 pub fn profile_routes() -> Router<AppState> {
     Router::new()
-        .route("/:user_id", get(get_user_profile))
-        .route("/:user_id", put(update_user_profile))
+        .route("/{user_id}", get(get_user_profile))
+        .route("/{user_id}", put(update_user_profile))
         .route("/config", get(get_profile_config))
         .route("/config", put(update_profile_config))
 }

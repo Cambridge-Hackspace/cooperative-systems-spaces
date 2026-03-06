@@ -381,7 +381,7 @@ pub async fn list_device_invites(
     Ok(Json(ApiResponse::success(invite_list)))
 }
 
-/// DELETE /api/admin/devices/invites/:code - Expire a device invite code
+/// DELETE /api/admin/devices/invites/{code} - Expire a device invite code
 pub async fn expire_device_invite(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -423,7 +423,7 @@ pub async fn expire_device_invite(
     ))
 }
 
-/// PATCH /api/admin/devices/:id/name - Rename a device
+/// PATCH /api/admin/devices/{id}/name - Rename a device
 #[derive(Debug, Deserialize)]
 pub struct RenameDeviceRequest {
     pub name: String,
@@ -492,7 +492,7 @@ pub async fn rename_device(
     ))
 }
 
-/// DELETE /api/admin/devices/:id - Soft delete a device
+/// DELETE /api/admin/devices/{id} - Soft delete a device
 pub async fn delete_device(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -550,8 +550,8 @@ pub fn admin_devices_routes() -> Router<AppState> {
     Router::new()
         .route("/invite", post(create_device_invite))
         .route("/invites", get(list_device_invites))
-        .route("/invites/:code", delete(expire_device_invite))
+        .route("/invites/{code}", delete(expire_device_invite))
         .route("/", get(list_devices))
-        .route("/:id/name", patch(rename_device))
-        .route("/:id", delete(delete_device))
+        .route("/{id}/name", patch(rename_device))
+        .route("/{id}", delete(delete_device))
 }

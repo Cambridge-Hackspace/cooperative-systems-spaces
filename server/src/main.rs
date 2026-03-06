@@ -3,6 +3,9 @@ use axum::extract::{State, FromRef};
 use axum::{Json, Router};
 use axum::http::StatusCode;
 use axum::routing::get;
+use dr_metrix_axum::{metrics_handler, PrometheusMetrics};
+use dr_metrix_core::collector::CollectorConfig;
+use dr_metrix_postgres::PostgresMetrics;
 use clap::Parser;
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
@@ -117,10 +120,15 @@ async fn main() -> Result<(), anyhow::Error> {
     test_database_operations(&db_manager).await?;
     info!("Database operations test completed successfully");
 
-    // Setup stats
-    //let collector = Collector::default();
-    //collector.describe();
-    //let (prometheus_layer, _metric_handle) = PrometheusMetricLayer::pair();
+    // Setup Prometheus metrics
+    let prom = Arc::new(
+        PrometheusMetrics::builder("css")
+            .with_process_collector()
+            .build()?,
+    );
+    let pg_config = CollectorConfig { namespace: "css".into(), ..Default::default() };
+    let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
+    prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
     let profile_validator = ProfileValidator::new(&app_config.user);
     let audit_logger = AuditLogger::new(db_manager.clone());
@@ -199,8 +207,9 @@ async fn main() -> Result<(), anyhow::Error> {
         // ));
 
     let app = Router::new()
+        .route("/metrics", get(metrics_handler).with_state(prom.clone()))
         .merge(general_route)
-        .nest("/api", api::api_routes())
+        .nest("/api", api::api_routes().layer(prom.http_layer()))
         .fallback_service(serve_dir)
         .with_state(app_state);
 

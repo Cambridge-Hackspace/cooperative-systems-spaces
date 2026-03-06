@@ -58,10 +58,10 @@ pub struct PageSummary {
 pub fn pages_routes() -> Router<AppState> {
     Router::new()
         .route("/wiki", get(list_wiki_pages))
-        .route("/wiki/*slug", get(get_wiki_page))
+        .route("/wiki/{*slug}", get(get_wiki_page))
         .route("/page", get(list_site_pages))
         .route("/page/index", get(get_site_index))
-        .route("/page/*slug", get(get_site_page))
+        .route("/page/{*slug}", get(get_site_page))
         .route("/navigation", get(get_navigation))
 }
 

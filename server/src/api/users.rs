@@ -21,10 +21,10 @@ use crate::{
 pub fn user_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_users))
-        .route("/:id", get(get_user_by_id))
-        .route("/:id", put(update_user))
-        .route("/:id", delete(delete_user))
-        .route("/:id/theme", patch(update_user_theme))
+        .route("/{id}", get(get_user_by_id))
+        .route("/{id}", put(update_user))
+        .route("/{id}", delete(delete_user))
+        .route("/{id}/theme", patch(update_user_theme))
 }
 
 // List all users (admin only)
