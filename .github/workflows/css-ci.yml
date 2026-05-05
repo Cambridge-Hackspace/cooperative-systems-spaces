@@ -103,23 +103,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
-        if: branch == 'master'
+        if: github.ref_name == 'master'
         run: |
           docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:latest .
 
       - name: Push Docker image
-        if: branch == 'master'
+        if: github.ref_name == 'master'
         run: |
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/app:latest
 
       - name: Build Dev Docker image
-        if: branch == 'dev'
+        if: github.ref_name == 'dev'
         run: |
           docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:dev .
 
       - name: Push Dev Docker image
-        if: branch == 'dev'
+        if: github.ref_name == 'dev'
         run: |
           docker push ghcr.io/${{ github.repository }}/app:dev
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
@@ -141,23 +141,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
-        if: branch == 'master'
+        if: github.ref_name == 'master'
         run: |
           docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:latest -f Dockerfile.edge  .
 
       - name: Push Docker image
-        if: branch == 'master'
+        if: github.ref_name == 'master'
         run: |
           docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/edge:latest
 
       - name: Build Dev Docker image
-        if: branch == 'dev'
+        if: github.ref_name == 'dev'
         run: |
           docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:dev -f Dockerfile.edge  .
 
       - name: Push Dev Docker image
-        if: branch == 'dev'
+        if: github.ref_name == 'dev'
         run: |
           docker push ghcr.io/${{ github.repository }}/edge:dev
 
