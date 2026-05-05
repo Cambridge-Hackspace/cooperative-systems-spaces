@@ -38,9 +38,9 @@ jobs:
       #  run: npm run test -- --ci --coverage
 
       # BACKEND JOBS (SERVER & CLI)
-      - name: Install ALSA development libraries
+      - name: Install addtl development libraries
         if: (matrix.job == 'server' || matrix.job == 'cli') && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
 
       - name: Set up Rust
         if: matrix.job == 'server' || matrix.job == 'cli'
