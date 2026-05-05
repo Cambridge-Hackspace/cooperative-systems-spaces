@@ -103,13 +103,26 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
+        if: branch == 'master'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:${{ github.branch == 'master' && 'latest' || github.branch }} .
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:latest .
 
       - name: Push Docker image
+        if: branch == 'master'
         run: |
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/app:${{ github.branch == 'master' && 'latest' || github.branch}}
+          docker push ghcr.io/${{ github.repository }}/app:latest
+
+      - name: Build Dev Docker image
+        if: branch == 'dev'
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:dev .
+
+      - name: Push Dev Docker image
+        if: branch == 'dev'
+        run: |
+          docker push ghcr.io/${{ github.repository }}/app:dev
+          docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
 
   docker-edge:
     needs: checks
@@ -128,13 +141,25 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
+        if: branch == 'master'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:${{ github.branch == 'master' && 'latest' || github.branch }} -f Dockerfile.edge  .
+          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:latest -f Dockerfile.edge  .
 
       - name: Push Docker image
+        if: branch == 'master'
         run: |
           docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/edge:${{ github.branch == 'master' && 'latest' || github.branch}}
+          docker push ghcr.io/${{ github.repository }}/edge:latest
+
+      - name: Build Dev Docker image
+        if: branch == 'dev'
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:dev -f Dockerfile.edge  .
+
+      - name: Push Dev Docker image
+        if: branch == 'dev'
+        run: |
+          docker push ghcr.io/${{ github.repository }}/edge:dev
 
 
   release:
