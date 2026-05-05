@@ -32,6 +32,18 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Install frontend-edge dependencies
+        if: matrix.job == 'frontend'
+        working-directory: frontend_edge
+        run: npm ci
+
+      - name: Run frontend-edge build
+        if: matrix.job == 'frontend'
+        working-directory: frontend_edge
+        run: npm run build
+
+
+
       #- name: Run frontend tests
       #  if: matrix.job == 'frontend'
       #  working-directory: frontend
