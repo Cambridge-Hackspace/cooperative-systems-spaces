@@ -720,6 +720,9 @@ async fn complete_training_session(
         tracing::warn!("Failed to log training session completion to audit: {}", e);
     }
 
+    // Broadcast updated toolguard state to all devices
+    crate::api::toolguard::broadcast_toolguard_state(&state).await;
+
     Ok(Json(ApiResponse::success(progress)))
 }
 

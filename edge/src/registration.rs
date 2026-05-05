@@ -110,6 +110,7 @@ pub async fn register_device(
     new_config.remote_device_info = Some(DeviceInfo {
         remote_id: registration_response.device_id.to_string(),
         remote_auth_token: registration_response.auth_token.clone(),
+        remote_instance_url: instance_url.trim_end_matches('/').to_string(),
     });
     
     // Configure MQTT if provided by server
@@ -169,6 +170,7 @@ mod tests {
         config.remote_device_info = Some(DeviceInfo {
             remote_id: "test-device".to_string(),
             remote_auth_token: "test-token".to_string(),
+            remote_instance_url: "https://spaces.neiam.org".to_string(),
         });
         
         assert!(is_registered(&config));
@@ -182,6 +184,7 @@ mod tests {
         config.remote_device_info = Some(DeviceInfo {
             remote_id: "test-device".to_string(),
             remote_auth_token: "test-token".to_string(),
+            remote_instance_url: "https://spaces.neiam.org".to_string(),
         });
         
         assert_eq!(get_device_id(&config), Some("test-device".to_string()));

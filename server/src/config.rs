@@ -533,9 +533,9 @@ impl Default for UserConfig {
 }
 
 
-/// Toolpass Compatability Configuration
+/// ToolGuard Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolPassConfig {
+pub struct ToolGuardConfig {
     /// is it enabled?
     pub enabled: bool,
     /// what profile field we should pull this out of
@@ -544,7 +544,7 @@ pub struct ToolPassConfig {
     pub global_api_key: Option<String>,
 }
 
-impl Default for ToolPassConfig {
+impl Default for ToolGuardConfig {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -784,8 +784,8 @@ pub struct AppConfig {
     pub user: UserConfig,
     /// Tool Configs
     pub tools: ToolConfig,
-    /// Toolpass Compat Configuration
-    pub toolpass: ToolPassConfig,
+    /// ToolGuard Configuration
+    pub toolguard: ToolGuardConfig,
     /// Calendar configuration
     pub calendar: CalendarConfig,
     /// Pages Configuration
@@ -811,7 +811,7 @@ impl Default for AppConfig {
             initial_setup: InitialSetupConfig::default(),
             user: UserConfig::default(),
             tools: ToolConfig::default(),
-            toolpass: ToolPassConfig::default(),
+            toolguard: ToolGuardConfig::default(),
             calendar: CalendarConfig::default(),
             pages: PagesConfig::default(),
             edge: EdgeConfig::default(),

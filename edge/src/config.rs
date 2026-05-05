@@ -15,9 +15,10 @@ pub enum AuthStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct  DeviceInfo {
+pub struct DeviceInfo {
     pub remote_id: String,
     pub remote_auth_token: String,
+    pub remote_instance_url: String,
 }
 
 /// Main edge configuration
@@ -29,7 +30,7 @@ pub struct Config {
 
     /// Authentication Status
     pub auth_status: AuthStatus,
-    
+
     /// MQTT configuration local
     #[serde(default)]
     pub local_mqtt_config: Option<MqttConfig>,
@@ -40,6 +41,30 @@ pub struct Config {
 
     /// Remote Device Info
     pub remote_device_info: Option<DeviceInfo>,
+
+    /// How often (in seconds) to poll the remote server for toolguard state (default: 300)
+    #[serde(default = "default_toolguard_sync_interval")]
+    pub toolguard_sync_interval_secs: u64,
+
+    /// Local MQTT topic to publish calendar events on (default: "cs/spaces/calendar/events")
+    #[serde(default = "default_calendar_mqtt_topic")]
+    pub calendar_mqtt_topic: String,
+
+    /// How often (in seconds) to fetch calendar events from the server (default: 300)
+    #[serde(default = "default_calendar_sync_interval")]
+    pub calendar_sync_interval_secs: u64,
+}
+
+fn default_toolguard_sync_interval() -> u64 {
+    300
+}
+
+fn default_calendar_mqtt_topic() -> String {
+    "cs/spaces/calendar/events".to_string()
+}
+
+fn default_calendar_sync_interval() -> u64 {
+    300
 }
 
 impl Default for Config {
@@ -50,6 +75,9 @@ impl Default for Config {
             local_mqtt_config: None,
             remote_mqtt_config: None,
             remote_device_info: None,
+            toolguard_sync_interval_secs: default_toolguard_sync_interval(),
+            calendar_mqtt_topic: default_calendar_mqtt_topic(),
+            calendar_sync_interval_secs: default_calendar_sync_interval(),
         }
     }
 }

@@ -1,0 +1,10 @@
+mqtt_broker_url = "tcp://localhost:1883"
+mqtt_client_id = "kiosk"
+toolguard_topic = "toolguard/state"
+
+# Uncomment to enable the Calendar view.
+# The publisher (server/edge/standalone) posts a Vec<CalEvent> JSON array here.
+# calendar_topic = "cs/spaces/calendar/events"
+
+# Seconds between automatic view rotation (requires calendar_topic to be set).
+# view_rotation_secs = 30.0

@@ -583,7 +583,7 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Get a tool by external_id (for ToolPass integration)
+    /// Get a tool by external_id (for ToolGuard integration)
     pub fn get_tool_by_external_id(&self, external_id_value: &str) -> Result<Option<crate::models::Tool>, DatabaseError> {
         use crate::schema::tools::dsl::*;
 
@@ -606,6 +606,19 @@ impl DatabaseManager {
             .values(new_tool)
             .returning(crate::models::Tool::as_returning())
             .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Get all tools with InUse status (for boot-reset)
+    pub fn get_inuse_tools(&self) -> Result<Vec<crate::models::Tool>, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        tools
+            .into_boxed()
+            .filter(status.eq(crate::models::ToolStatus::InUse))
+            .load::<crate::models::Tool>(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
@@ -1742,9 +1755,113 @@ impl DatabaseManager {
         Ok(records_with_users)
     }
 
+    // ── ToolGuard ────────────────────────────────────────────────────────────
 
+    /// Look up a device by its auth token.
+    /// Returns (device_id, token) if found.
+    pub fn find_device_by_auth_token(&self, token: &str) -> Result<Option<(uuid::Uuid, String)>, DatabaseError> {
+        use crate::schema::{space_device_auth, space_devices};
 
+        let mut conn = self.get_connection()?;
 
+        let result = space_device_auth::table
+            .inner_join(space_devices::table)
+            .filter(space_device_auth::auth_token.eq(token))
+            .filter(space_devices::deleted_at.is_null())
+            .select((space_device_auth::device_id, space_device_auth::auth_token))
+            .first::<(uuid::Uuid, String)>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+
+        Ok(result)
+    }
+
+    /// Return the IDs of all non-deleted devices (for MQTT broadcast).
+    pub fn list_approved_devices(&self) -> Result<Vec<uuid::Uuid>, DatabaseError> {
+        use crate::schema::space_devices::dsl::*;
+
+        let mut conn = self.get_connection()?;
+
+        space_devices
+            .filter(deleted_at.is_null())
+            .select(id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Build the ToolGuard sync data: a flat tool list and per-user authorized tool ID lists.
+    pub fn get_toolguard_sync_data(
+        &self,
+        profile_field: &str,
+    ) -> Result<(Vec<crate::api::toolguard::ToolGuardSyncUser>, Vec<crate::api::toolguard::ToolGuardSyncTool>), DatabaseError> {
+        use crate::schema::{tools, users};
+        use crate::api::toolguard::{ToolGuardSyncTool, ToolGuardSyncUser};
+
+        let mut conn = self.get_connection()?;
+
+        // Load all users
+        let all_users = users::table
+            .select(crate::models::User::as_select())
+            .load::<crate::models::User>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        // Load all tools
+        let all_tools = tools::table
+            .select(crate::models::Tool::as_select())
+            .load::<crate::models::Tool>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        let mut sync_users = Vec::new();
+        // Track which tools appear in at least one user's authorized list
+        let mut authorized_tool_ids_set: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
+
+        for user in &all_users {
+            let profile_field_value = match user.profile
+                .get(profile_field)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            {
+                Some(v) if !v.is_empty() => v,
+                _ => continue,
+            };
+
+            let mut authorized_tool_ids = Vec::new();
+
+            for tool in &all_tools {
+                let has_steps = self.tool_has_training_steps(tool.id)?;
+                let authorized = if has_steps {
+                    self.user_has_completed_all_training_steps(user.id, tool.id)?
+                } else {
+                    true
+                };
+
+                if authorized {
+                    authorized_tool_ids.push(tool.id);
+                    authorized_tool_ids_set.insert(tool.id);
+                }
+            }
+
+            sync_users.push(ToolGuardSyncUser {
+                profile_field_value,
+                full_name: user.full_name.clone(),
+                is_active: user.is_active,
+                authorized_tool_ids,
+            });
+        }
+
+        // Build the top-level tools list from all tools that appear in any user's authorized set
+        let sync_tools = all_tools.iter()
+            .filter(|t| authorized_tool_ids_set.contains(&t.id))
+            .map(|t| ToolGuardSyncTool {
+                id: t.id,
+                external_id: t.external_id.clone(),
+                name: t.name.clone(),
+                status: t.status.clone(),
+            })
+            .collect();
+
+        Ok((sync_users, sync_tools))
+    }
 }
 
 #[cfg(test)]

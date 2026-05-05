@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CSS Kiosk
+Comment=Cooperative Systems Spaces kiosk display
+Exec=/usr/bin/css-kiosk
+Icon=video-display
+Categories=Utility;
+Terminal=false
+StartupNotify=false

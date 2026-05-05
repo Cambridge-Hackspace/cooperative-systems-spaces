@@ -301,6 +301,15 @@ impl MqttService {
         )
     }
 
+    /// Publish a ToolGuard state update to a specific device
+    pub fn publish_toolguard_state(
+        &self,
+        device_id: Uuid,
+        payload: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.publish_to_device(device_id, "toolguard/state", payload)
+    }
+
     /// Get a reference to the MQTT client for publishing
     pub fn client(&self) -> &mqtt::AsyncClient {
         &self.client

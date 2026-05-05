@@ -7,6 +7,9 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/css_lib/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/edge/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/toolguard-status-ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/toolguard-test-ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/kiosk/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

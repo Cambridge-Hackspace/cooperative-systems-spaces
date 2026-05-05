@@ -1,18 +1,23 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing::{error, info, warn};
+use reqwest::Client;
 use std::sync::{Arc, RwLock};
+use tokio::time::{interval, Duration};
+use tracing::{error, info, warn};
 
+mod calendar;
 mod config;
 mod registration;
 mod system_info;
 mod mqtt;
+mod toolguard;
 mod web_server;
 
 use config::{generate_sample_config, load_config};
 use crate::config::AuthStatus;
 use crate::registration::{register_device, is_registered};
-use crate::mqtt::{EdgeMqttClient, run_mqtt_event_loop};
+use crate::mqtt::{EdgeMqttClient, LocalMqttClient, run_mqtt_event_loop, run_local_mqtt_event_loop};
+use crate::toolguard::ToolGuardState;
 use crate::web_server::start_web_server;
 
 #[derive(Parser, Debug)]
@@ -29,7 +34,7 @@ struct Args {
     /// Generate a sample configuration file and exit
     #[arg(long)]
     generate_config: bool,
-    
+
     #[command(subcommand)]
     command: Option<Commands>,
 
@@ -45,7 +50,7 @@ enum Commands {
         /// Space Server instance URL (e.g., https://space.example.com)
         #[arg(short, long)]
         instance_url: String,
-        
+
         /// Device registration code (8 emojis)
         #[arg(short = 'c', long)]
         code: String,
@@ -56,23 +61,19 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
     init_logging(args.verbose);
 
     info!("Edge binary started");
 
-    // Handle config generation
     if args.generate_config {
         generate_sample_config(&args.config)?;
         return Ok(());
     }
 
-    // Load configuration
     let app_config = load_config(&args.config)?;
     info!("Configuration loaded from: {}", args.config);
     info!("Edge client name: {}", app_config.name);
 
-    // Handle subcommands
     if let Some(command) = args.command {
         match command {
             Commands::Register { instance_url, code } => {
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
                     info!("If you want to re-register, please update the config file to reset auth_status.");
                     return Ok(());
                 }
-                
+
                 info!("Registering device with Space Server...");
                 register_device(
                     &instance_url,
@@ -90,23 +91,18 @@ async fn main() -> Result<()> {
                     std::path::Path::new(&args.config),
                 )
                 .await?;
-                
+
                 info!("Registration complete! Please restart the edge device.");
                 return Ok(());
             }
         }
     }
 
-    // Store config path for name updates
     std::env::set_var("CONFIG_PATH", &args.config);
 
-    // Create configuration manager for runtime reloading
     let config_arc = Arc::new(RwLock::new(app_config.clone()));
-    
-    // Get web server port from config or use default
-    let web_port = 8080; // You can add this to config if needed
+    let web_port = 8080;
 
-    // Display MQTT status
     if let Some(mqtt) = &app_config.local_mqtt_config {
         info!("Local MQTT enabled - connecting to: {}", mqtt.mqtt_instance_url);
     } else {
@@ -118,62 +114,149 @@ async fn main() -> Result<()> {
             info!("Edge client is unauthenticated");
             info!("Web UI available at http://localhost:{} for registration", web_port);
             info!("Or use: edge register --instance-url <url> --code <code>");
-            
-            // Start web server for registration
-            start_web_server(config_arc, args.config, web_port).await?;
+            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new())).await?;
         }
         AuthStatus::Pending => {
             info!("Edge client authentication is pending on server, please wait");
             info!("Web UI available at http://localhost:{} for status", web_port);
-            
-            // Start web server to show status
-            start_web_server(config_arc, args.config, web_port).await?;
+            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new())).await?;
         }
         AuthStatus::Approved => {
             info!("Edge client is authenticated");
             info!("Web UI available at http://localhost:{} for status", web_port);
-            
-            // Check if remote MQTT is configured
+
+            // Shared toolguard state — notify_rx fires on every state change
+            let (toolguard_state_inner, state_notify_rx) = ToolGuardState::new_with_notify();
+            let toolguard_state = Arc::new(toolguard_state_inner);
+
+            // Extract device credentials once
+            let device_info = app_config.remote_device_info.clone()
+                .expect("Approved device must have remote_device_info");
+            let remote_instance_url = device_info.remote_instance_url.clone();
+            let remote_auth_token = device_info.remote_auth_token.clone();
+            let sync_interval_secs = app_config.toolguard_sync_interval_secs;
+
+            // ── Boot-reset: tell server to clear any InUse tools ────────────
+            {
+                let url = format!("{}/api/toolguard/boot-reset", remote_instance_url);
+                match Client::new()
+                    .post(&url)
+                    .bearer_auth(&remote_auth_token)
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        info!("Boot-reset: server acknowledged ({} {})", resp.status().as_u16(), url);
+                    }
+                    Ok(resp) => {
+                        warn!("Boot-reset returned HTTP {}", resp.status());
+                    }
+                    Err(e) => {
+                        warn!("Boot-reset request failed: {}", e);
+                    }
+                }
+            }
+
+            // ── Periodic HTTP sync task ──────────────────────────────────────
+            {
+                let state = Arc::clone(&toolguard_state);
+                let instance_url = remote_instance_url.clone();
+                let auth_token = remote_auth_token.clone();
+                tokio::spawn(async move {
+                    let client = Client::new();
+                    let mut ticker = interval(Duration::from_secs(sync_interval_secs));
+                    loop {
+                        ticker.tick().await;
+                        let url = format!("{}/api/toolguard/sync", instance_url);
+                        match client
+                            .get(&url)
+                            .bearer_auth(&auth_token)
+                            .send()
+                            .await
+                        {
+                            Ok(resp) if resp.status().is_success() => {
+                                match resp.bytes().await {
+                                    Ok(bytes) => match state.apply_sync_bytes(&bytes) {
+                                        Ok(()) => info!("ToolGuard state synced from remote"),
+                                        Err(e) => warn!("Failed to parse toolguard sync response: {}", e),
+                                    },
+                                    Err(e) => warn!("Failed to read toolguard sync body: {}", e),
+                                }
+                            }
+                            Ok(resp) => warn!("ToolGuard sync returned HTTP {}", resp.status()),
+                            Err(e) => warn!("ToolGuard sync request failed: {}", e),
+                        }
+                    }
+                });
+            }
+
+            // ── Local MQTT client (if configured) ────────────────────────────
+            // state_notify_rx is consumed by the local event loop; if no local MQTT
+            // is configured we drop it so the sender's try_send just silently discards.
+            let state_notify_rx = Some(state_notify_rx);
+            if let Some(local_mqtt_cfg) = &app_config.local_mqtt_config {
+                match LocalMqttClient::new(
+                    local_mqtt_cfg,
+                    Arc::clone(&toolguard_state),
+                    remote_instance_url.clone(),
+                    remote_auth_token.clone(),
+                ).await {
+                    Ok((local_client, local_rx)) => {
+                        let local_client = Arc::new(local_client);
+                        if let Err(e) = local_client.subscribe_to_requests() {
+                            error!("Failed to subscribe to local toolguard topics: {}", e);
+                        } else {
+                            let lc = Arc::clone(&local_client);
+                            let rx = state_notify_rx.expect("state_notify_rx consumed once");
+                            tokio::spawn(async move {
+                                if let Err(e) = run_local_mqtt_event_loop(local_rx, lc, rx).await {
+                                    error!("Local MQTT event loop error: {}", e);
+                                }
+                            });
+
+                            local_client.start_calendar_publisher_task(
+                                app_config.calendar_mqtt_topic.clone(),
+                                app_config.calendar_sync_interval_secs,
+                            );
+                        }
+                    }
+                    Err(e) => error!("Failed to start local MQTT client: {}", e),
+                }
+            }
+
+            // ── Remote MQTT (if configured) ──────────────────────────────────
             if app_config.remote_mqtt_config.is_none() {
-                info!("Remote MQTT not configured - running without MQTT connection");
-                info!("Edge device running without MQTT. Press Ctrl+C to exit.");
-                
-                // Start web server to show status
-                start_web_server(config_arc, args.config, web_port).await?;
+                info!("Remote MQTT not configured - running without remote MQTT connection");
+                start_web_server(config_arc, args.config, web_port, Arc::clone(&toolguard_state)).await?;
                 return Ok(());
             }
-            
-            info!("Starting MQTT connection...");
-            
-            // Create MQTT client
-            let (mqtt_client, rx) = EdgeMqttClient::new(&app_config, config_arc.clone()).await?;
+
+            info!("Starting remote MQTT connection...");
+
+            let (mqtt_client, rx) = EdgeMqttClient::new(
+                &app_config,
+                config_arc.clone(),
+                Arc::clone(&toolguard_state),
+            ).await?;
             let mqtt_client = Arc::new(mqtt_client);
-            
-            // Subscribe to command topics
+
             mqtt_client.subscribe_to_commands()?;
-            
-            // Publish initial heartbeat
             mqtt_client.publish_heartbeat()?;
-            
-            // Publish initial device data
             mqtt_client.publish_device_data()?;
-            
-            // Start background tasks
             mqtt_client.start_heartbeat_task();
             mqtt_client.start_data_publisher_task();
-            
+
             info!("Edge device running. Press Ctrl+C to exit.");
-            
-            // Start web server in background
+
             let config_for_web = config_arc.clone();
             let config_path_for_web = args.config.clone();
+            let tgs_for_web = Arc::clone(&toolguard_state);
             tokio::spawn(async move {
-                if let Err(e) = start_web_server(config_for_web, config_path_for_web, web_port).await {
+                if let Err(e) = start_web_server(config_for_web, config_path_for_web, web_port, tgs_for_web).await {
                     error!("Web server error: {}", e);
                 }
             });
-            
-            // Run MQTT event loop with graceful shutdown
+
             tokio::select! {
                 result = run_mqtt_event_loop(rx, mqtt_client.clone()) => {
                     if let Err(e) = result {
@@ -186,11 +269,10 @@ async fn main() -> Result<()> {
                     info!("Received shutdown signal (Ctrl+C)");
                 }
             }
-            
-            // Graceful shutdown
+
             info!("Shutting down gracefully...");
             if let Err(e) = mqtt_client.disconnect() {
-                warn!("Error disconnecting from MQTT broker: {}", e);
+                warn!("Error disconnecting from remote MQTT broker: {}", e);
             }
         }
         AuthStatus::Denied => {
@@ -199,7 +281,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
     }
-    
+
     info!("Shutting down...");
     Ok(())
 }

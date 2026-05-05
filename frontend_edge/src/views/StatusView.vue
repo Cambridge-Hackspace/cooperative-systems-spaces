@@ -1,8 +1,7 @@
 <template>
-  <div class="min-h-screen flex items-center justify-center p-5">
-    <div class="card bg-base-100 shadow-2xl w-full max-w-2xl">
-      <!-- Header -->
-      <div class="card-body">
+  <div>
+    <!-- Header -->
+    <div>
         <div class="text-center mb-8">
           <div class="text-6xl mb-4">⚙️</div>
           <h1 class="text-3xl font-bold text-accent">{{ deviceName }}</h1>
@@ -168,7 +167,6 @@
             </div>
           </div>
         </div>
-      </div>
     </div>
   </div>
 </template>

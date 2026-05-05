@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["server", "cli", "edge", "css_lib"]
+members = ["server", "cli", "edge", "css_lib", "toolguard-test-ui", "toolguard-status-ui", "kiosk"]
 
 [workspace.dependencies]
 # Shared dependencies across workspace

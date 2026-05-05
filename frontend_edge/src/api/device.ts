@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { ApiResponse, DeviceStatus, RegistrationRequest } from '@/types'
+import type { ApiResponse, DeviceStatus, RegistrationRequest, SyncPayload } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -16,6 +16,11 @@ export const deviceApi = {
 
   async register(data: RegistrationRequest): Promise<ApiResponse<string>> {
     const response = await api.post<ApiResponse<string>>('/register', data)
+    return response.data
+  },
+
+  async getToolguardState(): Promise<ApiResponse<SyncPayload>> {
+    const response = await api.get<ApiResponse<SyncPayload>>('/toolguard/state')
     return response.data
   }
 }

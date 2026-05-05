@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::{
-    extract::State,
+    extract::{State, WebSocketUpgrade},
+    extract::ws::{Message, WebSocket},
     http::StatusCode,
     response::Html,
     routing::{get, post},
@@ -21,6 +22,7 @@ use tower_http::services::ServeDir;
 use crate::config::{Config, AuthStatus};
 use crate::registration::register_device;
 use crate::system_info::SystemInfo;
+use crate::toolguard::ToolGuardState;
 
 #[cfg(not(debug_assertions))]
 #[derive(RustEmbed, Clone)]
@@ -31,6 +33,7 @@ struct Assets;
 pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub config_path: String,
+    pub toolguard_state: Arc<ToolGuardState>,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,6 +156,58 @@ pub async fn register(
     }
 }
 
+/// GET /api/toolguard/ws - WebSocket endpoint that pushes state on every change
+pub async fn toolguard_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    ws.on_upgrade(move |socket| handle_toolguard_ws(socket, state))
+}
+
+async fn handle_toolguard_ws(mut socket: WebSocket, state: AppState) {
+    // Send current state immediately on connect
+    if let Some(payload) = state.toolguard_state.get_state() {
+        if let Ok(json) = serde_json::to_string(&payload) {
+            if socket.send(Message::Text(json.into())).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    let mut rx = state.toolguard_state.subscribe_ws();
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(json) => {
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// GET /api/toolguard/state - Return the current locally-cached toolguard sync payload
+pub async fn get_toolguard_state(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<crate::toolguard::SyncPayload>>, StatusCode> {
+    match state.toolguard_state.get_state() {
+        Some(payload) => Ok(Json(ApiResponse::success(payload))),
+        None => Ok(Json(ApiResponse::error("No toolguard state available yet".to_string()))),
+    }
+}
+
 /// Create the web server router
 #[cfg(not(debug_assertions))]
 pub fn create_router(state: AppState) -> Router {
@@ -199,6 +254,8 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/api/status", get(get_status))
         .route("/api/register", post(register))
+        .route("/api/toolguard/state", get(get_toolguard_state))
+        .route("/api/toolguard/ws", get(toolguard_ws))
         .fallback(serve_embedded)
         .with_state(state)
 }
@@ -214,6 +271,8 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/api/status", get(get_status))
         .route("/api/register", post(register))
+        .route("/api/toolguard/state", get(get_toolguard_state))
+        .route("/api/toolguard/ws", get(toolguard_ws))
         .fallback_service(serve_dir)
         .with_state(state)
 }
@@ -223,10 +282,12 @@ pub async fn start_web_server(
     config: Arc<RwLock<Config>>,
     config_path: String,
     port: u16,
+    toolguard_state: Arc<ToolGuardState>,
 ) -> Result<()> {
     let state = AppState {
         config,
         config_path,
+        toolguard_state,
     };
 
     let app = create_router(state);

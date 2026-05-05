@@ -10,7 +10,7 @@ pub mod profiles;
 pub mod tools;
 pub mod training;
 pub mod trainers;
-pub mod toolpass;
+pub mod toolguard;
 pub mod devices;
 
 use axum::Router;
@@ -26,7 +26,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/training", training::training_router())
         .nest("/trainers", trainers::trainers_router())
         .nest("/config", config::config_routes())
-        .nest("/toolpass", toolpass::toolpass_routes())
+        .nest("/toolguard", toolguard::toolguard_routes())
         .nest("/calendar", calendar::calendar_routes())
         .nest("/pages", pages::pages_routes())
         .nest("/devices", devices::devices_routes())

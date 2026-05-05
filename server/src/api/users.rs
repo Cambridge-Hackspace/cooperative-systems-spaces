@@ -168,6 +168,11 @@ async fn update_user(
     let updated_user = state.db.update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
 
+    // Broadcast toolguard state if active status changed (affects tool access)
+    if update_data.is_active.is_some() {
+        crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    }
+
     Ok(Json(ApiResponse::success_with_message(
         UserResponse::from(updated_user),
         "User updated successfully".to_string(),

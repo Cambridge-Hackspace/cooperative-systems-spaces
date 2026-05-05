@@ -28,7 +28,7 @@ get_if_addrs = "0.5"
 paho-mqtt = "0.13"
 
 # Web server dependencies
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 mime_guess = "2.0"

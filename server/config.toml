@@ -159,7 +159,7 @@ label = "Welding"
 value = "other"
 label = "Other"
 
-[toolpass]
+[toolguard]
 enabled = true
 profile_field = "card_id"
 
