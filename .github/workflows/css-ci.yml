@@ -38,6 +38,10 @@ jobs:
       #  run: npm run test -- --ci --coverage
 
       # BACKEND JOBS (SERVER & CLI)
+      - name: Install ALSA development libraries
+        if: (matrix.job == 'server' || matrix.job == 'cli') && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Set up Rust
         if: matrix.job == 'server' || matrix.job == 'cli'
         uses: actions-rs/toolchain@v1
