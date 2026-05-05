@@ -104,12 +104,12 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:latest .
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:${{ github.branch == 'master' && 'latest' || github.branch }} .
 
       - name: Push Docker image
         run: |
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/app:latest
+          docker push ghcr.io/${{ github.repository }}/app:${{ github.branch == 'master' && 'latest' || github.branch}}
 
   docker-edge:
     needs: checks
@@ -129,12 +129,12 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:latest -f Dockerfile.edge  .
+          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:${{ github.branch == 'master' && 'latest' || github.branch }} -f Dockerfile.edge  .
 
       - name: Push Docker image
         run: |
           docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/edge:latest
+          docker push ghcr.io/${{ github.repository }}/edge:${{ github.branch == 'master' && 'latest' || github.branch}}
 
 
   release:
