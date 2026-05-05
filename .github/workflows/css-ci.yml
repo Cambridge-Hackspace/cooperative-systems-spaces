@@ -173,6 +173,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
 
+      - name: Install frontend dependencies
+        working-directory: frontend_edge
+        run: npm ci
+
+      - name: Run frontend build
+        working-directory: frontend_edge
+        run: npm run build
+
       - name: Build CLI
         run: cargo build --release --bin css-cli
 
