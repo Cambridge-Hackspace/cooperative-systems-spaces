@@ -173,11 +173,11 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("MQTT service started");
             Some(mqtt_service_arc)
         } else {
-            warn!("Edge devices enabled but no MQTT configuration provided");
+            warn!("edge apparatuss enabled but no MQTT configuration provided");
             None
         }
     } else {
-        info!("Edge devices disabled, MQTT service not started");
+        info!("edge apparatuss disabled, MQTT service not started");
         None
     };
 

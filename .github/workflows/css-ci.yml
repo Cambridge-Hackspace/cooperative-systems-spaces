@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        job: [frontend, server, cli]
+        job: [frontend, server, cli, edge]
     steps:
       - uses: actions/checkout@v4
 
@@ -33,12 +33,12 @@ jobs:
         run: npm run build
 
       - name: Install frontend-edge dependencies
-        if: matrix.job == 'frontend'
+        if: matrix.job == 'frontend' || matrix.job == 'edge'
         working-directory: frontend_edge
         run: npm ci
 
       - name: Run frontend-edge build
-        if: matrix.job == 'frontend'
+        if: matrix.job == 'frontend' || matrix.job == 'edge'
         working-directory: frontend_edge
         run: npm run build
 
@@ -49,13 +49,13 @@ jobs:
       #  working-directory: frontend
       #  run: npm run test -- --ci --coverage
 
-      # BACKEND JOBS (SERVER & CLI)
+      # BACKEND JOBS (SERVER & CLI & EDGE)
       - name: Install addtl development libraries
-        if: (matrix.job == 'server' || matrix.job == 'cli') && runner.os == 'Linux'
+        if: (matrix.job == 'edge') && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
 
       - name: Set up Rust
-        if: matrix.job == 'server' || matrix.job == 'cli'
+        if: matrix.job == 'server' || matrix.job == 'cli' || matrix.job == 'edge'
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -66,17 +66,24 @@ jobs:
         if: matrix.job == 'server'
         working-directory: server
         run: |
-          cargo test --all
-#          cargo fmt --all -- --check
-#          cargo clippy --all-targets --all-features -- -D warnings
-
+          cargo test --bin css-server
+#          cargo fmt --bin css-server
+#          cargo clippy --all-targets --all-features -- -D warnings=
 
       - name: Run cli checks
         if: matrix.job == 'cli'
         working-directory: cli
         run: |
-          cargo test --all
-#          cargo fmt --all -- --check
+          cargo test --bin css-cli
+#          cargo fmt --bin css-cli
+#          cargo clippy --all-targets --all-features -- -D warnings=
+
+      - name: Run edge checks
+        if: matrix.job == 'edge'
+        working-directory: edge
+        run: |
+          cargo test --bin css-edge
+#          cargo fmt --bin css-edge
 #          cargo clippy --all-targets --all-features -- -D warnings=
 
   docker:
@@ -162,12 +169,18 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
+      - name: Install Edge Client Libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+
       - name: Build CLI
-        working-directory: cli
-        run: cargo build --release
+        run: cargo build --release --bin css-cli
+
+      - name: Build Edge
+        run: cargo build --release --bin css-edge
 
       - name: Build Server
-        run: cargo build --release
+        run: cargo build --release --bin css-server
 
       - name: Upload CLI artifacts
         uses: actions/upload-artifact@v4

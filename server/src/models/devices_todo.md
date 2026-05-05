@@ -1,7 +1,7 @@
 # Devices
 
 This project will support "devices" for spaces that implement either control or informational services running on local space networks. There are two types
-- Edge Devices will listen for MQTT messages from the Space Network and forward them to the Space Server, as well as recieve commands from the Space Server over the same link.
+- edge apparatuss will listen for MQTT messages from the Space Network and forward them to the Space Server, as well as recieve commands from the Space Server over the same link.
 - Kiosk Devices will be used to display the Space Information on a mounted kiosk display device, such as calendar, weather, etc.
 
 These devices communicate with the Space Server via MQTT, apart from registration which happens over REST endppints.

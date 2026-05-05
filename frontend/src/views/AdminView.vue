@@ -91,7 +91,7 @@
             </svg>
             Device Management
           </h2>
-          <p>Manage edge devices, generate invite codes, and monitor device status.</p>
+          <p>Manage edge apparatuss, generate invite codes, and monitor device status.</p>
           <div class="card-actions justify-end">
             <router-link to="/admin/devices" class="btn btn-primary btn-sm">
               Manage Devices

@@ -177,7 +177,7 @@
           <div class="invite-details">
             <p><strong>Expires:</strong> {{ formatExpiry(generatedInvite.expires_at) }}</p>
             <p class="help-text">
-              Use this code with the edge device registration command or web UI
+              Use this code with the edge apparatus registration command or web UI
             </p>
           </div>
 
@@ -193,7 +193,7 @@
 
         <div v-else>
           <div class="modal-body">
-            <p>Generate a new device invite code for registering an edge device.</p>
+            <p>Generate a new device invite code for registering an edge apparatus.</p>
             <p class="help-text">The code will be valid for 24 hours.</p>
           </div>
 

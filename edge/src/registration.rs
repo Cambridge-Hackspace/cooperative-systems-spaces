@@ -42,7 +42,7 @@ struct EdgeMqttConfig {
     mqtt_namespace: String,
 }
 
-/// Register the edge device with the Space Server
+/// Register the edge apparatus with the Space Server
 pub async fn register_device(
     instance_url: &str,
     device_code: &str,

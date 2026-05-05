@@ -57,7 +57,7 @@ pub struct RegisterDeviceResponse {
     pub mqtt_config: Option<EdgeMqttConfig>,
 }
 
-/// MQTT configuration for edge devices
+/// MQTT configuration for edge apparatuss
 #[derive(Debug, Serialize)]
 pub struct EdgeMqttConfig {
     pub mqtt_instance_url: String,
@@ -283,7 +283,7 @@ pub async fn register_device(
     });
     
     if mqtt_config.is_none() {
-        tracing::warn!("No MQTT configuration found in server config for edge devices");
+        tracing::warn!("No MQTT configuration found in server config for edge apparatuss");
     }
 
     Ok((

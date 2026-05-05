@@ -195,7 +195,7 @@ const activeTab = ref<'web' | 'cli'>('web')
 
 let pollInterval: number | null = null
 
-const deviceName = computed(() => status.value.device_name || 'Edge Device')
+const deviceName = computed(() => status.value.device_name || 'edge apparatus')
 
 const statusText = computed(() => {
   const statusMap = {

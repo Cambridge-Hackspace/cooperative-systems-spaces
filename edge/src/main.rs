@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
 
-                info!("Registration complete! Please restart the edge device.");
+                info!("Registration complete! Please restart the edge apparatus.");
                 return Ok(());
             }
         }
@@ -246,7 +246,7 @@ async fn main() -> Result<()> {
             mqtt_client.start_heartbeat_task();
             mqtt_client.start_data_publisher_task();
 
-            info!("Edge device running. Press Ctrl+C to exit.");
+            info!("edge apparatus running. Press Ctrl+C to exit.");
 
             let config_for_web = config_arc.clone();
             let config_path_for_web = args.config.clone();

@@ -1,6 +1,6 @@
-# Edge Device Frontend
+# edge apparatus Frontend
 
-Modern Vue 3 + TypeScript frontend for the Edge Device status and management interface.
+Modern Vue 3 + TypeScript frontend for the edge apparatus status and management interface.
 
 ## Features
 
@@ -68,27 +68,27 @@ frontend_edge/
 
 ## API Endpoints
 
-The frontend expects these API endpoints from the edge device:
+The frontend expects these API endpoints from the edge apparatus:
 
 - `GET /api/status` - Get current device status
 - `POST /api/register` - Register device with Space Server
 
 ## Deployment
 
-To deploy to the edge device:
+To deploy to the edge apparatus:
 
 1. Build the frontend:
    ```bash
    npm run build
    ```
 
-2. Copy the `dist/` directory contents to the edge device's static file location
+2. Copy the `dist/` directory contents to the edge apparatus's static file location
 
-3. Update the edge device server to serve these files
+3. Update the edge apparatus server to serve these files
 
 ## Configuration
 
-The Vite dev server proxies API requests to `http://localhost:8080` (the edge device default port).
+The Vite dev server proxies API requests to `http://localhost:8080` (the edge apparatus default port).
 
 To change the API proxy target, edit `vite.config.ts`:
 

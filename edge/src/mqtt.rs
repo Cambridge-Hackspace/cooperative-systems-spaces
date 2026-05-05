@@ -27,7 +27,7 @@ struct NameUpdateMessage {
     name: String,
 }
 
-/// MQTT Client Manager for edge device
+/// MQTT Client Manager for edge apparatus
 pub struct EdgeMqttClient {
     client: mqtt::AsyncClient,
     device_id: String,

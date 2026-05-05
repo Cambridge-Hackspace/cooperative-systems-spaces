@@ -135,13 +135,13 @@ pub async fn register(
                 Ok(new_config) => {
                     *state.config.write().unwrap() = new_config;
                     Ok(Json(ApiResponse::success(
-                        "Registration successful! Please restart the edge device.".to_string()
+                        "Registration successful! Please restart the edge apparatus.".to_string()
                     )))
                 }
                 Err(e) => {
                     error!("Failed to reload config after registration: {}", e);
                     Ok(Json(ApiResponse::success(
-                        "Registration successful! Please restart the edge device.".to_string()
+                        "Registration successful! Please restart the edge apparatus.".to_string()
                     )))
                 }
             }
