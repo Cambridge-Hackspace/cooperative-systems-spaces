@@ -4,7 +4,7 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend_edge
 
 # Copy package files
-COPY frontend/package*.json ./
+COPY frontend_edge/package*.json ./
 
 # Install dependencies
 RUN npm ci
@@ -26,6 +26,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
+
+# Copy built frontend assets from frontend-builder stage
+COPY --from=frontend-builder /app/frontend_edge/dist ./frontend_edge/dist
 
 # Build only the server in release mode (skip edge components in dockerfile)
 RUN cargo build --release --package css-edge
