@@ -215,7 +215,7 @@ jobs:
         run: cargo build --release --bin css-edge
 
       - name: Build Server
-        if: runner.os != 'Macos' || runner.os != 'Windows'
+        if: runner.os == 'Linux'
         run: cargo build --release --bin css-server
 
       - name: Upload CLI artifacts
