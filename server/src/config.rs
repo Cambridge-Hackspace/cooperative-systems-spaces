@@ -454,7 +454,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_address: "127.0.0.1:4399".to_string(),
+            bind_address: "0.0.0.0:4399".to_string(),
             log_requests: true,
             request_timeout_seconds: 30,
             max_request_body_size: 16 * 1024 * 1024, // 16MB
