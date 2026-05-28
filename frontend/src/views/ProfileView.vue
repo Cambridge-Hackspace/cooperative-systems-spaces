@@ -16,6 +16,17 @@
       class="mb-8"
     />
 
+    <!-- Two-factor link (only when viewing own profile AND MFA is enabled server-side) -->
+    <div v-if="isOwnProfile && mfaAvailable" class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4">
+      <div>
+        <div class="font-medium">Two-factor authentication</div>
+        <div class="text-sm text-base-content/70">
+          Add an authenticator app or security key to your account.
+        </div>
+      </div>
+      <router-link to="/profile/mfa" class="btn btn-primary btn-sm">Manage</router-link>
+    </div>
+
     <!-- Theme Picker (only shown for own profile) -->
     <ThemePicker
       v-if="isOwnProfile"
@@ -30,7 +41,7 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import UserProfile from '@/components/UserProfile.vue'
 import ThemePicker from '@/components/ThemePicker.vue'
-import { apiClient } from '@/utils/api'
+import { apiClient, mfaApi } from '@/utils/api'
 import type { User } from '@/types'
 
 const route = useRoute()
@@ -40,6 +51,8 @@ const authStore = useAuthStore()
 const user = ref<User | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+/** True only after we've confirmed the server has MFA enabled. */
+const mfaAvailable = ref(false)
 
 // Computed properties
 const userId = computed(() => {
@@ -78,6 +91,16 @@ async function fetchUser() {
 // Lifecycle
 onMounted(async () => {
   await fetchUser()
+  // Decide whether to surface the two-factor link without giving away whether
+  // *this* user is enrolled — we just need the server-wide enabled flag.
+  if (isOwnProfile.value) {
+    try {
+      const s = await mfaApi.status()
+      mfaAvailable.value = !!(s.success && s.data?.enabled)
+    } catch {
+      mfaAvailable.value = false
+    }
+  }
 })
 
 // Watch for route changes

@@ -2288,3 +2288,256 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 }
+
+// ---------------------------------------------------------------------------
+// MFA system
+// ---------------------------------------------------------------------------
+
+impl DatabaseManager {
+    // --- TOTP ------------------------------------------------------------
+
+    pub fn get_user_totp(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<Option<crate::models::UserMfaTotp>, DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_mfa_totp
+            .filter(user_id.eq(uid))
+            .select(crate::models::UserMfaTotp::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Replace any existing TOTP row for the user with a new unconfirmed one.
+    /// Returns the freshly-inserted row.
+    pub fn replace_user_totp_unconfirmed(
+        &self,
+        uid: uuid::Uuid,
+        new_secret_base32: &str,
+    ) -> Result<crate::models::UserMfaTotp, DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(user_mfa_totp.filter(user_id.eq(uid))).execute(conn)?;
+            let new_row = crate::models::NewUserMfaTotp {
+                user_id: uid,
+                secret_base32: new_secret_base32.to_string(),
+            };
+            diesel::insert_into(user_mfa_totp)
+                .values(&new_row)
+                .returning(crate::models::UserMfaTotp::as_returning())
+                .get_result(conn)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn confirm_user_totp(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+            .set((
+                confirmed_at.eq(Some(chrono::Utc::now())),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    pub fn delete_user_totp(&self, uid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(user_mfa_totp.filter(user_id.eq(uid)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // --- WebAuthn --------------------------------------------------------
+
+    pub fn list_user_webauthn(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::UserMfaWebauthn>, DatabaseError> {
+        use crate::schema::user_mfa_webauthn::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_mfa_webauthn
+            .filter(user_id.eq(uid))
+            .order(created_at.desc())
+            .select(crate::models::UserMfaWebauthn::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn insert_user_webauthn(
+        &self,
+        new_row: &crate::models::NewUserMfaWebauthn,
+    ) -> Result<crate::models::UserMfaWebauthn, DatabaseError> {
+        use crate::schema::user_mfa_webauthn;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(user_mfa_webauthn::table)
+            .values(new_row)
+            .returning(crate::models::UserMfaWebauthn::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Delete one of a user's WebAuthn credentials by row id.
+    pub fn delete_user_webauthn(
+        &self,
+        uid: uuid::Uuid,
+        row_id: uuid::Uuid,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::user_mfa_webauthn::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(user_mfa_webauthn.filter(id.eq(row_id)).filter(user_id.eq(uid)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn touch_user_webauthn_last_used(
+        &self,
+        uid: uuid::Uuid,
+        cred_id_bytes: &[u8],
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_mfa_webauthn::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(
+            user_mfa_webauthn
+                .filter(user_id.eq(uid))
+                .filter(credential_id.eq(cred_id_bytes)),
+        )
+        .set(last_used_at.eq(Some(chrono::Utc::now())))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    // --- Recovery codes --------------------------------------------------
+
+    pub fn replace_user_recovery_codes(
+        &self,
+        uid: uuid::Uuid,
+        hashes: Vec<String>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_mfa_recovery_codes::dsl::*;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(user_mfa_recovery_codes.filter(user_id.eq(uid))).execute(conn)?;
+            let rows: Vec<crate::models::NewUserMfaRecoveryCode> = hashes
+                .into_iter()
+                .map(|h| crate::models::NewUserMfaRecoveryCode {
+                    user_id: uid,
+                    code_hash: h,
+                })
+                .collect();
+            if !rows.is_empty() {
+                diesel::insert_into(user_mfa_recovery_codes)
+                    .values(&rows)
+                    .execute(conn)?;
+            }
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Unused recovery codes for the user. Caller hashes-and-compares.
+    pub fn list_unused_recovery_codes(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::UserMfaRecoveryCode>, DatabaseError> {
+        use crate::schema::user_mfa_recovery_codes::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_mfa_recovery_codes
+            .filter(user_id.eq(uid))
+            .filter(used_at.is_null())
+            .select(crate::models::UserMfaRecoveryCode::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn mark_recovery_code_used(
+        &self,
+        code_id: uuid::Uuid,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_mfa_recovery_codes::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(user_mfa_recovery_codes.filter(id.eq(code_id)))
+            .set(used_at.eq(Some(chrono::Utc::now())))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    pub fn count_unused_recovery_codes(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<i64, DatabaseError> {
+        use crate::schema::user_mfa_recovery_codes::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_mfa_recovery_codes
+            .filter(user_id.eq(uid))
+            .filter(used_at.is_null())
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // --- users.mfa_enrolled_at -------------------------------------------
+
+    pub fn set_user_mfa_enrolled(
+        &self,
+        uid: uuid::Uuid,
+        when: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(users.filter(id.eq(uid)))
+            .set(mfa_enrolled_at.eq(when))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// Wipe every MFA artifact for a user in a single transaction and clear
+    /// `mfa_enrolled_at`. Used by the admin "reset MFA" recovery action.
+    pub fn reset_user_mfa(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(
+                crate::schema::user_mfa_totp::table
+                    .filter(crate::schema::user_mfa_totp::user_id.eq(uid)),
+            )
+            .execute(conn)?;
+            diesel::delete(
+                crate::schema::user_mfa_webauthn::table
+                    .filter(crate::schema::user_mfa_webauthn::user_id.eq(uid)),
+            )
+            .execute(conn)?;
+            diesel::delete(
+                crate::schema::user_mfa_recovery_codes::table
+                    .filter(crate::schema::user_mfa_recovery_codes::user_id.eq(uid)),
+            )
+            .execute(conn)?;
+            diesel::update(crate::schema::users::table.filter(crate::schema::users::id.eq(uid)))
+                .set(crate::schema::users::mfa_enrolled_at.eq::<Option<chrono::DateTime<chrono::Utc>>>(None))
+                .execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Recompute `users.mfa_enrolled_at` for a user based on whether any
+    /// confirmed method exists. Call after add/remove operations.
+    pub fn recompute_user_mfa_enrolled(&self, uid: uuid::Uuid) -> Result<bool, DatabaseError> {
+        let has_totp = self
+            .get_user_totp(uid)?
+            .map(|t| t.confirmed_at.is_some())
+            .unwrap_or(false);
+        let has_webauthn = !self.list_user_webauthn(uid)?.is_empty();
+        let enrolled = has_totp || has_webauthn;
+        self.set_user_mfa_enrolled(uid, if enrolled { Some(chrono::Utc::now()) } else { None })?;
+        Ok(enrolled)
+    }
+}

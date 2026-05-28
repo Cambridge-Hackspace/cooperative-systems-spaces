@@ -368,6 +368,81 @@ pub struct AuthConfig {
     pub session_timeout_minutes: u32,
     /// Enable password reset functionality
     pub password_reset_enabled: bool,
+    /// Multi-factor authentication settings
+    #[serde(default)]
+    pub mfa: AuthMfaConfig,
+}
+
+/// Who is required to enroll in MFA before they can use the system fully.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MfaEnforcement {
+    /// Users may opt in; never blocks unenrolled users.
+    OptIn,
+    /// Staff and Admin must enroll. Members/Newbies remain opt-in.
+    RequiredForStaff,
+    /// All users must enroll on next login.
+    RequiredForAll,
+}
+
+impl Default for MfaEnforcement {
+    fn default() -> Self {
+        Self::OptIn
+    }
+}
+
+/// Multi-factor authentication configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthMfaConfig {
+    /// Master toggle. When false, MFA is unavailable regardless of other fields.
+    pub enabled: bool,
+    /// Who must enroll.
+    pub enforcement: MfaEnforcement,
+    /// Whether TOTP (authenticator app) is offered.
+    pub allow_totp: bool,
+    /// Whether WebAuthn (Yubikey / Touch ID / passkey) is offered.
+    pub allow_webauthn: bool,
+    /// Issuer shown in TOTP app entries (and in the otpauth URI).
+    pub issuer: String,
+    /// How many recovery codes to generate per user.
+    pub recovery_code_count: u32,
+    /// WebAuthn Relying Party ID (host, no scheme/port). Example: "example.org".
+    pub relying_party_id: String,
+    /// Human-readable Relying Party name shown by the authenticator.
+    pub relying_party_name: String,
+    /// Full origin (scheme + host + optional port) the browser will report.
+    /// Example: "https://example.org".
+    pub relying_party_origin: String,
+}
+
+impl Default for AuthMfaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            enforcement: MfaEnforcement::OptIn,
+            allow_totp: true,
+            allow_webauthn: true,
+            issuer: "Cooperative Systems Spaces".to_string(),
+            recovery_code_count: 10,
+            relying_party_id: "localhost".to_string(),
+            relying_party_name: "Cooperative Systems Spaces".to_string(),
+            relying_party_origin: "http://localhost:3000".to_string(),
+        }
+    }
+}
+
+impl AuthMfaConfig {
+    /// True when the given role must enroll under this enforcement setting.
+    pub fn is_required_for(&self, role: &crate::models::UserRole) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        use crate::models::UserRole::*;
+        match self.enforcement {
+            MfaEnforcement::OptIn => false,
+            MfaEnforcement::RequiredForStaff => matches!(role, Staff | Admin),
+            MfaEnforcement::RequiredForAll => true,
+        }
+    }
 }
 
 impl Default for AuthConfig {
@@ -380,6 +455,7 @@ impl Default for AuthConfig {
             password_min_length: 8,
             session_timeout_minutes: 1440, // 24 hours
             password_reset_enabled: true,
+            mfa: AuthMfaConfig::default(),
         }
     }
 }

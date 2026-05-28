@@ -62,6 +62,7 @@
               <th>Email</th>
               <th>Role</th>
               <th>Status</th>
+              <th>MFA</th>
               <th>Member Since</th>
               <th class="text-center">Actions</th>
             </tr>
@@ -138,6 +139,25 @@
                     <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                     </svg>
+                  </button>
+                </div>
+              </td>
+
+              <!-- MFA -->
+              <td>
+                <div class="flex items-center gap-2">
+                  <span class="badge badge-sm" :class="user.mfa_enrolled_at ? 'badge-success' : 'badge-ghost'">
+                    {{ user.mfa_enrolled_at ? 'Enrolled' : '—' }}
+                  </span>
+                  <button
+                    v-if="canResetMfa && user.mfa_enrolled_at"
+                    class="btn btn-ghost btn-xs"
+                    :disabled="resettingMfaFor === user.id"
+                    title="Reset MFA (lockout recovery)"
+                    @click="resetMfa(user)"
+                  >
+                    <span v-if="resettingMfaFor === user.id" class="loading loading-spinner loading-xs"></span>
+                    <span v-else>Reset</span>
                   </button>
                 </div>
               </td>
@@ -228,7 +248,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { userApi } from '@/utils/api'
+import { adminApi, userApi } from '@/utils/api'
 import type { User, UserRole } from '@/types'
 import { UserRole as UserRoleEnum } from '@/types'
 
@@ -267,6 +287,33 @@ const availableRoles = computed(() => [
 // Computed properties
 const canEditRoles = computed(() => authStore.isAdmin)
 const canToggleUserStatus = computed(() => authStore.isAdmin)
+const canResetMfa = computed(() => authStore.isAdmin)
+
+// MFA reset state
+const resettingMfaFor = ref<string | null>(null)
+
+async function resetMfa(user: User) {
+  if (!confirm(
+    `Reset MFA for ${user.full_name} (@${user.username})? ` +
+    `Their authenticator app, security keys, and recovery codes will all be removed. ` +
+    `They will be able to sign in with just their password until they re-enroll.`
+  )) return
+  resettingMfaFor.value = user.id
+  try {
+    const resp = await adminApi.resetUserMfa(user.id)
+    if (resp.success) {
+      // Optimistically clear locally so the badge updates without a refetch.
+      user.mfa_enrolled_at = null
+      emit('userUpdated', user)
+    } else {
+      emit('error', resp.error || 'Failed to reset MFA')
+    }
+  } catch (e: any) {
+    emit('error', e?.response?.data?.error || 'Network error resetting MFA')
+  } finally {
+    resettingMfaFor.value = null
+  }
+}
 
 // Pagination helpers
 const visiblePages = computed(() => {

@@ -36,6 +36,8 @@ export interface User {
   role: UserRole
   created_at: string
   updated_at: string
+  /** Set when the user has at least one confirmed MFA method. */
+  mfa_enrolled_at?: string | null
   profile: Record<string, any>
   meta: Record<string, any>
 }
@@ -99,6 +101,55 @@ export interface LoginResponse {
   token: string
   user: User
   expires_in: number
+  /** Set by the server when MFA enforcement requires this user to enroll. */
+  must_enroll_mfa?: boolean
+}
+
+/** Returned by `/auth/login` when the user has MFA enrolled. */
+export interface MfaChallenge {
+  mfa_required: true
+  challenge_token: string
+  methods: Array<'totp' | 'webauthn' | 'recovery'>
+  /** A serialized PublicKeyCredentialRequestOptionsJSON for navigator.credentials.get(). */
+  webauthn_options: unknown | null
+}
+
+export type LoginOutcome = LoginResponse | MfaChallenge
+
+export function isMfaChallenge(x: unknown): x is MfaChallenge {
+  return !!x && typeof x === 'object' && (x as any).mfa_required === true
+}
+
+// ===== MFA =====
+
+export interface MfaStatus {
+  enabled: boolean
+  totp_enrolled: boolean
+  webauthn_count: number
+  recovery_codes_remaining: number
+  must_enroll: boolean
+}
+
+export interface MfaTotpSetup {
+  secret_base32: string
+  otpauth_uri: string
+}
+
+export interface MfaRecoveryCodes {
+  recovery_codes: string[]
+}
+
+export interface MfaWebauthnCredential {
+  id: string
+  label: string
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface MfaWebauthnRegisterBegin {
+  challenge_token: string
+  /** Server-formatted PublicKeyCredentialCreationOptionsJSON. */
+  options: unknown
 }
 
 export interface RegisterRequest {

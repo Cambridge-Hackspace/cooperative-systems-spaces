@@ -277,12 +277,56 @@ export const adminApi = {
   getAuditLogs(page: number = 1, per_page: number = 50, event_type?: string): Promise<ApiResponse<AuditLog[]>> {
     const params: any = { page, per_page }
     if (event_type) params.event_type = event_type
-    
+
     return apiClient.get<AuditLog[]>('/admin/audit-logs', params)
       .catch(error => {
         console.error('Error fetching audit logs:', error)
         return { success: false, error: error.message || 'Failed to fetch audit logs', data: [] }
       })
+  },
+
+  /** Wipe every MFA artifact for a user — lockout recovery (admin only). */
+  resetUserMfa(userId: string): Promise<ApiResponse<{ user_id: string }>> {
+    return apiClient.delete<{ user_id: string }>(`/admin/users/${userId}/mfa`)
+  },
+}
+
+// MFA API functions
+export const mfaApi = {
+  status() {
+    return apiClient.get<import('@/types').MfaStatus>('/auth/mfa/status')
+  },
+  totpSetup() {
+    return apiClient.post<import('@/types').MfaTotpSetup>('/auth/mfa/totp/setup')
+  },
+  totpConfirm(code: string) {
+    return apiClient.post<import('@/types').MfaRecoveryCodes>('/auth/mfa/totp/confirm', { code })
+  },
+  totpDisable() {
+    return apiClient.delete<void>('/auth/mfa/totp')
+  },
+  listWebauthn() {
+    return apiClient.get<import('@/types').MfaWebauthnCredential[]>('/auth/mfa/webauthn')
+  },
+  webauthnRegisterBegin(label: string) {
+    return apiClient.post<import('@/types').MfaWebauthnRegisterBegin>('/auth/mfa/webauthn/register/begin', { label })
+  },
+  webauthnRegisterFinish(challenge_token: string, response: unknown) {
+    return apiClient.post<{ credential_id: string }>('/auth/mfa/webauthn/register/finish', { challenge_token, response })
+  },
+  webauthnRemove(id: string) {
+    return apiClient.delete<void>(`/auth/mfa/webauthn/${id}`)
+  },
+  regenerateRecoveryCodes() {
+    return apiClient.post<import('@/types').MfaRecoveryCodes>('/auth/mfa/recovery-codes/regenerate')
+  },
+  verify(body: {
+    challenge_token: string
+    method: 'totp' | 'webauthn' | 'recovery'
+    code?: string
+    response?: unknown
+  }) {
+    return apiClient.post<import('@/types').LoginResponse>('/auth/mfa/verify', body)
   },
 }
 

@@ -3,12 +3,14 @@ mod training;
 pub(crate) mod trainers;
 mod devices;
 mod webhooks;
+mod mfa;
 
 pub use tools::*;
 pub use training::*;
 pub use trainers::*;
 pub use devices::*;
 pub use webhooks::*;
+pub use mfa::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};
@@ -102,6 +104,9 @@ pub struct User {
     pub role: UserRole,
     pub profile: serde_json::Value,
     pub meta: serde_json::Value,
+    /// Set when the user confirms their first MFA method; cleared when the
+    /// last method is removed. Used to short-circuit `has any MFA?` checks.
+    pub mfa_enrolled_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -234,6 +239,15 @@ pub enum AuditEventType {
     WebhookAuthHeaderCreated,
     WebhookAuthHeaderUpdated,
     WebhookAuthHeaderDeleted,
+    // MFA events
+    MfaTotpEnrolled,
+    MfaTotpDisabled,
+    MfaWebauthnRegistered,
+    MfaWebauthnRemoved,
+    MfaRecoveryCodesRegenerated,
+    MfaRecoveryCodeUsed,
+    MfaLoginPassed,
+    MfaLoginFailed,
 }
 
 impl AuditEventType {
@@ -277,6 +291,14 @@ impl AuditEventType {
             Self::WebhookAuthHeaderCreated => "webhook_auth_header_created",
             Self::WebhookAuthHeaderUpdated => "webhook_auth_header_updated",
             Self::WebhookAuthHeaderDeleted => "webhook_auth_header_deleted",
+            Self::MfaTotpEnrolled => "mfa_totp_enrolled",
+            Self::MfaTotpDisabled => "mfa_totp_disabled",
+            Self::MfaWebauthnRegistered => "mfa_webauthn_registered",
+            Self::MfaWebauthnRemoved => "mfa_webauthn_removed",
+            Self::MfaRecoveryCodesRegenerated => "mfa_recovery_codes_regenerated",
+            Self::MfaRecoveryCodeUsed => "mfa_recovery_code_used",
+            Self::MfaLoginPassed => "mfa_login_passed",
+            Self::MfaLoginFailed => "mfa_login_failed",
         }
     }
 
@@ -323,6 +345,14 @@ impl AuditEventType {
             WebhookAuthHeaderCreated,
             WebhookAuthHeaderUpdated,
             WebhookAuthHeaderDeleted,
+            MfaTotpEnrolled,
+            MfaTotpDisabled,
+            MfaWebauthnRegistered,
+            MfaWebauthnRemoved,
+            MfaRecoveryCodesRegenerated,
+            MfaRecoveryCodeUsed,
+            MfaLoginPassed,
+            MfaLoginFailed,
         ]
     }
 }

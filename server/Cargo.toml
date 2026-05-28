@@ -52,6 +52,11 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+
+# Multi-factor auth
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+base32 = "0.5"
 validator = { version = "0.18.1", features = ["derive"] }
 # axum-extra = { version = "0.9", default-features = false, features = ["typed-header"] }  # Temporarily disabled
 tower = { version = "0.5.2", features = ["util"] }

@@ -32,6 +32,14 @@ const router = createRouter({
       }
     },
     {
+      path: '/profile/mfa',
+      name: 'profile-mfa',
+      component: () => import('@/components/MfaSettings.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/profile/:userId?',
       name: 'profile',
       component: () => import('@/views/ProfileView.vue'),

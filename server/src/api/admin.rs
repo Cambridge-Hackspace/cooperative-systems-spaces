@@ -26,6 +26,9 @@ pub struct RosterUser {
     pub is_active: bool,
     pub role: UserRole,
     pub created_at: chrono::NaiveDateTime,
+    /// `Some(_)` when the user has at least one confirmed MFA method.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mfa_enrolled_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +43,7 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/users/{user_id}/role", put(update_user_role))
         .route("/users/{user_id}/activate", put(activate_user))
         .route("/users/{user_id}/deactivate", put(deactivate_user))
+        .route("/users/{user_id}/mfa", axum::routing::delete(reset_user_mfa))
         .route("/audit-logs", get(get_audit_logs))
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
@@ -100,6 +104,7 @@ async fn get_roster(
             is_active: user.is_active,
             role: user.role,
             created_at: user.created_at,
+            mfa_enrolled_at: user.mfa_enrolled_at,
         })
         .collect();
 
@@ -149,6 +154,7 @@ async fn update_user_role(
         is_active: updated_user.is_active,
         role: updated_user.role.clone(),
         created_at: updated_user.created_at,
+        mfa_enrolled_at: updated_user.mfa_enrolled_at,
     };
 
     // Log the role change
@@ -215,6 +221,7 @@ async fn activate_user(
         is_active: updated_user.is_active,
         role: updated_user.role,
         created_at: updated_user.created_at,
+        mfa_enrolled_at: updated_user.mfa_enrolled_at,
     };
 
     // Log the activation
@@ -279,6 +286,7 @@ async fn deactivate_user(
         is_active: updated_user.is_active,
         role: updated_user.role,
         created_at: updated_user.created_at,
+        mfa_enrolled_at: updated_user.mfa_enrolled_at,
     };
 
     // Log the deactivation
@@ -381,4 +389,39 @@ async fn refresh_site_pages(
             ))
         }
     }
+}
+
+/// DELETE /api/admin/users/{user_id}/mfa — wipe every MFA artifact for a user.
+/// Used for lockout recovery; the user will be able to log in with just a
+/// password until they re-enroll. Always audited.
+async fn reset_user_mfa(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let target = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    state.db.reset_user_mfa(user_id).map_err(ApiError::from)?;
+
+    // Emit one event per disabled artifact category so webhook subscribers
+    // can see exactly what was reset, plus an aggregate audit entry.
+    if let Err(e) = state.audit_logger.log_event(
+        crate::models::AuditEventType::MfaTotpDisabled,
+        Some(user_id),
+        Some(admin_user.0.id),
+        serde_json::json!({ "reason": "admin_reset", "target_username": target.username }),
+        None,
+        None,
+    ).await {
+        tracing::warn!("Failed to log MFA reset audit: {}", e);
+    }
+
+    Ok(Json(ApiResponse::success_with_message(
+        serde_json::json!({ "user_id": user_id }),
+        format!("MFA reset for user {}", target.username),
+    )))
 }
