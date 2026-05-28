@@ -43,6 +43,8 @@ export interface User {
 // Profile types
 export enum ProfileFieldType {
   Text = 'Text',
+  /** Ordered list of free-form strings, edited as chips. */
+  TextArray = 'TextArray',
   Email = 'Email',
   Phone = 'Phone',
   Number = 'Number',

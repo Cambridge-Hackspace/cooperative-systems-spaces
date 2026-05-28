@@ -493,6 +493,9 @@ pub struct UserConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProfileFieldType {
     Text,
+    /// An ordered list of free-form text values (e.g. multiple RFID card IDs
+    /// per user). Stored as a JSON array of strings in `profile`.
+    TextArray,
     Email,
     Phone,
     Number,

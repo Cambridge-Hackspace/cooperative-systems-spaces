@@ -185,6 +185,7 @@
                       >
                         <option value="">Select type...</option>
                         <option value="Text">Text</option>
+                        <option value="TextArray">Text (list / multiple values)</option>
                         <option value="Email">Email</option>
                         <option value="Phone">Phone</option>
                         <option value="Number">Number</option>

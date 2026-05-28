@@ -1,0 +1,49 @@
+# CSS Edge Client Configuration
+# Copy to edge.config.toml and adjust for your environment.
+
+# Display name for this edge apparatus.
+# Auto-generated (adjective-color-animal) if omitted.
+# name = "clever-blue-falcon"
+
+# Authentication status — set by the registration flow, do not edit manually.
+auth_status = "Unauthenticated"
+
+# How often (seconds) to poll the server for ToolGuard state. Default: 300.
+# toolguard_sync_interval_secs = 300
+
+# Local MQTT topic to publish calendar events on. Default: "cs/spaces/calendar/events".
+# Must match calendar_topic in kiosk.toml.
+# calendar_mqtt_topic = "cs/spaces/calendar/events"
+
+# How often (seconds) to fetch calendar events from the server. Default: 300.
+# calendar_sync_interval_secs = 300
+
+# ── Local MQTT broker ─────────────────────────────────────────────────────────
+# The broker running on-site that kiosks and hardware subscribe to.
+# Required for ToolGuard hardware integration and kiosk publishing.
+
+# [local_mqtt_config]
+# mqtt_instance_url = "tcp://localhost:1883"
+# mqtt_client_id    = "css-edge-local"
+# mqtt_namespace    = "cs/spaces"
+# # mqtt_username   = ""
+# # mqtt_password   = ""
+
+# ── Remote MQTT broker ────────────────────────────────────────────────────────
+# The broker on the central Space Server, used to receive ToolGuard state pushes
+# and publish device heartbeats/data.
+
+# [remote_mqtt_config]
+# mqtt_instance_url = "mqtt://space.example.com:1883"
+# mqtt_client_id    = "css-edge-remote"
+# mqtt_namespace    = "cs/spaces"
+# # mqtt_username   = ""
+# # mqtt_password   = ""
+
+# ── Remote device info ────────────────────────────────────────────────────────
+# Populated automatically by `edge register`. Do not edit manually.
+
+# [remote_device_info]
+# remote_id           = ""
+# remote_auth_token   = ""
+# remote_instance_url = "https://space.example.com"

@@ -340,20 +340,27 @@ impl DatabaseManager {
     pub fn find_user_by_profile_field(&self, field_name: &str, field_value: &str) -> Result<Option<User>, DatabaseError> {
         use diesel::dsl::sql;
         use diesel::sql_types::{Text, Bool};
-        
+
         let mut conn = self.get_connection()?;
-        
-        // Query using PostgreSQL's JSONB ->> operator (get as text)
-        // This checks if profile->>'field_name' equals the value as a string
-        let query_string = format!("profile->>'{}'", field_name);
-        
+
+        // Match either a scalar text value (`profile->>'field' = $1`) or a
+        // text element inside an array (`profile->'field' ? $1`). This lets a
+        // single profile field hold either one identifier (e.g. a card ID) or
+        // a list of identifiers.
+        let val = field_value.to_string();
+        let predicate = sql::<Bool>(&format!("(profile->>'{}' = ", field_name))
+            .bind::<Text, _>(val.clone())
+            .sql(&format!(") OR (profile->'{}' ? ", field_name))
+            .bind::<Text, _>(val)
+            .sql(")");
+
         let user = users::table
             .select(User::as_select())
-            .filter(sql::<Bool>(&format!("{} = ", query_string)).bind::<Text, _>(field_value))
+            .filter(predicate)
             .first::<User>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)?;
-            
+
         Ok(user)
     }
 
@@ -1836,17 +1843,35 @@ impl DatabaseManager {
         let mut authorized_tool_ids_set: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
 
         for user in &all_users {
-            let profile_field_value = match user.profile
-                .get(profile_field)
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-            {
-                Some(v) if !v.is_empty() => v,
-                _ => continue,
+            // The profile field may be either a scalar string (one identifier)
+            // or an array of strings (many identifiers per user). Empty/missing
+            // values are skipped.
+            let identifiers: Vec<String> = match user.profile.get(profile_field) {
+                Some(v) if v.is_string() => v
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| vec![s.to_string()])
+                    .unwrap_or_default(),
+                Some(v) if v.is_array() => v
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|e| e.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                _ => Vec::new(),
             };
 
-            let mut authorized_tool_ids = Vec::new();
+            if identifiers.is_empty() {
+                continue;
+            }
 
+            // Authorization is per-user, so compute it once and reuse across
+            // every identifier this user exposes.
+            let mut authorized_tool_ids = Vec::new();
             for tool in &all_tools {
                 let has_steps = self.tool_has_training_steps(tool.id)?;
                 let authorized = if has_steps {
@@ -1861,12 +1886,14 @@ impl DatabaseManager {
                 }
             }
 
-            sync_users.push(ToolGuardSyncUser {
-                profile_field_value,
-                full_name: user.full_name.clone(),
-                is_active: user.is_active,
-                authorized_tool_ids,
-            });
+            for profile_field_value in identifiers {
+                sync_users.push(ToolGuardSyncUser {
+                    profile_field_value,
+                    full_name: user.full_name.clone(),
+                    is_active: user.is_active,
+                    authorized_tool_ids: authorized_tool_ids.clone(),
+                });
+            }
         }
 
         // Build the top-level tools list from all tools that appear in any user's authorized set
