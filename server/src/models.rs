@@ -2,11 +2,15 @@ mod tools;
 mod training;
 pub(crate) mod trainers;
 mod devices;
+mod webhooks;
+mod mfa;
 
 pub use tools::*;
 pub use training::*;
 pub use trainers::*;
 pub use devices::*;
+pub use webhooks::*;
+pub use mfa::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};
@@ -100,6 +104,9 @@ pub struct User {
     pub role: UserRole,
     pub profile: serde_json::Value,
     pub meta: serde_json::Value,
+    /// Set when the user confirms their first MFA method; cleared when the
+    /// last method is removed. Used to short-circuit `has any MFA?` checks.
+    pub mfa_enrolled_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -225,6 +232,22 @@ pub enum AuditEventType {
     DeviceNameChanged,
     DeviceDeleted,
     DeviceVersionChanged,
+    // Webhook management events
+    WebhookCreated,
+    WebhookUpdated,
+    WebhookDeleted,
+    WebhookAuthHeaderCreated,
+    WebhookAuthHeaderUpdated,
+    WebhookAuthHeaderDeleted,
+    // MFA events
+    MfaTotpEnrolled,
+    MfaTotpDisabled,
+    MfaWebauthnRegistered,
+    MfaWebauthnRemoved,
+    MfaRecoveryCodesRegenerated,
+    MfaRecoveryCodeUsed,
+    MfaLoginPassed,
+    MfaLoginFailed,
 }
 
 impl AuditEventType {
@@ -262,6 +285,74 @@ impl AuditEventType {
             Self::DeviceNameChanged => "device_name_changed",
             Self::DeviceDeleted => "device_deleted",
             Self::DeviceVersionChanged => "device_version_changed",
+            Self::WebhookCreated => "webhook_created",
+            Self::WebhookUpdated => "webhook_updated",
+            Self::WebhookDeleted => "webhook_deleted",
+            Self::WebhookAuthHeaderCreated => "webhook_auth_header_created",
+            Self::WebhookAuthHeaderUpdated => "webhook_auth_header_updated",
+            Self::WebhookAuthHeaderDeleted => "webhook_auth_header_deleted",
+            Self::MfaTotpEnrolled => "mfa_totp_enrolled",
+            Self::MfaTotpDisabled => "mfa_totp_disabled",
+            Self::MfaWebauthnRegistered => "mfa_webauthn_registered",
+            Self::MfaWebauthnRemoved => "mfa_webauthn_removed",
+            Self::MfaRecoveryCodesRegenerated => "mfa_recovery_codes_regenerated",
+            Self::MfaRecoveryCodeUsed => "mfa_recovery_code_used",
+            Self::MfaLoginPassed => "mfa_login_passed",
+            Self::MfaLoginFailed => "mfa_login_failed",
         }
+    }
+
+    /// All known audit event types, in stable display order.
+    /// Used to populate the webhook event-subscription picker.
+    pub fn all() -> &'static [AuditEventType] {
+        use AuditEventType::*;
+        &[
+            UserRegistration,
+            UserLogin,
+            UserLogout,
+            UserRoleChange,
+            UserProfileUpdate,
+            UserPasswordChange,
+            UserActivation,
+            UserDeactivation,
+            UserDeletion,
+            AdminConfigReload,
+            FailedLoginAttempt,
+            TrainingSessionStarted,
+            TrainingSessionCompleted,
+            TrainingStepCreated,
+            TrainingStepUpdated,
+            TrainingStepDeleted,
+            TrainerAssigned,
+            TrainerRemoved,
+            InstructorCertified,
+            InstructorRevoked,
+            ToolAccessGranted,
+            ToolAccessDenied,
+            ToolActivated,
+            ToolDeactivated,
+            ToolUsageLogged,
+            DeviceInviteCreated,
+            DeviceInviteUsed,
+            DeviceInviteExpired,
+            DeviceRegistered,
+            DeviceNameChanged,
+            DeviceDeleted,
+            DeviceVersionChanged,
+            WebhookCreated,
+            WebhookUpdated,
+            WebhookDeleted,
+            WebhookAuthHeaderCreated,
+            WebhookAuthHeaderUpdated,
+            WebhookAuthHeaderDeleted,
+            MfaTotpEnrolled,
+            MfaTotpDisabled,
+            MfaWebauthnRegistered,
+            MfaWebauthnRemoved,
+            MfaRecoveryCodesRegenerated,
+            MfaRecoveryCodeUsed,
+            MfaLoginPassed,
+            MfaLoginFailed,
+        ]
     }
 }

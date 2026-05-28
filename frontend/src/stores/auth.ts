@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { User, LoginRequest, LoginResponse, RegisterRequest } from '@/types'
-import { UserRole } from '@/types'
+import type { User, LoginRequest, LoginResponse, LoginOutcome, MfaChallenge, RegisterRequest } from '@/types'
+import { isMfaChallenge, UserRole } from '@/types'
 import { apiClient } from '@/utils/api'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -11,6 +11,10 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
   const initialized = ref(false)
+  /** When set, an MFA challenge is awaiting completion (set by `login`). */
+  const pendingMfa = ref<MfaChallenge | null>(null)
+  /** True when the just-completed login flagged the user must enroll in MFA. */
+  const mustEnrollMfa = ref(false)
 
   // Getters
   const isAuthenticated = computed(() => !!token.value && !!user.value)
@@ -34,31 +38,59 @@ export const useAuthStore = defineStore('auth', () => {
   const userFullName = computed(() => user.value?.full_name)
 
   // Actions
-  const login = async (credentials: LoginRequest): Promise<boolean> => {
+  /**
+   * Result of `login`:
+   *   - 'ok'   → token issued; user is signed in.
+   *   - 'mfa'  → MFA challenge required; see `pendingMfa`. Caller should route
+   *              to the challenge form and eventually call `completeMfa`.
+   *   - 'error'→ login failed; see `error`.
+   */
+  type LoginResult = 'ok' | 'mfa' | 'error'
+
+  const login = async (credentials: LoginRequest): Promise<LoginResult> => {
     isLoading.value = true
     error.value = null
+    pendingMfa.value = null
+    mustEnrollMfa.value = false
 
     try {
-      const response = await apiClient.post<LoginResponse>('/auth/login', credentials)
-      
-      if (response.success && response.data) {
-        token.value = response.data.token
-        user.value = response.data.user
-        
-        // Store token in localStorage
-        localStorage.setItem('css_token', response.data.token)
-        
-        return true
-      } else {
+      const response = await apiClient.post<LoginOutcome>('/auth/login', credentials)
+
+      if (!response.success || !response.data) {
         error.value = response.error || 'Login failed'
-        return false
+        return 'error'
       }
+
+      if (isMfaChallenge(response.data)) {
+        pendingMfa.value = response.data
+        return 'mfa'
+      }
+
+      const data = response.data as LoginResponse
+      token.value = data.token
+      user.value = data.user
+      mustEnrollMfa.value = !!data.must_enroll_mfa
+      localStorage.setItem('css_token', data.token)
+      return 'ok'
     } catch (err: any) {
       error.value = err.response?.data?.error || 'Network error during login'
-      return false
+      return 'error'
     } finally {
       isLoading.value = false
     }
+  }
+
+  /** Apply a successful MFA `/verify` response to the auth store. */
+  const completeMfa = (resp: LoginResponse) => {
+    token.value = resp.token
+    user.value = resp.user
+    mustEnrollMfa.value = !!resp.must_enroll_mfa
+    localStorage.setItem('css_token', resp.token)
+    pendingMfa.value = null
+  }
+
+  const cancelMfa = () => {
+    pendingMfa.value = null
   }
 
   const register = async (userData: RegisterRequest): Promise<boolean> => {
@@ -181,7 +213,9 @@ export const useAuthStore = defineStore('auth', () => {
     isLoading,
     error,
     initialized,
-    
+    pendingMfa,
+    mustEnrollMfa,
+
     // Getters
     isAuthenticated,
     isAdmin,
@@ -190,9 +224,11 @@ export const useAuthStore = defineStore('auth', () => {
     userRole,
     userName,
     userFullName,
-    
+
     // Actions
     login,
+    completeMfa,
+    cancelMfa,
     register,
     logout,
     getCurrentUser,

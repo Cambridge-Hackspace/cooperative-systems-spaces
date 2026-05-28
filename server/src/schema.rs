@@ -287,6 +287,68 @@ diesel::table! {
 }
 
 diesel::table! {
+    webhook_auth_headers (id) {
+        id -> Uuid,
+        #[max_length = 255]
+        name -> Varchar,
+        #[max_length = 255]
+        header_name -> Varchar,
+        header_value -> Text,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    webhooks (id) {
+        id -> Uuid,
+        #[max_length = 255]
+        name -> Varchar,
+        url -> Text,
+        enabled -> Bool,
+        signing_secret -> Text,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    webhook_event_subscriptions (id) {
+        id -> Uuid,
+        webhook_id -> Uuid,
+        event_type -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    webhook_auth_links (id) {
+        id -> Uuid,
+        webhook_id -> Uuid,
+        auth_header_id -> Uuid,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    webhook_deliveries (id) {
+        id -> Uuid,
+        webhook_id -> Uuid,
+        audit_log_id -> Nullable<Uuid>,
+        event_type -> Text,
+        attempt -> Int4,
+        success -> Bool,
+        status_code -> Nullable<Int4>,
+        response_body -> Nullable<Text>,
+        error -> Nullable<Text>,
+        request_payload -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::UserRole;
 
@@ -302,6 +364,41 @@ diesel::table! {
         role -> UserRole,
         profile -> Jsonb,
         meta -> Jsonb,
+        mfa_enrolled_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    user_mfa_totp (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        secret_base32 -> Text,
+        confirmed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    user_mfa_webauthn (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        credential_id -> Bytea,
+        passkey -> Jsonb,
+        #[max_length = 120]
+        label -> Varchar,
+        created_at -> Timestamptz,
+        last_used_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    user_mfa_recovery_codes (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        code_hash -> Text,
+        used_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -319,6 +416,16 @@ diesel::joinable!(training_steps -> tools (tool_id));
 diesel::joinable!(training_steps -> users (created_by));
 diesel::joinable!(user_tool_training -> tool_training_types (training_type_id));
 diesel::joinable!(user_training_progress -> training_steps (training_step_id));
+diesel::joinable!(webhook_auth_headers -> users (created_by));
+diesel::joinable!(webhooks -> users (created_by));
+diesel::joinable!(webhook_event_subscriptions -> webhooks (webhook_id));
+diesel::joinable!(webhook_auth_links -> webhooks (webhook_id));
+diesel::joinable!(webhook_auth_links -> webhook_auth_headers (auth_header_id));
+diesel::joinable!(webhook_deliveries -> webhooks (webhook_id));
+diesel::joinable!(webhook_deliveries -> audit_logs (audit_log_id));
+diesel::joinable!(user_mfa_totp -> users (user_id));
+diesel::joinable!(user_mfa_webauthn -> users (user_id));
+diesel::joinable!(user_mfa_recovery_codes -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
@@ -333,7 +440,15 @@ diesel::allow_tables_to_appear_in_same_query!(
     training_prerequisites,
     training_records,
     training_steps,
+    user_mfa_recovery_codes,
+    user_mfa_totp,
+    user_mfa_webauthn,
     user_tool_training,
     user_training_progress,
     users,
+    webhook_auth_headers,
+    webhooks,
+    webhook_event_subscriptions,
+    webhook_auth_links,
+    webhook_deliveries,
 );

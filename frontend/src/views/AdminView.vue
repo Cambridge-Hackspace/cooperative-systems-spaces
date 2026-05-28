@@ -100,6 +100,24 @@
         </div>
       </div>
 
+      <!-- Webhooks -->
+      <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h2 class="card-title">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+            </svg>
+            Webhooks
+          </h2>
+          <p>Define outbound webhooks on audit events and manage reusable auth credentials.</p>
+          <div class="card-actions justify-end">
+            <router-link to="/admin/webhooks" class="btn btn-primary btn-sm">
+              Manage Webhooks
+            </router-link>
+          </div>
+        </div>
+      </div>
+
       <!-- System Settings -->
       <div class="card bg-base-100 shadow-xl">
         <div class="card-body">

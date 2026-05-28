@@ -25,6 +25,8 @@ mod recaptcha;
 mod calendar;
 mod pages;
 mod mqtt;
+mod webhooks;
+mod mfa;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
@@ -33,6 +35,8 @@ use recaptcha::RecaptchaService;
 use calendar::CalendarService;
 use crate::pages::PagesService;
 use crate::mqtt::MqttService;
+use crate::webhooks::WebhookDispatcher;
+use crate::mfa::MfaService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -61,6 +65,8 @@ pub struct AppState {
     pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
     pub pages_service: Arc<tokio::sync::RwLock<PagesService>>,
     pub mqtt_service: Option<Arc<MqttService>>,
+    pub webhook_dispatcher: Arc<WebhookDispatcher>,
+    pub mfa_service: MfaService,
 }
 
 // Main dashboard handler
@@ -181,6 +187,21 @@ async fn main() -> Result<(), anyhow::Error> {
         None
     };
 
+    // Initialize webhook dispatcher and wire it to audit-log creation.
+    info!("Initializing webhook dispatcher...");
+    let (webhook_dispatcher, webhook_tx) = WebhookDispatcher::start(db_manager.clone());
+    db_manager.set_webhook_sender(webhook_tx);
+    info!("Webhook dispatcher initialized");
+
+    // Initialize MFA service (TOTP + WebAuthn).
+    info!("Initializing MFA service...");
+    let mfa_service = MfaService::new(app_config.auth.mfa.clone());
+    info!(
+        "MFA service initialized (enabled={}, webauthn_built={})",
+        mfa_service.config().enabled,
+        mfa_service.webauthn().is_some(),
+    );
+
     let app_state = AppState {
         config_manager: config_manager,
         db: db_manager,
@@ -191,6 +212,8 @@ async fn main() -> Result<(), anyhow::Error> {
         calendar_service,
         pages_service,
         mqtt_service: mqtt_service_arc,
+        webhook_dispatcher,
+        mfa_service,
     };
 
     // Serve frontend static files

@@ -23,6 +23,40 @@
       :disabled="disabled"
       @blur="$emit('blur')"
     />
+
+    <!-- TextArray Field (chip input) -->
+    <div
+      v-else-if="fieldType === 'TextArray'"
+      class="input input-bordered w-full h-auto min-h-12 flex flex-wrap items-center gap-1 py-2 cursor-text"
+      :class="{ 'input-error': hasError, 'opacity-60': disabled }"
+      @click="focusTagInput"
+    >
+      <span
+        v-for="(tag, i) in tagValues"
+        :key="`${tag}-${i}`"
+        class="badge badge-neutral gap-1"
+      >
+        {{ tag }}
+        <button
+          type="button"
+          class="opacity-70 hover:opacity-100"
+          :disabled="disabled"
+          aria-label="Remove"
+          @click.stop="removeTag(i)"
+        >&times;</button>
+      </span>
+      <input
+        ref="tagInputRef"
+        v-model="pendingTag"
+        type="text"
+        class="flex-1 min-w-[8rem] bg-transparent outline-none border-0 p-0 focus:ring-0"
+        :placeholder="tagValues.length ? '' : (field.help_text || 'type and press Enter')"
+        :disabled="disabled"
+        @keydown.enter.prevent="commitTag()"
+        @keydown="onTagKeydown"
+        @blur="onTagBlur"
+      />
+    </div>
     
     <!-- Email Field -->
     <input
@@ -125,7 +159,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { ProfileField } from '@/types'
 
 interface Props {
@@ -207,6 +241,52 @@ function updateNumberValue(event: Event) {
   const value = target.value
   const processedValue = value === '' ? null : Number(value)
   emit('update:modelValue', processedValue)
+}
+
+// ----- TextArray (chip input) -----
+const pendingTag = ref('')
+const tagInputRef = ref<HTMLInputElement | null>(null)
+
+const tagValues = computed<string[]>(() =>
+  Array.isArray(props.modelValue)
+    ? (props.modelValue as unknown[]).filter((v): v is string => typeof v === 'string')
+    : []
+)
+
+function commitTag() {
+  const t = pendingTag.value.trim()
+  if (!t) return
+  if (!tagValues.value.includes(t)) {
+    emit('update:modelValue', [...tagValues.value, t])
+  }
+  pendingTag.value = ''
+}
+
+function removeTag(i: number) {
+  const next = tagValues.value.slice()
+  next.splice(i, 1)
+  emit('update:modelValue', next)
+}
+
+function onTagKeydown(e: KeyboardEvent) {
+  // Comma also adds a tag; Backspace on empty input pops the last one.
+  if (e.key === ',') {
+    e.preventDefault()
+    commitTag()
+  } else if (e.key === 'Backspace' && pendingTag.value === '' && tagValues.value.length > 0) {
+    e.preventDefault()
+    removeTag(tagValues.value.length - 1)
+  }
+}
+
+function onTagBlur() {
+  // Don't lose what's been typed but not yet pressed Enter on.
+  commitTag()
+  emit('blur')
+}
+
+function focusTagInput() {
+  tagInputRef.value?.focus()
 }
 </script>
 

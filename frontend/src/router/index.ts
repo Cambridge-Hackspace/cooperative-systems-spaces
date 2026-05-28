@@ -32,6 +32,14 @@ const router = createRouter({
       }
     },
     {
+      path: '/profile/mfa',
+      name: 'profile-mfa',
+      component: () => import('@/components/MfaSettings.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/profile/:userId?',
       name: 'profile',
       component: () => import('@/views/ProfileView.vue'),
@@ -70,6 +78,15 @@ const router = createRouter({
       path: '/admin/devices',
       name: 'admin-devices',
       component: () => import('@/components/DeviceManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    {
+      path: '/admin/webhooks',
+      name: 'admin-webhooks',
+      component: () => import('@/components/WebhookManagement.vue'),
       meta: {
         requiresAuth: true,
         requiredRole: UserRole.Admin

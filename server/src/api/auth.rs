@@ -21,6 +21,7 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/login", post(login))
         .route("/me", get(me))
         .route("/logout", post(logout))
+        .nest("/mfa", crate::api::mfa::mfa_routes())
 }
 
 // User registration endpoint
@@ -191,11 +192,13 @@ async fn register(
     )))
 }
 
-// User login endpoint
+// User login endpoint. Returns either a JWT directly, or — if the user has
+// MFA enrolled — an MFA challenge envelope the client trades back to
+// `/api/auth/mfa/verify` for a JWT.
 async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<ApiResponse<LoginResponse>>, ApiError> {
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     if payload.username_or_email.is_empty() || payload.password.is_empty() {
         return Err(ApiError::BadRequest("Username/email and password are required".to_string()));
     }
@@ -210,14 +213,30 @@ async fn login(
         .authenticate_user(&payload.username_or_email, &payload.password)
         .map_err(ApiError::from)?;
 
+    // If the user has confirmed any MFA method, issue a challenge instead of
+    // a token. They complete login via /api/auth/mfa/verify.
+    if user.mfa_enrolled_at.is_some() && config.auth.mfa.enabled {
+        let challenge = crate::api::mfa::build_login_challenge(&state, &user)?;
+        return Ok(Json(ApiResponse::success_with_message(
+            challenge,
+            "MFA challenge required".to_string(),
+        )));
+    }
+
     let token = auth_service
         .create_token(&user)
         .map_err(ApiError::from)?;
 
+    // Flag users whose role requires enrollment under the current policy so
+    // the frontend can route them to the enrollment page on first sight.
+    let must_enroll = config.auth.mfa.is_required_for(&user.role)
+        && user.mfa_enrolled_at.is_none();
+
     let response = LoginResponse {
         token,
         user: UserResponse::from(user.clone()),
-        expires_in: 24 * 60 * 60, // 24 hours in seconds
+        expires_in: (config.auth.jwt_expiration_hours as i64) * 60 * 60,
+        must_enroll_mfa: if must_enroll { Some(true) } else { None },
     };
 
     // Log the successful login
@@ -226,14 +245,17 @@ async fn login(
         Some(user.id),
         None,
         serde_json::json!({"username": user.username, "action": "User logged in successfully"}),
-        None, // No IP tracking for now
-        None, // No User-Agent tracking for now
+        None,
+        None,
     ).await {
         tracing::warn!("Failed to log user login: {}", e);
     }
 
+    let value = serde_json::to_value(&response).map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to serialize login response: {e}"))
+    })?;
     Ok(Json(ApiResponse::success_with_message(
-        response,
+        value,
         "Login successful".to_string(),
     )))
 }

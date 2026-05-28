@@ -57,6 +57,21 @@ impl ProfileValidator {
                     .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
             }
 
+            ProfileFieldType::TextArray => {
+                let arr = value.as_array().ok_or_else(|| {
+                    anyhow!("Field '{}' must be an array of strings", field_name)
+                })?;
+                for (i, item) in arr.iter().enumerate() {
+                    if !item.is_string() {
+                        return Err(anyhow!(
+                            "Field '{}' item at index {} must be a string",
+                            field_name,
+                            i
+                        ));
+                    }
+                }
+            }
+
             ProfileFieldType::Email => {
                 let email_str = value.as_str()
                     .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;

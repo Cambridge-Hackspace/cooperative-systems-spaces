@@ -64,6 +64,10 @@ pub struct LoginResponse {
     pub token: String,
     pub user: UserResponse,
     pub expires_in: i64, // seconds
+    /// `Some(true)` when MFA enforcement requires this user to enroll but they
+    /// haven't yet. Frontend should route them to the enrollment page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub must_enroll_mfa: Option<bool>,
 }
 
 // Register request model
