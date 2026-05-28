@@ -118,6 +118,24 @@
         </div>
       </div>
 
+      <!-- Doors -->
+      <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h2 class="card-title">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21V5a2 2 0 012-2h10a2 2 0 012 2v16M3 21h18M9 15h.01"/>
+            </svg>
+            Doors
+          </h2>
+          <p>Manage physical doors, access rules, signage QR codes, and view unlock events.</p>
+          <div class="card-actions justify-end">
+            <router-link to="/admin/doors" class="btn btn-primary btn-sm">
+              Manage Doors
+            </router-link>
+          </div>
+        </div>
+      </div>
+
       <!-- System Settings -->
       <div class="card bg-base-100 shadow-xl">
         <div class="card-body">

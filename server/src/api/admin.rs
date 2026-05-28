@@ -49,6 +49,7 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/pages/site/refresh", post(refresh_site_pages))
         .nest("/devices", crate::api::devices::admin_devices_routes())
         .nest("/webhooks", crate::api::webhooks::admin_webhook_routes())
+        .nest("/doors", crate::api::doors::admin_routes())
 }
 
 /// Reload configuration from disk (admin only)
@@ -174,6 +175,9 @@ async fn update_user_role(
         tracing::warn!("Failed to log role change: {}", e);
     }
 
+    // Role change may affect door allow-lists (rules of kind=role).
+    state.door_service.republish_all();
+
     Ok(Json(ApiResponse::success_with_message(
         roster_user,
         "User role updated successfully".to_string(),
@@ -239,6 +243,9 @@ async fn activate_user(
         tracing::warn!("Failed to log user activation: {}", e);
     }
 
+    // Activation may pull this user into role-based door allow-lists.
+    state.door_service.republish_all();
+
     Ok(Json(ApiResponse::success_with_message(
         roster_user,
         "User activated successfully".to_string(),
@@ -303,6 +310,9 @@ async fn deactivate_user(
     ).await {
         tracing::warn!("Failed to log user deactivation: {}", e);
     }
+
+    // Deactivation should drop this user from role-based door allow-lists.
+    state.door_service.republish_all();
 
     Ok(Json(ApiResponse::success_with_message(
         roster_user,

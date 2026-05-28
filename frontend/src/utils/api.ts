@@ -291,6 +291,55 @@ export const adminApi = {
   },
 }
 
+// Doors API
+export const doorsApi = {
+  // Member-facing
+  info(doorId: string) {
+    return apiClient.get<import('@/types').DoorInfo>(`/doors/${doorId}/info`)
+  },
+  checkin(doorId: string) {
+    return apiClient.post<import('@/types').DoorCheckinResult>(`/doors/${doorId}/checkin`)
+  },
+
+  // Admin
+  list() {
+    return apiClient.get<import('@/types').Door[]>('/admin/doors')
+  },
+  get(doorId: string) {
+    return apiClient.get<import('@/types').DoorDetail>(`/admin/doors/${doorId}`)
+  },
+  create(body: import('@/types').CreateDoorRequest) {
+    return apiClient.post<import('@/types').Door>('/admin/doors', body)
+  },
+  update(doorId: string, body: import('@/types').UpdateDoorRequest) {
+    return apiClient.patch<import('@/types').Door>(`/admin/doors/${doorId}`, body)
+  },
+  remove(doorId: string) {
+    return apiClient.delete<void>(`/admin/doors/${doorId}`)
+  },
+  unlock(doorId: string) {
+    return apiClient.post<{ unlocked: boolean }>(`/admin/doors/${doorId}/unlock`)
+  },
+  republish(doorId: string) {
+    return apiClient.post<{ republished: boolean }>(`/admin/doors/${doorId}/republish`)
+  },
+  qrUrl(doorId: string) {
+    return apiClient.get<{ url: string }>(`/admin/doors/${doorId}/qr`)
+  },
+  events(doorId: string, params?: { limit?: number; offset?: number }) {
+    return apiClient.get<import('@/types').DoorAccessEvent[]>(`/admin/doors/${doorId}/events`, params)
+  },
+  listRules(doorId: string) {
+    return apiClient.get<import('@/types').DoorAccessRule[]>(`/admin/doors/${doorId}/rules`)
+  },
+  addRule(doorId: string, body: import('@/types').AddDoorRuleRequest) {
+    return apiClient.post<import('@/types').DoorAccessRule>(`/admin/doors/${doorId}/rules`, body)
+  },
+  removeRule(doorId: string, ruleId: string) {
+    return apiClient.delete<void>(`/admin/doors/${doorId}/rules/${ruleId}`)
+  },
+}
+
 // MFA API functions
 export const mfaApi = {
   status() {

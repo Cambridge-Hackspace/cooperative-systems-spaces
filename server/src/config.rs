@@ -633,6 +633,29 @@ impl Default for ToolGuardConfig {
     }
 }
 
+/// Door access module configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoorConfig {
+    /// Master toggle. When false, all door endpoints reject and no MQTT
+    /// state is published.
+    pub enabled: bool,
+    /// Default unlock pulse length (ms) for newly-created doors.
+    pub default_unlock_duration_ms: i32,
+    /// Public URL placed onto door signage. `{site_url}` and `{door_id}` are
+    /// interpolated when an admin requests the QR.
+    pub qr_url_template: String,
+}
+
+impl Default for DoorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_unlock_duration_ms: 5000,
+            qr_url_template: "{site_url}/door/{door_id}/checkin".to_string(),
+        }
+    }
+}
+
 /// Calendar aggregation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarConfig {
@@ -871,6 +894,9 @@ pub struct AppConfig {
     pub pages: PagesConfig,
     /// Edge Config
     pub edge: EdgeConfig,
+    /// Door access module configuration
+    #[serde(default)]
+    pub door: DoorConfig,
 }
 
 impl Default for AppConfig {
@@ -894,6 +920,7 @@ impl Default for AppConfig {
             calendar: CalendarConfig::default(),
             pages: PagesConfig::default(),
             edge: EdgeConfig::default(),
+            door: DoorConfig::default(),
         }
     }
 }

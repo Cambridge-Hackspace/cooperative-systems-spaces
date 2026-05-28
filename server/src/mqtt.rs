@@ -29,11 +29,18 @@ pub struct MqttService {
     client: mqtt::AsyncClient,
     db: Arc<DatabaseManager>,
     namespace: String,
+    /// Snapshot of `toolguard.profile_field` taken at startup; used by the
+    /// inbound `doors/event` handler to resolve a card to a user.
+    door_profile_field: String,
 }
 
 impl MqttService {
     /// Create a new MQTT service and consumer
-    pub fn new(config: &MqttConfig, db: Arc<DatabaseManager>) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>), Box<dyn std::error::Error>> {
+    pub fn new(
+        config: &MqttConfig,
+        db: Arc<DatabaseManager>,
+        door_profile_field: String,
+    ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>), Box<dyn std::error::Error>> {
         // Parse broker URL
         let broker_url = &config.mqtt_instance_url;
         
@@ -72,6 +79,7 @@ impl MqttService {
             client: cli,
             db,
             namespace: config.mqtt_namespace.clone(),
+            door_profile_field,
         }, rx))
     }
 
@@ -82,11 +90,16 @@ impl MqttService {
         // Subscribe to device topics with namespace prefix
         let heartbeat_topic = format!("{}/devices/+/heartbeat", self.namespace);
         let data_topic = format!("{}/devices/+/data", self.namespace);
-        
+        let doors_event_topic = format!("{}/devices/+/doors/event", self.namespace);
+
         self.client.subscribe(&heartbeat_topic, 1).wait()?;
         self.client.subscribe(&data_topic, 1).wait()?;
+        self.client.subscribe(&doors_event_topic, 1).wait()?;
 
-        info!("Subscribed to device topics: {} and {}", heartbeat_topic, data_topic);
+        info!(
+            "Subscribed to device topics: {}, {}, {}",
+            heartbeat_topic, data_topic, doors_event_topic
+        );
 
         // Process incoming messages
         loop {
@@ -119,17 +132,16 @@ impl MqttService {
             return;
         }
 
-        // Strip the namespace and "devices/" prefix to get device_id/message_type
+        // Strip the namespace and "devices/" prefix. Remaining is
+        // "{device_id}/{suffix}" where suffix may contain '/'.
         let remaining = &topic[expected_prefix.len()..];
-        let parts: Vec<&str> = remaining.split('/').collect();
-        
-        if parts.len() != 2 {
-            warn!("Invalid topic format after namespace: {}", topic);
-            return;
-        }
-        
-        let device_id_str = parts[0];
-        let message_type = parts[1];
+        let (device_id_str, suffix) = match remaining.split_once('/') {
+            Some(parts) => parts,
+            None => {
+                warn!("Invalid topic format after namespace: {}", topic);
+                return;
+            }
+        };
 
         let device_id = match Uuid::parse_str(device_id_str) {
             Ok(id) => id,
@@ -139,11 +151,12 @@ impl MqttService {
             }
         };
 
-        match message_type {
+        match suffix {
             "heartbeat" => self.handle_heartbeat(device_id).await,
             "data" => self.handle_device_data(device_id, msg.payload()).await,
-            _ => {
-                warn!("Unknown message type: {}", message_type);
+            "doors/event" => self.handle_doors_event(device_id, msg.payload()).await,
+            other => {
+                warn!("Unknown message suffix '{}' on topic {}", other, topic);
             }
         }
     }
@@ -272,6 +285,95 @@ impl MqttService {
         }
     }
 
+    /// Handle a `doors/event` message published by an edge device. Writes a
+    /// row to `door_access_events`, resolves the card to a user via the
+    /// configured toolguard profile field, and emits an audit event so
+    /// webhook subscribers see it.
+    async fn handle_doors_event(&self, device_id: Uuid, payload: &[u8]) {
+        #[derive(serde::Deserialize)]
+        struct DoorEventIn {
+            door_id: Uuid,
+            card_id: Option<String>,
+            granted: bool,
+            #[serde(default)]
+            reason: Option<String>,
+            #[serde(default)]
+            source: Option<String>,
+            #[serde(default)]
+            occurred_at: Option<chrono::DateTime<Utc>>,
+        }
+
+        let event: DoorEventIn = match serde_json::from_slice(payload) {
+            Ok(e) => e,
+            Err(e) => {
+                error!("Failed to parse doors/event payload from device {}: {}", device_id, e);
+                return;
+            }
+        };
+
+        // Resolve card -> user. Misses are normal (unknown card).
+        let user_id = match event.card_id.as_deref() {
+            Some(card) if !card.is_empty() => self
+                .db
+                .find_user_by_profile_field(&self.door_profile_field, card)
+                .ok()
+                .flatten()
+                .map(|u| u.id),
+            _ => None,
+        };
+
+        let method = match event.source.as_deref() {
+            Some("rfid") | None => crate::models::DoorAccessMethod::Rfid,
+            Some("admin_remote") => crate::models::DoorAccessMethod::AdminRemote,
+            Some("qr_checkin") => crate::models::DoorAccessMethod::QrCheckin,
+            Some(other) => {
+                warn!("Unknown doors/event source '{}' from device {}", other, device_id);
+                crate::models::DoorAccessMethod::Rfid
+            }
+        };
+
+        let new_event = crate::models::NewDoorAccessEvent {
+            door_id: event.door_id,
+            user_id,
+            method: method.as_str().to_string(),
+            card_id_attempted: event.card_id.clone(),
+            granted: event.granted,
+            reason: event.reason.clone(),
+            ip_address: None,
+            occurred_at: event.occurred_at.unwrap_or_else(Utc::now),
+        };
+
+        if let Err(e) = self.db.insert_door_access_event(&new_event) {
+            error!("Failed to insert door_access_events row: {}", e);
+            return;
+        }
+
+        // Audit event mirrors the access event so webhook subscribers receive it.
+        let audit_type = if event.granted {
+            crate::models::AuditEventType::DoorUnlockedCard
+        } else {
+            crate::models::AuditEventType::DoorUnlockDenied
+        };
+        let audit_log = NewAuditLog {
+            event_type: audit_type.as_str().to_string(),
+            user_id,
+            actor_id: user_id,
+            event_data: serde_json::json!({
+                "door_id": event.door_id,
+                "device_id": device_id,
+                "card_id_attempted": event.card_id,
+                "granted": event.granted,
+                "reason": event.reason,
+                "source": method.as_str(),
+            }),
+            ip_address: None,
+            user_agent: None,
+        };
+        if let Err(e) = self.db.create_audit_log(&audit_log) {
+            error!("Failed to write door access audit log: {}", e);
+        }
+    }
+
     /// Publish a message to a device topic
     pub fn publish_to_device(
         &self,
@@ -308,6 +410,24 @@ impl MqttService {
         payload: Vec<u8>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.publish_to_device(device_id, "toolguard/state", payload)
+    }
+
+    /// Publish a doors state snapshot (allow/deny lists) to a device.
+    pub fn publish_doors_state(
+        &self,
+        device_id: Uuid,
+        payload: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.publish_to_device(device_id, "doors/state", payload)
+    }
+
+    /// Publish a one-shot door-unlock command to a device.
+    pub fn publish_doors_unlock(
+        &self,
+        device_id: Uuid,
+        payload: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.publish_to_device(device_id, "doors/unlock", payload)
     }
 
     /// Get a reference to the MQTT client for publishing

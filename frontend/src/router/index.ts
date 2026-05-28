@@ -93,6 +93,23 @@ const router = createRouter({
       }
     },
     {
+      path: '/admin/doors',
+      name: 'admin-doors',
+      component: () => import('@/components/DoorManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    {
+      path: '/door/:id/checkin',
+      name: 'door-checkin',
+      component: () => import('@/views/DoorCheckinView.vue'),
+      meta: {
+        requiresAuth: true
+      }
+    },
+    {
       path: '/tools',
       name: 'tools',
       component: () => import('@/views/ToolsView.vue'),

@@ -11,6 +11,7 @@ mod registration;
 mod system_info;
 mod mqtt;
 mod toolguard;
+mod doors;
 mod web_server;
 
 use config::{generate_sample_config, load_config};
@@ -18,6 +19,7 @@ use crate::config::AuthStatus;
 use crate::registration::{register_device, is_registered};
 use crate::mqtt::{EdgeMqttClient, LocalMqttClient, run_mqtt_event_loop, run_local_mqtt_event_loop};
 use crate::toolguard::ToolGuardState;
+use crate::doors::DoorsState;
 use crate::web_server::start_web_server;
 
 #[derive(Parser, Debug)]
@@ -129,6 +131,15 @@ async fn main() -> Result<()> {
             let (toolguard_state_inner, state_notify_rx) = ToolGuardState::new_with_notify();
             let toolguard_state = Arc::new(toolguard_state_inner);
 
+            // Shared door cache + cross-client bridges. `doors_unlock_*` flows
+            // remote → local (server-issued unlocks → local relay).
+            // `doors_event_*` flows local → remote (scans → server audit log).
+            let doors_state = DoorsState::new();
+            let (doors_unlock_tx, doors_unlock_rx) =
+                tokio::sync::mpsc::unbounded_channel::<crate::doors::UnlockCommand>();
+            let (doors_event_tx, doors_event_rx) =
+                tokio::sync::mpsc::unbounded_channel::<crate::doors::DoorsEvent>();
+
             // Extract device credentials once
             let device_info = app_config.remote_device_info.clone()
                 .expect("Approved device must have remote_device_info");
@@ -194,12 +205,18 @@ async fn main() -> Result<()> {
             // state_notify_rx is consumed by the local event loop; if no local MQTT
             // is configured we drop it so the sender's try_send just silently discards.
             let state_notify_rx = Some(state_notify_rx);
+            // The local client owns the consumer side of the unlock bridge so
+            // it can fire the relay when the server pushes a `doors/unlock`.
+            // Wrapped in an Option so we can `.take()` it into the spawned task.
+            let mut doors_unlock_rx = Some(doors_unlock_rx);
             if let Some(local_mqtt_cfg) = &app_config.local_mqtt_config {
                 match LocalMqttClient::new(
                     local_mqtt_cfg,
                     Arc::clone(&toolguard_state),
                     remote_instance_url.clone(),
                     remote_auth_token.clone(),
+                    Arc::clone(&doors_state),
+                    doors_event_tx.clone(),
                 ).await {
                     Ok((local_client, local_rx)) => {
                         let local_client = Arc::new(local_client);
@@ -218,11 +235,24 @@ async fn main() -> Result<()> {
                                 app_config.calendar_mqtt_topic.clone(),
                                 app_config.calendar_sync_interval_secs,
                             );
+
+                            // Bridge: server-initiated unlocks → local relay.
+                            if let Some(mut rx) = doors_unlock_rx.take() {
+                                let lc = Arc::clone(&local_client);
+                                tokio::spawn(async move {
+                                    while let Some(cmd) = rx.recv().await {
+                                        lc.publish_doors_unlock_response(&cmd);
+                                    }
+                                });
+                            }
                         }
                     }
                     Err(e) => error!("Failed to start local MQTT client: {}", e),
                 }
             }
+            // If no local client was started, drop the receiver explicitly so
+            // remote senders see a closed channel and don't pile up forever.
+            drop(doors_unlock_rx);
 
             // ── Remote MQTT (if configured) ──────────────────────────────────
             if app_config.remote_mqtt_config.is_none() {
@@ -237,6 +267,8 @@ async fn main() -> Result<()> {
                 &app_config,
                 config_arc.clone(),
                 Arc::clone(&toolguard_state),
+                Arc::clone(&doors_state),
+                doors_unlock_tx.clone(),
             ).await?;
             let mqtt_client = Arc::new(mqtt_client);
 
@@ -245,6 +277,19 @@ async fn main() -> Result<()> {
             mqtt_client.publish_device_data()?;
             mqtt_client.start_heartbeat_task();
             mqtt_client.start_data_publisher_task();
+
+            // Bridge: local RFID scans → server `doors/event`.
+            {
+                let mc = Arc::clone(&mqtt_client);
+                let mut rx = doors_event_rx;
+                tokio::spawn(async move {
+                    while let Some(event) = rx.recv().await {
+                        if let Err(e) = mc.publish_doors_event(&event) {
+                            warn!("Failed to publish doors/event upstream: {}", e);
+                        }
+                    }
+                });
+            }
 
             info!("edge apparatus running. Press Ctrl+C to exit.");
 

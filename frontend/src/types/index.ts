@@ -152,6 +152,89 @@ export interface MfaWebauthnRegisterBegin {
   options: unknown
 }
 
+// ===== Doors =====
+
+export type DoorRuleKind = 'role' | 'user' | 'card'
+export type DoorRuleEffect = 'allow' | 'deny'
+export type DoorAccessMethod = 'rfid' | 'qr_checkin' | 'admin_remote'
+
+export interface Door {
+  id: string
+  name: string
+  location: string | null
+  description: string | null
+  edge_device_id: string | null
+  unlock_duration_ms: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DoorAccessRule {
+  id: string
+  door_id: string
+  kind: string
+  value: string
+  effect: string
+  created_at: string
+}
+
+export interface DoorDetail extends Door {
+  rules: DoorAccessRule[]
+}
+
+export interface DoorAccessEvent {
+  id: string
+  door_id: string
+  user_id: string | null
+  method: string
+  card_id_attempted: string | null
+  granted: boolean
+  reason: string | null
+  ip_address: string | null
+  occurred_at: string
+  created_at: string
+}
+
+export interface CreateDoorRequest {
+  name: string
+  location?: string | null
+  description?: string | null
+  edge_device_id?: string | null
+  unlock_duration_ms?: number
+  enabled?: boolean
+}
+
+export interface UpdateDoorRequest {
+  name?: string
+  /** Pass `null` to clear; omit to leave unchanged. */
+  location?: string | null
+  description?: string | null
+  edge_device_id?: string | null
+  unlock_duration_ms?: number
+  enabled?: boolean
+}
+
+export interface AddDoorRuleRequest {
+  kind: DoorRuleKind
+  value: string
+  effect?: DoorRuleEffect
+}
+
+export interface DoorInfo {
+  id: string
+  name: string
+  location: string | null
+  enabled: boolean
+  you_are_authorized: boolean
+  reason: string | null
+}
+
+export interface DoorCheckinResult {
+  unlocked: boolean
+  reason: string | null
+}
+
 export interface RegisterRequest {
   username: string
   email: string

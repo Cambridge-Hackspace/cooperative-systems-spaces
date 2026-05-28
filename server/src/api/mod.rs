@@ -14,6 +14,7 @@ pub mod toolguard;
 pub mod devices;
 pub mod webhooks;
 pub mod mfa;
+pub mod doors;
 
 use axum::Router;
 use crate::AppState;
@@ -32,4 +33,5 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/calendar", calendar::calendar_routes())
         .nest("/pages", pages::pages_routes())
         .nest("/devices", devices::devices_routes())
+        .nest("/doors", doors::member_routes())
 }

@@ -4,6 +4,7 @@ pub(crate) mod trainers;
 mod devices;
 mod webhooks;
 mod mfa;
+mod doors;
 
 pub use tools::*;
 pub use training::*;
@@ -11,6 +12,7 @@ pub use trainers::*;
 pub use devices::*;
 pub use webhooks::*;
 pub use mfa::*;
+pub use doors::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};
@@ -248,6 +250,17 @@ pub enum AuditEventType {
     MfaRecoveryCodeUsed,
     MfaLoginPassed,
     MfaLoginFailed,
+    // Door events
+    DoorCreated,
+    DoorUpdated,
+    DoorDeleted,
+    DoorRuleAdded,
+    DoorRuleRemoved,
+    DoorUnlockedCard,
+    DoorUnlockedQr,
+    DoorUnlockedAdmin,
+    DoorUnlockDenied,
+    DoorCheckinRecorded,
 }
 
 impl AuditEventType {
@@ -299,6 +312,16 @@ impl AuditEventType {
             Self::MfaRecoveryCodeUsed => "mfa_recovery_code_used",
             Self::MfaLoginPassed => "mfa_login_passed",
             Self::MfaLoginFailed => "mfa_login_failed",
+            Self::DoorCreated => "door_created",
+            Self::DoorUpdated => "door_updated",
+            Self::DoorDeleted => "door_deleted",
+            Self::DoorRuleAdded => "door_rule_added",
+            Self::DoorRuleRemoved => "door_rule_removed",
+            Self::DoorUnlockedCard => "door_unlocked_card",
+            Self::DoorUnlockedQr => "door_unlocked_qr",
+            Self::DoorUnlockedAdmin => "door_unlocked_admin",
+            Self::DoorUnlockDenied => "door_unlock_denied",
+            Self::DoorCheckinRecorded => "door_checkin_recorded",
         }
     }
 
@@ -353,6 +376,16 @@ impl AuditEventType {
             MfaRecoveryCodeUsed,
             MfaLoginPassed,
             MfaLoginFailed,
+            DoorCreated,
+            DoorUpdated,
+            DoorDeleted,
+            DoorRuleAdded,
+            DoorRuleRemoved,
+            DoorUnlockedCard,
+            DoorUnlockedQr,
+            DoorUnlockedAdmin,
+            DoorUnlockDenied,
+            DoorCheckinRecorded,
         ]
     }
 }

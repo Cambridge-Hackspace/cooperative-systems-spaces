@@ -27,6 +27,7 @@ mod pages;
 mod mqtt;
 mod webhooks;
 mod mfa;
+mod doors;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
@@ -37,6 +38,7 @@ use crate::pages::PagesService;
 use crate::mqtt::MqttService;
 use crate::webhooks::WebhookDispatcher;
 use crate::mfa::MfaService;
+use crate::doors::DoorService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -67,6 +69,7 @@ pub struct AppState {
     pub mqtt_service: Option<Arc<MqttService>>,
     pub webhook_dispatcher: Arc<WebhookDispatcher>,
     pub mfa_service: MfaService,
+    pub door_service: Arc<DoorService>,
 }
 
 // Main dashboard handler
@@ -161,7 +164,11 @@ async fn main() -> Result<(), anyhow::Error> {
     let mqtt_service_arc = if app_config.edge.edge_enabled {
         if let Some(mqtt_config) = &app_config.edge.edge_mqtt_config {
             info!("Initializing MQTT service...");
-            let (mqtt_service, rx) = MqttService::new(mqtt_config, db_manager.clone())
+            let (mqtt_service, rx) = MqttService::new(
+                mqtt_config,
+                db_manager.clone(),
+                app_config.toolguard.profile_field.clone(),
+            )
                 .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
             
             let mqtt_service_arc = Arc::new(mqtt_service);
@@ -202,6 +209,20 @@ async fn main() -> Result<(), anyhow::Error> {
         mfa_service.webauthn().is_some(),
     );
 
+    // Initialize door access service (depends on MQTT being constructed).
+    info!("Initializing door access service...");
+    let door_service = Arc::new(DoorService::new(
+        db_manager.clone(),
+        mqtt_service_arc.clone(),
+        app_config.toolguard.profile_field.clone(),
+    ));
+    // Push a fresh state snapshot to every device on startup so an edge
+    // restart picks up the current allow-lists.
+    if app_config.door.enabled {
+        door_service.republish_all();
+    }
+    info!("Door access service initialized (enabled={})", app_config.door.enabled);
+
     let app_state = AppState {
         config_manager: config_manager,
         db: db_manager,
@@ -214,6 +235,7 @@ async fn main() -> Result<(), anyhow::Error> {
         mqtt_service: mqtt_service_arc,
         webhook_dispatcher,
         mfa_service,
+        door_service,
     };
 
     // Serve frontend static files
