@@ -76,6 +76,15 @@ const router = createRouter({
       }
     },
     {
+      path: '/admin/webhooks',
+      name: 'admin-webhooks',
+      component: () => import('@/components/WebhookManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    {
       path: '/tools',
       name: 'tools',
       component: () => import('@/views/ToolsView.vue'),

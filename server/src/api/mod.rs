@@ -12,6 +12,7 @@ pub mod training;
 pub mod trainers;
 pub mod toolguard;
 pub mod devices;
+pub mod webhooks;
 
 use axum::Router;
 use crate::AppState;

@@ -44,6 +44,7 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
         .nest("/devices", crate::api::devices::admin_devices_routes())
+        .nest("/webhooks", crate::api::webhooks::admin_webhook_routes())
 }
 
 /// Reload configuration from disk (admin only)

@@ -152,3 +152,74 @@ export interface Notification {
   message: string
   duration?: number
 }
+
+// ===== Webhooks =====
+
+/** A reusable, write-only auth credential. The secret value is never returned. */
+export interface WebhookAuthHeader {
+  id: string
+  name: string
+  header_name: string
+  has_value: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateAuthHeaderRequest {
+  name: string
+  header_name: string
+  header_value: string
+}
+
+export interface UpdateAuthHeaderRequest {
+  name?: string
+  header_name?: string
+  header_value?: string
+}
+
+export interface Webhook {
+  id: string
+  name: string
+  url: string
+  enabled: boolean
+  signing_secret: string
+  event_types: string[]
+  auth_header_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateWebhookRequest {
+  name: string
+  url: string
+  enabled?: boolean
+  event_types: string[]
+  auth_header_ids: string[]
+}
+
+export interface UpdateWebhookRequest {
+  name?: string
+  url?: string
+  enabled?: boolean
+  event_types?: string[]
+  auth_header_ids?: string[]
+}
+
+export interface WebhookEventType {
+  value: string
+  label: string
+}
+
+export interface WebhookDelivery {
+  id: string
+  webhook_id: string
+  audit_log_id: string | null
+  event_type: string
+  attempt: number
+  success: boolean
+  status_code: number | null
+  response_body: string | null
+  error: string | null
+  request_payload: unknown
+  created_at: string
+}

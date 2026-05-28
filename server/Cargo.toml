@@ -7,6 +7,10 @@ edition = "2021"
 name = "css-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "css-webhook-recvr"
+path = "src/bin/webhook_recvr.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }
@@ -43,6 +47,11 @@ paho-mqtt = "0.13"
 jsonwebtoken = "9.3.0"
 argon2 = "0.5.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Webhook signing (HMAC-SHA256)
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 validator = { version = "0.18.1", features = ["derive"] }
 # axum-extra = { version = "0.9", default-features = false, features = ["typed-header"] }  # Temporarily disabled
 tower = { version = "0.5.2", features = ["util"] }

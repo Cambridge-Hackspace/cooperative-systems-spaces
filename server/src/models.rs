@@ -2,11 +2,13 @@ mod tools;
 mod training;
 pub(crate) mod trainers;
 mod devices;
+mod webhooks;
 
 pub use tools::*;
 pub use training::*;
 pub use trainers::*;
 pub use devices::*;
+pub use webhooks::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};
@@ -225,6 +227,13 @@ pub enum AuditEventType {
     DeviceNameChanged,
     DeviceDeleted,
     DeviceVersionChanged,
+    // Webhook management events
+    WebhookCreated,
+    WebhookUpdated,
+    WebhookDeleted,
+    WebhookAuthHeaderCreated,
+    WebhookAuthHeaderUpdated,
+    WebhookAuthHeaderDeleted,
 }
 
 impl AuditEventType {
@@ -262,6 +271,58 @@ impl AuditEventType {
             Self::DeviceNameChanged => "device_name_changed",
             Self::DeviceDeleted => "device_deleted",
             Self::DeviceVersionChanged => "device_version_changed",
+            Self::WebhookCreated => "webhook_created",
+            Self::WebhookUpdated => "webhook_updated",
+            Self::WebhookDeleted => "webhook_deleted",
+            Self::WebhookAuthHeaderCreated => "webhook_auth_header_created",
+            Self::WebhookAuthHeaderUpdated => "webhook_auth_header_updated",
+            Self::WebhookAuthHeaderDeleted => "webhook_auth_header_deleted",
         }
+    }
+
+    /// All known audit event types, in stable display order.
+    /// Used to populate the webhook event-subscription picker.
+    pub fn all() -> &'static [AuditEventType] {
+        use AuditEventType::*;
+        &[
+            UserRegistration,
+            UserLogin,
+            UserLogout,
+            UserRoleChange,
+            UserProfileUpdate,
+            UserPasswordChange,
+            UserActivation,
+            UserDeactivation,
+            UserDeletion,
+            AdminConfigReload,
+            FailedLoginAttempt,
+            TrainingSessionStarted,
+            TrainingSessionCompleted,
+            TrainingStepCreated,
+            TrainingStepUpdated,
+            TrainingStepDeleted,
+            TrainerAssigned,
+            TrainerRemoved,
+            InstructorCertified,
+            InstructorRevoked,
+            ToolAccessGranted,
+            ToolAccessDenied,
+            ToolActivated,
+            ToolDeactivated,
+            ToolUsageLogged,
+            DeviceInviteCreated,
+            DeviceInviteUsed,
+            DeviceInviteExpired,
+            DeviceRegistered,
+            DeviceNameChanged,
+            DeviceDeleted,
+            DeviceVersionChanged,
+            WebhookCreated,
+            WebhookUpdated,
+            WebhookDeleted,
+            WebhookAuthHeaderCreated,
+            WebhookAuthHeaderUpdated,
+            WebhookAuthHeaderDeleted,
+        ]
     }
 }

@@ -73,6 +73,9 @@ impl From<diesel::result::Error> for DatabaseError {
 #[derive(Clone)]
 pub struct DatabaseManager {
     pool: DbPool,
+    /// Optional sink for newly-created audit logs, consumed by the webhook
+    /// dispatcher. Set once at startup via [`set_webhook_sender`].
+    webhook_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
 }
 
 impl DatabaseManager {
@@ -112,7 +115,16 @@ impl DatabaseManager {
             config.min_connections, config.max_connections
         );
 
-        Ok(Self { pool })
+        Ok(Self { pool, webhook_tx: std::sync::OnceLock::new() })
+    }
+
+    /// Register the channel the webhook dispatcher listens on. Called once at
+    /// startup after the dispatcher is created. Subsequent calls are ignored.
+    pub fn set_webhook_sender(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>,
+    ) {
+        let _ = self.webhook_tx.set(tx);
     }
 
     /// Get a connection from the pool
@@ -530,11 +542,19 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::insert_into(audit_logs::table)
+        let created: crate::models::AuditLog = diesel::insert_into(audit_logs::table)
             .values(new_audit_log)
             .returning(crate::models::AuditLog::as_returning())
             .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)
+            .map_err(DatabaseError::Diesel)?;
+
+        // Fan the event out to the webhook dispatcher, if one is registered.
+        // Never fails the audit write: a closed/absent channel is ignored.
+        if let Some(tx) = self.webhook_tx.get() {
+            let _ = tx.send(created.clone());
+        }
+
+        Ok(created)
     }
 
     /// Get tools with filtering
@@ -1909,5 +1929,335 @@ mod tests {
 
         let url = config.get_url();
         assert_eq!(url, explicit_url);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Webhook system
+// ---------------------------------------------------------------------------
+
+impl DatabaseManager {
+    // --- Auth headers (reusable, write-only credentials) ------------------
+
+    pub fn create_webhook_auth_header(
+        &self,
+        new_header: &crate::models::NewWebhookAuthHeader,
+    ) -> Result<crate::models::WebhookAuthHeader, DatabaseError> {
+        use crate::schema::webhook_auth_headers;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(webhook_auth_headers::table)
+            .values(new_header)
+            .returning(crate::models::WebhookAuthHeader::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_webhook_auth_headers(
+        &self,
+    ) -> Result<Vec<crate::models::WebhookAuthHeader>, DatabaseError> {
+        use crate::schema::webhook_auth_headers::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhook_auth_headers
+            .order(created_at.desc())
+            .select(crate::models::WebhookAuthHeader::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_webhook_auth_header(
+        &self,
+        header_id: uuid::Uuid,
+    ) -> Result<crate::models::WebhookAuthHeader, DatabaseError> {
+        use crate::schema::webhook_auth_headers::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhook_auth_headers
+            .find(header_id)
+            .select(crate::models::WebhookAuthHeader::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_webhook_auth_header(
+        &self,
+        header_id: uuid::Uuid,
+        changes: &crate::models::UpdateWebhookAuthHeader,
+    ) -> Result<crate::models::WebhookAuthHeader, DatabaseError> {
+        use crate::schema::webhook_auth_headers::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(webhook_auth_headers.find(header_id))
+            .set(changes)
+            .returning(crate::models::WebhookAuthHeader::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_webhook_auth_header(
+        &self,
+        header_id: uuid::Uuid,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::webhook_auth_headers::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(webhook_auth_headers.find(header_id))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Number of webhooks currently referencing the given auth header.
+    pub fn count_webhook_auth_header_usage(
+        &self,
+        header_id: uuid::Uuid,
+    ) -> Result<i64, DatabaseError> {
+        use crate::schema::webhook_auth_links::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhook_auth_links
+            .filter(auth_header_id.eq(header_id))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // --- Webhooks ---------------------------------------------------------
+
+    /// Create a webhook together with its event subscriptions and auth links,
+    /// in a single transaction.
+    pub fn create_webhook(
+        &self,
+        new_webhook: &crate::models::NewWebhook,
+        event_types: &[String],
+        auth_header_ids: &[uuid::Uuid],
+    ) -> Result<crate::models::Webhook, DatabaseError> {
+        use crate::schema::{webhook_auth_links, webhook_event_subscriptions, webhooks};
+        let mut conn = self.get_connection()?;
+
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let webhook: crate::models::Webhook = diesel::insert_into(webhooks::table)
+                .values(new_webhook)
+                .returning(crate::models::Webhook::as_returning())
+                .get_result(conn)?;
+
+            let subs: Vec<crate::models::NewWebhookEventSubscription> = event_types
+                .iter()
+                .map(|et| crate::models::NewWebhookEventSubscription {
+                    webhook_id: webhook.id,
+                    event_type: et.clone(),
+                })
+                .collect();
+            if !subs.is_empty() {
+                diesel::insert_into(webhook_event_subscriptions::table)
+                    .values(&subs)
+                    .execute(conn)?;
+            }
+
+            let links: Vec<crate::models::NewWebhookAuthLink> = auth_header_ids
+                .iter()
+                .map(|hid| crate::models::NewWebhookAuthLink {
+                    webhook_id: webhook.id,
+                    auth_header_id: *hid,
+                })
+                .collect();
+            if !links.is_empty() {
+                diesel::insert_into(webhook_auth_links::table)
+                    .values(&links)
+                    .execute(conn)?;
+            }
+
+            Ok(webhook)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_webhooks(&self) -> Result<Vec<crate::models::Webhook>, DatabaseError> {
+        use crate::schema::webhooks::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhooks
+            .order(created_at.desc())
+            .select(crate::models::Webhook::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_webhook(
+        &self,
+        webhook_id: uuid::Uuid,
+    ) -> Result<crate::models::Webhook, DatabaseError> {
+        use crate::schema::webhooks::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhooks
+            .find(webhook_id)
+            .select(crate::models::Webhook::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Update webhook fields. When `event_types` / `auth_header_ids` are
+    /// `Some`, the corresponding set is replaced wholesale.
+    pub fn update_webhook(
+        &self,
+        webhook_id: uuid::Uuid,
+        changes: &crate::models::UpdateWebhook,
+        event_types: Option<&[String]>,
+        auth_header_ids: Option<&[uuid::Uuid]>,
+    ) -> Result<crate::models::Webhook, DatabaseError> {
+        use crate::schema::{webhook_auth_links, webhook_event_subscriptions, webhooks};
+        let mut conn = self.get_connection()?;
+
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let webhook: crate::models::Webhook = diesel::update(webhooks::table.find(webhook_id))
+                .set(changes)
+                .returning(crate::models::Webhook::as_returning())
+                .get_result(conn)?;
+
+            if let Some(events) = event_types {
+                diesel::delete(
+                    webhook_event_subscriptions::table
+                        .filter(webhook_event_subscriptions::webhook_id.eq(webhook_id)),
+                )
+                .execute(conn)?;
+                let subs: Vec<crate::models::NewWebhookEventSubscription> = events
+                    .iter()
+                    .map(|et| crate::models::NewWebhookEventSubscription {
+                        webhook_id,
+                        event_type: et.clone(),
+                    })
+                    .collect();
+                if !subs.is_empty() {
+                    diesel::insert_into(webhook_event_subscriptions::table)
+                        .values(&subs)
+                        .execute(conn)?;
+                }
+            }
+
+            if let Some(ids) = auth_header_ids {
+                diesel::delete(
+                    webhook_auth_links::table
+                        .filter(webhook_auth_links::webhook_id.eq(webhook_id)),
+                )
+                .execute(conn)?;
+                let links: Vec<crate::models::NewWebhookAuthLink> = ids
+                    .iter()
+                    .map(|hid| crate::models::NewWebhookAuthLink {
+                        webhook_id,
+                        auth_header_id: *hid,
+                    })
+                    .collect();
+                if !links.is_empty() {
+                    diesel::insert_into(webhook_auth_links::table)
+                        .values(&links)
+                        .execute(conn)?;
+                }
+            }
+
+            Ok(webhook)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_webhook(&self, webhook_id: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::webhooks::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(webhooks.find(webhook_id))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Event types a webhook is subscribed to.
+    pub fn get_webhook_event_types(
+        &self,
+        webhook_id_arg: uuid::Uuid,
+    ) -> Result<Vec<String>, DatabaseError> {
+        use crate::schema::webhook_event_subscriptions::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhook_event_subscriptions
+            .filter(webhook_id.eq(webhook_id_arg))
+            .select(event_type)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// IDs of auth headers linked to a webhook.
+    pub fn get_webhook_auth_header_ids(
+        &self,
+        webhook_id_arg: uuid::Uuid,
+    ) -> Result<Vec<uuid::Uuid>, DatabaseError> {
+        use crate::schema::webhook_auth_links::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhook_auth_links
+            .filter(webhook_id.eq(webhook_id_arg))
+            .select(auth_header_id)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Full auth header rows (incl. secret values) for a webhook — used only
+    /// by the dispatcher when building an outgoing request.
+    pub fn get_webhook_auth_headers_for_dispatch(
+        &self,
+        webhook_id_arg: uuid::Uuid,
+    ) -> Result<Vec<crate::models::WebhookAuthHeader>, DatabaseError> {
+        use crate::schema::{webhook_auth_headers, webhook_auth_links};
+        let mut conn = self.get_connection()?;
+        webhook_auth_links::table
+            .inner_join(
+                webhook_auth_headers::table
+                    .on(webhook_auth_links::auth_header_id.eq(webhook_auth_headers::id)),
+            )
+            .filter(webhook_auth_links::webhook_id.eq(webhook_id_arg))
+            .select(crate::models::WebhookAuthHeader::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Enabled webhooks subscribed to a given event type.
+    pub fn get_enabled_webhooks_for_event(
+        &self,
+        event_type_arg: &str,
+    ) -> Result<Vec<crate::models::Webhook>, DatabaseError> {
+        use crate::schema::{webhook_event_subscriptions, webhooks};
+        let mut conn = self.get_connection()?;
+        webhooks::table
+            .inner_join(
+                webhook_event_subscriptions::table
+                    .on(webhook_event_subscriptions::webhook_id.eq(webhooks::id)),
+            )
+            .filter(webhooks::enabled.eq(true))
+            .filter(webhook_event_subscriptions::event_type.eq(event_type_arg))
+            .select(crate::models::Webhook::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // --- Deliveries -------------------------------------------------------
+
+    pub fn record_webhook_delivery(
+        &self,
+        delivery: &crate::models::NewWebhookDelivery,
+    ) -> Result<crate::models::WebhookDelivery, DatabaseError> {
+        use crate::schema::webhook_deliveries;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(webhook_deliveries::table)
+            .values(delivery)
+            .returning(crate::models::WebhookDelivery::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_webhook_deliveries(
+        &self,
+        webhook_id_filter: Option<uuid::Uuid>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::models::WebhookDelivery>, DatabaseError> {
+        use crate::schema::webhook_deliveries::dsl::*;
+        let mut conn = self.get_connection()?;
+        let mut query = webhook_deliveries.order(created_at.desc()).into_boxed();
+        if let Some(wid) = webhook_id_filter {
+            query = query.filter(webhook_id.eq(wid));
+        }
+        query
+            .limit(limit)
+            .offset(offset)
+            .select(crate::models::WebhookDelivery::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 }

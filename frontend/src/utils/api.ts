@@ -286,6 +286,53 @@ export const adminApi = {
   },
 }
 
+// Webhooks API functions (admin only)
+export const webhooksApi = {
+  // --- Auth headers (reusable write-only credentials) ---
+  listAuthHeaders() {
+    return apiClient.get<import('@/types').WebhookAuthHeader[]>('/admin/webhooks/auth-headers')
+  },
+  createAuthHeader(data: import('@/types').CreateAuthHeaderRequest) {
+    return apiClient.post<import('@/types').WebhookAuthHeader>('/admin/webhooks/auth-headers', data)
+  },
+  updateAuthHeader(id: string, data: import('@/types').UpdateAuthHeaderRequest) {
+    return apiClient.patch<import('@/types').WebhookAuthHeader>(`/admin/webhooks/auth-headers/${id}`, data)
+  },
+  deleteAuthHeader(id: string) {
+    return apiClient.delete<void>(`/admin/webhooks/auth-headers/${id}`)
+  },
+
+  // --- Event type catalog ---
+  listEventTypes() {
+    return apiClient.get<import('@/types').WebhookEventType[]>('/admin/webhooks/event-types')
+  },
+
+  // --- Webhooks ---
+  listWebhooks() {
+    return apiClient.get<import('@/types').Webhook[]>('/admin/webhooks')
+  },
+  getWebhook(id: string) {
+    return apiClient.get<import('@/types').Webhook>(`/admin/webhooks/${id}`)
+  },
+  createWebhook(data: import('@/types').CreateWebhookRequest) {
+    return apiClient.post<import('@/types').Webhook>('/admin/webhooks', data)
+  },
+  updateWebhook(id: string, data: import('@/types').UpdateWebhookRequest) {
+    return apiClient.patch<import('@/types').Webhook>(`/admin/webhooks/${id}`, data)
+  },
+  deleteWebhook(id: string) {
+    return apiClient.delete<void>(`/admin/webhooks/${id}`)
+  },
+  testWebhook(id: string) {
+    return apiClient.post<{ delivered: boolean; error?: string }>(`/admin/webhooks/${id}/test`)
+  },
+
+  // --- Deliveries ---
+  listDeliveries(params?: { webhook_id?: string; limit?: number; offset?: number }) {
+    return apiClient.get<import('@/types').WebhookDelivery[]>('/admin/webhooks/deliveries', params)
+  },
+}
+
 // Tools API functions
 export const toolsApi = {
   // List tools (staff only)
