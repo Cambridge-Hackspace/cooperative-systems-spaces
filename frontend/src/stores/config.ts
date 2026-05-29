@@ -36,11 +36,28 @@ export interface PublicRegistrationChallengeConfig {
   recaptcha_site_key: string
 }
 
+export interface PublicDoorsConfig {
+  enabled: boolean
+}
+
+export interface PublicCalendarConfig {
+  enabled: boolean
+}
+
+export interface PublicToolGuardConfig {
+  enabled: boolean
+}
+
 export interface PublicConfig {
   registration_challenge: PublicRegistrationChallengeConfig
   tools: PublicToolConfig
   site: PublicSiteConfig
   pages: PublicPagesConfig
+  // Feature flags surfaced from server config.toml. All default to false on
+  // older servers that don't yet emit these blocks.
+  doors?: PublicDoorsConfig
+  calendar?: PublicCalendarConfig
+  toolguard?: PublicToolGuardConfig
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -124,6 +141,18 @@ export const useConfigStore = defineStore('config', () => {
     return link === 'HomePage' || link === 'Both'
   }
 
+  function doorsEnabled(): boolean {
+    return !!config.value?.doors?.enabled
+  }
+
+  function calendarEnabled(): boolean {
+    return !!config.value?.calendar?.enabled
+  }
+
+  function toolguardEnabled(): boolean {
+    return !!config.value?.toolguard?.enabled
+  }
+
   return {
     config,
     loading,
@@ -132,6 +161,9 @@ export const useConfigStore = defineStore('config', () => {
     shouldShowWikiInNav,
     shouldShowSiteInNav,
     shouldShowWikiOnHomePage,
-    shouldShowSiteOnHomePage
+    shouldShowSiteOnHomePage,
+    doorsEnabled,
+    calendarEnabled,
+    toolguardEnabled
   }
 })

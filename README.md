@@ -44,6 +44,22 @@ Almost everything is configurable via the config.toml file. At first start the s
   - Per-webhook HMAC-SHA256 signed payloads (`X-Webhook-Signature: sha256=...`)
   - Up to three retries with exponential backoff and a per-attempt delivery log
   - Ships with a `css-webhook-recvr` test sink binary for local development
+- Facility model
+  - Configurable hierarchy of physical Places (`Facility → Building → Floor → Room → Spot`); levels are operator-defined in `[place].types`
+  - Special places (Outside, Common Area, Parking Lot, …) sit outside the hierarchy
+  - Tools and devices can be tagged with a place; admin can ask "what's in this room?"
+- Door Access
+  - RFID at the door unlocks for authorized members; every unlock is logged
+  - Fallback: scan a static QR, sign in, tap **I'm here** to unlock
+  - Per-door access rules with `role` / `user` / `card` × `allow` / `deny`
+  - Edge-cached decisions: even if the server is offline, the door still works on its last snapshot
+  - Per-webhook HMAC-signed delivery logs and a graph view of the facility
+- Working hours / Schedules
+  - Reusable weekly windows (`24/7`, `9–5 weekdays`, `Weekday evenings`, …) created from one-click templates
+  - Attach to any door access rule — the rule is silently inactive outside its window
+  - Attach to a tool to gate its usability (closed schedule = tool unavailable to everyone)
+  - Mark a schedule "public" to surface it on the home page **Hours today** card
+  - Server transparently republishes door state at window boundaries — edge stays simple
 
 ### TODO
 - Link Blocks on the landing page for other sites

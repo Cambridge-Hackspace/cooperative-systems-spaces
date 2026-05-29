@@ -96,13 +96,23 @@
         <div class="form-row">
           <div class="form-group">
             <label for="location">Location</label>
-            <input 
+            <input
               id="location"
-              v-model="form.location" 
-              type="text" 
+              v-model="form.location"
+              type="text"
               placeholder="Where the tool is stored"
               class="input"
             />
+          </div>
+
+          <div class="form-group">
+            <label for="schedule_id">Usability schedule</label>
+            <SchedulePicker
+              :model-value="form.schedule_id ?? null"
+              :schedules="schedules"
+              @update:model-value="(v) => form.schedule_id = v ?? undefined"
+            />
+            <small class="help-text">Optional — restrict when the tool can be used.</small>
           </div>
 
           <div class="form-group">
@@ -180,9 +190,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { toolsApi } from '../utils/api'
+import { onMounted, ref } from 'vue'
+import { toolsApi, schedulesApi } from '../utils/api'
 import type { NewTool, ToolCategory } from '../types/tools'
+import type { Schedule } from '../types'
+import SchedulePicker from './SchedulePicker.vue'
 
 interface Emits {
   (e: 'close'): void
@@ -194,8 +206,9 @@ const emit = defineEmits<Emits>()
 // State
 const loading = ref(false)
 const error = ref('')
+const schedules = ref<Schedule[]>([])
 
-const form = ref<NewTool>({
+const form = ref<NewTool & { schedule_id?: string | null }>({
   name: '',
   category: '' as ToolCategory,
   description: '',
@@ -208,8 +221,16 @@ const form = ref<NewTool>({
   purchase_date: '',
   purchase_price: null,
   requires_training: false,
-  notes: ''
+  notes: '',
+  schedule_id: null,
 })
+
+const loadSchedules = async () => {
+  try {
+    const r = await schedulesApi.list()
+    if (r.success && r.data) schedules.value = r.data
+  } catch { schedules.value = [] }
+}
 
 // Methods
 const createTool = async () => {
@@ -235,6 +256,8 @@ const createTool = async () => {
     loading.value = false
   }
 }
+
+onMounted(loadSchedules)
 </script>
 
 <style scoped>

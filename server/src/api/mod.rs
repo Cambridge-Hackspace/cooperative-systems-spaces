@@ -15,6 +15,10 @@ pub mod devices;
 pub mod webhooks;
 pub mod mfa;
 pub mod doors;
+pub mod places;
+pub mod schedules;
+pub mod home_links;
+pub mod instance;
 
 use axum::Router;
 use crate::AppState;
@@ -34,4 +38,9 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/pages", pages::pages_routes())
         .nest("/devices", devices::devices_routes())
         .nest("/doors", doors::member_routes())
+        .nest("/places", places::member_routes())
+        .nest("/schedules", schedules::member_routes())
+        .nest("/public", schedules::public_routes())
+        .nest("/public", home_links::public_routes())
+        .nest("/instance", instance::instance_routes())
 }

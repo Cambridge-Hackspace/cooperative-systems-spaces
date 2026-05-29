@@ -1,6 +1,6 @@
 <template>
-  <div class="container mx-auto px-4 py-8">
-    <div class="breadcrumbs text-sm mb-6">
+  <div :class="embedded ? '' : 'container mx-auto px-4 py-8'">
+    <div v-if="!embedded" class="breadcrumbs text-sm mb-6">
       <ul>
         <li><router-link to="/" class="link">Home</router-link></li>
         <li><router-link to="/admin" class="link">Admin</router-link></li>
@@ -10,7 +10,7 @@
 
     <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-3xl font-bold mb-1">Doors</h1>
+        <h1 v-if="!embedded" class="text-3xl font-bold mb-1">Doors</h1>
         <p class="text-base-content/70">
           Manage physical doors backed by edge devices, their access rules, and view unlock events.
         </p>
@@ -101,6 +101,23 @@
           </label>
         </div>
 
+        <div v-if="places.length" class="grid grid-cols-2 gap-3 mb-3">
+          <div class="form-control">
+            <label class="label py-1"><span class="label-text">From</span></label>
+            <PlacePicker v-model="form.place_id_from" :places="places" hide-null />
+          </div>
+          <div class="form-control">
+            <label class="label py-1"><span class="label-text">To</span></label>
+            <PlacePicker v-model="form.place_id_to" :places="places" hide-null />
+          </div>
+        </div>
+        <div v-if="!places.length" class="alert alert-warning mb-3 text-sm">
+          You need at least one place to create a door. Add a place (or a
+          special place like
+          <span class="badge badge-warning badge-sm">Outside</span>)
+          on the Places tab first.
+        </div>
+
         <div class="modal-action">
           <button class="btn btn-ghost" @click="showForm = false">Cancel</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveDoor">
@@ -124,13 +141,80 @@
           <a role="tab" class="tab" :class="{ 'tab-active': detailTab === 'qr' }" @click="switchToQr">QR / signage</a>
         </div>
 
-        <!-- Settings tab: open edit form -->
-        <div v-if="detailTab === 'settings'" class="space-y-2 text-sm">
-          <div><strong>Edge device:</strong> {{ deviceLabel(detail.edge_device_id) }}</div>
-          <div><strong>Unlock duration:</strong> {{ detail.unlock_duration_ms }} ms</div>
-          <div><strong>Status:</strong> {{ detail.enabled ? 'Enabled' : 'Disabled' }}</div>
-          <button class="btn btn-sm mt-2" @click="openEdit(detail)">Edit settings</button>
-          <button class="btn btn-sm ml-2" @click="republish(detail)">Republish state to edge</button>
+        <!-- Settings tab: read-only summary OR inline edit form. -->
+        <div v-if="detailTab === 'settings'">
+          <!-- Read-only summary -->
+          <div v-if="!editingInline" class="space-y-2 text-sm">
+            <div><strong>Edge device:</strong> {{ deviceLabel(detail.edge_device_id) }}</div>
+            <div><strong>Unlock duration:</strong> {{ detail.unlock_duration_ms }} ms</div>
+            <div><strong>Status:</strong> {{ detail.enabled ? 'Enabled' : 'Disabled' }}</div>
+            <div>
+              <strong>From:</strong>
+              {{ placeLabel(detail.place_id_from) }}
+              <span class="text-base-content/50">→</span>
+              <strong>To:</strong>
+              {{ placeLabel(detail.place_id_to) }}
+            </div>
+            <div class="flex gap-2 mt-3">
+              <button class="btn btn-primary btn-sm" @click="beginInlineEdit">Edit settings</button>
+              <button class="btn btn-sm" @click="republish(detail)">Republish state to edge</button>
+            </div>
+          </div>
+
+          <!-- Inline edit form: same fields as the create modal, no second modal. -->
+          <div v-else class="space-y-3">
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text">Name</span></label>
+              <input v-model="form.name" type="text" class="input input-bordered input-sm" />
+            </div>
+
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text">Location</span></label>
+              <input v-model.lazy="formLocation" type="text" class="input input-bordered input-sm" />
+            </div>
+
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text">Edge device</span></label>
+              <select v-model="form.edge_device_id" class="select select-bordered select-sm">
+                <option :value="null">— None —</option>
+                <option v-for="dev in devices" :key="dev.id" :value="dev.id">
+                  {{ dev.name }} ({{ shortId(dev.id) }})
+                </option>
+              </select>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text">Unlock duration (ms)</span></label>
+                <input v-model.number="form.unlock_duration_ms" type="number" min="500" max="60000" class="input input-bordered input-sm" />
+              </div>
+              <div class="form-control">
+                <label class="label cursor-pointer justify-start gap-3 mt-7">
+                  <input v-model="form.enabled" type="checkbox" class="toggle toggle-primary toggle-sm" />
+                  <span class="label-text">Enabled</span>
+                </label>
+              </div>
+            </div>
+
+            <div v-if="places.length" class="grid grid-cols-2 gap-3">
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text">From</span></label>
+                <PlacePicker v-model="form.place_id_from" :places="places" hide-null />
+              </div>
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text">To</span></label>
+                <PlacePicker v-model="form.place_id_to" :places="places" hide-null />
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-1">
+              <button class="btn btn-ghost btn-sm" @click="cancelInlineEdit">Cancel</button>
+              <button class="btn btn-primary btn-sm" :disabled="saving" @click="saveInline">
+                <span v-if="saving" class="loading loading-spinner loading-sm"></span>
+                <span v-else>Save</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Rules tab -->
@@ -139,7 +223,7 @@
             No rules yet. Add one below.
           </div>
           <table v-else class="table table-sm">
-            <thead><tr><th>Kind</th><th>Value</th><th>Effect</th><th></th></tr></thead>
+            <thead><tr><th>Kind</th><th>Value</th><th>Effect</th><th>Schedule</th><th></th></tr></thead>
             <tbody>
               <tr v-for="r in detail.rules" :key="r.id">
                 <td>{{ r.kind }}</td>
@@ -147,6 +231,7 @@
                 <td>
                   <span class="badge" :class="r.effect === 'deny' ? 'badge-error' : 'badge-success'">{{ r.effect }}</span>
                 </td>
+                <td class="text-xs">{{ scheduleLabel(r.schedule_id) }}</td>
                 <td class="text-right">
                   <button class="btn btn-ghost btn-xs text-error" @click="removeRule(r)">Remove</button>
                 </td>
@@ -154,7 +239,7 @@
             </tbody>
           </table>
 
-          <div class="border-t border-base-300 mt-4 pt-3 grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+          <div class="border-t border-base-300 mt-4 pt-3 grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
             <div class="form-control">
               <label class="label py-1"><span class="label-text">Kind</span></label>
               <select v-model="newRule.kind" class="select select-bordered select-sm">
@@ -183,7 +268,11 @@
                 <option value="deny">Deny</option>
               </select>
             </div>
-            <button class="btn btn-primary btn-sm md:col-span-4" :disabled="!newRule.value.trim()" @click="addRule">
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text">Schedule</span></label>
+              <SchedulePicker v-model="newRule.schedule_id" :schedules="schedules" />
+            </div>
+            <button class="btn btn-primary btn-sm md:col-span-5" :disabled="!newRule.value.trim()" @click="addRule">
               Add rule
             </button>
           </div>
@@ -233,10 +322,22 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
-import { doorsApi, apiClient } from '@/utils/api'
+import { doorsApi, placesApi, schedulesApi, apiClient } from '@/utils/api'
 import type {
-  Door, DoorAccessEvent, DoorAccessRule, DoorDetail, DoorRuleEffect, DoorRuleKind, User,
+  Door, DoorAccessEvent, DoorAccessRule, DoorDetail, DoorRuleEffect, DoorRuleKind, Place, Schedule, User,
 } from '@/types'
+import PlacePicker from './PlacePicker.vue'
+import SchedulePicker from './SchedulePicker.vue'
+
+withDefaults(
+  defineProps<{
+    /** Hide the breadcrumb + outer container so the component can be
+        dropped into a parent (e.g. the combined Facility page) without
+        duplicating page chrome. */
+    embedded?: boolean
+  }>(),
+  { embedded: false },
+)
 
 const loading = ref(false)
 const saving = ref(false)
@@ -246,6 +347,7 @@ const flashOk = ref(true)
 const doors = ref<Door[]>([])
 const devices = ref<Array<{ id: string; name: string }>>([])
 const users = ref<User[]>([])
+const places = ref<Place[]>([])
 
 const showForm = ref(false)
 const editing = ref<Door | null>(null)
@@ -255,8 +357,12 @@ const form = ref<{
   edge_device_id: string | null
   unlock_duration_ms: number
   enabled: boolean
+  /** Required — `''` means "not picked yet", which fails validation on save. */
+  place_id_from: string
+  place_id_to: string
 }>({
   name: '', location: null, edge_device_id: null, unlock_duration_ms: 5000, enabled: true,
+  place_id_from: '', place_id_to: '',
 })
 
 // Bridge between input v-model (empty string) and the nullable Location column.
@@ -264,13 +370,22 @@ const formLocation = ref('')
 
 const detail = ref<DoorDetail | null>(null)
 const detailTab = ref<'settings' | 'rules' | 'events' | 'qr'>('rules')
+/** When true, the Settings tab renders the form inline instead of the
+    read-only summary. Reuses the same `form` ref the create modal uses. */
+const editingInline = ref(false)
 const events = ref<DoorAccessEvent[]>([])
 const qrUrl = ref('')
 const qrDataUrl = ref('')
 const unlockingId = ref<string | null>(null)
 
-const newRule = ref<{ kind: DoorRuleKind; value: string; effect: DoorRuleEffect }>({
-  kind: 'role', value: 'Member', effect: 'allow',
+const schedules = ref<Schedule[]>([])
+const newRule = ref<{
+  kind: DoorRuleKind
+  value: string
+  effect: DoorRuleEffect
+  schedule_id: string | null
+}>({
+  kind: 'role', value: 'Member', effect: 'allow', schedule_id: null,
 })
 
 function notify(msg: string, ok = true) {
@@ -284,6 +399,17 @@ function deviceLabel(id: string | null) {
   if (!id) return '—'
   const d = devices.value.find(x => x.id === id)
   return d ? `${d.name} (${shortId(id)})` : shortId(id)
+}
+function placeLabel(id: string | null | undefined) {
+  if (!id) return '— (unset) —'
+  const p = places.value.find(x => x.id === id)
+  if (!p) return id.slice(0, 8)
+  return p.is_special ? `★ ${p.name}` : p.name
+}
+function scheduleLabel(id: string | null | undefined) {
+  if (!id) return 'Always'
+  const s = schedules.value.find(x => x.id === id)
+  return s?.name ?? id.slice(0, 8)
 }
 function userLabel(id: string) {
   const u = users.value.find(x => x.id === id)
@@ -322,37 +448,45 @@ async function loadUsers() {
 
 function openNew() {
   editing.value = null
-  form.value = { name: '', location: null, edge_device_id: null, unlock_duration_ms: 5000, enabled: true }
+  // Pre-pick the first available place on both sides so a fresh form is
+  // valid out of the gate; the user can change either picker.
+  const first = places.value[0]?.id ?? ''
+  form.value = {
+    name: '',
+    location: null,
+    edge_device_id: null,
+    unlock_duration_ms: 5000,
+    enabled: true,
+    place_id_from: first,
+    place_id_to: first,
+  }
   formLocation.value = ''
   showForm.value = true
 }
 
-function openEdit(d: Door) {
-  editing.value = d
-  form.value = {
-    name: d.name,
-    location: d.location,
-    edge_device_id: d.edge_device_id,
-    unlock_duration_ms: d.unlock_duration_ms,
-    enabled: d.enabled,
+async function loadPlaces() {
+  try {
+    const r = await placesApi.list()
+    if (r.success && r.data) places.value = r.data
+  } catch {
+    places.value = []
   }
-  formLocation.value = d.location || ''
-  showForm.value = true
 }
 
 async function saveDoor() {
   if (!form.value.name.trim()) { notify('Name is required', false); return }
+  if (!form.value.place_id_from || !form.value.place_id_to) {
+    notify('Pick a From and a To place', false)
+    return
+  }
   form.value.location = formLocation.value.trim() || null
   saving.value = true
-  const r = editing.value
-    ? await doorsApi.update(editing.value.id, form.value)
-    : await doorsApi.create(form.value)
+  const r = await doorsApi.create(form.value)
   saving.value = false
   if (r.success) {
-    notify(editing.value ? 'Door saved' : 'Door created')
+    notify('Door created')
     showForm.value = false
     await loadDoors()
-    if (detail.value && editing.value?.id === detail.value.id) await openDetail(editing.value)
   } else notify(r.error || 'Failed', false)
 }
 
@@ -385,11 +519,53 @@ async function openDetail(d: Door) {
     events.value = []
     qrUrl.value = ''
     qrDataUrl.value = ''
+    editingInline.value = false
   } else notify(r.error || 'Failed to load door detail', false)
 }
 
 function closeDetail() {
   detail.value = null
+  editingInline.value = false
+}
+
+/** Flip Settings tab into edit mode, hydrating `form` from `detail`. */
+function beginInlineEdit() {
+  if (!detail.value) return
+  editing.value = detail.value as Door
+  form.value = {
+    name: detail.value.name,
+    location: detail.value.location,
+    edge_device_id: detail.value.edge_device_id,
+    unlock_duration_ms: detail.value.unlock_duration_ms,
+    enabled: detail.value.enabled,
+    place_id_from: detail.value.place_id_from ?? '',
+    place_id_to: detail.value.place_id_to ?? '',
+  }
+  formLocation.value = detail.value.location || ''
+  editingInline.value = true
+}
+
+function cancelInlineEdit() {
+  editingInline.value = false
+}
+
+async function saveInline() {
+  if (!detail.value) return
+  if (!form.value.name.trim()) { notify('Name is required', false); return }
+  if (!form.value.place_id_from || !form.value.place_id_to) {
+    notify('Pick a From and a To place', false)
+    return
+  }
+  form.value.location = formLocation.value.trim() || null
+  saving.value = true
+  const r = await doorsApi.update(detail.value.id, form.value)
+  saving.value = false
+  if (r.success) {
+    notify('Door saved')
+    editingInline.value = false
+    await loadDoors()
+    await openDetail({ id: detail.value.id } as Door)
+  } else notify(r.error || 'Failed', false)
 }
 
 async function switchToEvents() {
@@ -419,8 +595,18 @@ async function addRule() {
   if (r.success) {
     notify('Rule added')
     newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''
+    newRule.value.schedule_id = null
     await openDetail(detail.value)
   } else notify(r.error || 'Failed', false)
+}
+
+async function loadSchedules() {
+  try {
+    const r = await schedulesApi.list()
+    if (r.success && r.data) schedules.value = r.data
+  } catch {
+    schedules.value = []
+  }
 }
 
 async function removeRule(rule: DoorAccessRule) {
@@ -432,6 +618,6 @@ async function removeRule(rule: DoorAccessRule) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadDoors(), loadDevices(), loadUsers()])
+  await Promise.all([loadDoors(), loadDevices(), loadUsers(), loadPlaces(), loadSchedules()])
 })
 </script>

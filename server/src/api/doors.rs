@@ -68,6 +68,8 @@ pub struct DoorSummary {
     pub enabled: bool,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
+    pub place_id_from: Option<Uuid>,
+    pub place_id_to: Option<Uuid>,
 }
 
 impl From<Door> for DoorSummary {
@@ -82,6 +84,8 @@ impl From<Door> for DoorSummary {
             enabled: d.enabled,
             created_at: d.created_at,
             updated_at: d.updated_at,
+            place_id_from: d.place_id_from,
+            place_id_to: d.place_id_to,
         }
     }
 }
@@ -101,6 +105,10 @@ pub struct CreateDoorRequest {
     pub edge_device_id: Option<Uuid>,
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
+    /// Required. Use a special place (e.g. `Outside`) for exterior doors.
+    pub place_id_from: Uuid,
+    /// Required.
+    pub place_id_to: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +119,12 @@ pub struct UpdateDoorRequest {
     pub edge_device_id: Option<Option<Uuid>>,
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
+    /// PATCH-style: `Some` = set; absent = leave alone. Doors can no longer
+    /// be cleared to NULL — point at a special place if you mean "Outside".
+    #[serde(default)]
+    pub place_id_from: Option<Uuid>,
+    #[serde(default)]
+    pub place_id_to: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +133,9 @@ pub struct AddRuleRequest {
     pub value: String,
     #[serde(default = "default_effect")]
     pub effect: DoorRuleEffect,
+    /// Optional weekly-window schedule that gates this rule. `None` = always.
+    #[serde(default)]
+    pub schedule_id: Option<Uuid>,
 }
 fn default_effect() -> DoorRuleEffect { DoorRuleEffect::Allow }
 
@@ -370,6 +387,8 @@ async fn create_door(
             .unwrap_or(cfg.door.default_unlock_duration_ms),
         enabled: req.enabled.unwrap_or(true),
         created_by: Some(admin.0.id),
+        place_id_from: req.place_id_from,
+        place_id_to: req.place_id_to,
     };
     let door = state.db.create_door(&new_door)?;
     audit(
@@ -413,6 +432,8 @@ async fn update_door(
         unlock_duration_ms: req.unlock_duration_ms,
         enabled: req.enabled,
         updated_at: Some(Utc::now()),
+        place_id_from: req.place_id_from,
+        place_id_to: req.place_id_to,
     };
     let door = state.db.update_door(id, &changes)?;
     audit(
@@ -564,6 +585,7 @@ async fn add_rule(
         kind: req.kind.as_str().to_string(),
         value: req.value,
         effect: req.effect.as_str().to_string(),
+        schedule_id: req.schedule_id,
     })?;
     audit(
         &state,

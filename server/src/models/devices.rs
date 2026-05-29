@@ -87,6 +87,7 @@ pub struct SpaceDevice {
     pub ipv6_address: Option<String>,
     pub uptime: i64,
     pub platform: SpaceDevicePlatform,
+    pub place_id: Option<Uuid>,
 }
 
 /// New device for insertion
@@ -118,6 +119,8 @@ pub struct UpdateSpaceDevice {
     pub uptime: Option<i64>,
     pub platform: Option<SpaceDevicePlatform>,
     pub updated_at: Option<DateTime<Utc>>,
+    /// Outer Option = field present?; inner Option = SET NULL?
+    pub place_id: Option<Option<Uuid>>,
 }
 
 /// Device authentication token

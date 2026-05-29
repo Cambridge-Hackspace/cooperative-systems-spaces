@@ -32,6 +32,11 @@
       v-if="isOwnProfile"
       :user-id="userId"
     />
+
+    <!-- Instance QR (own profile only). Drives cross-device handoff into the
+         Cooperative Spaces app — the JSON payload mirrors what the Android
+         onboarding scanner expects. -->
+    <InstanceQrCard v-if="isOwnProfile" class="mt-6" />
   </div>
 </template>
 
@@ -41,6 +46,7 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import UserProfile from '@/components/UserProfile.vue'
 import ThemePicker from '@/components/ThemePicker.vue'
+import InstanceQrCard from '@/components/InstanceQrCard.vue'
 import { apiClient, mfaApi } from '@/utils/api'
 import type { User } from '@/types'
 

@@ -17,11 +17,12 @@ use serde_json::Value;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::config::ConfigManager;
 use crate::database::{DatabaseError, DatabaseManager};
+use crate::devices_transport::DeviceTransport;
 use crate::models::{
-    Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, User, UserRole,
+    Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User, UserRole,
 };
-use crate::mqtt::MqttService;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompiledDoor {
@@ -49,17 +50,28 @@ pub enum AccessDecision {
 #[derive(Clone)]
 pub struct DoorService {
     db: Arc<DatabaseManager>,
-    mqtt: Option<Arc<MqttService>>,
+    transport: Arc<DeviceTransport>,
     profile_field: String,
+    config: Arc<ConfigManager>,
+    /// Last-published snapshot hash per device. Used by the schedule ticker
+    /// to skip republish when nothing changed.
+    last_snapshot_hash: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, u64>>>,
 }
 
 impl DoorService {
     pub fn new(
         db: Arc<DatabaseManager>,
-        mqtt: Option<Arc<MqttService>>,
+        transport: Arc<DeviceTransport>,
         profile_field: String,
+        config: Arc<ConfigManager>,
     ) -> Self {
-        Self { db, mqtt, profile_field }
+        Self {
+            db,
+            transport,
+            profile_field,
+            config,
+            last_snapshot_hash: Arc::new(std::sync::Mutex::new(Default::default())),
+        }
     }
 
     // ----- card extraction helpers -------------------------------------
@@ -99,11 +111,14 @@ impl DoorService {
 
         // Single pass over active users for role/user rule expansion.
         let active_users = self.db.list_active_users()?;
+        // Snapshot the schedules table so rule expansion is a pure CPU pass.
+        let schedules = self.db.list_schedules()?;
+        let tz = self.site_tz();
 
         let mut compiled = Vec::with_capacity(doors.len());
         for door in &doors {
             let rules = self.db.list_rules_for_door(door.id)?;
-            let (allow, deny) = self.expand_rules(&rules, &active_users);
+            let (allow, deny) = self.expand_rules(&rules, &active_users, &schedules, tz);
             compiled.push(CompiledDoor {
                 id: door.id,
                 name: door.name.clone(),
@@ -124,11 +139,18 @@ impl DoorService {
         &self,
         rules: &[DoorAccessRule],
         active_users: &[User],
+        schedules: &[Schedule],
+        tz: chrono_tz::Tz,
     ) -> (BTreeSet<String>, BTreeSet<String>) {
         let mut allow = BTreeSet::<String>::new();
         let mut deny = BTreeSet::<String>::new();
 
         for rule in rules {
+            // Rule's schedule, if any, must be in-window right now;
+            // otherwise the rule contributes nothing to either bucket.
+            if !schedule_is_active_now(rule.schedule_id, schedules, tz) {
+                continue;
+            }
             let effect = DoorRuleEffect::parse(&rule.effect).unwrap_or(DoorRuleEffect::Allow);
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
@@ -180,27 +202,20 @@ impl DoorService {
 
     // ----- publishing ---------------------------------------------------
 
-    /// Publish a fresh snapshot for one device. Quiet no-op when MQTT is
-    /// disabled in config (the unit-test / dev environment).
+    /// Publish a fresh snapshot for one device. The transport picks WS if
+    /// the device is connected via WebSocket, otherwise MQTT, otherwise warns.
     pub fn publish_state(&self, device_id: Uuid) -> Result<(), DatabaseError> {
-        let mqtt = match &self.mqtt {
-            Some(m) => m.clone(),
-            None => {
-                debug!("Skipping doors/state publish (MQTT disabled)");
-                return Ok(());
-            }
-        };
         let snapshot = self.compile_state_for(device_id)?;
-        let payload = serde_json::to_vec(&snapshot)
+        let payload = serde_json::to_value(&snapshot)
             .map_err(|e| DatabaseError::Other(format!("serialize doors snapshot: {e}")))?;
-        if let Err(e) = mqtt.publish_doors_state(device_id, payload) {
-            error!("Failed to publish doors/state to {}: {}", device_id, e);
+        let count = snapshot.doors.len();
+        if self
+            .transport
+            .push(device_id, css_lib::wire::kinds::DOORS_STATE, payload)
+        {
+            info!("Published doors/state to {} ({} door(s))", device_id, count);
         } else {
-            info!(
-                "Published doors/state to {} ({} door(s))",
-                device_id,
-                snapshot.doors.len()
-            );
+            debug!("Skipped doors/state to {} (no transport)", device_id);
         }
         Ok(())
     }
@@ -209,9 +224,6 @@ impl DoorService {
     /// Called after role/activation/profile-card changes that don't tell us
     /// exactly which devices are affected.
     pub fn republish_all(&self) {
-        if self.mqtt.is_none() {
-            return;
-        }
         let device_ids = match self.db.list_door_device_ids() {
             Ok(ids) => ids,
             Err(e) => {
@@ -234,20 +246,19 @@ impl DoorService {
         duration_ms: i32,
         reason: &str,
     ) -> Result<(), DatabaseError> {
-        let mqtt = match &self.mqtt {
-            Some(m) => m,
-            None => {
-                warn!("Cannot publish doors/unlock — MQTT disabled");
-                return Err(DatabaseError::Other("MQTT disabled".into()));
-            }
-        };
         let payload = serde_json::json!({
             "door_id": door_id,
             "duration_ms": duration_ms,
             "reason": reason,
         });
-        mqtt.publish_doors_unlock(device_id, payload.to_string().into_bytes())
-            .map_err(|e| DatabaseError::Other(format!("publish doors/unlock: {e}")))?;
+        if !self
+            .transport
+            .push(device_id, css_lib::wire::kinds::DOORS_UNLOCK, payload)
+        {
+            return Err(DatabaseError::Other(
+                "No transport available to deliver doors/unlock".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -266,12 +277,18 @@ impl DoorService {
             return Ok(AccessDecision::Deny("Account inactive".into()));
         }
         let rules = self.db.list_rules_for_door(door.id)?;
+        let schedules = self.db.list_schedules()?;
+        let tz = self.site_tz();
         let mut allow = HashSet::<String>::new();
         let mut deny = HashSet::<String>::new();
         let user_cards: HashSet<String> = self.cards_for_user(user).into_iter().collect();
         let user_id_str = user.id.to_string();
 
         for rule in &rules {
+            // Schedule-gated rules are silent when their window is closed.
+            if !schedule_is_active_now(rule.schedule_id, &schedules, tz) {
+                continue;
+            }
             let effect = DoorRuleEffect::parse(&rule.effect).unwrap_or(DoorRuleEffect::Allow);
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
@@ -307,6 +324,107 @@ impl DoorService {
             Ok(AccessDecision::Deny("No matching access rule".into()))
         }
     }
+
+    // ----- schedules helpers + ticker ----------------------------------
+
+    fn site_tz(&self) -> chrono_tz::Tz {
+        let cfg = self.config.get_config();
+        crate::schedules::resolve_tz(&cfg.site.timezone)
+    }
+
+    /// Recompile per-device state and only push when the snapshot's hash
+    /// has changed since the last successful publish. Quiet during steady
+    /// state — the only thing chatty is a real schedule transition.
+    pub fn republish_changed(&self) {
+        let device_ids = match self.db.list_door_device_ids() {
+            Ok(ids) => ids,
+            Err(e) => {
+                error!("Failed to list door device IDs for tick republish: {}", e);
+                return;
+            }
+        };
+        for id in device_ids {
+            match self.compile_state_for(id) {
+                Ok(snapshot) => {
+                    let bytes = match serde_json::to_vec(&snapshot) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            warn!("Failed to serialize snapshot for {}: {}", id, e);
+                            continue;
+                        }
+                    };
+                    let hash = stable_hash(&bytes);
+                    let mut map = self
+                        .last_snapshot_hash
+                        .lock()
+                        .expect("door snapshot hash map poisoned");
+                    if map.get(&id).copied() == Some(hash) {
+                        continue;
+                    }
+                    let payload = match serde_json::to_value(&snapshot) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Failed to encode snapshot value for {}: {}", id, e);
+                            continue;
+                        }
+                    };
+                    drop(map);
+                    if self
+                        .transport
+                        .push(id, css_lib::wire::kinds::DOORS_STATE, payload)
+                    {
+                        info!(
+                            "Schedule tick republished doors/state to {} ({} door(s))",
+                            id, snapshot.doors.len()
+                        );
+                        let mut map = self
+                            .last_snapshot_hash
+                            .lock()
+                            .expect("door snapshot hash map poisoned");
+                        map.insert(id, hash);
+                    }
+                }
+                Err(e) => warn!("Failed to compile state for {}: {}", id, e),
+            }
+        }
+    }
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+/// Resolve a rule's schedule (by id) and ask whether *now* falls in any
+/// interval. Rules with no schedule are always active.
+fn schedule_is_active_now(
+    schedule_id: Option<Uuid>,
+    schedules: &[Schedule],
+    tz: chrono_tz::Tz,
+) -> bool {
+    let sid = match schedule_id {
+        Some(id) => id,
+        None => return true,
+    };
+    let sched = match schedules.iter().find(|s| s.id == sid) {
+        Some(s) => s,
+        None => {
+            // Schedule went missing (deleted mid-compile). Treat as always
+            // — matches the FK ON DELETE SET NULL semantics on the next
+            // recompile.
+            return true;
+        }
+    };
+    let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Schedule {} has invalid intervals: {}", sched.id, e);
+            return false;
+        }
+    };
+    crate::schedules::matches_now(&intervals, tz)
 }
 
 fn role_level(role: &UserRole) -> u8 {

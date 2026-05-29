@@ -9,9 +9,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, MqttConfig};
 use crate::doors::{
-    self, Decision, DoorStateSnapshot, DoorsEvent, DoorsState, LocalScanRequest,
+    self, Decision, DoorsEvent, DoorsState, LocalScanRequest,
     LocalUnlockResponse, UnlockCommand,
 };
+use crate::edge_inbound::EdgeInbound;
 use crate::registration::{get_auth_token, get_device_id};
 use crate::system_info::get_system_info;
 use crate::toolguard::ToolGuardState;
@@ -45,23 +46,15 @@ pub struct EdgeMqttClient {
     device_id: String,
     namespace: String,
     start_time: std::time::Instant,
-    config_manager: std::sync::Arc<std::sync::RwLock<Config>>,
-    toolguard_state: Arc<ToolGuardState>,
-    /// In-memory door allow/deny snapshot pushed by the server.
-    doors_state: Arc<DoorsState>,
-    /// Forwards `doors/unlock` commands from the server to the local broker
-    /// so the relay can fire. The receiver is consumed by a task in `main`.
-    doors_unlock_tx: DoorsUnlockSender,
+    /// Shared with the WebSocket transport; handles every server-pushed message.
+    inbound: Arc<EdgeInbound>,
 }
 
 impl EdgeMqttClient {
     /// Create a new MQTT client
     pub async fn new(
         config: &Config,
-        config_manager: std::sync::Arc<std::sync::RwLock<Config>>,
-        toolguard_state: Arc<ToolGuardState>,
-        doors_state: Arc<DoorsState>,
-        doors_unlock_tx: DoorsUnlockSender,
+        inbound: Arc<EdgeInbound>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let device_id = get_device_id(config)
             .ok_or_else(|| anyhow::anyhow!("Device ID not found in config"))?;
@@ -117,10 +110,7 @@ impl EdgeMqttClient {
                 device_id,
                 namespace: mqtt_config.mqtt_namespace.clone(),
                 start_time: std::time::Instant::now(),
-                config_manager,
-                toolguard_state,
-                doors_state,
-                doors_unlock_tx,
+                inbound,
             },
             rx,
         ))
@@ -287,73 +277,19 @@ impl EdgeMqttClient {
         info!("Data publisher task started (interval: 15 minutes)");
     }
     
-    /// Handle incoming MQTT messages
+    /// Handle incoming MQTT messages. The topic suffix is the same
+    /// `WireMessage::kind` string the WebSocket transport uses, so we just
+    /// extract it and delegate to the shared inbound dispatcher.
     pub async fn handle_message(&self, topic: &str, payload: &[u8]) -> Result<()> {
-        let name_topic = format!("{}/devices/{}/name", self.namespace, self.device_id);
-        let toolguard_topic = format!("{}/devices/{}/toolguard/state", self.namespace, self.device_id);
-        let doors_state_topic = format!("{}/devices/{}/doors/state", self.namespace, self.device_id);
-        let doors_unlock_topic = format!("{}/devices/{}/doors/unlock", self.namespace, self.device_id);
-
-        if topic == name_topic {
-            match serde_json::from_slice::<NameUpdateMessage>(payload) {
-                Ok(msg) => {
-                    info!("Received name update: {}", msg.name);
-                    self.update_device_name(&msg.name).await?;
-                }
-                Err(e) => {
-                    warn!("Failed to parse name update message: {}", e);
-                }
+        let prefix = format!("{}/devices/{}/", self.namespace, self.device_id);
+        let suffix = match topic.strip_prefix(&prefix) {
+            Some(s) => s,
+            None => {
+                warn!("Received message on unexpected topic: {}", topic);
+                return Ok(());
             }
-        } else if topic == toolguard_topic {
-            match self.toolguard_state.apply_sync_bytes(payload) {
-                Ok(()) => info!("ToolGuard state updated via MQTT push"),
-                Err(e) => warn!("Failed to parse toolguard state payload: {}", e),
-            }
-        } else if topic == doors_state_topic {
-            match serde_json::from_slice::<DoorStateSnapshot>(payload) {
-                Ok(snapshot) => {
-                    let count = snapshot.doors.len();
-                    self.doors_state.apply_snapshot(snapshot);
-                    info!("Doors state updated via MQTT push ({} door(s))", count);
-                }
-                Err(e) => warn!("Failed to parse doors/state payload: {}", e),
-            }
-        } else if topic == doors_unlock_topic {
-            // A server-initiated unlock (QR check-in or admin remote unlock).
-            // Forward to the local broker so the relay fires; the local task
-            // handles publishing.
-            match serde_json::from_slice::<UnlockCommand>(payload) {
-                Ok(cmd) => {
-                    info!("Received doors/unlock for door {} (reason={})", cmd.door_id, cmd.reason);
-                    if self.doors_unlock_tx.send(cmd).is_err() {
-                        warn!("Doors unlock bridge channel closed; cannot forward");
-                    }
-                }
-                Err(e) => warn!("Failed to parse doors/unlock payload: {}", e),
-            }
-        }
-
-        Ok(())
-    }
-    
-    /// Update device name in config
-    async fn update_device_name(&self, new_name: &str) -> Result<()> {
-        info!("Updating device name to: {}", new_name);
-        
-        // Update config
-        {
-            let mut config = self.config_manager.write().unwrap();
-            config.name = new_name.to_string();
-            
-            // Save to file
-            if let Some(path) = std::env::var_os("CONFIG_PATH") {
-                config.to_file(path)?;
-            }
-        }
-        
-        info!("Device name updated successfully");
-        info!("Note: Restart the device for the name change to take full effect");
-        
+        };
+        self.inbound.dispatch(suffix, payload).await;
         Ok(())
     }
     

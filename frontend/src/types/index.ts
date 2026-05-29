@@ -168,6 +168,8 @@ export interface Door {
   enabled: boolean
   created_at: string
   updated_at: string
+  place_id_from?: string | null
+  place_id_to?: string | null
 }
 
 export interface DoorAccessRule {
@@ -177,6 +179,8 @@ export interface DoorAccessRule {
   value: string
   effect: string
   created_at: string
+  /** Optional reusable schedule. `null` = the rule applies 24/7. */
+  schedule_id?: string | null
 }
 
 export interface DoorDetail extends Door {
@@ -203,6 +207,10 @@ export interface CreateDoorRequest {
   edge_device_id?: string | null
   unlock_duration_ms?: number
   enabled?: boolean
+  /** Required. Use a special place (e.g. `Outside`) for exterior doors. */
+  place_id_from: string
+  /** Required. */
+  place_id_to: string
 }
 
 export interface UpdateDoorRequest {
@@ -213,12 +221,19 @@ export interface UpdateDoorRequest {
   edge_device_id?: string | null
   unlock_duration_ms?: number
   enabled?: boolean
+  /** PATCH-style: set to a real place ID (special places included).
+      Doors can no longer be set to `null` — model exterior with a
+      special place like `Outside`. */
+  place_id_from?: string
+  place_id_to?: string
 }
 
 export interface AddDoorRuleRequest {
   kind: DoorRuleKind
   value: string
   effect?: DoorRuleEffect
+  /** Optional reusable schedule. Omit or pass `null` for "always". */
+  schedule_id?: string | null
 }
 
 export interface DoorInfo {
@@ -233,6 +248,145 @@ export interface DoorInfo {
 export interface DoorCheckinResult {
   unlocked: boolean
   reason: string | null
+}
+
+// ===== Places (configurable hierarchy) =====
+
+export interface Place {
+  id: string
+  parent_id: string | null
+  place_type: string
+  name: string
+  description: string | null
+  external_id: string | null
+  created_at: string
+  updated_at: string
+  /** Marked by operator as a "special" place (Outside, Common Area, Parking,
+      …). Special places ignore the configured type-ordering rules and must
+      be roots. */
+  is_special: boolean
+}
+
+export interface PlaceConfig {
+  enabled: boolean
+  /** Ordered list, top → leaf. Index = depth. */
+  types: string[]
+}
+
+export interface PlaceAttachedCounts {
+  doors: number
+  tools: number
+  devices: number
+}
+
+export interface PlaceDetail extends Place {
+  /** Top-down: `[root, ..., immediate_parent]`. Does not include this place. */
+  ancestors: Place[]
+  children: Place[]
+  attached: PlaceAttachedCounts
+}
+
+// ===== Home links (admin-curated, audience-gated) =====
+
+export type HomeLinkAudience =
+  | 'everyone'
+  | 'anonymous'
+  | 'logged_in'
+  | 'member'
+  | 'staff'
+
+export interface HomeLink {
+  id: string
+  label: string
+  url: string
+  description: string | null
+  icon: string | null
+  audience: HomeLinkAudience
+  sort_order: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+  /** RFC-3339; when set and in the past, the public endpoint hides this link. */
+  expires_at?: string | null
+}
+
+export interface CreateHomeLinkRequest {
+  label: string
+  url: string
+  description?: string | null
+  icon?: string | null
+  audience: HomeLinkAudience
+  sort_order?: number
+  enabled?: boolean
+  /** RFC-3339 (`new Date(...).toISOString()`); pass `null` for no expiry. */
+  expires_at?: string | null
+}
+
+export interface UpdateHomeLinkRequest {
+  label?: string
+  url?: string
+  description?: string | null
+  icon?: string | null
+  audience?: HomeLinkAudience
+  sort_order?: number
+  enabled?: boolean
+  /** Pass `null` to clear an existing expiry; omit to leave unchanged. */
+  expires_at?: string | null
+}
+
+// ===== Schedules (weekly windows attached to access rules) =====
+
+export type DayOfWeek = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+
+export interface ScheduleInterval {
+  day: DayOfWeek
+  /** HH:MM 24-hour */
+  start: string
+  /** HH:MM 24-hour; must be strictly greater than `start`. */
+  end: string
+}
+
+export interface Schedule {
+  id: string
+  name: string
+  description: string | null
+  intervals: ScheduleInterval[]
+  created_at: string
+  updated_at: string
+  is_public: boolean
+}
+
+export interface CreateScheduleRequest {
+  name: string
+  description?: string | null
+  intervals: ScheduleInterval[]
+  is_public?: boolean
+}
+
+export interface UpdateScheduleRequest {
+  name?: string
+  description?: string | null
+  intervals?: ScheduleInterval[]
+  is_public?: boolean
+}
+
+export interface CreatePlaceRequest {
+  name: string
+  place_type: string
+  parent_id?: string | null
+  description?: string | null
+  external_id?: string | null
+  is_special?: boolean
+}
+
+export interface UpdatePlaceRequest {
+  name?: string
+  place_type?: string
+  /** Pass `null` to promote to a root; omit to leave unchanged. */
+  parent_id?: string | null
+  description?: string | null
+  external_id?: string | null
+  is_special?: boolean
 }
 
 export interface RegisterRequest {

@@ -291,6 +291,78 @@ export const adminApi = {
   },
 }
 
+// Home links API (admin CRUD + public list)
+export const homeLinksApi = {
+  list() {
+    return apiClient.get<import('@/types').HomeLink[]>('/admin/home-links')
+  },
+  get(id: string) {
+    return apiClient.get<import('@/types').HomeLink>(`/admin/home-links/${id}`)
+  },
+  create(body: import('@/types').CreateHomeLinkRequest) {
+    return apiClient.post<import('@/types').HomeLink>('/admin/home-links', body)
+  },
+  update(id: string, body: import('@/types').UpdateHomeLinkRequest) {
+    return apiClient.patch<import('@/types').HomeLink>(`/admin/home-links/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<void>(`/admin/home-links/${id}`)
+  },
+  /** No-auth list, audience-filtered server-side based on the caller's bearer (if any). */
+  publicList() {
+    return apiClient.get<import('@/types').HomeLink[]>('/public/home-links')
+  },
+}
+
+// Schedules API
+export const schedulesApi = {
+  list() {
+    return apiClient.get<import('@/types').Schedule[]>('/admin/schedules')
+  },
+  get(id: string) {
+    return apiClient.get<import('@/types').Schedule>(`/admin/schedules/${id}`)
+  },
+  create(body: import('@/types').CreateScheduleRequest) {
+    return apiClient.post<import('@/types').Schedule>('/admin/schedules', body)
+  },
+  update(id: string, body: import('@/types').UpdateScheduleRequest) {
+    return apiClient.patch<import('@/types').Schedule>(`/admin/schedules/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<void>(`/admin/schedules/${id}`)
+  },
+  /** No-auth list of schedules marked `is_public`; used by the home page. */
+  publicList() {
+    return apiClient.get<import('@/types').Schedule[]>('/public/schedules')
+  },
+}
+
+// Places API
+export const placesApi = {
+  config() {
+    return apiClient.get<import('@/types').PlaceConfig>('/admin/places/config')
+  },
+  list() {
+    return apiClient.get<import('@/types').Place[]>('/admin/places')
+  },
+  get(id: string) {
+    return apiClient.get<import('@/types').PlaceDetail>(`/admin/places/${id}`)
+  },
+  create(body: import('@/types').CreatePlaceRequest) {
+    return apiClient.post<import('@/types').Place>('/admin/places', body)
+  },
+  update(id: string, body: import('@/types').UpdatePlaceRequest) {
+    return apiClient.patch<import('@/types').Place>(`/admin/places/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<void>(`/admin/places/${id}`)
+  },
+  // Member-facing
+  memberList() {
+    return apiClient.get<import('@/types').Place[]>('/places')
+  },
+}
+
 // Doors API
 export const doorsApi = {
   // Member-facing

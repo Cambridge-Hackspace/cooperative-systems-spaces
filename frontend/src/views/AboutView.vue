@@ -74,6 +74,9 @@
           <li><strong>Calendar Integration:</strong> Schedule events, workshops, and equipment reservations.</li>
           <li><strong>Outbound Webhooks:</strong> Fire signed HTTP requests on any audit event &mdash; see below.</li>
           <li><strong>MQTT Publishing:</strong> Push the same events onto an MQTT bus for real-time consumers.</li>
+          <li><strong>Facility Model:</strong> A configurable place hierarchy plus doors, special places (Outside, Common Area, …), and a graph view &mdash; see below.</li>
+          <li><strong>Door Access:</strong> RFID at the door or QR-driven check-in, with audit logs and edge-cached decisions that survive a server outage.</li>
+          <li><strong>Working Hours:</strong> Reusable schedules attached to door rules and to tools &mdash; one-click templates make Mon&ndash;Fri 9&ndash;5 a two-second setup.</li>
           <li><strong>Secure Edge Component:</strong> Talk to devices on the edge and build new automations.</li>
           <li><strong>Edge Kiosk Component:</strong> Show calendar events, tool status, and more on displays around your space.</li>
         </ul>
@@ -93,6 +96,41 @@
           <li><strong>Signed payloads:</strong> Every request carries an <code class="text-sm bg-base-300 px-1 rounded">X-Webhook-Signature: sha256=&hellip;</code> HMAC-SHA256 of the body, keyed by a per-webhook secret you can copy from the edit dialog.</li>
           <li><strong>Reliable delivery:</strong> Up to three attempts with exponential backoff per event, with every attempt recorded in a delivery log you can inspect from the UI.</li>
           <li><strong>Test sink:</strong> The <code class="text-sm bg-base-300 px-1 rounded">css-webhook-recvr</code> binary ships alongside the server &mdash; run it locally to see exactly what each webhook will send and to verify signatures.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h3 class="text-2xl font-semibold mb-2 mt-8">Facility model</h3>
+        <p class="leading-relaxed">
+          Most spaces grow into a hierarchy &mdash; rooms inside floors inside buildings.
+          The level vocabulary lives in your server config (<code class="text-sm bg-base-300 px-1 rounded">[place].types</code>),
+          from a trivial <em>Room &rarr; Spot</em> default to a deep
+          <em>Facility &rarr; Building &rarr; Floor &rarr; Room &rarr; Zone &rarr; Spot</em>.
+        </p>
+        <ul class="list-disc pl-6 space-y-1 leading-relaxed mt-2">
+          <li><strong>Self-referential tree:</strong> each place has at most one parent; child levels must be strictly deeper than their parent.</li>
+          <li><strong>Special places:</strong> mark places like <strong>Outside</strong>, <strong>Common Area</strong>, or <strong>Parking Lot</strong> as special so they sit outside the hierarchy rules.</li>
+          <li><strong>Doors connect places:</strong> every door explicitly references the place on each side, so exterior doors point at a special place (like <em>Outside</em>) rather than relying on null semantics.</li>
+          <li><strong>Tools and devices</strong> can be tagged with a place so administrators can answer "what's in this room?".</li>
+          <li><strong>Graph view</strong> renders places as nodes, doors as labelled edges, and special places in amber &mdash; useful for surveying connectivity at a glance.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h3 class="text-2xl font-semibold mb-2 mt-8">Working hours</h3>
+        <p class="leading-relaxed">
+          Reusable weekly schedules &mdash; <em>Member Hours</em>, <em>Staff Always</em>,
+          <em>Open House</em> &mdash; that gate when access rules and tools apply. One-click
+          templates (<code class="text-sm bg-base-300 px-1 rounded">24 / 7</code>,
+          <code class="text-sm bg-base-300 px-1 rounded">9&ndash;5 weekdays</code>,
+          <code class="text-sm bg-base-300 px-1 rounded">Weekday evenings</code>, &hellip;) make a
+          fresh schedule a two-click affair.
+        </p>
+        <ul class="list-disc pl-6 space-y-1 leading-relaxed mt-2">
+          <li><strong>Attach to a door rule:</strong> the rule is silently inactive outside its window. A "members may enter" rule with a Mon&ndash;Fri 9&ndash;5 schedule denies on weekends without you writing a deny rule.</li>
+          <li><strong>Attach to a tool:</strong> when the schedule is closed the tool is removed from every authorized list at sync time &mdash; same effect as deactivating it, but automatic.</li>
+          <li><strong>Edge stays simple:</strong> the server recomputes per-device snapshots on the minute and republishes when the allow-list changes, so the edge keeps its "is this card allowed right now?" decision local.</li>
+          <li><strong>Public schedules</strong> surface on the home page <strong>Hours today</strong> card so visitors can see when the space is open.</li>
         </ul>
       </section>
 

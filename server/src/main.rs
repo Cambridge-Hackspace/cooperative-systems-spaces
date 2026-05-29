@@ -28,6 +28,9 @@ mod mqtt;
 mod webhooks;
 mod mfa;
 mod doors;
+mod schedules;
+mod devices_inbound;
+mod devices_transport;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
 use profile::{ProfileValidator, AuditLogger};
@@ -39,6 +42,8 @@ use crate::mqtt::MqttService;
 use crate::webhooks::WebhookDispatcher;
 use crate::mfa::MfaService;
 use crate::doors::DoorService;
+use crate::devices_inbound::DeviceInbound;
+use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -70,6 +75,12 @@ pub struct AppState {
     pub webhook_dispatcher: Arc<WebhookDispatcher>,
     pub mfa_service: MfaService,
     pub door_service: Arc<DoorService>,
+    /// Transport-agnostic outbound router (WS → MQTT fallback).
+    pub device_transport: Arc<DeviceTransport>,
+    /// Per-device WS session registry; the WS handler inserts/removes itself.
+    pub device_registry: Arc<DeviceChannelRegistry>,
+    /// Shared inbound dispatcher used by both transports.
+    pub device_inbound: Arc<DeviceInbound>,
 }
 
 // Main dashboard handler
@@ -160,6 +171,14 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
     info!("Pages service initialized");
 
+    // Shared transport-agnostic inbound dispatcher and per-device session
+    // registry. Created before MQTT so MqttService can take a reference.
+    let device_inbound = Arc::new(DeviceInbound::new(
+        db_manager.clone(),
+        app_config.toolguard.profile_field.clone(),
+    ));
+    let device_registry = DeviceChannelRegistry::new();
+
     // Initialize MQTT service if edge is enabled
     let mqtt_service_arc = if app_config.edge.edge_enabled {
         if let Some(mqtt_config) = &app_config.edge.edge_mqtt_config {
@@ -167,10 +186,10 @@ async fn main() -> Result<(), anyhow::Error> {
             let (mqtt_service, rx) = MqttService::new(
                 mqtt_config,
                 db_manager.clone(),
-                app_config.toolguard.profile_field.clone(),
+                device_inbound.clone(),
             )
                 .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
-            
+
             let mqtt_service_arc = Arc::new(mqtt_service);
             let mqtt_service_for_task = mqtt_service_arc.as_ref().clone();
             
@@ -209,12 +228,19 @@ async fn main() -> Result<(), anyhow::Error> {
         mfa_service.webauthn().is_some(),
     );
 
-    // Initialize door access service (depends on MQTT being constructed).
+    // Outbound transport: prefers WS, falls back to MQTT.
+    let device_transport = Arc::new(DeviceTransport::new(
+        device_registry.clone(),
+        mqtt_service_arc.clone(),
+    ));
+
+    // Initialize door access service.
     info!("Initializing door access service...");
     let door_service = Arc::new(DoorService::new(
         db_manager.clone(),
-        mqtt_service_arc.clone(),
+        device_transport.clone(),
         app_config.toolguard.profile_field.clone(),
+        config_manager.clone(),
     ));
     // Push a fresh state snapshot to every device on startup so an edge
     // restart picks up the current allow-lists.
@@ -222,6 +248,22 @@ async fn main() -> Result<(), anyhow::Error> {
         door_service.republish_all();
     }
     info!("Door access service initialized (enabled={})", app_config.door.enabled);
+
+    // Schedule ticker: re-evaluate every rule's schedule each minute and
+    // republish any device whose compiled snapshot changed. Quiet during
+    // steady state; fires only on window open/close.
+    if app_config.door.enabled {
+        let svc = door_service.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                svc.republish_changed();
+            }
+        });
+        info!("Door schedule ticker started (1 minute interval)");
+    }
 
     let app_state = AppState {
         config_manager: config_manager,
@@ -236,6 +278,9 @@ async fn main() -> Result<(), anyhow::Error> {
         webhook_dispatcher,
         mfa_service,
         door_service,
+        device_transport,
+        device_registry,
+        device_inbound,
     };
 
     // Serve frontend static files

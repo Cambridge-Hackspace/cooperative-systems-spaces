@@ -23,6 +23,8 @@ pub struct Door {
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub place_id_from: Option<Uuid>,
+    pub place_id_to: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -36,6 +38,10 @@ pub struct NewDoor {
     pub unlock_duration_ms: i32,
     pub enabled: bool,
     pub created_by: Option<Uuid>,
+    /// Required on insert; every new door must connect two places (use a
+    /// special place like `Outside` for exterior doors).
+    pub place_id_from: Uuid,
+    pub place_id_to: Uuid,
 }
 
 #[derive(Debug, Clone, AsChangeset)]
@@ -49,6 +55,11 @@ pub struct UpdateDoor {
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     pub updated_at: Option<DateTime<Utc>>,
+    /// PATCH-style: `Some(uuid)` = set; `None` = leave alone. Setting to
+    /// NULL is intentionally not exposed — every door must connect two
+    /// places (use a special place like `Outside` for exterior doors).
+    pub place_id_from: Option<Uuid>,
+    pub place_id_to: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +127,8 @@ pub struct DoorAccessRule {
     pub value: String,
     pub effect: String,
     pub created_at: DateTime<Utc>,
+    /// Optional time-of-week schedule that gates this rule. `None` = always.
+    pub schedule_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -126,6 +139,7 @@ pub struct NewDoorAccessRule {
     pub kind: String,
     pub value: String,
     pub effect: String,
+    pub schedule_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------

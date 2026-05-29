@@ -50,6 +50,9 @@ pub fn admin_routes() -> Router<AppState> {
         .nest("/devices", crate::api::devices::admin_devices_routes())
         .nest("/webhooks", crate::api::webhooks::admin_webhook_routes())
         .nest("/doors", crate::api::doors::admin_routes())
+        .nest("/places", crate::api::places::admin_routes())
+        .nest("/schedules", crate::api::schedules::admin_routes())
+        .nest("/home-links", crate::api::home_links::admin_routes())
 }
 
 /// Reload configuration from disk (admin only)

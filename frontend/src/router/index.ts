@@ -94,12 +94,30 @@ const router = createRouter({
     },
     {
       path: '/admin/doors',
-      name: 'admin-doors',
-      component: () => import('@/components/DoorManagement.vue'),
+      redirect: { name: 'admin-facility', query: { tab: 'doors' } }
+    },
+    {
+      path: '/admin/facility',
+      name: 'admin-facility',
+      component: () => import('@/components/FacilityManagement.vue'),
       meta: {
         requiresAuth: true,
         requiredRole: UserRole.Admin
       }
+    },
+    {
+      path: '/admin/home-links',
+      name: 'admin-home-links',
+      component: () => import('@/components/HomeLinkManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    // Backward-compatible deep links — redirect into the combined Facility page.
+    {
+      path: '/admin/places',
+      redirect: { name: 'admin-facility', query: { tab: 'places' } }
     },
     {
       path: '/door/:id/checkin',

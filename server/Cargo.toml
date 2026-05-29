@@ -21,11 +21,13 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = "0.10"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Server-specific dependencies
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
+futures-util = "0.3"
 log = "0.4.28"
 config = "0.14"
 reqwest = { version = "0.11", features = ["json"] }

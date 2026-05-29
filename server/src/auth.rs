@@ -236,6 +236,48 @@ where
     }
 }
 
+/// Extractor for a registered edge device, authenticated by its `auth_token`
+/// (issued at device registration). Used by `/api/devices/ws` and the
+/// inline-authenticated ToolGuard endpoints.
+#[derive(Clone)]
+pub struct DeviceAuth {
+    pub device_id: uuid::Uuid,
+    pub token: String,
+}
+
+impl<S> FromRequestParts<S> for DeviceAuth
+where
+    S: Send + Sync,
+    AppState: FromRef<S>,
+{
+    type Rejection = AuthError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let app_state: AppState = AppState::from_ref(state);
+
+        let auth_header = parts
+            .headers
+            .get("authorization")
+            .ok_or(AuthError::MissingCredentials)?
+            .to_str()
+            .map_err(|_| AuthError::InvalidToken)?;
+        let token = auth_header
+            .strip_prefix("Bearer ")
+            .ok_or(AuthError::InvalidToken)?;
+
+        let (device_id, token_value) = app_state
+            .db
+            .find_device_by_auth_token(token)
+            .map_err(|_| AuthError::InternalError)?
+            .ok_or(AuthError::InvalidToken)?;
+
+        Ok(DeviceAuth {
+            device_id,
+            token: token_value,
+        })
+    }
+}
+
 // Optional: Admin-only middleware
 #[derive(Clone)]
 pub struct AdminUser(pub User);

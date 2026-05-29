@@ -14,6 +14,21 @@ pub enum AuthStatus {
     Denied,
 }
 
+/// Which transport the edge uses to talk to the server. Picked at startup;
+/// only one client is constructed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteTransport {
+    Mqtt,
+    Websocket,
+}
+
+impl Default for RemoteTransport {
+    fn default() -> Self {
+        Self::Mqtt
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub remote_id: String,
@@ -38,6 +53,11 @@ pub struct Config {
     /// MQTT configuration remote
     #[serde(default)]
     pub remote_mqtt_config: Option<MqttConfig>,
+
+    /// Which transport to use when talking to the server (default: "mqtt").
+    /// Set to "websocket" to skip MQTT and use only `/api/devices/ws`.
+    #[serde(default)]
+    pub remote_transport: RemoteTransport,
 
     /// Remote Device Info
     pub remote_device_info: Option<DeviceInfo>,
@@ -74,6 +94,7 @@ impl Default for Config {
             auth_status: AuthStatus::Unauthenticated,
             local_mqtt_config: None,
             remote_mqtt_config: None,
+            remote_transport: RemoteTransport::Mqtt,
             remote_device_info: None,
             toolguard_sync_interval_secs: default_toolguard_sync_interval(),
             calendar_mqtt_topic: default_calendar_mqtt_topic(),
