@@ -8,12 +8,15 @@ on:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     strategy:
       matrix:
         job: [frontend, server, cli, edge]
     steps:
       - uses: actions/checkout@v4
+
+      # ARC's default runner image ships no compilers
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential
 
       # FRONTEND JOBS
       - name: Set up Node.js
@@ -88,7 +91,7 @@ jobs:
 
   docker-server:
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     permissions:
       contents: read
       packages: write
@@ -126,7 +129,7 @@ jobs:
 
   docker-edge:
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     permissions:
       contents: read
       packages: write
@@ -167,9 +170,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        os: [ arc-runner-set, windows-latest, macos-latest ]
         include:
-          - os: ubuntu-latest
+          - os: arc-runner-set
             artifact_name: linux
             asset_name: css-server
             asset_name_cli: css
@@ -219,7 +222,7 @@ jobs:
 
       - name: Install PostgreSQL client library (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libpq-dev
 
       - name: Install Edge Client Libraries
         if: runner.os == 'Linux'
