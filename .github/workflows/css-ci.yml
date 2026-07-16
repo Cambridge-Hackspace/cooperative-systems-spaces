@@ -20,7 +20,7 @@ jobs:
 
       # FRONTEND JOBS
       - name: Set up Node.js
-        if: matrix.job == 'frontend'
+        if: matrix.job == 'frontend' || matrix.job == 'edge'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
