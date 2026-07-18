@@ -4,6 +4,10 @@ pub(crate) mod trainers;
 mod devices;
 mod webhooks;
 mod mfa;
+mod doors;
+mod places;
+mod schedules;
+mod home_links;
 
 pub use tools::*;
 pub use training::*;
@@ -11,6 +15,10 @@ pub use trainers::*;
 pub use devices::*;
 pub use webhooks::*;
 pub use mfa::*;
+pub use doors::*;
+pub use places::*;
+pub use schedules::*;
+pub use home_links::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};
@@ -248,6 +256,30 @@ pub enum AuditEventType {
     MfaRecoveryCodeUsed,
     MfaLoginPassed,
     MfaLoginFailed,
+    // Door events
+    DoorCreated,
+    DoorUpdated,
+    DoorDeleted,
+    DoorRuleAdded,
+    DoorRuleRemoved,
+    DoorUnlockedCard,
+    DoorUnlockedQr,
+    DoorUnlockedAdmin,
+    DoorUnlockDenied,
+    DoorCheckinRecorded,
+    // Place events
+    PlaceCreated,
+    PlaceUpdated,
+    PlaceMoved,
+    PlaceDeleted,
+    // Schedule events
+    ScheduleCreated,
+    ScheduleUpdated,
+    ScheduleDeleted,
+    // Home links
+    HomeLinkCreated,
+    HomeLinkUpdated,
+    HomeLinkDeleted,
 }
 
 impl AuditEventType {
@@ -299,6 +331,26 @@ impl AuditEventType {
             Self::MfaRecoveryCodeUsed => "mfa_recovery_code_used",
             Self::MfaLoginPassed => "mfa_login_passed",
             Self::MfaLoginFailed => "mfa_login_failed",
+            Self::DoorCreated => "door_created",
+            Self::DoorUpdated => "door_updated",
+            Self::DoorDeleted => "door_deleted",
+            Self::DoorRuleAdded => "door_rule_added",
+            Self::DoorRuleRemoved => "door_rule_removed",
+            Self::DoorUnlockedCard => "door_unlocked_card",
+            Self::DoorUnlockedQr => "door_unlocked_qr",
+            Self::DoorUnlockedAdmin => "door_unlocked_admin",
+            Self::DoorUnlockDenied => "door_unlock_denied",
+            Self::DoorCheckinRecorded => "door_checkin_recorded",
+            Self::PlaceCreated => "place_created",
+            Self::PlaceUpdated => "place_updated",
+            Self::PlaceMoved => "place_moved",
+            Self::PlaceDeleted => "place_deleted",
+            Self::ScheduleCreated => "schedule_created",
+            Self::ScheduleUpdated => "schedule_updated",
+            Self::ScheduleDeleted => "schedule_deleted",
+            Self::HomeLinkCreated => "home_link_created",
+            Self::HomeLinkUpdated => "home_link_updated",
+            Self::HomeLinkDeleted => "home_link_deleted",
         }
     }
 
@@ -353,6 +405,26 @@ impl AuditEventType {
             MfaRecoveryCodeUsed,
             MfaLoginPassed,
             MfaLoginFailed,
+            DoorCreated,
+            DoorUpdated,
+            DoorDeleted,
+            DoorRuleAdded,
+            DoorRuleRemoved,
+            DoorUnlockedCard,
+            DoorUnlockedQr,
+            DoorUnlockedAdmin,
+            DoorUnlockDenied,
+            DoorCheckinRecorded,
+            PlaceCreated,
+            PlaceUpdated,
+            PlaceMoved,
+            PlaceDeleted,
+            ScheduleCreated,
+            ScheduleUpdated,
+            ScheduleDeleted,
+            HomeLinkCreated,
+            HomeLinkUpdated,
+            HomeLinkDeleted,
         ]
     }
 }

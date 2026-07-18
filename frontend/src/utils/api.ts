@@ -291,6 +291,127 @@ export const adminApi = {
   },
 }
 
+// Home links API (admin CRUD + public list)
+export const homeLinksApi = {
+  list() {
+    return apiClient.get<import('@/types').HomeLink[]>('/admin/home-links')
+  },
+  get(id: string) {
+    return apiClient.get<import('@/types').HomeLink>(`/admin/home-links/${id}`)
+  },
+  create(body: import('@/types').CreateHomeLinkRequest) {
+    return apiClient.post<import('@/types').HomeLink>('/admin/home-links', body)
+  },
+  update(id: string, body: import('@/types').UpdateHomeLinkRequest) {
+    return apiClient.patch<import('@/types').HomeLink>(`/admin/home-links/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<void>(`/admin/home-links/${id}`)
+  },
+  /** No-auth list, audience-filtered server-side based on the caller's bearer (if any). */
+  publicList() {
+    return apiClient.get<import('@/types').HomeLink[]>('/public/home-links')
+  },
+}
+
+// Schedules API
+export const schedulesApi = {
+  list() {
+    return apiClient.get<import('@/types').Schedule[]>('/admin/schedules')
+  },
+  get(id: string) {
+    return apiClient.get<import('@/types').Schedule>(`/admin/schedules/${id}`)
+  },
+  create(body: import('@/types').CreateScheduleRequest) {
+    return apiClient.post<import('@/types').Schedule>('/admin/schedules', body)
+  },
+  update(id: string, body: import('@/types').UpdateScheduleRequest) {
+    return apiClient.patch<import('@/types').Schedule>(`/admin/schedules/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<void>(`/admin/schedules/${id}`)
+  },
+  /** No-auth list of schedules marked `is_public`; used by the home page. */
+  publicList() {
+    return apiClient.get<import('@/types').Schedule[]>('/public/schedules')
+  },
+}
+
+// Places API
+export const placesApi = {
+  config() {
+    return apiClient.get<import('@/types').PlaceConfig>('/admin/places/config')
+  },
+  list() {
+    return apiClient.get<import('@/types').Place[]>('/admin/places')
+  },
+  get(id: string) {
+    return apiClient.get<import('@/types').PlaceDetail>(`/admin/places/${id}`)
+  },
+  create(body: import('@/types').CreatePlaceRequest) {
+    return apiClient.post<import('@/types').Place>('/admin/places', body)
+  },
+  update(id: string, body: import('@/types').UpdatePlaceRequest) {
+    return apiClient.patch<import('@/types').Place>(`/admin/places/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<void>(`/admin/places/${id}`)
+  },
+  // Member-facing
+  memberList() {
+    return apiClient.get<import('@/types').Place[]>('/places')
+  },
+}
+
+// Doors API
+export const doorsApi = {
+  // Member-facing
+  info(doorId: string) {
+    return apiClient.get<import('@/types').DoorInfo>(`/doors/${doorId}/info`)
+  },
+  checkin(doorId: string) {
+    return apiClient.post<import('@/types').DoorCheckinResult>(`/doors/${doorId}/checkin`)
+  },
+
+  // Admin
+  list() {
+    return apiClient.get<import('@/types').Door[]>('/admin/doors')
+  },
+  get(doorId: string) {
+    return apiClient.get<import('@/types').DoorDetail>(`/admin/doors/${doorId}`)
+  },
+  create(body: import('@/types').CreateDoorRequest) {
+    return apiClient.post<import('@/types').Door>('/admin/doors', body)
+  },
+  update(doorId: string, body: import('@/types').UpdateDoorRequest) {
+    return apiClient.patch<import('@/types').Door>(`/admin/doors/${doorId}`, body)
+  },
+  remove(doorId: string) {
+    return apiClient.delete<void>(`/admin/doors/${doorId}`)
+  },
+  unlock(doorId: string) {
+    return apiClient.post<{ unlocked: boolean }>(`/admin/doors/${doorId}/unlock`)
+  },
+  republish(doorId: string) {
+    return apiClient.post<{ republished: boolean }>(`/admin/doors/${doorId}/republish`)
+  },
+  qrUrl(doorId: string) {
+    return apiClient.get<{ url: string }>(`/admin/doors/${doorId}/qr`)
+  },
+  events(doorId: string, params?: { limit?: number; offset?: number }) {
+    return apiClient.get<import('@/types').DoorAccessEvent[]>(`/admin/doors/${doorId}/events`, params)
+  },
+  listRules(doorId: string) {
+    return apiClient.get<import('@/types').DoorAccessRule[]>(`/admin/doors/${doorId}/rules`)
+  },
+  addRule(doorId: string, body: import('@/types').AddDoorRuleRequest) {
+    return apiClient.post<import('@/types').DoorAccessRule>(`/admin/doors/${doorId}/rules`, body)
+  },
+  removeRule(doorId: string, ruleId: string) {
+    return apiClient.delete<void>(`/admin/doors/${doorId}/rules/${ruleId}`)
+  },
+}
+
 // MFA API functions
 export const mfaApi = {
   status() {

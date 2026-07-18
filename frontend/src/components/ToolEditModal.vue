@@ -92,14 +92,27 @@
 
         <div class="form-group">
           <label for="external_id">External ID</label>
-          <input 
+          <input
             id="external_id"
-            v-model="form.external_id" 
-            type="text" 
+            v-model="form.external_id"
+            type="text"
             placeholder="External system ID (e.g., ToolPass device ID)"
             class="input"
           />
           <small class="help-text">Optional ID for external system integration (ToolPass, etc.)</small>
+        </div>
+
+        <div class="form-group">
+          <label for="schedule_id">Usability schedule</label>
+          <SchedulePicker
+            :model-value="form.schedule_id"
+            :schedules="schedules"
+            @update:model-value="(v) => form.schedule_id = v"
+          />
+          <small class="help-text">
+            Optional. When the schedule is closed the tool is removed from
+            every authorized list at sync time (same effect as deactivating it).
+          </small>
         </div>
 
         <div class="form-group">
@@ -178,8 +191,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { toolsApi } from '../utils/api'
+import { toolsApi, schedulesApi } from '../utils/api'
 import type { Tool, ToolCategory } from '../types/tools'
+import type { Schedule } from '../types'
+import SchedulePicker from './SchedulePicker.vue'
 import axios from 'axios'
 
 interface Props {
@@ -202,6 +217,7 @@ interface CategoryMapping {
   label: string
 }
 const categories = ref<CategoryMapping[]>([])
+const schedules = ref<Schedule[]>([])
 
 const form = ref({
   name: '',
@@ -216,7 +232,8 @@ const form = ref({
   purchase_date: '',
   purchase_price: undefined as number | undefined,
   requires_training: false,
-  notes: ''
+  notes: '',
+  schedule_id: null as string | null,
 })
 
 // Methods
@@ -251,8 +268,16 @@ const loadToolData = () => {
     purchase_date: props.tool.purchase_date || '',
     purchase_price: props.tool.purchase_price,
     requires_training: props.tool.requires_training || false,
-    notes: props.tool.notes || ''
+    notes: props.tool.notes || '',
+    schedule_id: (props.tool as any).schedule_id ?? null,
   }
+}
+
+const loadSchedules = async () => {
+  try {
+    const r = await schedulesApi.list()
+    if (r.success && r.data) schedules.value = r.data
+  } catch { schedules.value = [] }
 }
 
 const updateTool = async () => {
@@ -282,6 +307,7 @@ const updateTool = async () => {
 // Lifecycle
 onMounted(async () => {
   await loadCategories()
+  await loadSchedules()
   loadToolData()
 })
 </script>

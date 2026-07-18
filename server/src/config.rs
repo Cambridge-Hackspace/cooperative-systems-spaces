@@ -34,6 +34,32 @@ fn merge_toml_values(existing: toml::Value, defaults: toml::Value) -> toml::Valu
     }
 }
 
+/// Toggles for the built-in home-page action buttons (View My Profile,
+/// Browse Tools, Admin Panel, Wiki). Operator-curated entries from the
+/// `home_links` admin page are unaffected.
+///
+/// The `wiki` flag is combined with the existing `[pages]` settings: the
+/// button only appears when wiki is configured server-side **and** its
+/// `wiki_link` is set to `HomePage` or `Both` **and** this toggle is true.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HomepageLinksConfig {
+    pub view_my_profile: bool,
+    pub browse_tools: bool,
+    pub admin_panel: bool,
+    pub wiki: bool,
+}
+
+impl Default for HomepageLinksConfig {
+    fn default() -> Self {
+        Self {
+            view_my_profile: true,
+            browse_tools: true,
+            admin_panel: true,
+            wiki: true,
+        }
+    }
+}
+
 /// Site-specific configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteConfig {
@@ -55,6 +81,9 @@ pub struct SiteConfig {
     pub https: bool,
     /// Analytics tracking ID (optional)
     pub analytics_id: Option<String>,
+    /// Which built-in homepage buttons are shown. Each defaults to `true`.
+    #[serde(default)]
+    pub homepage_links: HomepageLinksConfig,
 }
 
 impl Default for SiteConfig {
@@ -69,6 +98,7 @@ impl Default for SiteConfig {
             secret_key: "change-me-in-production".to_string(),
             https: false,
             analytics_id: None,
+            homepage_links: HomepageLinksConfig::default(),
         }
     }
 }
@@ -633,6 +663,83 @@ impl Default for ToolGuardConfig {
     }
 }
 
+/// Configurable hierarchy of physical places (`Building → Floor → Room → …`).
+/// The level vocabulary is operator-defined; children must use a level
+/// strictly deeper than their parent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceConfig {
+    /// Master toggle. When false, the places admin/UI is hidden and the
+    /// optional `place_id` columns on doors / tools / devices are ignored.
+    pub enabled: bool,
+    /// Ordered list of place-type names, from most-containing to least.
+    /// Index in this list = depth.
+    pub types: Vec<String>,
+}
+
+impl Default for PlaceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            // Two-element default so the out-of-the-box experience
+            // demonstrates the parent → child relationship (a Room
+            // containing a Spot) rather than a degenerate single-level
+            // setup.
+            types: vec!["Room".to_string(), "Spot".to_string()],
+        }
+    }
+}
+
+impl PlaceConfig {
+    /// Depth of a given place type, or `None` if it isn't configured.
+    pub fn index_of(&self, place_type: &str) -> Option<usize> {
+        self.types.iter().position(|t| t == place_type)
+    }
+
+    /// `Ok(())` iff `child_type` is deeper than `parent_type`. Both types
+    /// must appear in [`Self::types`].
+    pub fn validate_parent_child(
+        &self,
+        parent_type: &str,
+        child_type: &str,
+    ) -> Result<(), String> {
+        let parent_idx = self
+            .index_of(parent_type)
+            .ok_or_else(|| format!("Unknown parent place_type '{parent_type}'"))?;
+        let child_idx = self
+            .index_of(child_type)
+            .ok_or_else(|| format!("Unknown place_type '{child_type}'"))?;
+        if child_idx <= parent_idx {
+            return Err(format!(
+                "Child place_type '{child_type}' must be deeper than parent '{parent_type}'"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Door access module configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoorConfig {
+    /// Master toggle. When false, all door endpoints reject and no MQTT
+    /// state is published.
+    pub enabled: bool,
+    /// Default unlock pulse length (ms) for newly-created doors.
+    pub default_unlock_duration_ms: i32,
+    /// Public URL placed onto door signage. `{site_url}` and `{door_id}` are
+    /// interpolated when an admin requests the QR.
+    pub qr_url_template: String,
+}
+
+impl Default for DoorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_unlock_duration_ms: 5000,
+            qr_url_template: "{site_url}/door/{door_id}/checkin".to_string(),
+        }
+    }
+}
+
 /// Calendar aggregation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarConfig {
@@ -871,6 +978,12 @@ pub struct AppConfig {
     pub pages: PagesConfig,
     /// Edge Config
     pub edge: EdgeConfig,
+    /// Door access module configuration
+    #[serde(default)]
+    pub door: DoorConfig,
+    /// Configurable hierarchy of places
+    #[serde(default)]
+    pub place: PlaceConfig,
 }
 
 impl Default for AppConfig {
@@ -894,6 +1007,8 @@ impl Default for AppConfig {
             calendar: CalendarConfig::default(),
             pages: PagesConfig::default(),
             edge: EdgeConfig::default(),
+            door: DoorConfig::default(),
+            place: PlaceConfig::default(),
         }
     }
 }

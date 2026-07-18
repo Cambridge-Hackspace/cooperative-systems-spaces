@@ -2528,6 +2528,459 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    // ---------------------------------------------------------------------
+    // Door access
+    // ---------------------------------------------------------------------
+
+    pub fn list_doors(&self) -> Result<Vec<crate::models::Door>, DatabaseError> {
+        use crate::schema::doors::dsl::*;
+        let mut conn = self.get_connection()?;
+        doors
+            .order(name.asc())
+            .select(crate::models::Door::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_door(&self, did: uuid::Uuid) -> Result<crate::models::Door, DatabaseError> {
+        use crate::schema::doors::dsl::*;
+        let mut conn = self.get_connection()?;
+        doors
+            .find(did)
+            .select(crate::models::Door::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_door(
+        &self,
+        new_door: &crate::models::NewDoor,
+    ) -> Result<crate::models::Door, DatabaseError> {
+        use crate::schema::doors;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(doors::table)
+            .values(new_door)
+            .returning(crate::models::Door::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_door(
+        &self,
+        did: uuid::Uuid,
+        changes: &crate::models::UpdateDoor,
+    ) -> Result<crate::models::Door, DatabaseError> {
+        use crate::schema::doors::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(doors.find(did))
+            .set(changes)
+            .returning(crate::models::Door::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_door(&self, did: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::doors::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(doors.find(did))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Doors served by a specific edge device.
+    pub fn list_doors_for_device(
+        &self,
+        edge_id: uuid::Uuid,
+    ) -> Result<Vec<crate::models::Door>, DatabaseError> {
+        use crate::schema::doors::dsl::*;
+        let mut conn = self.get_connection()?;
+        doors
+            .filter(edge_device_id.eq(edge_id))
+            .select(crate::models::Door::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Distinct edge device IDs that have at least one door bound to them.
+    /// Used for "republish to every device whose state might have changed".
+    pub fn list_door_device_ids(&self) -> Result<Vec<uuid::Uuid>, DatabaseError> {
+        use crate::schema::doors::dsl::*;
+        let mut conn = self.get_connection()?;
+        let ids: Vec<Option<uuid::Uuid>> = doors
+            .select(edge_device_id)
+            .distinct()
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(ids.into_iter().flatten().collect())
+    }
+
+    pub fn list_rules_for_door(
+        &self,
+        did: uuid::Uuid,
+    ) -> Result<Vec<crate::models::DoorAccessRule>, DatabaseError> {
+        use crate::schema::door_access_rules::dsl::*;
+        let mut conn = self.get_connection()?;
+        door_access_rules
+            .filter(door_id.eq(did))
+            .order(created_at.asc())
+            .select(crate::models::DoorAccessRule::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn insert_door_rule(
+        &self,
+        new_rule: &crate::models::NewDoorAccessRule,
+    ) -> Result<crate::models::DoorAccessRule, DatabaseError> {
+        use crate::schema::door_access_rules;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(door_access_rules::table)
+            .values(new_rule)
+            .returning(crate::models::DoorAccessRule::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_door_rule(
+        &self,
+        did: uuid::Uuid,
+        rid: uuid::Uuid,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::door_access_rules::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(door_access_rules.filter(id.eq(rid)).filter(door_id.eq(did)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn insert_door_access_event(
+        &self,
+        new_event: &crate::models::NewDoorAccessEvent,
+    ) -> Result<crate::models::DoorAccessEvent, DatabaseError> {
+        use crate::schema::door_access_events;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(door_access_events::table)
+            .values(new_event)
+            .returning(crate::models::DoorAccessEvent::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_door_events(
+        &self,
+        did: uuid::Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::models::DoorAccessEvent>, DatabaseError> {
+        use crate::schema::door_access_events::dsl::*;
+        let mut conn = self.get_connection()?;
+        door_access_events
+            .filter(door_id.eq(did))
+            .order(occurred_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .select(crate::models::DoorAccessEvent::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn insert_door_checkin(
+        &self,
+        new_checkin: &crate::models::NewDoorCheckin,
+    ) -> Result<crate::models::DoorCheckin, DatabaseError> {
+        use crate::schema::door_checkins;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(door_checkins::table)
+            .values(new_checkin)
+            .returning(crate::models::DoorCheckin::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // ---------------------------------------------------------------------
+    // Home links (admin-curated links on the public home page)
+    // ---------------------------------------------------------------------
+
+    pub fn list_home_links(&self) -> Result<Vec<crate::models::HomeLink>, DatabaseError> {
+        use crate::schema::home_links::dsl::*;
+        let mut conn = self.get_connection()?;
+        home_links
+            .order((sort_order.asc(), label.asc()))
+            .select(crate::models::HomeLink::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_home_link(
+        &self,
+        link_id: uuid::Uuid,
+    ) -> Result<crate::models::HomeLink, DatabaseError> {
+        use crate::schema::home_links::dsl::*;
+        let mut conn = self.get_connection()?;
+        home_links
+            .find(link_id)
+            .select(crate::models::HomeLink::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_home_link(
+        &self,
+        new_link: &crate::models::NewHomeLink,
+    ) -> Result<crate::models::HomeLink, DatabaseError> {
+        use crate::schema::home_links;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(home_links::table)
+            .values(new_link)
+            .returning(crate::models::HomeLink::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_home_link(
+        &self,
+        link_id: uuid::Uuid,
+        changes: &crate::models::UpdateHomeLink,
+    ) -> Result<crate::models::HomeLink, DatabaseError> {
+        use crate::schema::home_links::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(home_links.find(link_id))
+            .set(changes)
+            .returning(crate::models::HomeLink::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_home_link(&self, link_id: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::home_links::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(home_links.find(link_id))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // ---------------------------------------------------------------------
+    // Schedules (weekly windows attachable to access rules)
+    // ---------------------------------------------------------------------
+
+    pub fn list_schedules(&self) -> Result<Vec<crate::models::Schedule>, DatabaseError> {
+        use crate::schema::schedules::dsl::*;
+        let mut conn = self.get_connection()?;
+        schedules
+            .order(name.asc())
+            .select(crate::models::Schedule::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_schedule(
+        &self,
+        sid: uuid::Uuid,
+    ) -> Result<crate::models::Schedule, DatabaseError> {
+        use crate::schema::schedules::dsl::*;
+        let mut conn = self.get_connection()?;
+        schedules
+            .find(sid)
+            .select(crate::models::Schedule::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_schedule(
+        &self,
+        new_schedule: &crate::models::NewSchedule,
+    ) -> Result<crate::models::Schedule, DatabaseError> {
+        use crate::schema::schedules;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(schedules::table)
+            .values(new_schedule)
+            .returning(crate::models::Schedule::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_schedule(
+        &self,
+        sid: uuid::Uuid,
+        changes: &crate::models::UpdateSchedule,
+    ) -> Result<crate::models::Schedule, DatabaseError> {
+        use crate::schema::schedules::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(schedules.find(sid))
+            .set(changes)
+            .returning(crate::models::Schedule::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_schedule(&self, sid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::schedules::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(schedules.find(sid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // ---------------------------------------------------------------------
+    // Places (configurable hierarchy)
+    // ---------------------------------------------------------------------
+
+    pub fn list_places(&self) -> Result<Vec<crate::models::Place>, DatabaseError> {
+        use crate::schema::places::dsl::*;
+        let mut conn = self.get_connection()?;
+        places
+            .order((parent_id.asc().nulls_first(), name.asc()))
+            .select(crate::models::Place::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_place(&self, pid: uuid::Uuid) -> Result<crate::models::Place, DatabaseError> {
+        use crate::schema::places::dsl::*;
+        let mut conn = self.get_connection()?;
+        places
+            .find(pid)
+            .select(crate::models::Place::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_child_places(
+        &self,
+        parent: uuid::Uuid,
+    ) -> Result<Vec<crate::models::Place>, DatabaseError> {
+        use crate::schema::places::dsl::*;
+        let mut conn = self.get_connection()?;
+        places
+            .filter(parent_id.eq(Some(parent)))
+            .order(name.asc())
+            .select(crate::models::Place::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Walk parent links until a root is hit. Returns `[root, …, immediate_parent]`
+    /// (i.e. ordered top-down, excluding `pid` itself). Bounded at 32 steps as
+    /// a safety net even though the API rejects cycles on every write.
+    pub fn place_ancestors(
+        &self,
+        pid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::Place>, DatabaseError> {
+        let mut acc = Vec::new();
+        let mut current = self.get_place(pid)?.parent_id;
+        let mut depth = 0;
+        while let Some(parent) = current {
+            depth += 1;
+            if depth > 32 {
+                return Err(DatabaseError::Other(
+                    "place ancestor chain exceeded 32 levels".into(),
+                ));
+            }
+            let p = self.get_place(parent)?;
+            current = p.parent_id;
+            acc.push(p);
+        }
+        acc.reverse();
+        Ok(acc)
+    }
+
+    pub fn create_place(
+        &self,
+        new_place: &crate::models::NewPlace,
+    ) -> Result<crate::models::Place, DatabaseError> {
+        use crate::schema::places;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(places::table)
+            .values(new_place)
+            .returning(crate::models::Place::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_place(
+        &self,
+        pid: uuid::Uuid,
+        changes: &crate::models::UpdatePlace,
+    ) -> Result<crate::models::Place, DatabaseError> {
+        use crate::schema::places::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(places.find(pid))
+            .set(changes)
+            .returning(crate::models::Place::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_place(&self, pid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::places::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(places.find(pid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Counts of attached entities referencing this place. Used by the API
+    /// to render "what's in here" hints.
+    pub fn count_place_references(
+        &self,
+        pid: uuid::Uuid,
+    ) -> Result<(i64, i64, i64), DatabaseError> {
+        use diesel::dsl::count_star;
+        let mut conn = self.get_connection()?;
+        let doors_count: i64 = {
+            use crate::schema::doors::dsl::*;
+            doors
+                .filter(place_id_from.eq(Some(pid)).or(place_id_to.eq(Some(pid))))
+                .select(count_star())
+                .first(&mut conn)
+                .map_err(DatabaseError::Diesel)?
+        };
+        let tools_count: i64 = {
+            use crate::schema::tools::dsl::*;
+            tools
+                .filter(place_id.eq(Some(pid)))
+                .select(count_star())
+                .first(&mut conn)
+                .map_err(DatabaseError::Diesel)?
+        };
+        let devices_count: i64 = {
+            use crate::schema::space_devices::dsl::*;
+            space_devices
+                .filter(place_id.eq(Some(pid)))
+                .filter(deleted_at.is_null())
+                .select(count_star())
+                .first(&mut conn)
+                .map_err(DatabaseError::Diesel)?
+        };
+        Ok((doors_count, tools_count, devices_count))
+    }
+
+    /// Set / clear the `place_id` on a device.
+    pub fn set_space_device_place(
+        &self,
+        device_id: uuid::Uuid,
+        new_place: Option<uuid::Uuid>,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::space_devices::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(space_devices.filter(id.eq(device_id)))
+            .set((place_id.eq(new_place), updated_at.eq(chrono::Utc::now())))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every active user. Used by the door state compiler to expand role
+    /// rules to a flat card allow-list.
+    pub fn list_active_users(&self) -> Result<Vec<crate::models::User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(is_active.eq(true))
+            .select(crate::models::User::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Recompute `users.mfa_enrolled_at` for a user based on whether any
     /// confirmed method exists. Call after add/remove operations.
     pub fn recompute_user_mfa_enrolled(&self, uid: uuid::Uuid) -> Result<bool, DatabaseError> {

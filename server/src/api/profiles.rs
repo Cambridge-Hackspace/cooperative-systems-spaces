@@ -111,6 +111,16 @@ async fn update_user_profile(
     let updated_user = state.db.update_user_profile(user_id, &payload.profile)
         .map_err(ApiError::from)?;
 
+    // If the door-relevant profile field changed (it's reused by the door
+    // module via `toolguard.profile_field`), republish state to every edge
+    // device serving doors so allow-lists pick up the new card(s).
+    let card_field = state.config_manager.get_config().toolguard.profile_field.clone();
+    let old_card = existing_user.profile.get(&card_field).cloned();
+    let new_card = payload.profile.get(&card_field).cloned();
+    if old_card != new_card {
+        state.door_service.republish_all();
+    }
+
     // Log the profile update
     let audit_logger = AuditLogger::new(state.db.clone());
     if let Err(e) = audit_logger.log_profile_update(

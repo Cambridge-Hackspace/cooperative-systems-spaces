@@ -8,9 +8,22 @@ use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, MqttConfig};
+use crate::doors::{
+    self, Decision, DoorsEvent, DoorsState, LocalScanRequest,
+    LocalUnlockResponse, UnlockCommand,
+};
+use crate::edge_inbound::EdgeInbound;
 use crate::registration::{get_auth_token, get_device_id};
 use crate::system_info::get_system_info;
 use crate::toolguard::ToolGuardState;
+
+/// Cross-MQTT channels for the door bridge. The remote client forwards
+/// `doors/unlock` commands here; the local client forwards local scan
+/// decisions back out as `doors/event`. Tasks spawned in `main` drain them.
+pub type DoorsUnlockSender = tokio::sync::mpsc::UnboundedSender<UnlockCommand>;
+pub type DoorsUnlockReceiver = tokio::sync::mpsc::UnboundedReceiver<UnlockCommand>;
+pub type DoorsEventSender = tokio::sync::mpsc::UnboundedSender<DoorsEvent>;
+pub type DoorsEventReceiver = tokio::sync::mpsc::UnboundedReceiver<DoorsEvent>;
 
 #[derive(Debug, Serialize)]
 struct DeviceData {
@@ -33,16 +46,15 @@ pub struct EdgeMqttClient {
     device_id: String,
     namespace: String,
     start_time: std::time::Instant,
-    config_manager: std::sync::Arc<std::sync::RwLock<Config>>,
-    toolguard_state: Arc<ToolGuardState>,
+    /// Shared with the WebSocket transport; handles every server-pushed message.
+    inbound: Arc<EdgeInbound>,
 }
 
 impl EdgeMqttClient {
     /// Create a new MQTT client
     pub async fn new(
         config: &Config,
-        config_manager: std::sync::Arc<std::sync::RwLock<Config>>,
-        toolguard_state: Arc<ToolGuardState>,
+        inbound: Arc<EdgeInbound>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let device_id = get_device_id(config)
             .ok_or_else(|| anyhow::anyhow!("Device ID not found in config"))?;
@@ -98,17 +110,18 @@ impl EdgeMqttClient {
                 device_id,
                 namespace: mqtt_config.mqtt_namespace.clone(),
                 start_time: std::time::Instant::now(),
-                config_manager,
-                toolguard_state,
+                inbound,
             },
             rx,
         ))
     }
-    
+
     /// Subscribe to device command topics
     pub fn subscribe_to_commands(&self) -> Result<()> {
         let name_topic = format!("{}/devices/{}/name", self.namespace, self.device_id);
         let toolguard_topic = format!("{}/devices/{}/toolguard/state", self.namespace, self.device_id);
+        let doors_state_topic = format!("{}/devices/{}/doors/state", self.namespace, self.device_id);
+        let doors_unlock_topic = format!("{}/devices/{}/doors/unlock", self.namespace, self.device_id);
 
         self.client
             .subscribe(&name_topic, 1)
@@ -120,7 +133,29 @@ impl EdgeMqttClient {
             .wait()
             .context("Failed to subscribe to toolguard state topic")?;
 
+        // Retained snapshots are nice but not required; standard QoS 1.
+        self.client
+            .subscribe(&doors_state_topic, 1)
+            .wait()
+            .context("Failed to subscribe to doors/state topic")?;
+        self.client
+            .subscribe(&doors_unlock_topic, 1)
+            .wait()
+            .context("Failed to subscribe to doors/unlock topic")?;
+
         info!("Subscribed to command topics with namespace: {}", self.namespace);
+        Ok(())
+    }
+
+    /// Publish a door access event (`doors/event`) back to the server.
+    /// Called by the bridge task when the local broker reports a scan.
+    pub fn publish_doors_event(&self, event: &DoorsEvent) -> Result<()> {
+        let topic = format!("{}/devices/{}/doors/event", self.namespace, self.device_id);
+        let payload = serde_json::to_vec(event)
+            .context("Failed to serialize DoorsEvent")?;
+        let msg = mqtt::Message::new(topic, payload, 1);
+        self.client.publish(msg).wait()
+            .context("Failed to publish doors/event")?;
         Ok(())
     }
     
@@ -242,49 +277,19 @@ impl EdgeMqttClient {
         info!("Data publisher task started (interval: 15 minutes)");
     }
     
-    /// Handle incoming MQTT messages
+    /// Handle incoming MQTT messages. The topic suffix is the same
+    /// `WireMessage::kind` string the WebSocket transport uses, so we just
+    /// extract it and delegate to the shared inbound dispatcher.
     pub async fn handle_message(&self, topic: &str, payload: &[u8]) -> Result<()> {
-        let name_topic = format!("{}/devices/{}/name", self.namespace, self.device_id);
-        let toolguard_topic = format!("{}/devices/{}/toolguard/state", self.namespace, self.device_id);
-
-        if topic == name_topic {
-            match serde_json::from_slice::<NameUpdateMessage>(payload) {
-                Ok(msg) => {
-                    info!("Received name update: {}", msg.name);
-                    self.update_device_name(&msg.name).await?;
-                }
-                Err(e) => {
-                    warn!("Failed to parse name update message: {}", e);
-                }
+        let prefix = format!("{}/devices/{}/", self.namespace, self.device_id);
+        let suffix = match topic.strip_prefix(&prefix) {
+            Some(s) => s,
+            None => {
+                warn!("Received message on unexpected topic: {}", topic);
+                return Ok(());
             }
-        } else if topic == toolguard_topic {
-            match self.toolguard_state.apply_sync_bytes(payload) {
-                Ok(()) => info!("ToolGuard state updated via MQTT push"),
-                Err(e) => warn!("Failed to parse toolguard state payload: {}", e),
-            }
-        }
-
-        Ok(())
-    }
-    
-    /// Update device name in config
-    async fn update_device_name(&self, new_name: &str) -> Result<()> {
-        info!("Updating device name to: {}", new_name);
-        
-        // Update config
-        {
-            let mut config = self.config_manager.write().unwrap();
-            config.name = new_name.to_string();
-            
-            // Save to file
-            if let Some(path) = std::env::var_os("CONFIG_PATH") {
-                config.to_file(path)?;
-            }
-        }
-        
-        info!("Device name updated successfully");
-        info!("Note: Restart the device for the name change to take full effect");
-        
+        };
+        self.inbound.dispatch(suffix, payload).await;
         Ok(())
     }
     
@@ -362,6 +367,10 @@ const LOCAL_TOOL_ON_REQ: &str = "toolguard/request/tool-on";
 const LOCAL_TOOL_OFF_REQ: &str = "toolguard/request/tool-off";
 const LOCAL_TOOL_LOG_REQ: &str = "toolguard/request/tool-log";
 const LOCAL_KIOSK_REFRESH: &str = "kiosk/refresh";
+/// RFID scan from the local hardware bridge — `{ door_id, card_id }`.
+const LOCAL_DOOR_SCAN_REQ: &str = "door/request/scan";
+/// Unlock response sent back to the local relay controller.
+const LOCAL_DOOR_UNLOCK_RESP: &str = "door/response/unlock";
 
 /// JSON published by local hardware onto the local broker
 #[derive(Debug, Deserialize)]
@@ -381,6 +390,11 @@ pub struct LocalMqttClient {
     remote_auth_token: String,
     http_client: Client,
     refresh_notify: Arc<tokio::sync::Notify>,
+    /// Shared decision cache populated by remote `doors/state` snapshots.
+    doors_state: Arc<DoorsState>,
+    /// Forwards local scan outcomes back to the server as `doors/event`. The
+    /// receiver is consumed by a task in `main`.
+    doors_event_tx: DoorsEventSender,
 }
 
 impl LocalMqttClient {
@@ -389,6 +403,8 @@ impl LocalMqttClient {
         toolguard_state: Arc<ToolGuardState>,
         remote_instance_url: String,
         remote_auth_token: String,
+        doors_state: Arc<DoorsState>,
+        doors_event_tx: DoorsEventSender,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
@@ -425,6 +441,8 @@ impl LocalMqttClient {
                 remote_auth_token,
                 http_client: Client::new(),
                 refresh_notify: Arc::new(tokio::sync::Notify::new()),
+                doors_state,
+                doors_event_tx,
             },
             rx,
         ))
@@ -439,13 +457,20 @@ impl LocalMqttClient {
             .context("Failed to subscribe to tool-log requests")?;
         self.client.subscribe(LOCAL_KIOSK_REFRESH, 0).wait()
             .context("Failed to subscribe to kiosk refresh topic")?;
-        info!("Subscribed to local toolguard request topics");
+        self.client.subscribe(LOCAL_DOOR_SCAN_REQ, 1).wait()
+            .context("Failed to subscribe to door scan requests")?;
+        info!("Subscribed to local toolguard + door request topics");
         Ok(())
     }
 
     pub async fn handle_message(&self, topic: &str, payload: &[u8]) {
         if topic == LOCAL_KIOSK_REFRESH {
             self.handle_refresh_request().await;
+            return;
+        }
+
+        if topic == LOCAL_DOOR_SCAN_REQ {
+            self.handle_door_scan(payload).await;
             return;
         }
 
@@ -462,6 +487,62 @@ impl LocalMqttClient {
             LOCAL_TOOL_OFF_REQ => self.handle_tool_off(req).await,
             LOCAL_TOOL_LOG_REQ => self.handle_tool_log(req).await,
             _ => {}
+        }
+    }
+
+    /// Decide an RFID scan against the local cache, publish a response back
+    /// to the hardware, and forward the outcome to the server as `doors/event`.
+    async fn handle_door_scan(&self, payload: &[u8]) {
+        let req: LocalScanRequest = match serde_json::from_slice(payload) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Failed to parse door scan request: {}", e);
+                return;
+            }
+        };
+
+        let (granted, duration_ms, reason) = match self.doors_state.decide(req.door_id, &req.card_id) {
+            Decision::Allow { duration_ms } => (true, duration_ms, None),
+            Decision::Deny(why) => (false, 0, Some(why.to_string())),
+        };
+
+        // Tell the local relay controller what to do.
+        let response = LocalUnlockResponse {
+            door_id: req.door_id,
+            granted,
+            duration_ms,
+            reason: reason.clone(),
+        };
+        if let Ok(v) = serde_json::to_value(&response) {
+            self.publish_local(LOCAL_DOOR_UNLOCK_RESP, &v);
+        }
+
+        // Tell the server what just happened (audit log, webhook, etc.).
+        let event = doors::DoorsEvent {
+            door_id: req.door_id,
+            card_id: Some(req.card_id),
+            granted,
+            reason,
+            source: "rfid",
+            occurred_at: chrono::Utc::now(),
+        };
+        if self.doors_event_tx.send(event).is_err() {
+            warn!("Doors event bridge channel closed; cannot report scan upstream");
+        }
+    }
+
+    /// Forward a server-initiated unlock command onto the local broker so
+    /// the relay actuates. Called by a bridge task in `main` that drains the
+    /// channel populated by [`EdgeMqttClient`].
+    pub fn publish_doors_unlock_response(&self, cmd: &UnlockCommand) {
+        let response = LocalUnlockResponse {
+            door_id: cmd.door_id,
+            granted: true,
+            duration_ms: cmd.duration_ms,
+            reason: Some(cmd.reason.clone()),
+        };
+        if let Ok(v) = serde_json::to_value(&response) {
+            self.publish_local(LOCAL_DOOR_UNLOCK_RESP, &v);
         }
     }
 

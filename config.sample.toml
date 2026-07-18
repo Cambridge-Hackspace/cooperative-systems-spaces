@@ -256,7 +256,7 @@ help_text = "BIRD"
 
 [[user.profile_fields]]
 key = "card_id"
-label = "Transit Card ID for Toolpass"
+label = "Transit Card ID for ToolGuard"
 field_type = "Text"
 required = false
 help_text = "0x"
@@ -317,6 +317,6 @@ label = "Other"
 
 
 
-[toolpass]
+[toolguard]
 enabled = true
 profile_field = "card_id"

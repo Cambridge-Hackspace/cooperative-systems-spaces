@@ -407,8 +407,19 @@ pub async fn build_sync_payload(
     device_id: Uuid,
     profile_field: &str,
 ) -> Result<ToolGuardSyncPayload, ApiError> {
-    let (users, tools) = state.db.get_toolguard_sync_data(profile_field)
+    let (mut users, mut tools) = state.db.get_toolguard_sync_data(profile_field)
         .map_err(|e| ApiError::InternalServerError(format!("Failed to build sync data: {}", e)))?;
+
+    // Apply schedule gating: any tool whose attached schedule is closed
+    // right now is removed from every user's authorized list, and then
+    // dropped from the top-level tool list since nobody can use it.
+    let closed_tool_ids = closed_tool_ids_now(state)?;
+    if !closed_tool_ids.is_empty() {
+        for u in users.iter_mut() {
+            u.authorized_tool_ids.retain(|tid| !closed_tool_ids.contains(tid));
+        }
+        tools.retain(|t| !closed_tool_ids.contains(&t.id));
+    }
 
     Ok(ToolGuardSyncPayload {
         device_id,
@@ -416,6 +427,61 @@ pub async fn build_sync_payload(
         tools,
         users,
     })
+}
+
+/// Tools whose attached schedule isn't currently open. Empty when no tools
+/// have a schedule (typical case) or when no schedules exist.
+fn closed_tool_ids_now(
+    state: &AppState,
+) -> Result<std::collections::HashSet<Uuid>, ApiError> {
+    use std::collections::HashSet;
+    let cfg = state.config_manager.get_config();
+    let tz = crate::schedules::resolve_tz(&cfg.site.timezone);
+
+    let schedules = state
+        .db
+        .list_schedules()
+        .map_err(|e| ApiError::InternalServerError(format!("list_schedules: {e}")))?;
+    if schedules.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    // Index schedules by id for O(1) lookup.
+    let by_id: std::collections::HashMap<Uuid, &crate::models::Schedule> =
+        schedules.iter().map(|s| (s.id, s)).collect();
+
+    // Walk every tool's `schedule_id`; cheaper than per-tool lookups.
+    use crate::schema::tools::dsl;
+    use diesel::prelude::*;
+    let mut conn = state
+        .db
+        .pool()
+        .get()
+        .map_err(|e| ApiError::InternalServerError(format!("DB pool: {e}")))?;
+    let rows: Vec<(Uuid, Option<Uuid>)> = dsl::tools
+        .select((dsl::id, dsl::schedule_id))
+        .load(&mut conn)
+        .map_err(|e| ApiError::InternalServerError(format!("load tools: {e}")))?;
+
+    let mut closed = HashSet::new();
+    for (tool_id, schedule_id) in rows {
+        let sid = match schedule_id {
+            Some(s) => s,
+            None => continue, // No schedule = always open.
+        };
+        let sched = match by_id.get(&sid) {
+            Some(s) => s,
+            None => continue, // Schedule went missing; treat as always open.
+        };
+        let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
+            Ok(v) => v,
+            Err(_) => continue, // Invalid intervals — fail-open rather than locking the tool.
+        };
+        if !crate::schedules::matches_now(&intervals, tz) {
+            closed.insert(tool_id);
+        }
+    }
+    Ok(closed)
 }
 
 /// Broadcast the current toolguard state to all registered devices over MQTT.

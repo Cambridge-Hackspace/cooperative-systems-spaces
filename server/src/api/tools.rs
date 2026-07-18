@@ -33,6 +33,10 @@ pub struct CreateToolRequest {
     pub requires_training: Option<bool>,
     pub external_id: Option<String>,
     pub external_api_key: Option<String>,
+    pub place_id: Option<uuid::Uuid>,
+    /// Optional usability window. When set and the schedule is closed,
+    /// the tool is removed from every user's authorized list at sync time.
+    pub schedule_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, diesel::AsChangeset)]
@@ -51,6 +55,8 @@ pub struct UpdateToolRequest {
     pub requires_training: Option<bool>,
     pub external_id: Option<String>,
     pub external_api_key: Option<String>,
+    pub place_id: Option<uuid::Uuid>,
+    pub schedule_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +96,7 @@ pub fn tools_routes() -> Router<AppState> {
         
         // Public endpoints for members to view tools
         .route("/available", get(list_available_tools))
+        .route("/visible", get(list_visible_tools))
         .route("/{tool_id}/can-use", get(can_user_use_tool))
 }
 
@@ -145,6 +152,8 @@ async fn create_tool(
         created_by: staff.0.id,
         external_id: payload.external_id,
         external_api_key: payload.external_api_key,
+        place_id: payload.place_id,
+        schedule_id: payload.schedule_id,
     };
 
     let created_tool = state.db.create_tool(&new_tool)
@@ -329,6 +338,33 @@ async fn list_available_tools(
             tracing::error!("Failed to query available tools: {}", e);
             ApiError::InternalServerError("Failed to fetch tools".to_string())
         })?;
+
+    Ok(Json(ApiResponse::success(tools)))
+}
+
+/// List every tool that's not retired. This is the member-facing equivalent
+/// of `list_tools` — they can see in_use / maintenance / broken / repair
+/// alongside idle (useful for "is the laser cutter free?" style queries) but
+/// retired tools stay hidden so the UI isn't cluttered by decommissioned
+/// inventory.
+async fn list_visible_tools(
+    _user: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Tool>>>, ApiError> {
+    let tools = state.db.get_tools(ToolQuery {
+        category: None,
+        status: None,
+        requires_training: None,
+        page: None,
+        per_page: Some(100),
+    })
+        .map_err(|e| {
+            tracing::error!("Failed to query visible tools: {}", e);
+            ApiError::InternalServerError("Failed to fetch tools".to_string())
+        })?
+        .into_iter()
+        .filter(|t| t.status != ToolStatus::Retired)
+        .collect();
 
     Ok(Json(ApiResponse::success(tools)))
 }

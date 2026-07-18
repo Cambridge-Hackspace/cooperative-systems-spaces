@@ -29,11 +29,18 @@ pub struct MqttService {
     client: mqtt::AsyncClient,
     db: Arc<DatabaseManager>,
     namespace: String,
+    /// Transport-agnostic inbound dispatcher. Shared with the WebSocket path
+    /// so the per-message handling lives in exactly one place.
+    inbound: Arc<crate::devices_inbound::DeviceInbound>,
 }
 
 impl MqttService {
     /// Create a new MQTT service and consumer
-    pub fn new(config: &MqttConfig, db: Arc<DatabaseManager>) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>), Box<dyn std::error::Error>> {
+    pub fn new(
+        config: &MqttConfig,
+        db: Arc<DatabaseManager>,
+        inbound: Arc<crate::devices_inbound::DeviceInbound>,
+    ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>), Box<dyn std::error::Error>> {
         // Parse broker URL
         let broker_url = &config.mqtt_instance_url;
         
@@ -72,6 +79,7 @@ impl MqttService {
             client: cli,
             db,
             namespace: config.mqtt_namespace.clone(),
+            inbound,
         }, rx))
     }
 
@@ -82,11 +90,16 @@ impl MqttService {
         // Subscribe to device topics with namespace prefix
         let heartbeat_topic = format!("{}/devices/+/heartbeat", self.namespace);
         let data_topic = format!("{}/devices/+/data", self.namespace);
-        
+        let doors_event_topic = format!("{}/devices/+/doors/event", self.namespace);
+
         self.client.subscribe(&heartbeat_topic, 1).wait()?;
         self.client.subscribe(&data_topic, 1).wait()?;
+        self.client.subscribe(&doors_event_topic, 1).wait()?;
 
-        info!("Subscribed to device topics: {} and {}", heartbeat_topic, data_topic);
+        info!(
+            "Subscribed to device topics: {}, {}, {}",
+            heartbeat_topic, data_topic, doors_event_topic
+        );
 
         // Process incoming messages
         loop {
@@ -119,17 +132,16 @@ impl MqttService {
             return;
         }
 
-        // Strip the namespace and "devices/" prefix to get device_id/message_type
+        // Strip the namespace and "devices/" prefix. Remaining is
+        // "{device_id}/{suffix}" where suffix may contain '/'.
         let remaining = &topic[expected_prefix.len()..];
-        let parts: Vec<&str> = remaining.split('/').collect();
-        
-        if parts.len() != 2 {
-            warn!("Invalid topic format after namespace: {}", topic);
-            return;
-        }
-        
-        let device_id_str = parts[0];
-        let message_type = parts[1];
+        let (device_id_str, suffix) = match remaining.split_once('/') {
+            Some(parts) => parts,
+            None => {
+                warn!("Invalid topic format after namespace: {}", topic);
+                return;
+            }
+        };
 
         let device_id = match Uuid::parse_str(device_id_str) {
             Ok(id) => id,
@@ -139,138 +151,11 @@ impl MqttService {
             }
         };
 
-        match message_type {
-            "heartbeat" => self.handle_heartbeat(device_id).await,
-            "data" => self.handle_device_data(device_id, msg.payload()).await,
-            _ => {
-                warn!("Unknown message type: {}", message_type);
-            }
-        }
+        // Suffixes are identical to `WireMessage::kind` strings — let the
+        // shared inbound dispatcher do the actual work.
+        self.inbound.dispatch(device_id, suffix, msg.payload()).await;
     }
 
-    /// Handle heartbeat messages
-    async fn handle_heartbeat(&self, device_id: Uuid) {
-        info!("Received heartbeat from device: {}", device_id);
-
-        let mut conn = match self.db.pool().get() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to get DB connection: {}", e);
-                return;
-            }
-        };
-
-        let update = UpdateSpaceDevice {
-            last_seen_at: Some(Utc::now()),
-            ..Default::default()
-        };
-
-        match diesel::update(space_devices::table)
-            .filter(space_devices::id.eq(device_id))
-            .filter(space_devices::deleted_at.is_null())
-            .set(&update)
-            .execute(&mut conn)
-        {
-            Ok(rows) if rows > 0 => {
-                tracing::debug!("Updated last_seen_at for device {}", device_id);
-            }
-            Ok(_) => {
-                warn!("Device not found or already deleted: {}", device_id);
-            }
-            Err(e) => {
-                error!("Failed to update device last_seen_at: {}", e);
-            }
-        }
-    }
-
-    /// Handle device data update messages
-    async fn handle_device_data(&self, device_id: Uuid, payload: &[u8]) {
-        info!("Received data update from device: {}", device_id);
-
-        let data: DeviceDataPayload = match serde_json::from_slice(payload) {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to parse device data payload: {}", e);
-                return;
-            }
-        };
-
-        let mut conn = match self.db.pool().get() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to get DB connection: {}", e);
-                return;
-            }
-        };
-
-        // Parse platform
-        let platform = match data.platform.to_lowercase().as_str() {
-            "windows" => SpaceDevicePlatform::Windows,
-            "linux" => SpaceDevicePlatform::Linux,
-            "macos" => SpaceDevicePlatform::MacOs,
-            _ => SpaceDevicePlatform::Other,
-        };
-
-        // Get old version for audit logging
-        let old_version: Option<String> = space_devices::table
-            .filter(space_devices::id.eq(device_id))
-            .select(space_devices::software_version)
-            .first(&mut conn)
-            .ok();
-
-        let update = UpdateSpaceDevice {
-            mac_address: Some(data.mac_address),
-            software_version: Some(data.software_version.clone()),
-            ipv4_address: data.ipv4_address.clone(),
-            ipv6_address: data.ipv6_address.clone(),
-            uptime: Some(data.uptime),
-            platform: Some(platform),
-            updated_at: Some(Utc::now()),
-            ..Default::default()
-        };
-
-        match diesel::update(space_devices::table)
-            .filter(space_devices::id.eq(device_id))
-            .filter(space_devices::deleted_at.is_null())
-            .set(&update)
-            .execute(&mut conn)
-        {
-            Ok(rows) if rows > 0 => {
-                info!(
-                    "Updated device data for {}: version={}, uptime={}",
-                    device_id, data.software_version, data.uptime
-                );
-
-                // Create audit log if version changed
-                if let Some(old_ver) = old_version {
-                    if old_ver != data.software_version {
-                        let audit_log = NewAuditLog {
-                            event_type: AuditEventType::DeviceVersionChanged.as_str().to_string(),
-                            user_id: None,
-                            actor_id: None,
-                            event_data: serde_json::json!({
-                                "device_id": device_id,
-                                "old_version": old_ver,
-                                "new_version": data.software_version,
-                            }),
-                            ip_address: None,
-                            user_agent: None,
-                        };
-
-                        if let Err(e) = self.db.create_audit_log(&audit_log) {
-                            error!("Failed to create audit log for version change: {}", e);
-                        }
-                    }
-                }
-            }
-            Ok(_) => {
-                warn!("Device not found or already deleted: {}", device_id);
-            }
-            Err(e) => {
-                error!("Failed to update device data: {}", e);
-            }
-        }
-    }
 
     /// Publish a message to a device topic
     pub fn publish_to_device(
@@ -308,6 +193,24 @@ impl MqttService {
         payload: Vec<u8>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.publish_to_device(device_id, "toolguard/state", payload)
+    }
+
+    /// Publish a doors state snapshot (allow/deny lists) to a device.
+    pub fn publish_doors_state(
+        &self,
+        device_id: Uuid,
+        payload: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.publish_to_device(device_id, "doors/state", payload)
+    }
+
+    /// Publish a one-shot door-unlock command to a device.
+    pub fn publish_doors_unlock(
+        &self,
+        device_id: Uuid,
+        payload: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.publish_to_device(device_id, "doors/unlock", payload)
     }
 
     /// Get a reference to the MQTT client for publishing

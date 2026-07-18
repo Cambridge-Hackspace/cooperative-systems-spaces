@@ -540,10 +540,166 @@ pub async fn delete_device(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Bidirectional WebSocket transport (device ↔ server)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/devices/ws` — bidirectional transport for a registered edge
+/// device. Authenticates with the same `Bearer <auth_token>` the MQTT path
+/// uses. The session lives until either side closes; reconnect is the
+/// client's responsibility (the edge's `WsClient` handles it).
+async fn device_ws(
+    State(state): State<AppState>,
+    auth: crate::auth::DeviceAuth,
+    ws: axum::extract::WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_device_ws(state, auth.device_id, socket))
+}
+
+async fn handle_device_ws(
+    state: AppState,
+    device_id: uuid::Uuid,
+    socket: axum::extract::ws::WebSocket,
+) {
+    use axum::extract::ws::Message;
+    use css_lib::wire::WireMessage;
+    use futures_util::{sink::SinkExt, stream::StreamExt};
+    use std::time::Duration;
+
+    tracing::info!("WebSocket: device {} connected", device_id);
+
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::unbounded_channel::<WireMessage>();
+    state.device_registry.register(device_id, mpsc_tx);
+
+    // Writer task — drains the mpsc and sends pings every 15s.
+    let writer_handle = tokio::spawn(async move {
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
+        ping_interval.tick().await; // skip the immediate first tick
+        loop {
+            tokio::select! {
+                maybe_msg = mpsc_rx.recv() => {
+                    match maybe_msg {
+                        Some(msg) => {
+                            let text = match serde_json::to_string(&msg) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    tracing::warn!("Failed to serialize WireMessage: {}", e);
+                                    continue;
+                                }
+                            };
+                            if ws_tx.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    if ws_tx.send(Message::Ping(Default::default())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        // Tear down the socket on exit so the reader sees it close.
+        let _ = ws_tx.close().await;
+    });
+
+    // Reader loop — runs inline so we can `await` it before unregister.
+    while let Some(frame) = ws_rx.next().await {
+        let msg = match frame {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("WebSocket read error from {}: {}", device_id, e);
+                break;
+            }
+        };
+        match msg {
+            Message::Text(t) => match serde_json::from_str::<WireMessage>(&t) {
+                Ok(wm) => {
+                    state
+                        .device_inbound
+                        .dispatch(device_id, &wm.kind, wm.payload.to_string().as_bytes())
+                        .await;
+                }
+                Err(e) => tracing::warn!("Invalid WireMessage from {}: {}", device_id, e),
+            },
+            Message::Binary(b) => match serde_json::from_slice::<WireMessage>(&b) {
+                Ok(wm) => {
+                    state
+                        .device_inbound
+                        .dispatch(device_id, &wm.kind, wm.payload.to_string().as_bytes())
+                        .await;
+                }
+                Err(e) => tracing::warn!("Invalid binary WireMessage from {}: {}", device_id, e),
+            },
+            Message::Pong(_) => {
+                // Heartbeat acknowledged.
+            }
+            Message::Ping(_) => {
+                // axum auto-replies; nothing to do.
+            }
+            Message::Close(_) => break,
+        }
+    }
+
+    state.device_registry.unregister(device_id);
+    writer_handle.abort();
+    tracing::info!("WebSocket: device {} disconnected", device_id);
+}
+
 // Router configuration
 pub fn devices_routes() -> Router<AppState> {
     Router::new()
         .route("/register", post(register_device))
+        .route("/ws", get(device_ws))
+}
+
+/// PATCH /api/admin/devices/{id}/place — assign or clear the device's place.
+#[derive(Debug, Deserialize)]
+pub struct SetDevicePlaceRequest {
+    /// `None` (or `null`) clears the field.
+    #[serde(default)]
+    pub place_id: Option<Uuid>,
+}
+
+pub async fn set_device_place(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SetDevicePlaceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate the target place exists if provided.
+    if let Some(place_id) = req.place_id {
+        let _ = state.db.get_place(place_id)
+            .map_err(|_| ApiError::NotFound("place_id does not exist".to_string()))?;
+    }
+    let rows = state.db.set_space_device_place(id, req.place_id)?;
+    if rows == 0 {
+        return Err(ApiError::NotFound("Device not found".to_string()));
+    }
+
+    // Audit through DeviceNameChanged's neighbor isn't ideal — emit an
+    // unstructured device-updated entry instead by hand.
+    let audit_log = NewAuditLog {
+        event_type: "device_name_changed".to_string(),
+        user_id: None,
+        actor_id: Some(admin.0.id),
+        event_data: serde_json::json!({
+            "device_id": id,
+            "place_id": req.place_id,
+            "reason": "place_assignment",
+        }),
+        ip_address: None,
+        user_agent: None,
+    };
+    let _ = state.db.create_audit_log(&audit_log);
+
+    Ok(Json(ApiResponse::success(serde_json::json!({
+        "device_id": id,
+        "place_id": req.place_id,
+    }))))
 }
 
 pub fn admin_devices_routes() -> Router<AppState> {
@@ -552,6 +708,7 @@ pub fn admin_devices_routes() -> Router<AppState> {
         .route("/invites", get(list_device_invites))
         .route("/invites/{code}", delete(expire_device_invite))
         .route("/", get(list_devices))
+        .route("/{id}/place", patch(set_device_place))
         .route("/{id}/name", patch(rename_device))
         .route("/{id}", delete(delete_device))
 }

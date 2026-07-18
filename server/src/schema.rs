@@ -117,6 +117,7 @@ diesel::table! {
         ipv6_address -> Nullable<Varchar>,
         uptime -> Int8,
         platform -> SpaceDevicePlatform,
+        place_id -> Nullable<Uuid>,
     }
 }
 
@@ -189,6 +190,8 @@ diesel::table! {
         updated_at -> Timestamptz,
         external_id -> Nullable<Varchar>,
         external_api_key -> Nullable<Text>,
+        place_id -> Nullable<Uuid>,
+        schedule_id -> Nullable<Uuid>,
     }
 }
 
@@ -369,6 +372,113 @@ diesel::table! {
 }
 
 diesel::table! {
+    places (id) {
+        id -> Uuid,
+        parent_id -> Nullable<Uuid>,
+        place_type -> Text,
+        #[max_length = 120]
+        name -> Varchar,
+        description -> Nullable<Text>,
+        #[max_length = 255]
+        external_id -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        is_special -> Bool,
+    }
+}
+
+diesel::table! {
+    doors (id) {
+        id -> Uuid,
+        #[max_length = 120]
+        name -> Varchar,
+        location -> Nullable<Text>,
+        description -> Nullable<Text>,
+        edge_device_id -> Nullable<Uuid>,
+        unlock_duration_ms -> Int4,
+        enabled -> Bool,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        place_id_from -> Nullable<Uuid>,
+        place_id_to -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    door_access_rules (id) {
+        id -> Uuid,
+        door_id -> Uuid,
+        kind -> Text,
+        value -> Text,
+        effect -> Text,
+        created_at -> Timestamptz,
+        schedule_id -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    schedules (id) {
+        id -> Uuid,
+        #[max_length = 120]
+        name -> Varchar,
+        description -> Nullable<Text>,
+        intervals -> Jsonb,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        is_public -> Bool,
+    }
+}
+
+diesel::table! {
+    home_links (id) {
+        id -> Uuid,
+        #[max_length = 120]
+        label -> Varchar,
+        url -> Text,
+        description -> Nullable<Text>,
+        #[max_length = 120]
+        icon -> Nullable<Varchar>,
+        audience -> Text,
+        sort_order -> Int4,
+        enabled -> Bool,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        expires_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    door_access_events (id) {
+        id -> Uuid,
+        door_id -> Uuid,
+        user_id -> Nullable<Uuid>,
+        method -> Text,
+        card_id_attempted -> Nullable<Text>,
+        granted -> Bool,
+        reason -> Nullable<Text>,
+        ip_address -> Nullable<Text>,
+        occurred_at -> Timestamptz,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    door_checkins (id) {
+        id -> Uuid,
+        door_id -> Uuid,
+        user_id -> Uuid,
+        door_access_event_id -> Nullable<Uuid>,
+        ip_address -> Nullable<Text>,
+        user_agent -> Nullable<Text>,
+        occurred_at -> Timestamptz,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     user_mfa_totp (id) {
         id -> Uuid,
         user_id -> Uuid,
@@ -426,6 +536,22 @@ diesel::joinable!(webhook_deliveries -> audit_logs (audit_log_id));
 diesel::joinable!(user_mfa_totp -> users (user_id));
 diesel::joinable!(user_mfa_webauthn -> users (user_id));
 diesel::joinable!(user_mfa_recovery_codes -> users (user_id));
+diesel::joinable!(doors -> space_devices (edge_device_id));
+diesel::joinable!(doors -> users (created_by));
+// (places → places self-join not registered via `joinable!`; walked manually
+// in the ancestor query helper.)
+diesel::joinable!(tools -> places (place_id));
+diesel::joinable!(space_devices -> places (place_id));
+diesel::joinable!(door_access_rules -> schedules (schedule_id));
+diesel::joinable!(schedules -> users (created_by));
+diesel::joinable!(tools -> schedules (schedule_id));
+diesel::joinable!(home_links -> users (created_by));
+diesel::joinable!(door_access_rules -> doors (door_id));
+diesel::joinable!(door_access_events -> doors (door_id));
+diesel::joinable!(door_access_events -> users (user_id));
+diesel::joinable!(door_checkins -> doors (door_id));
+diesel::joinable!(door_checkins -> users (user_id));
+diesel::joinable!(door_checkins -> door_access_events (door_access_event_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
@@ -440,6 +566,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     training_prerequisites,
     training_records,
     training_steps,
+    doors,
+    door_access_events,
+    door_access_rules,
+    door_checkins,
+    places,
+    schedules,
+    home_links,
     user_mfa_recovery_codes,
     user_mfa_totp,
     user_mfa_webauthn,

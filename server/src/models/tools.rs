@@ -166,6 +166,10 @@ pub struct Tool {
     pub updated_at: DateTime<Utc>,
     pub external_id: Option<String>,
     pub external_api_key: Option<String>,
+    pub place_id: Option<Uuid>,
+    /// Optional usability window. When set and the schedule isn't currently
+    /// open, the tool is effectively unavailable.
+    pub schedule_id: Option<Uuid>,
 }
 
 /// New tool for creation
@@ -186,6 +190,8 @@ pub struct NewTool {
     pub created_by: Uuid,
     pub external_id: Option<String>,
     pub external_api_key: Option<String>,
+    pub place_id: Option<Uuid>,
+    pub schedule_id: Option<Uuid>,
 }
 
 /// Tool event model
