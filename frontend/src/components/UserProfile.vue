@@ -103,23 +103,23 @@
             @blur="validateField(field.key)"
           />
         </div>
+      </div>
 
-        <!-- No profile fields configured -->
-        <div v-if="profileFields.length === 0" class="text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-          </svg>
-          <h3 class="text-lg font-medium text-base-content/70 mb-2">No Profile Fields</h3>
-          <p class="text-base-content/50">No profile fields have been configured.</p>
-          <div v-if="profileStore.canManageProfileConfig" class="mt-4">
-            <router-link to="/admin/profile-config" class="btn btn-primary btn-sm">
-              Configure Profile Fields
-            </router-link>
-          </div>
+      <!-- Profiles enabled, but no fields have been configured yet -->
+      <div v-else-if="profileStore.isProfilesEnabled && profileFields.length === 0" class="text-center py-12">
+        <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+        </svg>
+        <h3 class="text-lg font-medium text-base-content/70 mb-2">No Profile Fields</h3>
+        <p class="text-base-content/50">No profile fields have been configured.</p>
+        <div v-if="profileStore.canManageProfileConfig" class="mt-4">
+          <router-link to="/admin/profile-config" class="btn btn-primary btn-sm">
+            Configure Profile Fields
+          </router-link>
         </div>
       </div>
 
-      <!-- Profiles disabled but no fields -->
+      <!-- Profiles disabled -->
       <div v-else class="text-center py-12">
         <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>

@@ -173,9 +173,11 @@ async fn update_user_profile(
     )))
 }
 
-/// Get profile configuration (admin only)
+/// Get profile configuration (any authenticated user — needed so every
+/// user's own profile page can tell whether profiles are enabled and which
+/// fields to render; only `update_profile_config` is admin-restricted).
 async fn get_profile_config(
-    _admin_user: AdminUser,
+    _auth_user: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
     // profile_fields is versioned in the database, which is authoritative

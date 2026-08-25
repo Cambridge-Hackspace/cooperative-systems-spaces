@@ -93,6 +93,15 @@ const router = createRouter({
       }
     },
     {
+      path: '/admin/profile-config',
+      name: 'admin-profile-config',
+      component: () => import('@/components/ProfileConfigAdmin.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    {
       path: '/admin/doors',
       redirect: { name: 'admin-facility', query: { tab: 'doors' } }
     },
