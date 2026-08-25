@@ -34,6 +34,7 @@ pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub config_path: String,
     pub toolguard_state: Arc<ToolGuardState>,
+    pub frontend_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,9 +265,9 @@ pub fn create_router(state: AppState) -> Router {
 #[cfg(debug_assertions)]
 pub fn create_router(state: AppState) -> Router {
     use tower_http::services::{ServeDir, ServeFile};
-    
-    let serve_dir = ServeDir::new("./frontend_edge/dist")
-        .not_found_service(ServeFile::new("./frontend_edge/dist/index.html"));
+
+    let serve_dir = ServeDir::new(&state.frontend_path)
+        .not_found_service(ServeFile::new(format!("{}/index.html", state.frontend_path)));
     
     Router::new()
         .route("/api/status", get(get_status))
@@ -283,11 +284,13 @@ pub async fn start_web_server(
     config_path: String,
     port: u16,
     toolguard_state: Arc<ToolGuardState>,
+    frontend_path: String,
 ) -> Result<()> {
     let state = AppState {
         config,
         config_path,
         toolguard_state,
+        frontend_path,
     };
 
     let app = create_router(state);

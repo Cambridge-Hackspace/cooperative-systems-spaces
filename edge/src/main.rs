@@ -118,12 +118,12 @@ async fn main() -> Result<()> {
             info!("Edge client is unauthenticated");
             info!("Web UI available at http://localhost:{} for registration", web_port);
             info!("Or use: edge register --instance-url <url> --code <code>");
-            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new())).await?;
+            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new()), args.frontend_path).await?;
         }
         AuthStatus::Pending => {
             info!("Edge client authentication is pending on server, please wait");
             info!("Web UI available at http://localhost:{} for status", web_port);
-            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new())).await?;
+            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new()), args.frontend_path).await?;
         }
         AuthStatus::Approved => {
             info!("Edge client is authenticated");
@@ -267,9 +267,10 @@ async fn main() -> Result<()> {
             // ── Web server (independent of transport) ────────────────────────
             let config_for_web = config_arc.clone();
             let config_path_for_web = args.config.clone();
+            let frontend_path_for_web = args.frontend_path.clone();
             let tgs_for_web = Arc::clone(&toolguard_state);
             tokio::spawn(async move {
-                if let Err(e) = start_web_server(config_for_web, config_path_for_web, web_port, tgs_for_web).await {
+                if let Err(e) = start_web_server(config_for_web, config_path_for_web, web_port, tgs_for_web, frontend_path_for_web).await {
                     error!("Web server error: {}", e);
                 }
             });
