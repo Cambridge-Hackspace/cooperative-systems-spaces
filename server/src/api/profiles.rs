@@ -1,7 +1,7 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Json,
-    routing::{get, put},
+    routing::{get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -16,10 +16,9 @@ use crate::{
     auth::{AuthUser, AdminUser},
     profile::{ProfileValidator, AuditLogger},
     config::ProfileField,
-    models::AuditEventType,
+    models::{AuditEventType, ProfileConfigVersion},
     AppState,
 };
-use crate::auth::MemberUser;
 
 pub fn profile_routes() -> Router<AppState> {
     Router::new()
@@ -27,6 +26,8 @@ pub fn profile_routes() -> Router<AppState> {
         .route("/{user_id}", put(update_user_profile))
         .route("/config", get(get_profile_config))
         .route("/config", put(update_profile_config))
+        .route("/config/versions", get(list_profile_config_versions))
+        .route("/config/rollback/{version}", post(rollback_profile_config))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,6 +51,33 @@ pub struct ProfileResponse {
 pub struct ProfileConfigResponse {
     pub profile_fields: Vec<ProfileField>,
     pub profiles_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProfileConfigVersionResponse {
+    pub version: i64,
+    pub profile_fields: Vec<ProfileField>,
+    pub created_by: Option<Uuid>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<ProfileConfigVersion> for ProfileConfigVersionResponse {
+    type Error = serde_json::Error;
+
+    fn try_from(v: ProfileConfigVersion) -> Result<Self, Self::Error> {
+        Ok(Self {
+            version: v.version,
+            profile_fields: serde_json::from_value(v.profile_fields)?,
+            created_by: v.created_by,
+            created_at: v.created_at,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VersionListQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 /// Get user profile
@@ -147,14 +175,17 @@ async fn update_user_profile(
 
 /// Get profile configuration (admin only)
 async fn get_profile_config(
-    _admin_user: MemberUser,
+    _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
-    let config = state.config_manager.get_config();
+    // profile_fields is versioned in the database, which is authoritative
+    // across instances; profiles_enabled is a plain file-backed setting.
+    let profile_fields = current_profile_fields(&state).await?;
+    let profiles_enabled = state.config_manager.get_config().user.profiles_enabled;
 
     let response = ProfileConfigResponse {
-        profile_fields: config.user.profile_fields.clone(),
-        profiles_enabled: config.user.profiles_enabled,
+        profile_fields,
+        profiles_enabled,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -162,37 +193,26 @@ async fn get_profile_config(
 
 /// Update profile configuration (admin only)
 async fn update_profile_config(
-    admin_user: MemberUser,
+    admin_user: AdminUser,
     State(state): State<AppState>,
     Json(payload): Json<UpdateProfileConfigRequest>,
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
-    // Validate the profile fields configuration
-    for field in &payload.profile_fields {
-        if field.key.is_empty() {
-            return Err(ApiError::BadRequest("Profile field key cannot be empty".to_string()));
-        }
-        if field.label.is_empty() {
-            return Err(ApiError::BadRequest("Profile field label cannot be empty".to_string()));
-        }
-    }
+    validate_profile_fields(&payload.profile_fields)?;
 
-    // Check for duplicate field keys
-    let mut keys = std::collections::HashSet::new();
-    for field in &payload.profile_fields {
-        if !keys.insert(&field.key) {
-            return Err(ApiError::BadRequest(format!("Duplicate field key: {}", field.key)));
-        }
-    }
+    // Persist a new, immutable version of the field schema...
+    let fields_json = serde_json::to_value(&payload.profile_fields)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to serialize profile fields: {}", e)))?;
+    let new_version = state.db
+        .insert_profile_config_version(fields_json, Some(admin_user.0.id))
+        .map_err(ApiError::from)?;
 
-    // Update the configuration
-    {
-        let mut config = state.config_manager.get_config();
-        config.user.profile_fields = payload.profile_fields.clone();
-        config.user.profiles_enabled = payload.profiles_enabled;
-
-        // Note: In a real application, you'd want to save this to the config file
-        // For now, this just updates the in-memory configuration
-    }
+    // ...and keep the in-process config cache (used by validation) and the
+    // file-backed profiles_enabled toggle up to date.
+    state.config_manager.set_profile_fields(payload.profile_fields.clone());
+    let profiles_enabled = payload.profiles_enabled;
+    state.config_manager.update_config(|config| {
+        config.user.profiles_enabled = profiles_enabled;
+    }).map_err(|e| ApiError::InternalServerError(e.to_string()))?;
 
     // Log the configuration change
     let audit_logger = AuditLogger::new(state.db.clone());
@@ -202,6 +222,7 @@ async fn update_profile_config(
         Some(admin_user.0.id),
         serde_json::json!({
             "section": "user_profiles",
+            "profile_config_version": new_version.version,
             "profile_fields_count": payload.profile_fields.len(),
             "profiles_enabled": payload.profiles_enabled,
             "action": "Profile configuration updated by admin"
@@ -221,4 +242,107 @@ async fn update_profile_config(
         response,
         "Profile configuration updated successfully".to_string(),
     )))
+}
+
+/// List profile field schema version history, newest first (admin only)
+async fn list_profile_config_versions(
+    _admin_user: AdminUser,
+    State(state): State<AppState>,
+    Query(q): Query<VersionListQuery>,
+) -> Result<Json<ApiResponse<Vec<ProfileConfigVersionResponse>>>, ApiError> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+
+    let versions = state.db.list_profile_config_versions(limit, offset)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .map(ProfileConfigVersionResponse::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
+
+    Ok(Json(ApiResponse::success(versions)))
+}
+
+/// Roll back to a prior field schema version by inserting a new version
+/// carrying that version's `profile_fields` (admin only). History is
+/// never mutated or deleted, so this itself shows up as a new entry.
+async fn rollback_profile_config(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path(target_version): Path<i64>,
+) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
+    let target = state.db.get_profile_config_version(target_version)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound(format!("No profile config version {}", target_version)))?;
+
+    let profile_fields: Vec<ProfileField> = serde_json::from_value(target.profile_fields.clone())
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
+
+    let new_version = state.db
+        .insert_profile_config_version(target.profile_fields, Some(admin_user.0.id))
+        .map_err(ApiError::from)?;
+
+    state.config_manager.set_profile_fields(profile_fields.clone());
+
+    let audit_logger = AuditLogger::new(state.db.clone());
+    if let Err(e) = audit_logger.log_event(
+        AuditEventType::AdminConfigReload,
+        Some(admin_user.0.id),
+        Some(admin_user.0.id),
+        serde_json::json!({
+            "section": "user_profiles",
+            "profile_config_version": new_version.version,
+            "rolled_back_to": target_version,
+            "action": "Profile configuration rolled back by admin"
+        }),
+        None,
+        None,
+    ).await {
+        tracing::warn!("Failed to log config rollback: {}", e);
+    }
+
+    let profiles_enabled = state.config_manager.get_config().user.profiles_enabled;
+    let response = ProfileConfigResponse {
+        profile_fields,
+        profiles_enabled,
+    };
+
+    Ok(Json(ApiResponse::success_with_message(
+        response,
+        format!("Rolled back to profile configuration version {}", target_version),
+    )))
+}
+
+/// Validate a submitted set of profile field definitions: no empty keys or
+/// labels, and no duplicate keys.
+fn validate_profile_fields(fields: &[ProfileField]) -> Result<(), ApiError> {
+    for field in fields {
+        if field.key.is_empty() {
+            return Err(ApiError::BadRequest("Profile field key cannot be empty".to_string()));
+        }
+        if field.label.is_empty() {
+            return Err(ApiError::BadRequest("Profile field label cannot be empty".to_string()));
+        }
+    }
+
+    let mut keys = std::collections::HashSet::new();
+    for field in fields {
+        if !keys.insert(&field.key) {
+            return Err(ApiError::BadRequest(format!("Duplicate field key: {}", field.key)));
+        }
+    }
+
+    Ok(())
+}
+
+/// The current profile field schema, read from the database (authoritative
+/// across instances) and falling back to the in-process config cache only
+/// if no version has ever been saved (shouldn't happen once main.rs's
+/// startup bootstrap has run, but keeps this handler standalone).
+async fn current_profile_fields(state: &AppState) -> Result<Vec<ProfileField>, ApiError> {
+    match state.db.get_latest_profile_config_version().map_err(ApiError::from)? {
+        Some(latest) => serde_json::from_value(latest.profile_fields)
+            .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e))),
+        None => Ok(state.config_manager.get_config().user.profile_fields.clone()),
+    }
 }

@@ -140,6 +140,22 @@ async fn main() -> Result<(), anyhow::Error> {
     test_database_operations(&db_manager).await?;
     info!("Database operations test completed successfully");
 
+    // Bootstrap the versioned profile-field schema: the DB is authoritative
+    // once any version exists; on a fresh install, seed version 1 from the
+    // config file so existing deployments carry their fields forward.
+    match db_manager.get_latest_profile_config_version()? {
+        Some(latest) => {
+            let fields: Vec<config::ProfileField> = serde_json::from_value(latest.profile_fields)?;
+            config_manager.set_profile_fields(fields);
+            info!("Loaded profile field schema from database (version {})", latest.version);
+        }
+        None => {
+            let seed = serde_json::to_value(&app_config.user.profile_fields)?;
+            db_manager.insert_profile_config_version(seed, None)?;
+            info!("Seeded profile field schema version 1 from config file");
+        }
+    }
+
     // Setup Prometheus metrics
     let prom = Arc::new(
         PrometheusMetrics::builder("css")

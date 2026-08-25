@@ -8,6 +8,7 @@ mod doors;
 mod places;
 mod schedules;
 mod home_links;
+mod profile_config;
 
 pub use tools::*;
 pub use training::*;
@@ -19,6 +20,7 @@ pub use doors::*;
 pub use places::*;
 pub use schedules::*;
 pub use home_links::*;
+pub use profile_config::*;
 
 use std::io::Write;
 use crate::schema::{users, audit_logs, sql_types};

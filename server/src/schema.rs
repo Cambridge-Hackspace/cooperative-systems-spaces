@@ -512,6 +512,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    profile_config_versions (id) {
+        id -> Uuid,
+        version -> BigInt,
+        profile_fields -> Jsonb,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(space_device_auth -> space_devices (device_id));
 diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));
@@ -552,6 +562,7 @@ diesel::joinable!(door_access_events -> users (user_id));
 diesel::joinable!(door_checkins -> doors (door_id));
 diesel::joinable!(door_checkins -> users (user_id));
 diesel::joinable!(door_checkins -> door_access_events (door_access_event_id));
+diesel::joinable!(profile_config_versions -> users (created_by));
 
 diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
@@ -584,4 +595,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     webhook_event_subscriptions,
     webhook_auth_links,
     webhook_deliveries,
+    profile_config_versions,
 );

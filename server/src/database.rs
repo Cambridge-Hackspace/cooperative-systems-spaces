@@ -2994,3 +2994,87 @@ impl DatabaseManager {
         Ok(enrolled)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Profile config version history
+// ---------------------------------------------------------------------------
+
+impl DatabaseManager {
+    /// Insert a new profile-field-schema version. `version` is one past the
+    /// current highest version (starting at 1), computed inside the same
+    /// transaction as the insert so concurrent admin edits can't race onto
+    /// the same version number.
+    pub fn insert_profile_config_version(
+        &self,
+        fields: serde_json::Value,
+        creator: Option<uuid::Uuid>,
+    ) -> Result<crate::models::ProfileConfigVersion, DatabaseError> {
+        use crate::schema::profile_config_versions::dsl::*;
+        let mut conn = self.get_connection()?;
+
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let current_max: Option<i64> = profile_config_versions
+                .select(diesel::dsl::max(version))
+                .first(conn)?;
+
+            let new_version = crate::models::NewProfileConfigVersion {
+                version: current_max.unwrap_or(0) + 1,
+                profile_fields: fields,
+                created_by: creator,
+            };
+
+            diesel::insert_into(profile_config_versions)
+                .values(&new_version)
+                .returning(crate::models::ProfileConfigVersion::as_returning())
+                .get_result(conn)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// The current (highest-version) profile field schema, if any versions
+    /// have ever been saved.
+    pub fn get_latest_profile_config_version(
+        &self,
+    ) -> Result<Option<crate::models::ProfileConfigVersion>, DatabaseError> {
+        use crate::schema::profile_config_versions::dsl::*;
+        let mut conn = self.get_connection()?;
+        profile_config_versions
+            .order(version.desc())
+            .select(crate::models::ProfileConfigVersion::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// A single version by its version number.
+    pub fn get_profile_config_version(
+        &self,
+        version_number: i64,
+    ) -> Result<Option<crate::models::ProfileConfigVersion>, DatabaseError> {
+        use crate::schema::profile_config_versions::dsl::*;
+        let mut conn = self.get_connection()?;
+        profile_config_versions
+            .filter(version.eq(version_number))
+            .select(crate::models::ProfileConfigVersion::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Version history, newest first.
+    pub fn list_profile_config_versions(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::models::ProfileConfigVersion>, DatabaseError> {
+        use crate::schema::profile_config_versions::dsl::*;
+        let mut conn = self.get_connection()?;
+        profile_config_versions
+            .order(version.desc())
+            .limit(limit)
+            .offset(offset)
+            .select(crate::models::ProfileConfigVersion::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+}

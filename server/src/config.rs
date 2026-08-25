@@ -1196,6 +1196,37 @@ impl ConfigManager {
     pub fn get_config_ref(&self) -> Arc<RwLock<AppConfig>> {
         Arc::clone(&self.config)
     }
+
+    /// Overwrite the in-memory profile field schema without touching the
+    /// config file. The version-history table in the database is the
+    /// source of truth for `profile_fields`; this just keeps the shared
+    /// `AppConfig` (read by validation and the config-file `GET`) in sync
+    /// with the latest DB version.
+    pub fn set_profile_fields(&self, profile_fields: Vec<ProfileField>) {
+        self.config.write().unwrap().user.profile_fields = profile_fields;
+    }
+
+    /// Apply an in-place mutation to the shared configuration and persist
+    /// the result to the config file, if one is known.
+    pub fn update_config<F>(&self, mutator: F) -> Result<()>
+    where
+        F: FnOnce(&mut AppConfig),
+    {
+        let updated = {
+            let mut config_guard = self.config.write().unwrap();
+            mutator(&mut config_guard);
+            config_guard.clone()
+        };
+
+        if let Some(config_path) = &self.config_path {
+            updated.to_file(config_path)
+                .with_context(|| "Failed to persist updated configuration")?;
+        } else {
+            warn!("No config path available; configuration change was not persisted to disk");
+        }
+
+        Ok(())
+    }
 }
 
 /// Load configuration from file or create default configuration
