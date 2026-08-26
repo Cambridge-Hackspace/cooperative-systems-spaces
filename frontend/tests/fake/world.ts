@@ -63,7 +63,7 @@ function user(over: Partial<User> = {}): User {
     profile: {},
     meta: {},
     ...over,
-  } as User
+  }
 }
 
 /** The whole world, rebuilt for each test run so specs cannot leak into each other. */
@@ -165,7 +165,7 @@ export class World {
   login(usernameOrEmail: string, password: string): { token: string; user: User } | null {
     if (password !== PASSWORD) return null
     const found = this.users.find(
-      (u) => u.username === usernameOrEmail || u.email === usernameOrEmail,
+      (u) => u.username === usernameOrEmail || u.email === usernameOrEmail
     )
     if (!found) return null
     const token = `fake-token-${found.id}-${this.sessions.size}`

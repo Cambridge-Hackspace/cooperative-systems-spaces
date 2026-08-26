@@ -508,6 +508,7 @@ Every one of these is scoped to exactly what it covers.
 
 | Narrowing | Scope | Reason |
 |---|---|---|
+| `tests/components` and `tests/e2e` outside the strict project | those two directories | Mounting a component pulls its whole `.vue` file into the strict project, so adding tier-2 specs made the ratchet report ~30 `strictNullChecks` errors across nine components that no test touches directly. Those errors are real and are the ratchet's future work; fixing them as a side effect of adding a test is the giant unreviewable diff the ratchet exists to avoid. Both directories are still fully type-checked by `npm run type-check` — they lose `strictNullChecks`, not checking. **The next step is one component at a time**, and when nine are done `tests/components/**` goes back. |
 | `no-unsafe-*`, `no-explicit-any` off | everything except `tsconfig.strict.json`'s include list | The base tsconfig is `"strict": false` and 585 of 1034 initial lint problems were downstream of that. **Growing the strict include list is the unit of work**; `eslint.config.js` and `tsconfig.strict.json` name the same paths so the two ratchets move together. Every other rule, `no-floating-promises` included, stays on everywhere. |
 | `vue/multi-word-component-names` off | `src/App.vue` only | The framework's own convention; the file cannot be renamed. |
 | `no-require-imports` off | the four CommonJS config files at `frontend/` root | tailwind and postcss load them through their own resolvers; converting them to ESM is a build change, not a lint fix. |

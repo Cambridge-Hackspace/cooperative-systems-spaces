@@ -28,5 +28,5 @@ export default mergeConfig(
       // edits a file while the browser is open.
       hmr: false,
     },
-  }),
+  })
 )

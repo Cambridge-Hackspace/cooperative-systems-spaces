@@ -56,20 +56,23 @@ function configThemes(): string[] {
 
   const names: string[] = []
   for (const line of body.split('\n')) {
-    const code = line.split('//')[0]
+    // `?? ''` because `split` returns `string | undefined` under
+    // noUncheckedIndexedAccess, and a scraper that silently skips a line it
+    // could not read is a scraper that reports agreement it did not verify.
+    const code = line.split('//')[0] ?? ''
     // A custom theme is an object key -- quoted when it contains a hyphen
     // ('css-light') and bare when it does not (afterdark), because that is what
     // a JavaScript object literal and prettier between them produce. Matching
     // only the quoted form dropped six of the fourteen and left the comparison
     // reporting differences that were entirely the scraper's.
     const custom = code.match(/^\s*'?([a-zA-Z0-9-]+)'?:\s*\{/)
-    if (custom) {
+    if (custom?.[1]) {
       names.push(custom[1])
       continue
     }
     // A built-in is a bare string in the list.
     const builtin = code.match(/^\s*'([a-zA-Z0-9-]+)',?\s*$/)
-    if (builtin) names.push(builtin[1])
+    if (builtin?.[1]) names.push(builtin[1])
   }
   return names
 }
@@ -85,7 +88,11 @@ function pickerThemes(): Array<{ value: string; label: string; group: string }> 
   const out: Array<{ value: string; label: string; group: string }> = []
   for (const line of body.split('\n')) {
     const m = line.match(/value:\s*'([^']+)',\s*label:\s*'([^']+)',\s*group:\s*'([^']+)'/)
-    if (m) out.push({ value: m[1], label: m[2], group: m[3] })
+    // Every group is checked rather than asserted. A capture group can be
+    // undefined even when the match succeeded, and pushing `undefined` here
+    // would make the comparison below report a theme named "undefined" -- a
+    // failure describing the parser rather than the thing being parsed.
+    if (m?.[1] && m[2] && m[3]) out.push({ value: m[1], label: m[2], group: m[3] })
   }
   return out
 }

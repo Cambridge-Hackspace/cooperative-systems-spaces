@@ -19,10 +19,37 @@
 import type { Connect, Plugin } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { validateProfile } from '../../src/stores/profile'
-import { World } from './world'
+import { createPinia, setActivePinia } from 'pinia'
+
+import { useProfileStore } from '../../src/stores/profile'
+import { UserRole } from '../../src/types'
+import { World, type Injection } from './world'
 
 const world = new World()
+
+// The real validator, reached through the real store.
+//
+// `validateProfile` is a method on the Pinia store rather than a free function,
+// and it reads `profileConfig` off that store's state -- so the fake installs a
+// Pinia, seeds the config it is serving, and calls the method. That is more
+// ceremony than importing a function would be, and it is still the right trade:
+// the alternative is a second copy of the rules in this file, which would agree
+// with itself no matter what the application did.
+//
+// The store's setup touches no DOM, so it runs in the Vite dev server's Node
+// process. If it ever stops doing that, the fix is to extract the validator
+// into a pure module that both the store and this file import -- which is where
+// it belongs anyway.
+setActivePinia(createPinia())
+const profileStore = useProfileStore()
+
+function validateAgainstTheRealRules(profile: Record<string, unknown>) {
+  profileStore.profileConfig = {
+    profile_fields: world.profileFields,
+    profiles_enabled: world.profilesEnabled,
+  }
+  return profileStore.validateProfile(profile)
+}
 
 function json(res: ServerResponse, status: number, body: unknown) {
   const text = JSON.stringify(body)
@@ -54,6 +81,11 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
+/** A string, or the empty string. Never "[object Object]". */
+function asText(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+
 function bearer(req: IncomingMessage): string | undefined {
   const h = req.headers.authorization
   if (!h || !h.startsWith('Bearer ')) return undefined
@@ -70,10 +102,14 @@ function injected(path: string, res: ServerResponse): boolean {
 
   switch (armed.kind) {
     case 'failNext':
-      json(res, armed.status ?? 500, armed.body ?? {
-        success: false,
-        error: 'Injected failure',
-      })
+      json(
+        res,
+        armed.status ?? 500,
+        armed.body ?? {
+          success: false,
+          error: 'Injected failure',
+        }
+      )
       return true
 
     case 'abortNext':
@@ -101,8 +137,8 @@ export function fakeApi(): Plugin {
   return {
     name: 'css-fake-api',
     configureServer(server) {
-      server.middlewares.use('/__fake', control as Connect.NextHandleFunction)
-      server.middlewares.use('/api', api as Connect.NextHandleFunction)
+      server.middlewares.use('/__fake', control)
+      server.middlewares.use('/api', api)
     },
   }
 }
@@ -122,9 +158,12 @@ const control: Connect.NextHandleFunction = (req, res) => {
     if (path === '/arm') {
       const body = (await readBody(req)) as Record<string, unknown>
       world.arm({
-        kind: body.kind as never,
-        path: String(body.path ?? ''),
-        status: body.status as number | undefined,
+        kind: body.kind as Injection,
+        // `asText` rather than `String()`: a control payload with an object
+        // where a string belongs would stringify to "[object Object]" and arm a
+        // fault that matches nothing, silently.
+        path: asText(body.path),
+        status: typeof body.status === 'number' ? body.status : undefined,
         body: body.body,
       })
       return ok(res, world.armed.length)
@@ -177,10 +216,7 @@ const api: Connect.NextHandleFunction = (req, res) => {
     }
 
     if (path === '/auth/login' && method === 'POST') {
-      const session = world.login(
-        String(body.username_or_email ?? ''),
-        String(body.password ?? ''),
-      )
+      const session = world.login(asText(body.username_or_email), asText(body.password))
       if (!session) return err(res, 401, 'Wrong credentials')
       return ok(res, { token: session.token, user: session.user, expires_in: 86400 })
     }
@@ -206,7 +242,7 @@ const api: Connect.NextHandleFunction = (req, res) => {
     }
 
     if (path === '/profiles/config' && method === 'PUT') {
-      if (me.role !== 'Admin') return err(res, 403, 'Insufficient permissions')
+      if (me.role !== UserRole.Admin) return err(res, 403, 'Insufficient permissions')
       world.profileFields = (body.profile_fields ?? []) as never
       world.profilesEnabled = Boolean(body.profiles_enabled)
       return ok(res, {
@@ -228,15 +264,14 @@ const api: Connect.NextHandleFunction = (req, res) => {
         // resolve `@/stores/profile`, and a hand-written copy of these rules
         // would agree with itself.
         const incoming = (body.profile ?? {}) as Record<string, unknown>
-        const problems = validateProfile(incoming, world.profileFields)
-        if (Object.keys(problems).length > 0) {
+        const { valid, errors } = validateAgainstTheRealRules(incoming)
+        if (!valid) {
           return json(res, 400, {
             success: false,
-            error: 'Validation failed',
-            fields: problems,
+            error: errors.join('; '),
           })
         }
-        target.profile = incoming as never
+        target.profile = incoming
         return ok(res, { user_id: target.id, profile: target.profile })
       }
     }
@@ -244,7 +279,7 @@ const api: Connect.NextHandleFunction = (req, res) => {
     if (path === '/tools' && method === 'GET') return ok(res, world.tools)
 
     if (path === '/users' && method === 'GET') {
-      if (me.role !== 'Admin') return err(res, 403, 'Insufficient permissions')
+      if (me.role !== UserRole.Admin) return err(res, 403, 'Insufficient permissions')
       return ok(res, {
         items: world.users,
         total: world.users.length,
