@@ -1,203 +1,301 @@
 name: CI
 
+# This is the gate. reaper is the pre-push loop and runs the same suites on an
+# ephemeral machine, but nothing here depends on reaper existing: every job
+# below provisions what it needs.
+
 on:
   push:
-    branches: [ master, dev ]
+    branches: [master, dev]
   pull_request:
-    branches: [ master, dev ]
+    branches: [master, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  checks:
+  # ---------------------------------------------------------------------------
+  # frontend_edge/dist is embedded into the edge crate by include_dir! at compile
+  # time, so every Rust job needs it to exist AND to contain the real bundle.
+  #
+  # This job is that dependency, expressed as one. It replaces
+  # `mkdir -p /builds/<org>/<repo>/edge/../frontend_edge/dist`, which hardcoded a
+  # single runner's checkout path and produced an *empty* embedding -- a binary
+  # that compiles cleanly and serves 404 for its own UI. edge/build.rs now
+  # guarantees the directory exists at all; this guarantees it has something in it.
+  # ---------------------------------------------------------------------------
+  assets:
     runs-on: arc-runner-set
-    strategy:
-      matrix:
-        job: [frontend, server, cli, edge]
     steps:
       - uses: actions/checkout@v4
-
-      # ARC's default runner image ships no compilers
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libpq-dev cmake
-
-      # FRONTEND JOBS
-      - name: Set up Node.js
-        if: matrix.job == 'frontend' || matrix.job == 'edge'
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
-      - name: Install frontend dependencies
-        if: matrix.job == 'frontend'
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend_edge/package-lock.json
+      - name: Build frontend_edge
+        working-directory: frontend_edge
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Build frontend
         working-directory: frontend
-        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Assert the bundles are real, not empty
+        run: |
+          test -s frontend/dist/index.html
+          test -s frontend_edge/dist/index.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            frontend/dist
+            frontend_edge/dist
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Run frontend build
-        if: matrix.job == 'frontend'
+  # --- Tiers 1 and 2, plus lint/format/type ----------------------------------
+  frontend:
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - working-directory: frontend
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund
+      - name: Format
         working-directory: frontend
+        run: npm run format:check
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Type-check
+        working-directory: frontend
+        run: npm run type-check
+      # The strictness ratchet. Shrinking tsconfig.strict.json's include list is
+      # a narrowing and needs a stated reason; growing it is the unit of work.
+      - name: Type-check (strict ratchet)
+        working-directory: frontend
+        run: npm run type-check:strict
+      - name: Test
+        working-directory: frontend
+        run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-test-results
+          path: |
+            frontend/test-results/
+            frontend/coverage/
+          if-no-files-found: error
+
+  frontend-edge:
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend_edge/package-lock.json }
+      - working-directory: frontend_edge
+        run: npm ci --no-audit --no-fund
+      - working-directory: frontend_edge
+        run: npm run type-check
+      - working-directory: frontend_edge
         run: npm run build
 
-      - name: Install frontend-edge dependencies
-        if: matrix.job == 'frontend' || matrix.job == 'edge'
-        working-directory: frontend_edge
-        run: npm ci
+  # --- The e2e suite's own code ----------------------------------------------
+  shell:
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+      - uses: mfinelli/setup-shfmt@v3
+      - run: ./e2e/lint.sh
 
-      - name: Run frontend-edge build
-        if: matrix.job == 'frontend' || matrix.job == 'edge'
-        working-directory: frontend_edge
-        run: npm run build
+  # --- Tiers 1, 1b, 3 and 4, Rust side ---------------------------------------
+  rust:
+    runs-on: arc-runner-set
+    needs: assets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: . }
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libpq-dev cmake \
+            libasound2-dev libudev-dev
+      # actions-rs/* has been archived and unmaintained since 2023.
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
 
+      - name: Format
+        run: cargo fmt --all -- --check
 
+      # `cargo test --bin css-server` was a *target filter*: it ran only unit
+      # tests inside that one binary, excluded css_lib entirely, and silently
+      # ignored every tests/ directory in the workspace -- so an integration
+      # test could be added and never run once. --all-targets is what picks
+      # them up.
+      - name: Test
+        run: cargo test --locked --all-targets
+      - name: Doc tests
+        run: cargo test --locked --doc
 
-      #- name: Run frontend tests
-      #  if: matrix.job == 'frontend'
-      #  working-directory: frontend
-      #  run: npm run test -- --ci --coverage
+      # kiosk and the two toolguard UIs are outside default-members on purpose
+      # (d78227d) because bevy and egui are heavy. Compile-checking them stops
+      # them rotting without paying to link them.
+      - name: Check the full workspace, including the GUI crates
+        run: cargo check --locked --workspace --all-targets
 
-      # BACKEND JOBS (SERVER & CLI & EDGE)
-      - name: Install addtl development libraries
-        if: (matrix.job == 'edge') && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
-
-      - name: Set up Rust
-        if: matrix.job == 'server' || matrix.job == 'cli' || matrix.job == 'edge'
-        uses: actions-rs/toolchain@v1
+  # --- Tier 4's DB-backed half, and tiers 6-8 --------------------------------
+  # A `services:` Postgres, so this needs no reaper and no container engine of
+  # its own. e2e/run.sh --provision=external takes the endpoint from the
+  # environment rather than starting anything.
+  #
+  # No continue-on-error and no `if:` guard. If this cannot run, that is a
+  # runner defect to fix, not a suite to skip.
+  stack:
+    runs-on: arc-runner-set
+    needs: [assets, rust]
+    timeout-minutes: 45
+    services:
+      postgres:
+        # Deliberately not UTF-8. Under the image's default the text assertions
+        # pass whether or not the application does anything right, which is the
+        # failure mode the methodology names. See e2e/run.sh for what LATIN1 and
+        # a C locale actually make load-bearing here.
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_DB: css
+          POSTGRES_USER: css_user
+          POSTGRES_PASSWORD: css_pass
+          POSTGRES_INITDB_ARGS: '--encoding=LATIN1 --locale=C'
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U css_user -d css"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CSS_TEST_DATABASE_URL: postgres://css_user:css_pass@localhost:5432/css
+      FUZZ_ITERATIONS: '600'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: . }
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libpq-dev cmake \
+            libasound2-dev libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the artifacts the stack runs
+        run: ./e2e/build.sh
+      - name: Run the stack tiers
+        run: ./e2e/run.sh --provision=external
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          toolchain: stable
-          override: true
-          profile: minimal
+          name: e2e-results
+          path: e2e/out/
+          if-no-files-found: error
 
-      - name: Run server checks
-        if: matrix.job == 'server'
-        working-directory: server
-        run: |
-          cargo test --bin css-server
-#          cargo fmt --bin css-server
-#          cargo clippy --all-targets --all-features -- -D warnings=
-
-      - name: Run cli checks
-        if: matrix.job == 'cli'
-        working-directory: cli
-        run: |
-          cargo test --bin css-cli
-#          cargo fmt --bin css-cli
-#          cargo clippy --all-targets --all-features -- -D warnings=
-
-      - name: Run edge checks
-        if: matrix.job == 'edge'
-        working-directory: edge
-        run: |
-          cargo test --bin css-edge
-#          cargo fmt --bin css-edge
-#          cargo clippy --all-targets --all-features -- -D warnings=
-
+  # --- packaging --------------------------------------------------------------
   docker-server:
-    needs: checks
+    needs: [frontend, frontend-edge, rust, shell, stack]
     runs-on: arc-runner-set
-    permissions:
-      contents: read
-      packages: write
+    permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
+      - name: Build and push (master)
         if: github.ref_name == 'master'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:latest .
-
-      - name: Push Docker image
-        if: github.ref_name == 'master'
-        run: |
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} \
+                       -t ghcr.io/${{ github.repository }}/app:latest .
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/app:latest
-
-      - name: Build Dev Docker image
+      - name: Build and push (dev)
         if: github.ref_name == 'dev'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:dev .
-
-      - name: Push Dev Docker image
-        if: github.ref_name == 'dev'
-        run: |
-          docker push ghcr.io/${{ github.repository }}/app:dev
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} \
+                       -t ghcr.io/${{ github.repository }}/app:dev .
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}/app:dev
 
   docker-edge:
-    needs: checks
+    needs: [frontend, frontend-edge, rust, shell, stack]
     runs-on: arc-runner-set
-    permissions:
-      contents: read
-      packages: write
+    permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
+      - name: Build and push (master)
         if: github.ref_name == 'master'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:latest -f Dockerfile.edge  .
-
-      - name: Push Docker image
-        if: github.ref_name == 'master'
-        run: |
+          docker build -f Dockerfile.edge \
+            -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} \
+            -t ghcr.io/${{ github.repository }}/edge:latest .
           docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/edge:latest
-
-      - name: Build Dev Docker image
+      - name: Build and push (dev)
         if: github.ref_name == 'dev'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:dev -f Dockerfile.edge  .
-
-      - name: Push Dev Docker image
-        if: github.ref_name == 'dev'
-        run: |
+          docker build -f Dockerfile.edge \
+            -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} \
+            -t ghcr.io/${{ github.repository }}/edge:dev .
+          docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/edge:dev
 
-
   release:
-    needs: checks
+    needs: [frontend, frontend-edge, rust, shell, stack]
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ arc-runner-set, windows-latest, macos-latest ]
         include:
           - os: arc-runner-set
             artifact_name: linux
-            asset_name: css-server
-            asset_name_cli: css
+            server_bin: css-server
+            cli_bin: css-cli
+            edge_bin: css-edge
+            build_server: true
           - os: windows-latest
             artifact_name: windows
-            asset_name: css-server.exe
-            asset_name_cli: css.exe
+            server_bin: css-server.exe
+            cli_bin: css-cli.exe
+            edge_bin: css-edge.exe
+            build_server: false
           - os: macos-latest
             artifact_name: macos
-            asset_name: css-server
-            asset_name_cli: css
+            server_bin: css-server
+            cli_bin: css-cli
+            edge_bin: css-edge
+            build_server: false
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          profile: minimal
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install PostgreSQL client library (Windows)
         if: runner.os == 'Windows'
@@ -206,59 +304,62 @@ jobs:
           choco install postgresql --yes --no-progress
           $pg = Get-ChildItem 'C:\Program Files\PostgreSQL' -ErrorAction SilentlyContinue |
                 Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $pg) { Write-Error "PostgreSQL not found in C:\Program Files\PostgreSQL"; exit 1 }
+          if (-not $pg) { Write-Error "PostgreSQL not found"; exit 1 }
           $prefix = $pg.FullName
-          Write-Host "Postgres prefix: $prefix"
-          Add-Content -Path $env:GITHUB_ENV -Value "PG_PREFIX=$prefix"
           Add-Content -Path $env:GITHUB_ENV -Value "PATH=${prefix}\bin;${env:PATH}"
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=${prefix}\lib;${env:LIB}"
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=${prefix}\include;${env:INCLUDE}"
-          Add-Content -Path $env:GITHUB_ENV -Value "LIBRARY_PATH=${prefix}\lib;${env:LIBRARY_PATH}"
 
       - name: Install PostgreSQL client library (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install libpq
+          brew update && brew install libpq
           prefix=$(brew --prefix libpq)
           echo "LDFLAGS=-L${prefix}/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I${prefix}/include" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=${prefix}/lib/pkgconfig" >> $GITHUB_ENV
 
-      - name: Install PostgreSQL client library (Ubuntu)
+      - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev libpq-dev cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libpq-dev cmake \
+            libasound2-dev libudev-dev
 
-      - name: Install Edge Client Libraries
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
-
-      - name: Install frontend dependencies
+      - name: Build the edge bundle
         working-directory: frontend_edge
-        run: npm ci
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Assert the bundle is real
+        shell: bash
+        run: test -s frontend_edge/dist/index.html
 
-      - name: Run frontend build
-        working-directory: frontend_edge
-        run: npm run build
+      - run: cargo build --locked --release --bin css-cli
+      - run: cargo build --locked --release --bin css-edge
+      - if: matrix.build_server
+        run: cargo build --locked --release --bin css-server
 
-      - name: Build CLI
-        run: cargo build --release --bin css-cli
-
-      - name: Build Edge
-        run: cargo build --release --bin css-edge
-
-      - name: Build Server
-        if: runner.os == 'Linux'
-        run: cargo build --release --bin css-server
-
-      - name: Upload CLI artifacts
-        uses: actions/upload-artifact@v4
+      # This is a workspace: cargo writes to <root>/target/release, never to
+      # cli/target/release, and the binary is `css-cli`, not `css`. The previous
+      # paths matched nothing on every platform, and upload-artifact defaults to
+      # `if-no-files-found: warn` -- so the CLI release artifact has been
+      # silently empty for as long as this job has existed. `error` is what makes
+      # that impossible to repeat.
+      - uses: actions/upload-artifact@v4
         with:
           name: css-cli-${{ matrix.artifact_name }}
-          path: cli/target/release/${{ matrix.asset_name_cli }}
-
-      - name: Upload Server artifacts
+          path: target/release/${{ matrix.cli_bin }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: css-edge-${{ matrix.artifact_name }}
+          path: target/release/${{ matrix.edge_bin }}
+          if-no-files-found: error
+      # Only where it was actually built. This previously uploaded css-server on
+      # Windows and macOS, where the build step was gated on Linux.
+      - if: matrix.build_server
         uses: actions/upload-artifact@v4
         with:
           name: css-server-${{ matrix.artifact_name }}
-          path: target/release/${{ matrix.asset_name }}
+          path: target/release/${{ matrix.server_bin }}
+          if-no-files-found: error
