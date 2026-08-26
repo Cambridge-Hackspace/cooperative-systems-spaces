@@ -92,7 +92,7 @@ const KNOWN_STUBS: &[(&str, &str, &str)] = &[
     (
         "tools.rs",
         "complete_training",
-        "PUT /api/tools/user-training/{training_id}",
+        "POST /api/tools/user-training/{training_id}",
     ),
     (
         "tools.rs",

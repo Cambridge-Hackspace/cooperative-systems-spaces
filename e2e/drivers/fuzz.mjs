@@ -200,7 +200,7 @@ const KNOWN = [
   ...[
     ['POST', '/api/tools/{id}/training-types'],
     ['POST', '/api/tools/{id}/trainers'],
-    ['PUT', '/api/tools/user-training/{id}'],
+    ['POST', '/api/tools/user-training/{id}'],
     ['DELETE', '/api/tools/user-training/{id}'],
   ].map(([method, template]) => ({
     method,

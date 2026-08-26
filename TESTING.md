@@ -20,13 +20,26 @@ npm ci
 npm run format:check && npm run lint && npm run type-check && \
   npm run type-check:strict && npm test
 
-# Rust — see §3. On FreeBSD it does not build; use a reaper session.
+# The cheapest tier, and the one that has found the most. No server crate, no
+# database, no toolchain beyond cargo: it reads source as data.
+cargo test -p css-checks
+
+# The suite's own code, plus tier 9's oracle. Needs shellcheck, shfmt and node.
+./e2e/lint.sh
+
+# Rust — see §3. On FreeBSD css-server does not build; use a reaper session.
 cargo fmt --all -- --check
 cargo test --locked --all-targets
 
 # The whole battery on a disposable Linux machine
-reaper up && reaper test && reaper down
+reaper test          # sync, build, reset, run
+reaper down          # when you are finished with the session
 ```
+
+**If you read one thing:** §2 is the tier-by-tier status, and it says which
+tiers are running, which are written but unexercised, and which do not exist.
+§8 is the list of defects the suite records rather than fixes — each pinned by
+an assertion, so it fails the day somebody fixes it.
 
 ---
 
