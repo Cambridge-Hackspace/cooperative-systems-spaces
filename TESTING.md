@@ -37,16 +37,16 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 
 | Tier | Question only it answers | State |
 |---|---|---|
-| 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** ~100 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About half the Rust tests run on the workstation; the rest need Linux. |
-| 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. `wire_kinds.json` is not written and the six ToolGuard wire-type copies still exist. |
+| 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
+| 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
 | 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 29 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and it costs seconds to run. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 52 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Not started.** The transport-failure shape it exists for is covered for two components at Tier 2 instead; that is narrower and is not a substitute. |
-| 6 Full stack | Does it work against a real database, broker, charset? | **Running.** Eight stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply and the 401-for-a-role defect. |
+| 6 Full stack | Does it work against a real database, broker, charset? | **Running.** Eleven stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
-| 9 Simulated users | What breaks only after history accumulates? | **Not started.** |
+| 9 Simulated users | What breaks only after history accumulates? | **Oracle only.** Six invariants over the accumulated world, and a 20-case self-test that feeds each of them what a broken server would send and requires it to fire — written first, deliberately, because an invariant that never fires is indistinguishable from a passing suite. It runs in `e2e/lint.sh` with no stack at all. The journey driver that uses them is not written. |
 | 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Not started.** |
 | 11 Human evidence | Does this make sense to a newcomer? | **Not started.** |
 
@@ -60,10 +60,18 @@ spend the next hour:
 
 | Tier | Real defects it found |
 |---|---|
-| 3 Source-as-data | The unauthenticated ToolGuard endpoints; four broken CLI paths; the `UserRole` wire drift; the duplicate migrations root; the two divergent error conversions |
+| 3 Source-as-data | The unauthenticated ToolGuard endpoints; four broken CLI paths; the `UserRole` wire drift; the duplicate migrations root; the two divergent error conversions; five diverged copies of one wire format |
 | 1 / 2 Unit and component | The unreachable training warning; the iCal `v-html`; the roster refresh that never refreshed; the roster error banner that destroyed the list |
 | 1b Vectors | Both door fail-open sites; the inactive-member divergence between the RFID and QR paths |
-| 6 Full stack | The migration no non-UTF-8 database can apply; the 401-for-an-insufficient-role, which logs the user out; the config loader exiting 0 after refusing to start |
+| 6 Full stack | The migration no non-UTF-8 database can apply; the 401-for-an-insufficient-role, which logs the user out; the config loader exiting 0 after refusing to start; **a 404 on every deep link, including the QR door URL** |
+| 7 Seeded fuzz | Two different error envelopes across every guarded route; six handlers answering 500 for a row that does not exist; a 500 for a repository nobody configured; four routes that can never succeed |
+| Build warnings, read rather than silenced | A `dsl::*` glob shadowing a function's parameters, so an UPDATE deactivated **every** trainer assignment in the table; the training-history filters passed and never read |
+
+The last row is worth its own note. Every one of those was a plain rustc
+warning — "unused variable", "field is never read" — sitting in the build
+output. Fixing them properly rather than prefixing with an underscore is what
+turned three warnings into two real defects and a vestigial dependency. A
+warning is a question the compiler is asking; `_` is a way of not answering it.
 
 ---
 
