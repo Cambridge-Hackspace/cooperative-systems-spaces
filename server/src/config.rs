@@ -1361,13 +1361,28 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir");
         let path = dir.path().join("config.toml");
 
-        // A real configuration with one section incomplete. `calendars` has no
-        // `#[serde(default)]`, so omitting it is a missing-field error — which
-        // is exactly how the stack battery's own config was wrong on its first
-        // run.
-        let mut text = toml::to_string_pretty(&AppConfig::default()).expect("serialise");
-        text = text.replace("calendars = []", "");
-        std::fs::write(&path, &text).expect("write the config");
+        // A real configuration with one field removed. `lookahead_days` has no
+        // `#[serde(default)]`, so omitting it is a missing-field error -- the
+        // same shape that stopped the stack battery booting on its first run.
+        //
+        // The assertion that the removal changed something is not decoration.
+        // The first version of this test removed a line the serialiser does not
+        // emit, so the config parsed cleanly, `from_file` succeeded, and the
+        // test failed with a wall of Debug output rather than saying the
+        // fixture was wrong. A mutation that does not mutate is a test that
+        // proves nothing while looking like it proves something.
+        let text = toml::to_string_pretty(&AppConfig::default()).expect("serialise");
+        let broken: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("lookahead_days"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            text.lines().count(),
+            broken.lines().count(),
+            "the fixture removed nothing; AppConfig no longer serialises lookahead_days"
+        );
+        std::fs::write(&path, &broken).expect("write the config");
 
         let err = AppConfig::from_file(&path)
             .expect_err("a config missing a required field must not load silently");
@@ -1437,6 +1452,43 @@ mod tests {
             "the sample names a wiki or site repository; a fresh deployment would \
              clone it on first boot without anybody asking for it"
         );
+    }
+
+    /// A finding, recorded rather than changed.
+    ///
+    /// `PagesConfig::default()` names two live GitHub repositories, and
+    /// `PagesService::new` git-clones whatever is there into a hardcoded
+    /// /tmp/css-{wiki,site}-repo during boot. So a deployment that starts with
+    /// no config file at all -- which `load_config` handles by writing the
+    /// defaults and carrying on -- clones two repositories belonging to
+    /// somebody else on its first boot, and fails closed the moment the
+    /// network or those repositories do.
+    ///
+    /// Whether the shipped default should be a working demo or an empty one is
+    /// a product decision, not a test's. What a test can do is make the current
+    /// answer visible and stop it changing silently in either direction, which
+    /// is what this is. The tracked sample has both commented out, asserted by
+    /// `the_shipped_sample_config_parses` above, so the path a real operator
+    /// takes is already clean; this covers the path taken by a first boot with
+    /// no file.
+    #[test]
+    fn the_default_config_still_names_two_live_repositories() {
+        let defaults = AppConfig::default();
+        assert_eq!(
+            defaults.pages.wiki_repo.as_deref(),
+            Some("https://github.com/neiam/css-wiki-example"),
+            "the default wiki repository changed. If it became None, delete this \
+             test -- the finding is fixed. If it became a different URL, a first \
+             boot now clones that one instead."
+        );
+        assert_eq!(
+            defaults.pages.site_repo.as_deref(),
+            Some("https://github.com/neiam/css-site-example"),
+        );
+        // The one thing that keeps it survivable: neither is polled, so the
+        // clone happens once at boot rather than every ten minutes.
+        assert!(!defaults.pages.wiki_auto_enabled);
+        assert!(!defaults.pages.site_auto_enabled);
     }
 
     #[test]

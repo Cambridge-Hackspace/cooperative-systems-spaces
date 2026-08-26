@@ -29,7 +29,15 @@ export default mergeConfig(
       globals: false,
 
       setupFiles: ['./tests/setup.ts'],
-      include: ['tests/unit/**/*.spec.ts', 'tests/structure/**/*.spec.ts'],
+      // tests/components is tier 2 -- component conformance against jsdom.
+      // tests/unit is tier 1, plain functions. tests/structure is tier 3, files
+      // read as data. Listed rather than globbed as tests/**, so a stray spec
+      // in tests/e2e cannot be collected by the wrong runner.
+      include: [
+        'tests/unit/**/*.spec.ts',
+        'tests/components/**/*.spec.ts',
+        'tests/structure/**/*.spec.ts',
+      ],
 
       // Playwright owns tests/e2e. Vitest must not try to collect it: the two
       // runners have incompatible `test` globals and the failure is confusing.

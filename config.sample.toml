@@ -343,7 +343,10 @@ calendars = []
 [pages]
 # wiki_repo = "https://github.com/your-org/your-wiki"
 # Where the wiki appears: "None", "Nav", "Footer" or "Both"
-wiki_link = "None"
+# LinkLocation is Navigation | HomePage | Both -- there is no "off". With no
+# repository configured the link has nothing to point at, so the value here is
+# only about where it would appear if one were.
+wiki_link = "Navigation"
 # Poll the wiki repository for changes
 wiki_auto_enabled = false
 # Seconds between polls
@@ -351,7 +354,7 @@ wiki_period = 600
 # Include the repository's README.md in the wiki
 wiki_readme = false
 # site_repo = "https://github.com/your-org/your-site"
-site_link = "None"
+site_link = "Navigation"
 site_auto_enabled = false
 site_period = 600
 # Which file from the site repository is embedded in the index page

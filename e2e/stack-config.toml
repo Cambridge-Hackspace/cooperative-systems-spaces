@@ -197,11 +197,14 @@ lookahead_days = 30
 # git-clones whatever is here into a hardcoded /tmp path at boot; a stack that
 # inherited the tracked config would clone two GitHub repositories on every
 # bring-up and fail closed the moment the network did.
-wiki_link = "None"
+# LinkLocation is Navigation | HomePage | Both -- there is no "off". With no
+# repository configured the link has nothing to point at, so the value here is
+# only about where it would appear if one were.
+wiki_link = "Navigation"
 wiki_auto_enabled = false
 wiki_period = 600
 wiki_readme = false
-site_link = "None"
+site_link = "Navigation"
 site_auto_enabled = false
 site_period = 600
 site_embed_index = "INDEX.md"
