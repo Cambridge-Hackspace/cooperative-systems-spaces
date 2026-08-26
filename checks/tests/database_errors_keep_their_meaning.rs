@@ -52,8 +52,8 @@ const BUDGET: &[(&str, usize)] = &[
     ("schedules.rs", 3),
     ("toolguard.rs", 17),
     ("tools.rs", 13),
-    ("trainers.rs", 13),
-    ("training.rs", 34),
+    ("trainers.rs", 12),
+    ("training.rs", 30),
     ("users.rs", 2),
     ("webhooks.rs", 0),
 ];

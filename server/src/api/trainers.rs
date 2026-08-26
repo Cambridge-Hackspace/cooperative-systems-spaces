@@ -207,8 +207,10 @@ async fn update_tool_trainer(
         .db
         .update_tool_trainer(tool_id, user_id, &update_trainer)
         .map_err(|e| {
-            tracing::error!("Failed to update trainer: {}", e);
-            ApiError::InternalServerError("Failed to update trainer".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("update_tool_trainer({tool_id}, {user_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(updated_trainer)))

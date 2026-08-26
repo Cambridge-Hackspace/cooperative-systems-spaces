@@ -165,17 +165,28 @@ const KNOWN = [
       'a device invite code is eight emoji, and this cluster cannot store one. ' +
       'The finding is pinned by the concurrency tier. TESTING.md, "Known defects".',
   },
-  {
-    method: 'POST',
-    template: '/api/tools/user-training/{id}',
+  // The four registered-but-unimplemented routes. A 501 is honest rather than
+  // broken -- but each is a route the frontend can call and that can never
+  // succeed, so they are recorded rather than ignored.
+  //
+  // `checks/tests/unimplemented_endpoints.rs` pins the same list from the source
+  // in milliseconds, which is the version that does not depend on the fuzzer
+  // happening to reach the endpoint. This one exists so the oracle stays on for
+  // every *other* 5xx on these routes.
+  ...[
+    ['POST', '/api/tools/{id}/training-types'],
+    ['POST', '/api/tools/{id}/trainers'],
+    ['PUT', '/api/tools/user-training/{id}'],
+    ['DELETE', '/api/tools/user-training/{id}'],
+  ].map(([method, template]) => ({
+    method,
+    template,
     status: 501,
     only: () => true,
     why:
-      'the route is registered and the handler returns 501 Not Implemented. ' +
-      'A 501 is honest rather than broken -- but it is a route the frontend can ' +
-      'call and that can never succeed, so it is recorded rather than ignored. ' +
-      'TESTING.md, "Known defects".',
-  },
+      'registered and unimplemented; the handler returns 501. See ' +
+      'checks/tests/unimplemented_endpoints.rs and TESTING.md, "Known defects".',
+  })),
 ]
 
 const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
@@ -251,6 +262,9 @@ main(async () => {
 
   let requests = 0
   let alive = true
+  // Which endpoints the run actually reached, so a KNOWN entry that did not
+  // fire can be told apart from one whose endpoint was never tried.
+  const attempts = new Set()
 
   for (let i = 0; i < ITERATIONS && alive; i += 1) {
     const ep = pick(INVENTORY.endpoints)
@@ -260,6 +274,7 @@ main(async () => {
     const body = sendsBody ? hostileBody() : undefined
 
     const req = { method: ep.method, template: ep.template, path, credName, body, iteration: i }
+    attempts.add(`${ep.method} ${ep.template}`)
 
     let res
     try {
@@ -358,13 +373,28 @@ main(async () => {
     if (!k.only(ENCODING)) continue
     const key = `${k.method} ${k.template} ${k.status}`
     if (seenKnown.has(key)) continue
-    record(`fuzz/known-finding-still-occurs: ${key}`, 'fail',
-      'this finding is exempted and did not occur in this run. Either it was ' +
-      'fixed -- delete the KNOWN entry -- or the fuzzer stopped reaching the ' +
-      'endpoint, which is a narrowing nobody asked for. ' +
-      `(seed ${SEED}, ${ITERATIONS} iterations; a short run may simply not have ` +
-      'tried it, in which case raise CSS_FUZZ_ITERATIONS rather than deleting ' +
-      'the entry.)')
+
+    // Two very different situations, and reporting them the same way is how a
+    // check that should mean something becomes noise:
+    //
+    //   * the run never tried this endpoint -- a seeded fuzzer picks uniformly
+    //     from 164 endpoints, so at 400 iterations any given one is missed
+    //     about a tenth of the time. That is not news.
+    //   * the run DID try it and got something else -- either the defect was
+    //     fixed, or it changed shape. That is news either way.
+    const attempted = attempts.has(`${k.method} ${k.template}`)
+    if (attempted) {
+      record(`fuzz/known-finding-changed: ${key}`, 'fail',
+        'this endpoint was exercised and did not produce the exempted result. ' +
+        'Either the defect was fixed -- delete the KNOWN entry, here and in ' +
+        'checks/tests/unimplemented_endpoints.rs if it is named there -- or it ' +
+        `changed shape, which is worth a look. (seed ${SEED})`)
+    } else {
+      record(`fuzz/known-finding-not-reached: ${key}`, 'skip',
+        `this run never tried ${k.method} ${k.template}. At ${ITERATIONS} ` +
+        'iterations across 164 endpoints that is ordinary; raise ' +
+        'CSS_FUZZ_ITERATIONS to make the coverage claim stronger.')
+    }
   }
 
   // The seed, restated where somebody reading only the summary will see it.

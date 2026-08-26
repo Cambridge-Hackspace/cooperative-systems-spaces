@@ -303,6 +303,9 @@ async fn main() -> Result<(), anyhow::Error> {
     //     web_auth_middleware
     // ));
 
+    // The SPA fallback below catches everything the router did not match --
+    // including, without care, unmatched /api paths. `api::api_routes()` owns
+    // its own 404 for exactly that reason; the note is there.
     let app = Router::new()
         .route("/metrics", get(metrics_handler).with_state(prom.clone()))
         .merge(general_route)

@@ -535,8 +535,10 @@ async fn get_tool_training_overview(
         .db
         .get_tool_training_overview(tool_id, user.0.id)
         .map_err(|e| {
-            tracing::error!("Failed to get training overview: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training overview".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("get_tool_training_overview({tool_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(overview)))
@@ -552,8 +554,10 @@ async fn get_my_tool_training_overview(
         .db
         .get_tool_training_overview(tool_id, user.0.id)
         .map_err(|e| {
-            tracing::error!("Failed to get training overview: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training overview".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("get_tool_training_overview({tool_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(overview)))
@@ -576,8 +580,10 @@ async fn get_user_tool_training_overview(
         .db
         .get_tool_training_overview(tool_id, target_user_id)
         .map_err(|e| {
-            tracing::error!("Failed to get training overview: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training overview".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("get_tool_training_overview({tool_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(overview)))
@@ -918,8 +924,10 @@ async fn check_tool_access(
     Path((tool_id, user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
     let can_access = state.db.can_access_tool(user_id, tool_id).map_err(|e| {
-        tracing::error!("Failed to check tool access: {}", e);
-        ApiError::InternalServerError("Failed to check tool access".to_string())
+        // See the note in update_tool. A tool or user that does not exist is a
+        // 404, not a server fault.
+        tracing::warn!("can_access_tool({user_id}, {tool_id}) failed: {e}");
+        ApiError::from(e)
     })?;
 
     Ok(Json(ApiResponse::success(can_access)))

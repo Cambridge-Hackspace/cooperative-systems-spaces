@@ -362,6 +362,23 @@ async fn refresh_wiki_pages(
     _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    // Asked before it is attempted, rather than inferred from the failure.
+    //
+    // "No repository configured" is a state an administrator put the instance
+    // in, not a fault -- so a 500 tells them the server broke about a setting
+    // they can change in the next screen. 409 says what is actually true: the
+    // request conflicts with the current configuration.
+    //
+    // Checked against the config rather than by matching the error's text. The
+    // message is ours today and one refactor away from being somebody else's,
+    // and a status code that depends on a string is a status code that changes
+    // when a message is reworded.
+    if state.config_manager.get_config().pages.wiki_repo.is_none() {
+        return Err(ApiError::Conflict(
+            "No wiki repository is configured; set one before refreshing".to_string(),
+        ));
+    }
+
     let mut pages_service = state.pages_service.write().await;
 
     match pages_service.trigger_wiki_update().await {
@@ -393,6 +410,23 @@ async fn refresh_site_pages(
     _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    // Asked before it is attempted, rather than inferred from the failure.
+    //
+    // "No repository configured" is a state an administrator put the instance
+    // in, not a fault -- so a 500 tells them the server broke about a setting
+    // they can change in the next screen. 409 says what is actually true: the
+    // request conflicts with the current configuration.
+    //
+    // Checked against the config rather than by matching the error's text. The
+    // message is ours today and one refactor away from being somebody else's,
+    // and a status code that depends on a string is a status code that changes
+    // when a message is reworded.
+    if state.config_manager.get_config().pages.site_repo.is_none() {
+        return Err(ApiError::Conflict(
+            "No site repository is configured; set one before refreshing".to_string(),
+        ));
+    }
+
     let mut pages_service = state.pages_service.write().await;
 
     match pages_service.trigger_site_update().await {
