@@ -38,8 +38,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,browser,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,browser,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -824,6 +824,80 @@ EOF
 }
 
 edge_ready() { [[ "$(http_status /api/status "$1")" == "200" ]]; }
+
+# ===========================================================================
+# browser -- Tier 5, the real app against the fake API
+# ===========================================================================
+# Runs Playwright out of the pinned image, which carries its own browsers --
+# which is why PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 is set everywhere else and why
+# the package.json pin and the image tag have to agree. They do: 1.62.1.
+#
+# The fake is a Vite middleware, so this stage needs no database, no broker and
+# no css-server. It is listed after the stack stages only because that is the
+# order somebody reads a report in; it would run just as well first.
+#
+# Under --provision=external it is skipped with a reason rather than attempted:
+# a CI runner has no browsers, and the GitHub workflow runs this in its own
+# `browser-fake` job inside the same image. Naming that here means the skip is a
+# statement about where the tier runs rather than a gap.
+stage_browser() {
+  cases_begin browser
+  stack_paths
+
+  if [[ ${PROVISION} == "external" ]]; then
+    record_case "browser/runs-elsewhere" skip \
+      "--provision=external has no browsers; CI runs this in its own browser-fake job inside the pinned Playwright image"
+    emit_junit browser
+    return 0
+  fi
+
+  # node_modules has to be the one e2e/build.sh installed, with the Playwright
+  # package in it. Checked rather than assumed: without it `npx playwright`
+  # downloads a *different* version into a container that already has browsers
+  # for the pinned one, and the failure names a browser executable rather than a
+  # missing dependency.
+  if [[ ! -d "${ROOT}/frontend/node_modules/@playwright/test" ]]; then
+    record_case "browser/playwright-installed" fail \
+      "frontend/node_modules/@playwright/test is missing -- run e2e/build.sh"
+    emit_junit browser
+    return 1
+  fi
+  record_case "browser/playwright-installed" ok
+
+  log "running the browser tier"
+  local rc=0
+  pm run --rm --network host \
+    -v "${ROOT}/frontend:/app" \
+    -w /app \
+    -e CI=1 \
+    -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    "${IMG_PLAYWRIGHT}" \
+    npx playwright test --config playwright.config.ts \
+    >"${OUT}/logs/browser.log" 2>&1 || rc=$?
+
+  if [[ ${rc} -eq 0 ]]; then
+    record_case "browser/playwright" ok
+  else
+    # The count, from Playwright's own summary line, so the report says how bad
+    # rather than only that it was bad.
+    local summary
+    summary="$(grep -oE '[0-9]+ (failed|passed)' "${OUT}/logs/browser.log" | tr '\n' ' ' || true)"
+    record_case "browser/playwright" fail \
+      "exit ${rc}: ${summary:-see logs/browser.log}"
+  fi
+
+  # Playwright writes its own JUnit; copied in so the run's junit/ is complete
+  # rather than having one stage's results somewhere else.
+  if [[ -f "${ROOT}/frontend/test-results/playwright-junit.xml" ]]; then
+    cp "${ROOT}/frontend/test-results/playwright-junit.xml" "${OUT}/junit/browser-playwright.xml"
+    record_case "browser/results-collected" ok
+  else
+    record_case "browser/results-collected" fail \
+      "Playwright wrote no JUnit; the run did not reach the reporter"
+  fi
+
+  emit_junit browser
+}
 # ===========================================================================
 # logs -- what the server said that nobody was listening to
 # ===========================================================================

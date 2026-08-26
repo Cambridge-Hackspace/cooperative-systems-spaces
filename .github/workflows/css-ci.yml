@@ -162,6 +162,41 @@ jobs:
       - name: Check the full workspace, including the GUI crates
         run: cargo check --locked --workspace --all-targets
 
+  # --- Tier 5: the real app against the fake API ------------------------------
+  # In the pinned Playwright image, which carries its own browsers -- which is
+  # why PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 is set in every other job and why the
+  # package.json pin and this image tag have to agree. They do: 1.62.1.
+  #
+  # No database, no broker and no css-server: the fake is a Vite middleware, so
+  # this job needs the frontend and nothing else. It is also the only job in
+  # this workflow that runs a browser at all.
+  browser-fake:
+    runs-on: arc-runner-set
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - working-directory: frontend
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund
+      - name: Run the browser tier
+        working-directory: frontend
+        env:
+          CI: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npx playwright test --config playwright.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-fake-results
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          if-no-files-found: error
+
   # --- Tier 4's DB-backed half, and tiers 6-8 --------------------------------
   # A `services:` Postgres, so this needs no reaper and no container engine of
   # its own. e2e/run.sh --provision=external takes the endpoint from the
@@ -250,7 +285,7 @@ jobs:
 
   # --- packaging --------------------------------------------------------------
   docker-server:
-    needs: [frontend, frontend-edge, rust, shell, stack]
+    needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
     runs-on: arc-runner-set
     permissions: { contents: read, packages: write }
     steps:
@@ -276,7 +311,7 @@ jobs:
           docker push ghcr.io/${{ github.repository }}/app:dev
 
   docker-edge:
-    needs: [frontend, frontend-edge, rust, shell, stack]
+    needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
     runs-on: arc-runner-set
     permissions: { contents: read, packages: write }
     steps:
@@ -304,7 +339,7 @@ jobs:
           docker push ghcr.io/${{ github.repository }}/edge:dev
 
   release:
-    needs: [frontend, frontend-edge, rust, shell, stack]
+    needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
