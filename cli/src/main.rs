@@ -2,14 +2,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod auth;
-mod client;
-mod config;
-mod commands;
-mod output;
-
-use crate::config::CliConfig;
-use crate::client::ApiClient;
+use css_cli::client::ApiClient;
+use css_cli::config::CliConfig;
+use css_cli::{auth, commands, config};
 
 /// Cooperative Systems Spaces CLI - Administrative and management tool
 #[derive(Parser)]
@@ -60,6 +55,16 @@ enum Commands {
     Health,
     /// Server information
     Info,
+    // `commands::admin` was fully implemented and declared in
+    // `commands/mod.rs`, but this enum had no variant for it, so
+    // `css-cli admin reload-config` did not exist and the whole module read as
+    // dead code. Kept as a line comment, not a doc comment: clap renders doc
+    // comments as user-facing help text.
+    /// Administrative operations against the server
+    Admin {
+        #[command(subcommand)]
+        action: commands::admin::AdminCommand,
+    },
 }
 
 #[tokio::main]
@@ -106,6 +111,9 @@ async fn main() -> Result<()> {
         }
         Commands::Info => {
             commands::info::handle_info_command(&client, &config).await
+        }
+        Commands::Admin { action } => {
+            commands::admin::handle_admin_command(action, &client, &config).await
         }
     }
 }

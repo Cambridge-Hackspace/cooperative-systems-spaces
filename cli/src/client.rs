@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
-use reqwest::{Client, Method, Request, Response};
+use reqwest::{Client, Method, Response};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
 
@@ -31,16 +30,6 @@ impl ApiClient {
             token: config.auth_token.clone(),
             log_requests: config.log_requests,
         })
-    }
-
-    /// Set the authentication token
-    pub fn set_token(&mut self, token: String) {
-        self.token = Some(token);
-    }
-
-    /// Clear the authentication token
-    pub fn clear_token(&mut self) {
-        self.token = None;
     }
 
     /// Make a GET request
@@ -107,14 +96,24 @@ impl ApiClient {
     }
 
     fn build_url(&self, path: &str) -> Result<Url> {
-        let path = if path.starts_with('/') {
-            &path[1..]
-        } else {
-            path
-        };
+        let path = path.strip_prefix('/').unwrap_or(path);
 
-        self.base_url
-            .join(path)
+        // `Url::join` is RFC 3986 relative resolution, in which the final
+        // segment of the base is a *file* unless the base ends in a slash. So
+        // joining `api/auth/me` onto `https://example.com/css` resolves to
+        // `https://example.com/api/auth/me` and the deployment's path prefix
+        // is silently discarded.
+        //
+        // Nothing noticed because the default `server_url` has no path at all.
+        // It fires the first time CSS is served under a prefix, which is an
+        // entirely ordinary way to deploy it.
+        let mut base = self.base_url.clone();
+        if !base.path().ends_with('/') {
+            let with_slash = format!("{}/", base.path());
+            base.set_path(&with_slash);
+        }
+
+        base.join(path)
             .with_context(|| format!("Failed to build URL for path: {}", path))
     }
 
@@ -213,9 +212,21 @@ pub struct UserResponse {
     pub updated_at: chrono::NaiveDateTime,
 }
 
-/// User role enum
+/// User role enum.
+///
+/// This is a fourth independent copy of a vocabulary that also exists in
+/// `server/src/models.rs`, `frontend/src/types/index.ts` and the
+/// `user_role` SQL enum — and it had drifted. It carried
+/// `#[serde(rename_all = "lowercase")]`, while the server's copy has no
+/// `rename_all` at all and therefore emits `"Admin"`. So this type could not
+/// deserialize a role the server sent, which took the whole enclosing
+/// `UserResponse` down with it: every command that lists or shows a user was
+/// broken against its own server.
+///
+/// The lowercase form is not imaginary — it is what `ToSql` writes to
+/// Postgres (`server/src/models.rs:49-58`) — but that is the *storage*
+/// encoding, not the wire encoding, and this type is on the wire.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum UserRole {
     Unknown,
     Newbie,
@@ -269,4 +280,152 @@ pub struct UpdateUserRequest {
     pub password: Option<String>,
     pub is_active: Option<bool>,
     pub role: Option<UserRole>,
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+
+    fn client_for(server_url: &str) -> ApiClient {
+        ApiClient::new(&CliConfig {
+            server_url: server_url.to_string(),
+            ..CliConfig::default()
+        })
+        .expect("a well-formed URL and a default reqwest client build offline")
+    }
+
+    /// The shape every caller uses today, and the one that has always worked.
+    #[test]
+    fn build_url_joins_onto_a_bare_host() {
+        let c = client_for("http://localhost:4399");
+        assert_eq!(
+            c.build_url("/api/auth/login").unwrap().as_str(),
+            "http://localhost:4399/api/auth/login"
+        );
+    }
+
+    #[test]
+    fn build_url_accepts_a_path_with_or_without_its_leading_slash() {
+        let c = client_for("http://localhost:4399");
+        assert_eq!(
+            c.build_url("api/auth/me").unwrap().as_str(),
+            c.build_url("/api/auth/me").unwrap().as_str()
+        );
+    }
+
+    /// `Url::join` is RFC 3986 relative resolution, in which the last segment
+    /// of the base is a *file* unless it ends in a slash. So joining `users`
+    /// onto `https://example.com/css` yields `https://example.com/users` and
+    /// the deployment's path prefix vanishes -- every request 404s, or worse
+    /// reaches something else entirely.
+    ///
+    /// Nothing catches this today because the default `server_url` has no path.
+    /// It fires the moment CSS is served under a prefix, which is an ordinary
+    /// way to deploy it.
+    #[test]
+    fn build_url_preserves_a_base_path_prefix() {
+        let c = client_for("https://example.com/css");
+        assert_eq!(
+            c.build_url("/api/auth/me").unwrap().as_str(),
+            "https://example.com/css/api/auth/me"
+        );
+    }
+
+    #[test]
+    fn build_url_is_stable_when_the_base_already_ends_in_a_slash() {
+        let c = client_for("https://example.com/css/");
+        assert_eq!(
+            c.build_url("/api/auth/me").unwrap().as_str(),
+            "https://example.com/css/api/auth/me"
+        );
+    }
+
+    #[test]
+    fn auth_header_is_bearer_and_absent_when_there_is_no_token() {
+        let with = ApiClient::new(&CliConfig {
+            auth_token: Some("t0ken".to_string()),
+            ..CliConfig::default()
+        })
+        .unwrap();
+        let req = with
+            .add_auth_header(with.client.get("http://localhost:4399/"))
+            .build()
+            .unwrap();
+        assert_eq!(req.headers()["authorization"], "Bearer t0ken");
+
+        let without = client_for("http://localhost:4399");
+        let req = without
+            .add_auth_header(without.client.get("http://localhost:4399/"))
+            .build()
+            .unwrap();
+        assert!(!req.headers().contains_key("authorization"));
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    /// The exact JSON the server emits for a role, and the exact JSON it will
+    /// accept back.
+    ///
+    /// Written out here rather than imported from the server. That is
+    /// deliberate on two counts: css-server cannot be compiled on this
+    /// project's development workstation at all, and a check derived from the
+    /// structure it is checking agrees with itself no matter what either side
+    /// says. The duplication *is* the check.
+    ///
+    /// The authority is `server/src/models.rs:33-46`, whose `UserRole` derives
+    /// `Serialize`/`Deserialize` with **no** `rename_all`, so serde emits the
+    /// variant names verbatim. `frontend/src/types/index.ts:22-28` mirrors the
+    /// same PascalCase strings, which corroborates it independently.
+    const SERVER_WIRE: &[(&str, UserRole)] = &[
+        ("Unknown", UserRole::Unknown),
+        ("Newbie", UserRole::Newbie),
+        ("Member", UserRole::Member),
+        ("Staff", UserRole::Staff),
+        ("Admin", UserRole::Admin),
+    ];
+
+    #[test]
+    fn user_role_deserializes_what_the_server_actually_sends() {
+        for (wire, expected) in SERVER_WIRE {
+            let json = format!("\"{wire}\"");
+            let got: UserRole = serde_json::from_str(&json).unwrap_or_else(|e| {
+                panic!(
+                    "the server sends {json} for this role and the CLI cannot read it: {e}. \
+                     A UserResponse carrying it therefore fails to parse, so every command \
+                     that lists or shows a user is broken against its own server."
+                )
+            });
+            assert_eq!(got, *expected);
+        }
+    }
+
+    #[test]
+    fn user_role_serializes_to_what_the_server_accepts() {
+        for (wire, role) in SERVER_WIRE {
+            assert_eq!(serde_json::to_string(role).unwrap(), format!("\"{wire}\""));
+        }
+    }
+
+    /// The whole payload, not just the field, because a role that fails to
+    /// parse takes the entire `UserResponse` down with it and that is how this
+    /// would actually be experienced.
+    #[test]
+    fn a_realistic_user_payload_round_trips() {
+        let payload = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "username": "ada",
+            "email": "ada@example.com",
+            "full_name": "Ada Lovelace",
+            "is_active": true,
+            "role": "Staff",
+            "created_at": "2026-01-15T12:00:00",
+            "updated_at": "2026-01-15T12:00:00"
+        }"#;
+        let user: UserResponse = serde_json::from_str(payload).expect("server-shaped payload");
+        assert_eq!(user.role, UserRole::Staff);
+        assert_eq!(user.username, "ada");
+    }
 }

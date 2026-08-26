@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 use reqwest::Method;
 use serde_json::Value;
@@ -11,9 +11,10 @@ pub async fn handle_health_command(client: &ApiClient, config: &CliConfig) -> Re
     println!("{}", style("Health Check").bold().underlined());
     println!();
 
-    // Test basic connectivity
+    // `/status`, not `/`: the latter is the SPA fallback, so this reported a
+    // healthy server whenever the frontend bundle was present.
     println!("Testing server connectivity...");
-    let response = client.request_raw(Method::GET, "/").await;
+    let response = client.request_raw(Method::GET, "/status").await;
     
     match response {
         Ok(resp) => {

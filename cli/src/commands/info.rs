@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 use serde_json::Value;
 
@@ -9,8 +9,10 @@ pub async fn handle_info_command(client: &ApiClient, config: &CliConfig) -> Resu
     println!("{}", style("Server Information").bold().underlined());
     println!();
 
-    // Get server info from the root endpoint
-    let response = client.request_raw(reqwest::Method::GET, "/").await;
+    // `/status` is the JSON status handler (server/src/main.rs:87,308). `/` is
+    // served by the static-file fallback, so asking for it returned index.html
+    // and this function printed "Raw response: <!doctype html>...".
+    let response = client.request_raw(reqwest::Method::GET, "/status").await;
     
     match response {
         Ok(resp) => {

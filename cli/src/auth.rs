@@ -185,7 +185,11 @@ async fn handle_register(
     };
 
     let response: ApiResponse<UserResponse> = client
-        .post("/auth/register", &register_request)
+        // `/api/auth/register`, not `/auth/register`. Every other call in this
+        // crate carries the prefix; this one did not, so it never reached the
+        // API at all -- it fell through to the server's static-file fallback.
+        // checks/tests/cli_api_paths.rs now asserts the convention holds.
+        .post("/api/auth/register", &register_request)
         .await
         .context("Registration request failed")?;
 

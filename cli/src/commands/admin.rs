@@ -25,7 +25,7 @@ async fn handle_reload_config(client: &ApiClient, config: &CliConfig) -> Result<
     println!("Reloading server configuration...");
 
     let response: ApiResponse<serde_json::Value> = client
-        .post("/admin/reload-config", &serde_json::json!({}))
+        .post("/api/admin/reload-config", &serde_json::json!({}))
         .await?;
 
     if response.success {

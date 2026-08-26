@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use console::style;
-use dialoguer::{Input, Password, Select};
 use uuid::Uuid;
 
 use crate::client::{
@@ -435,5 +434,37 @@ fn parse_role(role_str: &str) -> Result<UserRole> {
         "staff" => Ok(UserRole::Staff),
         "admin" => Ok(UserRole::Admin),
         _ => anyhow::bail!("Invalid role: {}. Valid roles: unknown, newbie, member, staff, admin", role_str),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_role_accepts_every_role_case_insensitively() {
+        for (input, expected) in [
+            ("unknown", UserRole::Unknown),
+            ("NEWBIE", UserRole::Newbie),
+            ("Member", UserRole::Member),
+            ("sTaFf", UserRole::Staff),
+            ("admin", UserRole::Admin),
+        ] {
+            assert_eq!(parse_role(input).unwrap(), expected, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn parse_role_rejects_anything_else_and_says_what_is_valid() {
+        let err = parse_role("superuser").unwrap_err().to_string();
+        assert!(err.contains("superuser"), "{err}");
+        assert!(err.contains("unknown, newbie, member, staff, admin"), "{err}");
+    }
+
+    /// The empty string is the shape a missing `--role` argument takes if one
+    /// ever reaches here, and it must be refused rather than silently becoming
+    /// a role.
+    #[test]
+    fn parse_role_rejects_the_empty_string() {
+        assert!(parse_role("").is_err());
     }
 }

@@ -2867,6 +2867,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "css-checks"
+version = "0.1.0"
+dependencies = [
+ "walkdir",
+]
+
+[[package]]
 name = "css-cli"
 version = "0.1.0"
 dependencies = [
