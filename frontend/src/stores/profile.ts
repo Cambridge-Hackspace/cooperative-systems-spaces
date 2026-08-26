@@ -155,17 +155,41 @@ export const useProfileStore = defineStore('profile', () => {
     for (const field of profileConfig.value.profile_fields) {
       const value = profileData[field.key]
       
-      // Check required fields
-      if (field.required && (!value || (typeof value === 'string' && value.trim() === ''))) {
+      // "Required" means the value was provided, not that it is truthy.
+      //
+      // This used to test `!value`, which made `false` and `0` indistinguishable
+      // from a missing field: a required Boolean could not be saved as `false`
+      // and a required Number could not be saved as `0`. The form reported "is
+      // required" for a value the user had explicitly given, and one the server
+      // would have accepted — `ProfileValidator::validate_profile` in
+      // server/src/profile.rs only errors when the key is *absent* from the
+      // object. A waiver checkbox that must be answered "no" was unsaveable.
+      const isAbsent =
+        value === undefined ||
+        value === null ||
+        (typeof value === 'string' && value.trim() === '')
+
+      if (field.required && isAbsent) {
         errors.push(`${field.label} is required`)
         continue
       }
-      
-      // Skip validation if field is empty and not required
-      if (!value) continue
-      
-      // Validate field types
-      const fieldType = typeof field.field_type === 'string' ? field.field_type : 'Select'
+
+      // Nothing to type-check when an optional field was left blank.
+      if (isAbsent) continue
+
+      // Narrow exactly as ProfileField.vue does, so the validator and the
+      // renderer never disagree about what a field is. This previously treated
+      // *every* non-string field_type as a Select; the Select branch then
+      // re-checked the shape, found it wrong, and silently validated nothing —
+      // under a label claiming the field had been checked.
+      const fieldType =
+        typeof field.field_type === 'string'
+          ? field.field_type
+          : typeof field.field_type === 'object' &&
+              field.field_type !== null &&
+              'Select' in field.field_type
+            ? 'Select'
+            : 'Text'
       
       switch (fieldType) {
         case 'Email':
