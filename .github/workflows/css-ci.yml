@@ -9,6 +9,17 @@ on:
     branches: [master, dev]
   pull_request:
     branches: [master, dev]
+  # Manually runnable, and the reason is that without it this workflow could not
+  # be verified at all. It triggers only on master/dev and on pull requests
+  # targeting them -- which is the right policy for a project, and it means a
+  # feature branch can carry a rewritten CI configuration that has never once
+  # executed. That was the state of this file for the whole of the work that
+  # produced it: aligned, reviewed, and unrun.
+  #
+  # `gh workflow run CI --ref <branch>` now exercises it before it is merged,
+  # which is the only way to find out whether the --provision=external path
+  # works before it is the thing gating everybody's pushes.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
