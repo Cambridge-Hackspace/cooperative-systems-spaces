@@ -633,6 +633,30 @@ leaves the tree correct and the run green, and the acceptance test then reports
 a pass for work it did not do — the one failure this document exists to
 prevent. Four files must be modified or it restores itself and exits non-zero.
 
+### It has been run, and it passes
+
+Run on 2026-08-26 against the suite as it stands. All four reverted fixes were
+rediscovered, each by the tier the table below predicts — and by **no other**,
+which is the part that says the tiers are not redundant:
+
+| Reverted fix | Caught by | What it said |
+|---|---|---|
+| `5c2fa3c` | Tier 6 `contract` | `newbie-reads-profile-config -- expected [200], got [403]` |
+| `11c4f42` | Tier 6 `contract` | `newbie-cannot-write-profile-config -- expected [403], got [200]` |
+| `fdc887c` | Tier 6 `devices` | `debug-serves-the-path-it-was-given -- --frontend-path pointed at a fixture and the marker is not in the response` |
+| `92afb4c` | Tier 5 `browser` | 4 failed: the two `abortNext` specs, on both viewports |
+
+Nine stages stayed green throughout, which matters as much as the four
+failures: a suite that goes red everywhere when anything breaks cannot tell you
+*what* broke.
+
+Two details worth keeping. `92afb4c` was caught **only** by the transport-abort
+specs — the `failNext` cases passed, because axios attaches a `response` to
+every HTTP error and the fallback branch is unreachable through them. And an
+automated security scanner, running against the working tree while it was
+reverted, independently flagged `11c4f42` as a privilege escalation. That is the
+acceptance test's premise confirmed from an angle nobody arranged.
+
 ### The corpus, and what should catch each one
 
 | Reverted fix | Caught by |
