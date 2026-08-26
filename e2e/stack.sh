@@ -420,6 +420,7 @@ run_node() {
       -e CASES_OUT=/stack/driver-cases.tsv \
       -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       -e CSS_STACK_DIR=/stack \
+      -e CSS_DB_ENCODING="${PG_ENCODING}" \
       -v "${ROOT}/e2e:/e2e:ro" \
       -v "${STACK_DIR}:/stack" \
       "${IMG_NODE}" node "/e2e/drivers/${script}" "$@"

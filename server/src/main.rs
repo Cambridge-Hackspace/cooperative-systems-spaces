@@ -174,9 +174,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let mqtt_service_arc = if app_config.edge.edge_enabled {
         if let Some(mqtt_config) = &app_config.edge.edge_mqtt_config {
             info!("Initializing MQTT service...");
-            let (mqtt_service, rx) =
-                MqttService::new(mqtt_config, db_manager.clone(), device_inbound.clone())
-                    .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
+            let (mqtt_service, rx) = MqttService::new(mqtt_config, device_inbound.clone())
+                .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
 
             let mqtt_service_arc = Arc::new(mqtt_service);
             let mqtt_service_for_task = mqtt_service_arc.as_ref().clone();

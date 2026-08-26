@@ -38,8 +38,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -675,11 +675,22 @@ stage_health() {
   # The SPA fallback. `not_found_service` serves index.html for any unmatched
   # path, which is what makes client-side routing work -- and a missing bundle
   # turns the whole UI into 404s while every API assertion still passes.
-  # Two probes, because one cannot tell the two failures apart. If / is 200 and
-  # a nested path is 404, the not_found_service is not wired; if both are 404,
-  # the bundle is not where the server was told it is.
+  # Three probes at different depths, because "the SPA fallback is broken" is
+  # three different faults and one number cannot tell them apart:
+  #
+  #   /                    the bundle is where the server was told it is
+  #   /tools               a real client-side route, one segment deep
+  #   /door/{id}/checkin   the QR flow -- three segments, and the one that
+  #                        arrives as a cold deep link from a phone camera,
+  #                        which is the case nobody tests by hand because
+  #                        clicking through the app never produces it
+  #
+  # A run where the first two pass and the third does not is a real defect and
+  # it is the highest-consequence route in the product.
   assert_eq "health/root-serves-the-app" "200" "$(http_status /)"
-  assert_eq "health/spa-fallback" "200" "$(http_status /some/client/side/route)"
+  assert_eq "health/spa-route-one-level" "200" "$(http_status /tools)"
+  assert_eq "health/spa-route-deep-link" "200" \
+    "$(http_status /door/00000000-0000-4000-8000-000000000001/checkin)"
 
   # But not for /api. A fallback that swallowed unknown API paths would turn
   # every typo in the frontend into a silent 200 serving HTML, and the Tier 4
@@ -698,6 +709,106 @@ stage_health() {
 
 # ===========================================================================
 # down -- tear the stack down
+
+# ===========================================================================
+# logs -- what the server said that nobody was listening to
+# ===========================================================================
+# The cheapest oracle in the suite, and it exists because of a specific habit
+# this codebase has: `let _ = state.db.create_audit_log(..)`. Discarding that
+# result is the right call -- failing a user's request because an audit row
+# would not insert is worse than losing the row -- but it means an audit write
+# that violates a constraint produces no error anybody sees. The request
+# succeeds, the caller is told so, and the event is simply never recorded.
+#
+# The same shape appears wherever a background task logs and carries on: the
+# MQTT reconnect loop, the webhook dispatcher, the pages poller.
+#
+# So the run's own log is an oracle. Every ERROR line the server emitted is a
+# failure of this stage unless it is on the list below, and every entry on that
+# list carries the reason it is expected. That turns "the server logged
+# something alarming and the suite went green" into a case with a name.
+#
+# What this does NOT do: judge WARN. The toolguard rejections are warnings and
+# they are the suite deliberately sending bad credentials.
+stage_logs() {
+  cases_begin logs
+  stack_paths
+  collect_server_log
+
+  local log="${OUT}/logs/css-server.log"
+  if [[ ! -s ${log} ]]; then
+    record_case "logs/server-log-present" fail \
+      "no server log to read; every assertion below would pass over nothing"
+    emit_junit logs
+    return 1
+  fi
+  record_case "logs/server-log-present" ok
+
+  # --- audit writes that failed silently -----------------------------------
+  # Named separately from the general ERROR sweep because the consequence is
+  # specific: this is the record of who did what, and it is the one thing a
+  # cooperative cannot reconstruct afterwards.
+  local audit_failures
+  audit_failures="$(grep -c 'Failed to save audit log' "${log}" || true)"
+  if [[ ${audit_failures} -eq 0 ]]; then
+    record_case "logs/no-audit-write-was-swallowed" ok
+  else
+    record_case "logs/no-audit-write-was-swallowed" fail \
+      "${audit_failures} audit write(s) failed and were discarded: $(grep -m 2 -o 'Failed to save audit log.*' "${log}" | tr '\n' ' ')"
+  fi
+
+  # --- everything else the server called an error --------------------------
+  #
+  # Each exemption covers one message and says why. A pattern broad enough to
+  # cover two things covers the next real one too.
+  local expected=(
+    # The pinned encoding finding: a device invite code is eight emoji and the
+    # suite's cluster is LATIN1. TESTING.md, "Known defects".
+    'Failed to insert device invite: character with byte sequence'
+    # The fuzz tier asks for training overviews on tools that do not exist.
+    # A 404 for a missing tool is correct; the handler logs it at ERROR, which
+    # is the wrong level rather than the wrong behaviour.
+    'Failed to get training overview: Database error: Tool not found'
+  )
+
+  local unexpected=0 sample=''
+  local line
+  while IFS= read -r line; do
+    local matched=0 pattern
+    for pattern in "${expected[@]}"; do
+      if [[ ${line} == *"${pattern}"* ]]; then
+        matched=1
+        break
+      fi
+    done
+    if [[ ${matched} -eq 0 ]]; then
+      unexpected=$((unexpected + 1))
+      [[ -z ${sample} ]] && sample="${line}"
+    fi
+  done < <(grep 'ERROR' "${log}" || true)
+
+  if [[ ${unexpected} -eq 0 ]]; then
+    record_case "logs/no-unexpected-server-errors" ok
+  else
+    record_case "logs/no-unexpected-server-errors" fail \
+      "${unexpected} ERROR line(s) the suite does not expect. First: ${sample:0:400}"
+  fi
+
+  # --- and the exemptions are not stale ------------------------------------
+  # An exemption for a message that no longer appears is a claim about
+  # behaviour nobody is checking. It is removed, not left.
+  local pattern
+  for pattern in "${expected[@]}"; do
+    if grep -qF "${pattern}" "${log}"; then
+      record_case "logs/exemption-still-needed: ${pattern:0:48}" ok
+    else
+      record_case "logs/exemption-still-needed: ${pattern:0:48}" fail \
+        "this ERROR is exempted and did not occur; delete the exemption"
+    fi
+  done
+
+  emit_junit logs
+}
 # ===========================================================================
 stage_down() {
   cases_begin down

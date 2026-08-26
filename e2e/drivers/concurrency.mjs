@@ -33,6 +33,7 @@ import { GET, POST, PUT, adminAccount, record, ok, assertEq, main, RUN_TAG } fro
 const FANOUT = Number(process.env.CSS_RACE_FANOUT ?? 8)
 const ROUNDS = Number(process.env.CSS_RACE_ROUNDS ?? 3)
 const TAG = `${RUN_TAG}_${process.hrtime.bigint().toString(36).slice(-6)}`
+const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
 
 main(async () => {
   console.log(`fan-out ${FANOUT}, rounds ${ROUNDS}, tag ${TAG}`)
@@ -57,6 +58,38 @@ main(async () => {
 // meant to have it, and every audit trail afterwards shows one legitimate
 // registration.
 async function inviteRedemption(admin) {
+  // A device invite code is eight emoji -- `SpaceDeviceAuthRequest::new_device_code`
+  // picks from a ~250-entry emoji alphabet, so that a code can be read aloud
+  // across a workshop. It also means `space_device_auth_requests` cannot be
+  // written at all on a database whose encoding has no emoji, and nothing in
+  // the application or its documentation says the encoding is a requirement.
+  //
+  // So on a non-UTF-8 cluster this scenario asserts the finding instead of the
+  // race. That is a narrowing and it covers exactly one scenario: device-invite
+  // redemption on a non-UTF-8 cluster. The profile-config race below runs
+  // either way, and the nightly UTF-8 run exercises this one for real.
+  if (ENCODING !== 'UTF8') {
+    const probe = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    assertEq(
+      'findings/device-invite-codes-require-a-utf8-database',
+      500,
+      probe.status,
+      `PINNED FINDING, not a passing behaviour: on a ${ENCODING} cluster a device ` +
+        'invite cannot be created at all, because the code is eight emoji. ' +
+        'Device registration is therefore impossible, and nothing says the ' +
+        'application requires a UTF-8 database. If this assertion fails, either ' +
+        'the code alphabet changed or the cluster did -- check which. ' +
+        'See TESTING.md, "Known defects".',
+    )
+    record('race/invite/not-run-on-this-cluster', 'skip',
+      `the invite race needs an invite, and this cluster (${ENCODING}) cannot ` +
+      'store one. The profile-config race below still runs.')
+    return
+  }
+
   let worst = null
 
   for (let round = 0; round < ROUNDS; round += 1) {

@@ -114,37 +114,26 @@ impl Display for AuthError {
 impl std::error::Error for AuthError {}
 
 impl IntoResponse for AuthError {
+    /// Delegated to `ApiError`, which is the one place a status and an error
+    /// envelope are decided.
+    ///
+    /// This used to be a second, complete copy of the mapping, and it built a
+    /// *different body*: `{"error": "..."}` where every handler-originated
+    /// error is `{"success": false, "error": "..."}`. So a rejected request
+    /// carried one shape when an extractor refused it and another when a
+    /// handler did -- across the whole API, on the paths a client is most
+    /// likely to be handling programmatically.
+    ///
+    /// The seeded fuzz tier found it, from a standing start, with an oracle
+    /// that knows nothing about any endpoint: "anything answering with a JSON
+    /// content type and an envelope-shaped body must fill in `success`". It
+    /// reported it on twenty-three different routes in four hundred requests.
+    ///
+    /// Two implementations of one mapping is the same defect this codebase
+    /// already had twice -- in the diesel conversions, and in the role gates.
+    /// Delegation is the only version that cannot drift.
     fn into_response(self) -> Response {
-        let (status, error_message) = match self {
-            AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Wrong credentials"),
-            // 401, not 400. A request with no Authorization header is
-            // well-formed; it is unauthenticated. 400 says "your request was
-            // malformed", which sends a client looking for a syntax problem
-            // that is not there, and it is not a status any HTTP client
-            // treats as "you need to log in".
-            AuthError::MissingCredentials => (StatusCode::UNAUTHORIZED, "Missing credentials"),
-            AuthError::TokenCreation => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token")
-            }
-            AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
-            // 403, not 401. 401 means "authenticate"; 403 means "you have, and
-            // it is still no". Returning 401 here made the frontend log the
-            // user out, because that is what a client is supposed to do with a
-            // 401 and there is no way for it to tell the two situations apart.
-            AuthError::Forbidden(_) => (StatusCode::FORBIDDEN, "Insufficient permissions"),
-            AuthError::UserNotFound => (StatusCode::NOT_FOUND, "User not found"),
-            AuthError::UserInactive => (StatusCode::FORBIDDEN, "User account is inactive"),
-            AuthError::InvalidPassword(_) => (StatusCode::BAD_REQUEST, "Invalid password"),
-            AuthError::InternalError => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
-            }
-        };
-
-        let body = Json(serde_json::json!({
-            "error": error_message,
-        }));
-
-        (status, body).into_response()
+        crate::api::errors::ApiError::from(self).into_response()
     }
 }
 

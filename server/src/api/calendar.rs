@@ -25,8 +25,8 @@ async fn get_calendar_events(
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
+                    "success": false,
                     "error": "Failed to fetch calendar events",
-                    "details": e.to_string()
                 })),
             ))
         }
@@ -50,8 +50,8 @@ async fn refresh_calendar_events(
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
+                    "success": false,
                     "error": "Failed to refresh calendar events",
-                    "details": e.to_string()
                 })),
             ))
         }

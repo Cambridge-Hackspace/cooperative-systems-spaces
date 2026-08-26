@@ -297,7 +297,10 @@ impl DoorService {
                         }
                     };
                     let hash = stable_hash(&bytes);
-                    let mut map = self
+                    // Read-only: the write happens after the publish, under a
+                    // second lock below, after `drop(map)`, so that a failed publish
+                    // does not record the snapshot as sent.
+                    let map = self
                         .last_snapshot_hash
                         .lock()
                         .expect("door snapshot hash map poisoned");

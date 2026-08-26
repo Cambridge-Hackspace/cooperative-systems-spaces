@@ -6,7 +6,6 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::MqttConfig;
-use crate::database::DatabaseManager;
 
 /// Device data payload sent by devices
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +22,6 @@ pub struct DeviceDataPayload {
 #[derive(Clone)]
 pub struct MqttService {
     client: mqtt::AsyncClient,
-    db: Arc<DatabaseManager>,
     namespace: String,
     /// Transport-agnostic inbound dispatcher. Shared with the WebSocket path
     /// so the per-message handling lives in exactly one place.
@@ -32,9 +30,16 @@ pub struct MqttService {
 
 impl MqttService {
     /// Create a new MQTT service and consumer
+    /// The database handle is deliberately absent from the signature.
+    ///
+    /// This service used to hold an `Arc<DatabaseManager>` and never read it:
+    /// every message it receives goes to `DeviceInbound`, which owns the
+    /// per-message handling so that the MQTT and WebSocket paths cannot drift
+    /// apart. A field nobody reads on a service that plainly *could* need one is
+    /// an invitation for the next person to reach for it here rather than there,
+    /// and the two transports would then handle messages differently.
     pub fn new(
         config: &MqttConfig,
-        db: Arc<DatabaseManager>,
         inbound: Arc<crate::devices_inbound::DeviceInbound>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>), Box<dyn std::error::Error>> {
         // Parse broker URL
@@ -77,7 +82,6 @@ impl MqttService {
         Ok((
             Self {
                 client: cli,
-                db,
                 namespace: config.mqtt_namespace.clone(),
                 inbound,
             },

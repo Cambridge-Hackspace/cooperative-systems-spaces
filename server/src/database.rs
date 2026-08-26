@@ -1491,7 +1491,18 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
-    /// Remove tool trainer assignment (soft delete)
+    /// Remove tool trainer assignment (soft delete).
+    ///
+    /// Note the `_param` suffixes. `use ...::dsl::*` brings every *column* of
+    /// the table into scope, so a parameter named `user_id` is shadowed by the
+    /// column named `user_id` -- and `.filter(user_id.eq(user_id))` then
+    /// compiles as `user_id = user_id`, which is true for every row.
+    ///
+    /// A near-duplicate of this function existed with exactly that mistake. It
+    /// was reachable from nothing, which is the only reason it never ran: an
+    /// "unassign this trainer from this tool" that deactivated every trainer
+    /// assignment in the table. rustc's only complaint was "unused variable".
+    /// `checks/tests/dsl_glob_shadowing.rs` now fails on the pattern.
     pub fn remove_tool_trainer(
         &self,
         tool_id_param: uuid::Uuid,
@@ -1512,28 +1523,6 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
-    /// Remove tool trainer assignment by user and tool ID
-    pub fn remove_tool_trainer_by_user_tool(
-        &self,
-        user_id: uuid::Uuid,
-        tool_id: uuid::Uuid,
-    ) -> Result<(), DatabaseError> {
-        use crate::schema::tool_trainers::dsl::*;
-
-        let mut conn = self.get_connection()?;
-
-        diesel::update(
-            tool_trainers
-                .filter(user_id.eq(user_id))
-                .filter(tool_id.eq(tool_id))
-                .filter(is_active.eq(true)),
-        )
-        .set((is_active.eq(false), updated_at.eq(chrono::Utc::now())))
-        .execute(&mut conn)
-        .map(|_| ())
-        .map_err(DatabaseError::Diesel)
-    }
-
     /// Get training history for a specific tool with detailed information
     pub fn get_training_history_for_tool(
         &self,
@@ -1543,10 +1532,51 @@ impl DatabaseManager {
         use crate::schema::{tools, training_records, training_steps, users};
         let mut conn = self.get_connection()?;
 
+        // The filters are applied here rather than ignored.
+        //
+        // They used to be: this function took `query` and never read it, so
+        // every filter on the training-history page -- trainee, trainer, step,
+        // status, date range -- returned the unfiltered list, and pagination
+        // returned every row. rustc said "unused variable: query", which is a
+        // true statement about a feature that silently did nothing.
+        //
+        // `into_boxed` is what makes the conditional filters possible: each
+        // `.filter()` on a bare query changes its type, so they cannot be
+        // applied in an `if`.
+        //
         // Note: Diesel doesn't support joining the same table twice with different aliases easily,
         // so we'll do a simpler query and then enrich the data
-        let results = training_records::table
+        let mut filtered = training_records::table
             .filter(training_records::tool_id.eq(tool_id))
+            .into_boxed();
+
+        if let Some(trainee) = query.trainee_id {
+            filtered = filtered.filter(training_records::trainee_user_id.eq(trainee));
+        }
+        if let Some(trainer) = query.trainer_id {
+            filtered = filtered.filter(training_records::trainer_user_id.eq(trainer));
+        }
+        if let Some(step) = query.step_id {
+            filtered = filtered.filter(training_records::training_step_id.eq(step));
+        }
+        if let Some(status) = query.completion_status.as_deref() {
+            filtered = filtered.filter(training_records::completion_status.eq(status.to_string()));
+        }
+        if let Some(from) = query.start_date {
+            filtered = filtered.filter(training_records::training_date.ge(from));
+        }
+        if let Some(until) = query.end_date {
+            filtered = filtered.filter(training_records::training_date.le(until));
+        }
+
+        // Clamped rather than trusted. `per_page` comes off the query string, so
+        // without a ceiling one request can ask for every training record ever
+        // written -- and this function then issues four more queries per row.
+        let per_page = query.per_page.unwrap_or(50).clamp(1, 500);
+        let page = query.page.unwrap_or(1).max(1);
+        filtered = filtered.limit(per_page).offset((page - 1) * per_page);
+
+        let results = filtered
             .select((
                 training_records::id,
                 training_records::tool_id,

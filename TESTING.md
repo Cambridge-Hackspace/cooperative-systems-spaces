@@ -37,22 +37,33 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 
 | Tier | Question only it answers | State |
 |---|---|---|
-| 1 Pure unit | Is this calculation right, at its boundaries? | **Partial.** 82 Rust tests + 36 TypeScript, from 44 Rust and 0 TypeScript. 51 of the Rust tests run on the workstation; the rest need Linux. |
-| 1b Cross-implementation vectors | Do two independent implementations agree? | **Not started.** Six copies of the ToolGuard wire types still exist. |
-| 2 Component conformance | Did the rendered output drift? | **Not started.** vitest and jsdom are installed and the harness works; no component is mounted yet. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 9 checks in `checks/`, plus 4 in `frontend/tests/structure/`. This tier found more real defects than any other. |
-| 4 Server contract | Do the authorization and enum rules hold, in isolation? | **Started.** `server/src/lib.rs` exists, `DatabaseManager::disconnected()` is the seam, and `server/tests/contract_auth.rs` runs 7 cases in-process with no database. The full route × credential matrix is not written. |
-| 5 Browser vs fake API | What does the app do when a request *fails*? | **Not started.** |
-| 6 Full stack | Does it work against a real database, broker, charset? | **Skeleton only.** `e2e/run.sh` has its stage machinery, `preflight`, and provisioning; no stack is brought up yet. |
-| 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Not started.** |
-| 8 Concurrency | Does the invariant survive simultaneous writers? | **Not started.** Two live races are identified in §8. |
+| 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** ~100 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About half the Rust tests run on the workstation; the rest need Linux. |
+| 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. `wire_kinds.json` is not written and the six ToolGuard wire-type copies still exist. |
+| 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 29 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and it costs seconds to run. |
+| 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
+| 5 Browser vs fake API | What does the app do when a request *fails*? | **Not started.** The transport-failure shape it exists for is covered for two components at Tier 2 instead; that is narrower and is not a substitute. |
+| 6 Full stack | Does it work against a real database, broker, charset? | **Running.** Eight stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply and the 401-for-a-role defect. |
+| 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
+| 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Not started.** |
 | 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Not started.** |
 | 11 Human evidence | Does this make sense to a newcomer? | **Not started.** |
 
 **Formatting and linting are complete and gating.** `rustfmt`, `prettier`,
-`eslint` (type-aware, flat config) and `shellcheck` all pass, and CI fails on
-any of them.
+`eslint` (type-aware, flat config), `shellcheck` and `shfmt` all pass, and CI
+fails on any of them. A `[Vue warn]` during a component test is a test failure,
+with no allowlist.
+
+**Where the findings came from.** Worth recording, because it says where to
+spend the next hour:
+
+| Tier | Real defects it found |
+|---|---|
+| 3 Source-as-data | The unauthenticated ToolGuard endpoints; four broken CLI paths; the `UserRole` wire drift; the duplicate migrations root; the two divergent error conversions |
+| 1 / 2 Unit and component | The unreachable training warning; the iCal `v-html`; the roster refresh that never refreshed; the roster error banner that destroyed the list |
+| 1b Vectors | Both door fail-open sites; the inactive-member divergence between the RFID and QR paths |
+| 6 Full stack | The migration no non-UTF-8 database can apply; the 401-for-an-insufficient-role, which logs the user out; the config loader exiting 0 after refusing to start |
 
 ---
 
@@ -142,7 +153,41 @@ dependency.
 | Frontend tests | `npm test` / `npm run test:coverage` | anywhere |
 | e2e suite's own code | `./e2e/lint.sh` | anywhere with shellcheck + shfmt |
 | Stack battery | `./e2e/run.sh --provision=podman\|docker\|external` | session / CI |
-| Stack stages | `./e2e/run.sh --only preflight` · `--list-stages` | session / CI |
+| One stage | `./e2e/run.sh --only schema` · `--list-stages` | session / CI |
+| Replay a fuzz seed | `CSS_FUZZ_SEED=1234 ./e2e/run.sh --only up,fuzz` | session / CI |
+| Deeper fuzz | `CSS_FUZZ_ITERATIONS=5000 ./e2e/run.sh --only up,fuzz` | session / CI |
+| Harder race | `CSS_RACE_FANOUT=32 CSS_RACE_ROUNDS=10 ./e2e/run.sh --only up,concurrency` | session / CI |
+| A harsher cluster | `CSS_E2E_DB_ENCODING=SQL_ASCII ./e2e/run.sh` | session / CI |
+| The whole loop | `reaper test` | workstation |
+
+### Replaying a fuzz finding
+
+The seed is printed as the first line of `logs/fuzz.log`, recorded in the
+stage's JUnit `<properties>`, and restated as its own case so it is visible in
+a summary that shows nothing else.
+
+**It reproduces the sequence of decisions, not the run.** Entity ids differ
+between runs, so a replayed seed follows a *similar* path rather than an
+identical one — which is stated here rather than implied, because a seed
+advertised as a reproduction and delivering a near-miss wastes more time than no
+seed at all. What it does reproduce reliably is which endpoint, which corpus
+entry and which credential each iteration chose.
+
+What a seed cannot give you, every finding carries anyway: the method, the full
+path, the credential and the body, verbatim, in `stack/fuzz-findings.json` and
+in the failure message. Reproducing by hand needs no seed and no replay.
+
+### A note on the workstation
+
+`npx` is broken on this FreeBSD host — the system npm's vendored
+`@sigstore/sign` is missing `imurmurhash`. Run the binaries directly
+(`node node_modules/vitest/vitest.mjs run`) or use
+`corepack npm@11.6.2`. Nothing in the suite depends on `npx`, deliberately.
+
+`shfmt` has no FreeBSD release binary; build one with
+`GOBIN=~/.local/bin go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1`.
+`e2e/lint.sh` fails rather than skipping when it is absent, because a lint that
+reports a clean tree it did not check is worse than one that does not run.
 
 `checks/` deliberately depends on **none** of the other crates. It reads text,
 so it compiles and runs in seconds on any host — including the one where
@@ -261,43 +306,146 @@ never built server-side.
 
 ## 8. Known defects that tests record rather than fix
 
-Each of these is asserted as-is, so it cannot widen unnoticed, and each says in
-its own comments why it was not fixed here.
+Every one of these is **pinned by an assertion on the current behaviour**, not
+left as a failing test. That is a deliberate choice and it is worth stating why:
+a suite that stays red teaches people to ignore red, and within a month a
+genuine regression is indistinguishable from the wallpaper. An assertion that
+pins a defect in place fails the day somebody fixes it — which is exactly when
+somebody should read it, confirm the fix, and delete the assertion. Each one
+says so in its own failure message.
 
-**A "24 / 7" schedule is closed for sixty seconds every night.** The server
-matches an interval as `start <= now < end`, and the template ends at `23:59`.
-Not fixable in the template: the interval is `HH:MM` parsed to a `NaiveTime`, so
-the end of a day cannot be written down — `24:00` does not parse and `00:00`
-would be rejected by `validate` as `end <= start`. The fix belongs in the
+None of these was fixed here, and each says why.
+
+### Login is case-sensitive, on username and on email
+
+`find_user_by_username` and `find_user_by_email` both filter with a plain `eq`
+and no `lower()` on either side. This is not a collation artifact — it is the
+behaviour on every cluster, including UTF-8 ones.
+
+It matters most for email, which is the field people retype. Somebody who
+registered as `Alice@example.com` and types `alice@example.com` is told "Wrong
+credentials", which is indistinguishable from a wrong password and sends them to
+reset one that was right.
+
+The worse half is not asserted, because it needs two accounts: the unique index
+is on the raw column, so `Alice@example.com` and `alice@example.com` are two
+separate accounts with two separate profiles.
+
+*Why not fixed:* a functional index, a migration, and a decision about rows that
+already collide. That is a product change, not a status-code correction.
+*(`findings/login-is-case-sensitive`, contract stage)*
+
+### Text a non-UTF-8 database cannot store answers 500
+
+Postgres refuses it at the server with SQLSTATE 22P05, and the application turns
+that into a 500 — telling the user the site is broken about an input only they
+can change.
+
+*Why not fixed:* diesel classifies error kinds structurally, and
+`DatabaseErrorInformation` exposes message, details, hint, table, column,
+constraint and statement position — and no SQLSTATE. Recognising 22P05 today
+means matching English prose that changes with the server's `lc_messages`, which
+is a worse failure than the one it fixes: it would work in testing and stop
+working in a deployment whose locale differs, silently, in the direction of
+calling a 4xx a 500. The real fix is encoding-aware validation at the input
+boundary, using the encoding the server reports at boot.
+*(`findings/astral-text-is-a-500-not-a-4xx`, contract stage)*
+
+### The profile-config write is not atomic
+
+`update_profile_config` commits the new version row and *then* writes
+`profiles_enabled` back to the configuration file. The two are not in a
+transaction and there is no compensation. A read-only ConfigMap, a full disk or
+a permissions change leaves a committed version row and returns 500: the admin
+sees a failure and the version history shows their change.
+
+Found because the stack originally mounted its config read-only.
+
+*Why not fixed:* the two stores are a database and a file, so there is no
+transaction to put them in. The fix is either to stop storing
+`profiles_enabled` in two places or to write the file first and roll the row
+back — both product decisions.
+*(`findings/profile-config-write-is-not-atomic`, contract stage)*
+
+### A deactivated member's card still opens the door
+
+`compile_state_for` filters *users* through `list_active_users()`, but an
+explicit `kind=card` rule is not user-scoped — so the card is compiled into
+`allow_cards` and the edge opens the door, while `DoorService::evaluate`
+short-circuits on `!user.is_active` and the QR path refuses the same person. Two
+doors, two answers, one deactivation.
+
+*Why not fixed:* whether deactivating a member should revoke card rules naming
+their card is a product decision. The vectors assert the current behaviour with
+the reasoning written out, and it cannot change unnoticed.
+*(`contracts/door_rules.json`, last case)*
+
+### A "24 / 7" schedule is closed for sixty seconds every night
+
+The server matches an interval as `start <= now < end`, and the template ends at
+`23:59`. Not fixable in the template: the interval is `HH:MM` parsed to a
+`NaiveTime`, so the end of a day cannot be written down — `24:00` does not parse
+and `00:00` is rejected by `validate` as `end <= start`. The fix belongs in the
 server's interval model.
 *(`frontend/tests/unit/schedule_templates.spec.ts`)*
 
-**`hasRole` is fail-open on an unrecognised *required* role.**
+### `hasRole` is fail-open on an unrecognised *required* role
+
 `roleHierarchy[required] || 0` maps an unknown role to level 0, so a guard
 asking for a role that does not exist admits everyone, `Unknown` included.
-Changing it is a behaviour change to the authorization path and belongs with the
-server-side matrix work.
+
+*Why not fixed:* it is a behaviour change on the authorization path, and the
+right shape is a total mapping that fails to compile when a role is added.
 *(`frontend/tests/unit/auth-roles.spec.ts`)*
 
-**A lost-update race on `profile_config_versions`, which surfaces as a 500.**
-`insert_profile_config_version` does `SELECT max(version)` then
-`INSERT version = max+1` inside a `READ COMMITTED` transaction against
-`UNIQUE (version)`. Two concurrent admin edits collide. It becomes a 500 rather
-than a 409 because it returns `DatabaseError::Diesel`, whose conversion
-special-cases only `NotFound` — while the *direct* `From<diesel::result::Error>`
-path does map `UniqueViolation` to `Conflict`. Two conversion paths, two answers
-for one failure. This is Tier 8's sharpest target and is not yet written.
+### Two live races
 
-**Device invite redemption has the same shape.** `register_device` reads the
-invite, checks `used_at`, then marks it used in a separate statement with no
-transaction and no `WHERE used_at IS NULL`.
+**Device-invite redemption.** `register_device` reads the invite, checks
+`used_at`, inserts a device, inserts its auth token, and only then marks the
+invite used — four statements, no transaction, no `WHERE used_at IS NULL`. The
+extra row is the smaller half: a device row carries a standing auth token on the
+toolguard and door surface, so a single-use invite that mints two hands one to
+somebody who was never meant to have it, and the audit trail shows one
+legitimate registration.
 
-**`api/toolguard.rs` hand-rolls device auth** with a bare `HeaderMap` beside a
-`DeviceAuth` extractor that exists for the purpose. Two implementations of one
-check.
+**The profile-config version race.** `insert_profile_config_version` does
+`SELECT max(version)` then `INSERT version = max + 1` under `READ COMMITTED`
+against `UNIQUE (version)`.
 
-**`RegisterView` renders `terms_of_service_md` with `v-html` without converting
-it**, so markdown syntax appears literally.
+Both are exercised by the concurrency stage, asserted on the resource rather
+than the response tally, and each paired with a sequential sibling so that a
+failure to reproduce is distinguishable from a broken setup. A round that finds
+nothing means this scheduling did not lose — not that the window is closed.
+*(`e2e/drivers/concurrency.mjs`)*
+
+### The audit log records the wrong role for the first administrator
+
+`auth::register` writes `"role": "Newbie"` into the audit event unconditionally,
+even when `should_grant_admin_role` has just made the account an admin. The
+account is correct; the record of how it came to exist is not — which is the
+opposite of what an audit trail is for.
+
+### Smaller things, recorded where they live
+
+* `api/toolguard.rs` hand-rolls device auth from a bare `HeaderMap` beside the
+  `DeviceAuth` extractor that exists for the purpose. Two implementations of one
+  check. *(`checks/tests/toolguard_auth.rs`)*
+* ToolGuard parses its query parameters before it authenticates, because `Query`
+  is a `FromRequestParts` extractor and runs before the handler body. A request
+  missing `card` gets 400, not 401.
+  *(`server/tests/contract_matrix.rs::toolguard_parses_parameters_before_it_authenticates`)*
+* `RegisterView` renders `terms_of_service_md` with `v-html` without converting
+  it, so markdown syntax appears literally.
+* `PagesConfig::default()` names two live GitHub repositories, and
+  `PagesService::new` clones whatever is there into a hardcoded `/tmp` path at
+  boot — so a deployment starting with no config file at all clones two
+  repositories belonging to somebody else on its first boot.
+  *(`server/src/config.rs::the_default_config_still_names_two_live_repositories`)*
+* A zero `purchase_price` is indistinguishable from an unknown one, because the
+  row is rendered behind a truthiness check.
+  *(`frontend/tests/components/ToolCard.spec.ts`)*
+* Four frontend calls target training routes the server does not have.
+  *(`checks/tests/route_parity.rs`, `UNRESOLVED`)*
 
 ---
 

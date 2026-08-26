@@ -16,7 +16,8 @@ use crate::{
         },
     },
     auth::{AdminUser, AuthUser, PasswordHashUtil},
-    models::{UpdateUser, UserRole},
+    models::{AuditEventType, UpdateUser, UserRole},
+    profile::AuditLogger,
     AppState,
 };
 
@@ -208,11 +209,52 @@ async fn delete_user(
     }
 
     // Check if user exists
-    state
+    let victim = state
         .db
         .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    // Audited BEFORE the delete, and with the subject in `event_data` rather
+    // than in `user_id`. Two reasons, and both were found by running this:
+    //
+    //   * `audit_logs.user_id` is `REFERENCES users(id) ON DELETE SET NULL`, so
+    //     a row inserted *after* the delete violates the constraint outright --
+    //     and `create_audit_log` is called as `let _ = ..`, so the failure goes
+    //     to a log line nobody reads and the record simply does not exist;
+    //   * even a row inserted before the delete has its `user_id` set to NULL by
+    //     the cascade a moment later, so the only durable record of *who* was
+    //     deleted is the JSON.
+    //
+    // Until now this handler wrote nothing at all. The most destructive
+    // administrative action in the system left no trace, which is the one place
+    // an audit trail is not optional.
+    let audit_logger = AuditLogger::new(state.db.clone());
+    if let Err(e) = audit_logger
+        .log_event(
+            AuditEventType::UserDeletion,
+            None,
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "deleted_user_id": victim.id,
+                "deleted_username": victim.username,
+                "deleted_email": victim.email,
+                "deleted_role": victim.role,
+                "action": "User deleted by admin",
+            }),
+            None,
+            None,
+        )
+        .await
+    {
+        // Refused, not swallowed. If the deletion cannot be recorded, it does
+        // not happen: an unrecorded deletion of a member account is worse than
+        // a deletion that failed and can be retried.
+        tracing::error!("Refusing to delete user {user_id}: audit write failed: {e}");
+        return Err(ApiError::InternalServerError(
+            "Could not record this deletion; the user was not deleted".to_string(),
+        ));
+    }
 
     // Delete user
     state.db.delete_user(user_id).map_err(ApiError::from)?;

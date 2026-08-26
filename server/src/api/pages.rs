@@ -105,11 +105,15 @@ async fn get_wiki_page(
                 default_branch,
             )))
         }
+        // The standard envelope. This used to answer
+        // `{"error": .., "slug": ..}` -- no `success`, and one extra key --
+        // so a client parsing responses generically got a third shape from
+        // these two routes alone.
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "Wiki page not found",
-                "slug": slug
+                "success": false,
+                "error": format!("Wiki page not found: {slug}"),
             })),
         )),
     }
@@ -154,7 +158,8 @@ async fn get_site_index(
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "Site index page not found"
+                "success": false,
+                "error": "Site index page not found",
             })),
         )),
     }
@@ -183,8 +188,8 @@ async fn get_site_page(
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "Site page not found",
-                "slug": slug
+                "success": false,
+                "error": format!("Site page not found: {slug}"),
             })),
         )),
     }
