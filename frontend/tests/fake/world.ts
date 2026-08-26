@@ -47,6 +47,25 @@ export interface Armed {
   status?: number
   /** For failNext: the body. Defaults to the standard error envelope. */
   body?: unknown
+  /**
+   * How many matching requests this fault applies to. Defaults to 1.
+   *
+   * `abortNext` needs more than one, and the reason is a browser behaviour
+   * rather than a preference: **Chromium automatically retries an idempotent
+   * GET when a persistent connection is closed without a response.** So
+   * destroying the socket once produced exactly this in the fake's log --
+   *
+   *     GET /doors/door-1/info left unanswered
+   *     GET /doors/door-1/info -> 200
+   *
+   * -- the retry found the fault already consumed, succeeded, and the
+   * application never saw a transport failure at all. The test then asserted an
+   * error message that had no reason to exist.
+   *
+   * An injection the browser can retry its way past is not an injection. This
+   * is what makes `abortNext` actually abort.
+   */
+  times?: number
 }
 
 const PASSWORD = 'fake-password'
@@ -146,16 +165,33 @@ export class World {
     this.requests = []
   }
 
-  /** Arm a fault for the next request whose path starts with `path`. */
+  /** Arm a fault for the next request(s) whose path starts with `path`. */
   arm(a: Armed) {
-    this.armed.push(a)
+    this.armed.push({
+      ...a,
+      // Three, not one, for abortNext -- see the note on `times`. Three covers
+      // Chromium's single retry with room to spare, and any request the app
+      // itself retries.
+      times: a.times ?? (a.kind === 'abortNext' ? 3 : 1),
+    })
   }
 
-  /** Take the armed fault matching this path, if any. Consumed on use. */
+  /**
+   * The armed fault matching this path, if any.
+   *
+   * Decrements its remaining count and removes it when exhausted, so a
+   * multi-use fault survives a browser-level retry without staying armed for
+   * the rest of the run.
+   */
   takeArmed(path: string): Armed | undefined {
     const i = this.armed.findIndex((a) => path.startsWith(a.path))
     if (i < 0) return undefined
-    return this.armed.splice(i, 1)[0]
+    const armed = this.armed[i]
+    if (!armed) return undefined
+    const remaining = (armed.times ?? 1) - 1
+    if (remaining <= 0) this.armed.splice(i, 1)
+    else this.armed[i] = { ...armed, times: remaining }
+    return armed
   }
 
   userByToken(token: string | undefined): User | undefined {

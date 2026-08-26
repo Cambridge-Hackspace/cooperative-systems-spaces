@@ -227,6 +227,7 @@ const control: Connect.NextHandleFunction = (req, res) => {
         path: asText(body.path),
         status: typeof body.status === 'number' ? body.status : undefined,
         body: body.body,
+        times: typeof body.times === 'number' ? body.times : undefined,
       })
       return ok(res, world.armed.length)
     }

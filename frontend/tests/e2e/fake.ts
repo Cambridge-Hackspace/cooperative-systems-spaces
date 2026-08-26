@@ -27,7 +27,7 @@ export async function arm(
   request: APIRequestContext,
   kind: Injection,
   path: string,
-  extra: { status?: number; body?: unknown } = {}
+  extra: { status?: number; body?: unknown; times?: number } = {}
 ) {
   const res = await request.post('/__fake/arm', {
     data: { kind, path, ...extra },

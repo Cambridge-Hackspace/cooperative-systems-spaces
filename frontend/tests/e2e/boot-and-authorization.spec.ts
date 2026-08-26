@@ -16,6 +16,21 @@ import { expect, test } from '@playwright/test'
 
 import { arm, reset, signIn } from './fake'
 
+/**
+ * A locator for "the application rendered", at any viewport.
+ *
+ * NOT the nav links. `App.vue`'s horizontal menu is `hidden lg:flex`, so on the
+ * mobile project those links do not exist and four boot tests failed on a
+ * selector that only had meaning at desktop width. The brand link in
+ * `navbar-start` carries no responsive hiding and is the honest "something
+ * rendered" signal at both sizes.
+ *
+ * The mobile project exists because DoorCheckinView is opened by a phone camera
+ * and by nothing else. Assertions that only hold at 1280px defeat the point of
+ * running it.
+ */
+const APP_SHELL = 'nav.navbar'
+
 test.beforeEach(async ({ request }) => {
   await reset(request)
 })
@@ -30,7 +45,7 @@ test.describe('the boot sequence', () => {
     // not do, and would fail for a reason that has nothing to do with booting.
     // (That the configured name is not in the header is recorded in
     // TESTING.md; it is a product gap, not a boot failure.)
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
+    await expect(page.locator(APP_SHELL)).toBeVisible()
     await expect(page.getByText(/Initialization Error/i)).toHaveCount(0)
   })
 
@@ -48,7 +63,7 @@ test.describe('the boot sequence', () => {
     // fixed it: delete the test. See TESTING.md, "Known defects".
     await arm(request, 'failNext', '/config/public', { status: 500 })
     await page.goto('/')
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
+    await expect(page.locator(APP_SHELL)).toBeVisible()
     await expect(page.getByText(/Initialization Error|Failed to initialize/i)).toHaveCount(0)
   })
 
@@ -58,7 +73,7 @@ test.describe('the boot sequence', () => {
     await arm(request, 'abortNext', '/config/public')
     await page.goto('/')
 
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
+    await expect(page.locator(APP_SHELL)).toBeVisible()
     await expect(page.locator('body')).not.toBeEmpty()
   })
 
