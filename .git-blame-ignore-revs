@@ -6,3 +6,4 @@
 # line it touches, permanently.
 
 # Repo-wide `cargo fmt --all` under the new rustfmt.toml. No behaviour change.
+44708a620c9411a4bb18e70a286640c436c2a6d9
