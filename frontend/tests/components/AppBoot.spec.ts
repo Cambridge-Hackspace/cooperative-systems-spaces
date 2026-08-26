@@ -86,12 +86,24 @@ beforeEach(() => {
   // render, which reads `config.pages`. A fixture without it throws inside a
   // computed -- which surfaces as an unrelated-looking render error, not as
   // "your fixture is incomplete".
+  // The shape `PublicConfig` declares. A fixture that invents one tests the
+  // component against a server that does not exist -- which is how the browser
+  // tier spent two cycles on a fake whose config had no `pages` block.
   mocks.get.mockResolvedValue({
     success: true,
     data: {
-      site_name: 'Test Space',
-      theme: { dark_mode_enabled: true },
-      pages: { wiki_enabled: false, site_enabled: false, wiki_link: 'None', site_link: 'None' },
+      site: { site_name: 'Test Space' },
+      pages: { wiki_enabled: false, wiki_link: 'None', site_enabled: false, site_link: 'None' },
+      tools: { tool_categories: [] },
+      registration_challenge: {
+        enabled: false,
+        hint: '',
+        throttle_enabled: false,
+        terms_of_service_checkbox: false,
+        terms_of_service_md: '',
+        recaptcha_enabled: false,
+        recaptcha_site_key: '',
+      },
     },
   })
 })

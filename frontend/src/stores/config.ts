@@ -109,35 +109,55 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   // Helper computed values
+  // `?.` on `pages` as well as on `config`, and the difference is the whole
+  // application.
+  //
+  // These four guards used to read `config.value?.pages.wiki_enabled`: the
+  // optional chain covered `config` and stopped there. A config object whose
+  // `pages` block is absent therefore threw
+  // `Cannot read properties of undefined` -- inside a computed, during render.
+  //
+  // Vue stops patching a component whose render function throws. So App.vue
+  // froze on whatever it had last rendered, which is the full-screen
+  // `fixed inset-0 ... z-50` loading overlay: the application drew itself
+  // correctly and then accepted no input at all, with no error visible anywhere
+  // except the console.
+  //
+  // The type's own comment says feature blocks "default to false on older
+  // servers that don't yet emit these blocks" -- so a server that omits one is
+  // an expected case, and the guard was one level too shallow to survive it.
+  //
+  // Found by the browser tier, whose fake happened to serve a config without
+  // `pages`. The fake was wrong; that is what made it a good test.
   function shouldShowWikiInNav(): boolean {
-    if (!config.value?.pages.wiki_enabled) {
+    if (!config.value?.pages?.wiki_enabled) {
       console.log('Wiki not enabled:', config.value?.pages)
       return false
     }
-    const link = config.value.pages.wiki_link
+    const link = config.value?.pages?.wiki_link
     console.log('Wiki link location:', link)
     return link === 'Navigation' || link === 'Both'
   }
 
   function shouldShowSiteInNav(): boolean {
-    if (!config.value?.pages.site_enabled) {
+    if (!config.value?.pages?.site_enabled) {
       console.log('Site not enabled:', config.value?.pages)
       return false
     }
-    const link = config.value.pages.site_link
+    const link = config.value?.pages?.site_link
     console.log('Site link location:', link)
     return link === 'Navigation' || link === 'Both'
   }
 
   function shouldShowWikiOnHomePage(): boolean {
-    if (!config.value?.pages.wiki_enabled) return false
-    const link = config.value.pages.wiki_link
+    if (!config.value?.pages?.wiki_enabled) return false
+    const link = config.value?.pages?.wiki_link
     return link === 'HomePage' || link === 'Both'
   }
 
   function shouldShowSiteOnHomePage(): boolean {
-    if (!config.value?.pages.site_enabled) return false
-    const link = config.value.pages.site_link
+    if (!config.value?.pages?.site_enabled) return false
+    const link = config.value?.pages?.site_link
     return link === 'HomePage' || link === 'Both'
   }
 

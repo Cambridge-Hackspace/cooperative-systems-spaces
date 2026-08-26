@@ -87,6 +87,8 @@ function readBody(req: IncomingMessage): Promise<unknown> {
  */
 const KNOWN_PATHS: RegExp[] = [
   /^\/config\/public$/,
+  /^\/calendar\/events$/,
+  /^\/public\/(schedules|home-links)$/,
   /^\/auth\/(login|logout|me)$/,
   /^\/profiles\/config$/,
   /^\/profiles\/[^/]+$/,
@@ -263,15 +265,35 @@ const api: Connect.NextHandleFunction = (req, res) => {
 
     // --- public ------------------------------------------------------------
     if (path === '/config/public') {
+      // The shape `PublicConfig` declares, not one invented here.
+      //
+      // The first version of this handler returned `site_name` at the top
+      // level and no `pages` block at all -- a shape no server sends. It
+      // produced a genuine finding by accident (four shallow optional chains
+      // that froze the whole application), and it would have gone on producing
+      // false ones forever: a fake whose responses do not match the contract is
+      // a fake that tests the client against a server that does not exist.
       return ok(res, {
-        site_name: 'Fake Space',
-        site_url: 'http://localhost',
-        registration_enabled: true,
-        profiles_enabled: world.profilesEnabled,
-        theme: { dark_mode_enabled: true },
-        toolguard_enabled: true,
-        door_enabled: true,
-        place_enabled: false,
+        site: { site_name: 'Fake Space' },
+        pages: {
+          wiki_enabled: false,
+          wiki_link: 'None',
+          site_enabled: false,
+          site_link: 'None',
+        },
+        tools: { tool_categories: [{ value: 'saw', label: 'Saw' }] },
+        registration_challenge: {
+          enabled: false,
+          hint: '',
+          throttle_enabled: false,
+          terms_of_service_checkbox: false,
+          terms_of_service_md: '',
+          recaptcha_enabled: false,
+          recaptcha_site_key: '',
+        },
+        doors: { enabled: true },
+        calendar: { enabled: false },
+        toolguard: { enabled: true },
       })
     }
 
@@ -284,6 +306,14 @@ const api: Connect.NextHandleFunction = (req, res) => {
     if (path === '/auth/logout' && method === 'POST') {
       return ok(res, null, 'Logged out')
     }
+
+    // Public on the real server -- `Guard::Public` in the contract tier's route
+    // table -- and asked for by the home page whether or not anybody is signed
+    // in. Serving them below the credential gate would have made them 401 here
+    // and 200 in production, which is the fake teaching a spec the wrong thing.
+    if (path === '/calendar/events') return ok(res, [])
+    if (path === '/public/schedules') return ok(res, [])
+    if (path === '/public/home-links') return ok(res, [])
 
     // --- the 404, decided before the credential gate -------------------------
     // The real router mounts `api_routes()` with its own fallback, and axum

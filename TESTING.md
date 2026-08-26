@@ -508,6 +508,29 @@ business. The number is what makes the conversation possible, and it is
 ratcheted so it can only go down.
 *(`frontend/tests/structure/contrast.spec.ts`)*
 
+### A config without a `pages` block froze the entire application
+
+**Fixed.** `shouldShowWikiInNav` and its three siblings read
+`config.value?.pages.wiki_enabled` — the optional chain covered `config` and
+stopped there. A config object whose `pages` block was absent threw
+`Cannot read properties of undefined`.
+
+That would be a minor bug almost anywhere else. Here it is called from a
+computed during `App.vue`'s render, and **Vue stops patching a component whose
+render function throws** — so App.vue froze on whatever it had last drawn, which
+during boot is the full-screen `fixed inset-0 … z-50` loading overlay. The
+application rendered correctly and then accepted no input at all, with nothing
+visible anywhere except a console warning.
+
+`PublicConfig`'s own comment says feature blocks "default to false on older
+servers that don't yet emit these blocks", so a server that omits one is an
+expected case; the guard was one level too shallow to survive it.
+
+Found by the browser tier, whose fake happened to serve a config without
+`pages`. **The fake was wrong, and that is what made it a good test** — it sent
+a shape a server could plausibly send, and the client could not survive it.
+*(`frontend/tests/unit/config-store.spec.ts` — eleven cases, mutation-checked)*
+
 ### A failed configuration load says nothing at all
 
 `configStore.fetchConfig` catches its own errors and does not rethrow, so
