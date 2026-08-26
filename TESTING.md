@@ -247,36 +247,44 @@ limit rather than assert correctness; they say so in their own comments.
 
 Being specific, because "not covered" without a reason is just a gap.
 
-**The Tier 4 matrix is one route wide.** `server/src/lib.rs` now exists, all
-three crates have had the lib/bin split, and `server/tests/contract_auth.rs`
-proves the seam works: seven cases over the real router with a dead pool,
-including the liveness meta-test that makes the negative results mean
-something. What is missing is the breadth — the hand-written table of all 134
-routes × every credential state. The hard part is done; the table is not.
+**Tier 5 has no browser tier at all.** The question it answers — what the app
+does when a request *fails* — is partly answered at Tier 2 for two components,
+by injecting rejections with and without a `response`. That is narrower than
+Tier 5 and is not a substitute: it covers the components somebody wrote a spec
+for, not the ones nobody thought about. The Playwright fake-API plan is in the
+approved design and unwritten. **No browser runs anywhere in this suite yet**,
+which also means Tiers 10 and 11 cannot exist.
 
-**Role gating cannot be asserted offline at all.** `AdminUser` and `StaffUser`
-delegate to `AuthUser`, which loads the user from the database, so 403-for-
-insufficient-role needs a real Postgres. Those rows belong to the container
-tier and are deliberately not folded into the offline file.
+**Tier 9 has no journeys and no oracle.** The design calls for the invariant
+self-test to be written *first*, fed with what a broken server would send, and
+run with no stack at all — an invariant that never fires is indistinguishable
+from a passing suite. Neither exists.
 
-**7 dead-code warnings remain in `css-server`**, down from 32 before the lib
-split. They are unused variables and one never-read field — each needs an
-individual judgement about whether the code is dead or the caller is missing,
-which is exactly the kind of thing that should not be batch-resolved. Until
-they are, `-D warnings` cannot go on and CI does not run clippy.
+**Thirty-five of forty components have no Tier 2 spec.** Five do: the ones
+carrying the fixes the acceptance test reverts, plus the roster. The rest are
+covered only insofar as Tier 3 reads them as text.
 
-**Tiers 5 through 11 are not implemented.** `e2e/run.sh` has its stage
-machinery, argument handling, result recording and a working `preflight`, and
-it refuses an unknown `--only` stage rather than silently running nothing. What
-it does not yet have is any stage that brings a stack up. `STAGES_ALL` lists
-exactly one stage because exactly one is implemented — listing more would mean
-either failing every run or passing without doing anything, and a suite that
-reports green for work it did not do is the specific failure this whole
-exercise exists to prevent.
+**Tier 1b covers doors and nothing else.** `contracts/door_rules.json` is read
+by two crates and found a real divergence. `wire_kinds.json` is not written, and
+**six copies of the ToolGuard `SyncPayload` and `ToolStatus` types still
+exist** — in `edge`, `kiosk`, both toolguard UIs and the server. They have
+already diverged: `toolguard-test-ui` carries an extra `Unknown` variant and
+`kiosk` types its tool id as `String` where everything else uses `Uuid`. Moving
+them into `css_lib::toolguard` is the fix; a source-level check that
+`assert_eq!(definitions_of("SyncPayload").len(), 1)` is the fallback if the GUI
+crates cannot be built.
 
-**Tier 2 has a harness but no component tests.** vitest, `@vue/test-utils` and
-jsdom are installed and 36 tests run against pure modules and stores. No
-component is mounted yet.
+**The stack battery does not exercise several product areas.** There is no
+`accounts`, `doors`, `webhooks`, `text` or `training` stage. The contract stage
+covers authorization across the whole surface and the fuzz stage reaches every
+endpoint with an oracle that knows nothing about any of them — so the *shapes*
+are covered. What is not covered is whether a door unlock actually reaches the
+edge, whether a webhook delivery arrives, or whether a training record survives
+a round trip. Those need per-feature stages and each one is a day's work.
+
+**121 handlers map a database error to a bare 500.** Ratcheted rather than
+fixed, per §8. `checks/tests/database_errors_keep_their_meaning.rs` pins the
+count per file so it can only go down.
 
 **Four frontend calls hit routes that do not exist.** Found by
 `checks/tests/route_parity.rs` and recorded there rather than repointed,
@@ -301,6 +309,17 @@ generic "Failed to …" rather than anything naming a missing route.
 `/api/toolpass` router exists anywhere. They are left pointing at the path that
 does not exist, deliberately: inventing a target would hide that the feature was
 never built server-side.
+
+**`POST /api/tools/user-training/{id}` returns 501.** The route is registered,
+the frontend can call it, and it can never succeed. Recorded by the fuzz tier's
+known-findings list rather than ignored.
+
+**Clippy still does not run in CI.** The build is warning-free now — the last
+four went with the `AuthError` response deletion, an unmutated lock guard and a
+vestigial database handle — so `-D warnings` is finally possible. Turning it on
+is its own unit of work, because `clippy::pedantic` on 19.6k never-linted lines
+produces a commit carrying forty `#[allow]`s, which is the weakening this
+methodology forbids wearing the costume of progress.
 
 ---
 
@@ -459,7 +478,12 @@ Every one of these is scoped to exactly what it covers.
 | `vue/multi-word-component-names` off | `src/App.vue` only | The framework's own convention; the file cannot be renamed. |
 | `no-require-imports` off | the four CommonJS config files at `frontend/` root | tailwind and postcss load them through their own resolvers; converting them to ESM is a build change, not a lint fix. |
 | `vue/no-v-html` disabled per element | 3 elements | Two render markdown already escaped server-side by comrak with `Options::default()` (`render.unsafe_` is false); one renders config text only an administrator can set. The fourth — an external iCal feed — was **not** exempted; it is now interpolated. |
-| clippy not yet in CI | the `rust` job | 30 dead-code warnings in `css-server` that the pending lib split resolves. The rule set is written; the fallout is not cleared. |
+| clippy not yet in CI | the `rust` job | The build is warning-free now, so `-D warnings` is finally possible. Turning clippy on is its own unit of work: `clippy::pedantic` on 19.6k never-linted lines produces a commit carrying forty `#[allow]`s, which is the weakening this methodology forbids wearing the costume of progress. |
+| A blanket-500 budget rather than a fix | 121 sites under `server/src/api` | Converting them all at once is a large diff touching every handler, reviewed by nobody, for status codes nothing yet asserts. `checks/tests/database_errors_keep_their_meaning.rs` pins the count **per file** so a fix in one and a regression in another cannot cancel out — and it fails when a file *improves* without the budget coming down, because a ratchet that does not tighten gives back the ground it won. |
+| The invite-redemption race is not exercised on a non-UTF-8 cluster | that one scenario | A device invite code is eight emoji, so the row cannot be written at all. The finding is asserted instead, and the profile-config race runs either way. `CSS_E2E_DB_ENCODING=UTF8` exercises the race itself. |
+| Two ERROR messages exempted in the `logs` stage | those two strings | Both are correct 404s logged at the wrong level. Each exemption is itself checked for staleness — as a *skip*, not a failure, because those lines come from the fuzz tier reaching for things that do not exist and a short run legitimately may not reach them. Making it a failure would couple the logs stage's result to the fuzz iteration count. |
+| Two `(method, template, status)` triples exempted in the fuzz tier | those two triples | Narrower than a route exemption, which would cover the next real 500 on that route, and much narrower than a status exemption, which would switch the oracle off. A stale entry here **is** a failure: the fuzzer's coverage narrowing is itself the news. |
+| `findings/...` assertions pin defects rather than failing | the eight listed in §8 | A suite that stays red teaches people to ignore red. Each of these fails the day the defect is fixed, with a message saying that failing is the good outcome and the assertion should be deleted. |
 | `expect_used` allowed | workspace | An `expect` carries a message and documents an invariant; an `unwrap` documents nothing. |
 | `print_stdout` allowed | `cli` only | Printing is that crate's entire job. |
 
@@ -472,17 +496,44 @@ have already found and fixed by hand, revert the fixes, and confirm the harness
 rediscovers them.** A methodology that cannot rediscover your known bugs is not
 yet measuring anything.
 
-The four fixes at the head of `feature/tests` are the corpus:
+It is a script, `e2e/acceptance.sh`, rather than something somebody did once:
 
-| Reverted fix | Should be caught by | Status |
-|---|---|---|
-| `92afb4c` door check-in / rule management silent failures | Tier 5 transport-error injection | **not yet** — Tier 5 unwritten |
-| `5c2fa3c` profile page for non-admins | Tier 3 route parity; Tier 6 `contract` | route parity exists; contract stage unwritten |
-| `fdc887c` `--frontend-path` wiring | Tier 6 `devices`, running the **debug** binary — the flag only exists under `#[cfg(debug_assertions)]`, so a release binary ignores it and building only one profile leaves a `cfg` branch nothing executes | **not yet** |
-| `11c4f42` profile config admin-only | Tier 6 `contract`; Tier 8 version race | **not yet** |
+    e2e/acceptance.sh break     # revert the four fixes
+    reaper test                 # the suite is now EXPECTED to fail
+    e2e/acceptance.sh restore
 
-This has **not** been run. It cannot be until the tiers above exist. It is
-recorded here as the gate, not as an achievement.
+Each revert is **surgical** — the behavioural change only, not the whole
+commit. `11c4f42` in particular added a migration, a database module and an
+entire version history alongside the guard change; reverting that wholesale
+produces a tree that fails for reasons which have nothing to do with the
+defect, which looks like success and proves nothing.
+
+The script asserts its own reverts landed. A substitution that matches nothing
+leaves the tree correct and the run green, and the acceptance test then reports
+a pass for work it did not do — the one failure this document exists to
+prevent. Four files must be modified or it restores itself and exits non-zero.
+
+### The corpus, and what should catch each one
+
+| Reverted fix | Caught by |
+|---|---|
+| `92afb4c` door check-in silent failures | Tier 2, `DoorCheckinView.spec.ts` — the transport-failure case. **Only** a rejection with no `response` reaches that branch: axios attaches one to every HTTP error, so a suite injecting 500s never executes it. |
+| `5c2fa3c` profile page for non-admins | Tier 6 `contract` — `5c2fa3c/newbie-reads-profile-config` must be 200. Tier 3 route parity catches it at build time too. |
+| `fdc887c` `--frontend-path` | Tier 6 `devices`, running the **debug** binary against a fixture directory and asserting the *bytes served*. No unit test can see this: `cargo test` compiles one profile, and the release build has a different `create_router` that ignores the flag by design. |
+| `11c4f42` profile config admin-only | Tier 6 `contract` — `11c4f42/newbie-cannot-write-profile-config` must be 403. |
+
+### The nuance on the two guard reverts
+
+`5c2fa3c` and `11c4f42` both change a guard on `/api/profiles/config`, and the
+contract tier's route table states what each guard should be. So reverting the
+guard **alone** is caught by `checks/tests/route_table_matches.rs` during the
+build verb — correctly, and before a stack is ever brought up.
+
+That is a real answer and it is not the one being tested. So those two reverts
+also update the route table to match, which is what a regression looks like when
+somebody changes a guard deliberately and keeps the table in step. Only a tier
+that talks to a running server can catch that, which is exactly the claim the
+contract stage exists to support.
 
 ---
 
