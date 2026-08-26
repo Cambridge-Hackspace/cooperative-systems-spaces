@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
-pub(crate) use css_lib::MqttConfig;
+pub use css_lib::MqttConfig;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};

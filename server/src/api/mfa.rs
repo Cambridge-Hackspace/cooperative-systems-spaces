@@ -18,7 +18,7 @@ use webauthn_rs::prelude::*;
 
 use crate::auth::{AuthService, AuthUser};
 use crate::mfa::{
-    self, generate_recovery_codes, generate_totp_secret_base32, hash_recovery_code, methods,
+    generate_recovery_codes, generate_totp_secret_base32, hash_recovery_code, methods,
     verify_recovery_code, LoginChallenge, WebauthnRegistration,
 };
 use crate::models::{AuditEventType, NewAuditLog, NewUserMfaWebauthn};

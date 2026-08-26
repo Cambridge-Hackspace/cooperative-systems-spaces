@@ -247,7 +247,9 @@ fn with_api_key(url: &str, api_key: Option<&str>) -> String {
 async fn check_status(client: &Client, server: &str) -> Result<()> {
     println!("🔍 Checking ToolPass API status...");
 
-    let url = format!("{}/api/toolguard/", server);
+    // No trailing slash: the router nests `.route("/")` at the bare
+    // prefix, so `/api/toolguard/` is a different path and 404s.
+    let url = format!("{}/api/toolguard", server);
     let response = client
         .get(&url)
         .send()

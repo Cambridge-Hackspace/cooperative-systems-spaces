@@ -2,7 +2,7 @@ use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde_json::json;
 use tracing::error;
 
-use crate::calendar::{CalendarEvent, CalendarService};
+use crate::calendar::CalendarEvent;
 use crate::AppState;
 
 /// Routes for calendar functionality

@@ -174,7 +174,6 @@ impl Default for RegistrationThrottleService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread::sleep;
 
     #[test]
     fn test_throttle_basic_functionality() {

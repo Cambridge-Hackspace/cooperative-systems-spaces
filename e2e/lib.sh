@@ -10,6 +10,20 @@
 # why e2e/reaper-run.sh exists and why run.cmd must never contain a pipe.
 
 # ---------------------------------------------------------------------------
+# What the sourcing script must provide
+# ---------------------------------------------------------------------------
+# Declared here rather than left implicit. shellcheck's
+# check-unassigned-uppercase found these referenced-but-never-assigned, and it
+# was right: this file's dependency on its caller was a convention nobody had
+# written down. Declaring them documents the contract and keeps the check on --
+# a `# shellcheck disable=SC2154` would have hidden the same problem.
+#
+# `OUT`    where results are written (run.sh derives it from $REAPER_OUT)
+# `ENGINE` the container engine binary, empty under --provision=external
+OUT="${OUT:-}"
+ENGINE="${ENGINE:-}"
+
+# ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 log()  { printf '[%s] %s\n' "$(date -u '+%H:%M:%S')" "$*"; }

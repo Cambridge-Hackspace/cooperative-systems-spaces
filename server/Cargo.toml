@@ -75,5 +75,14 @@ regex = "1.10"
 rand = "0.8.5"
 css_lib = {path = "../css_lib"}
 
+[features]
+# Exposes DatabaseManager::disconnected(), the seam the server-contract tier
+# needs. Never enabled by default, so the shipped binary cannot contain it; a
+# structural check asserts no [dependencies] entry anywhere turns it on.
+test-support = []
+
 [dev-dependencies]
 tempfile = "3.0"
+# The self-dev-dependency pattern: integration tests in server/tests/ link
+# against this crate with test-support on, while the binary does not.
+css-server = { path = ".", features = ["test-support"] }

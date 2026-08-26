@@ -78,6 +78,53 @@ pub struct DatabaseManager {
     webhook_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl DatabaseManager {
+    /// A manager whose pool is created **without opening any connection**.
+    ///
+    /// Every query through it fails fast with a pool error, which handlers map
+    /// to a 500. It exists so the request-rejection surface — authentication,
+    /// routing, method dispatch, body decoding — can be tested without a live
+    /// PostgreSQL, which is most of the server's security-relevant behaviour
+    /// and none of which reaches the database. `AuthUser::from_request_parts`
+    /// checks the header, the `Bearer` prefix and the JWT signature *before*
+    /// its single `find_user_by_id`, so every negative case is reachable here.
+    ///
+    /// This is a rig, not a lowered bar. Production [`DatabaseManager::new`] is
+    /// untouched: it keeps its eager connectivity probe and its blocking
+    /// `min_idle` pool build. What is being routed around is an *environment*
+    /// without a database, not a defect in the code.
+    ///
+    /// **500 is the universal "you reached the dead pool" signal**, and it is
+    /// distinct in both status and body shape from every legitimate rejection.
+    /// Tests built on this must therefore:
+    ///
+    /// * assert with `assert_eq!` on an exact status, never `is_client_error()`;
+    /// * treat an unexpected 500 as a failure of the test's own premise rather
+    ///   than as a result — a row whose true offline answer is 500 belongs to
+    ///   the container tier, not here;
+    /// * include a liveness case asserting that one known DB-reaching endpoint
+    ///   *does* return 500, so that wiring a real database into this fixture
+    ///   fails loudly instead of silently reinterpreting every negative result.
+    ///
+    /// Port 1 gives an immediate `ECONNREFUSED` rather than a routable
+    /// blackhole; `min_idle(0)` stops the background reaper churning; the short
+    /// timeout means a DB-reaching handler answers in milliseconds rather than
+    /// after the configured thirty seconds.
+    pub fn disconnected() -> Self {
+        let manager = ConnectionManager::<PgConnection>::new("postgres://127.0.0.1:1/none");
+        let pool = Pool::builder()
+            .max_size(1)
+            .min_idle(Some(0))
+            .connection_timeout(std::time::Duration::from_millis(50))
+            .build_unchecked(manager);
+        Self {
+            pool,
+            webhook_tx: std::sync::OnceLock::new(),
+        }
+    }
+}
+
 impl DatabaseManager {
     /// Create a new database manager with connection pool
     pub fn new(config: &DatabaseConfig) -> Result<Self, DatabaseError> {

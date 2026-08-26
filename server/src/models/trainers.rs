@@ -3,8 +3,6 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::schema::tool_trainers;
-
 // ==================== TOOL TRAINERS ====================
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]

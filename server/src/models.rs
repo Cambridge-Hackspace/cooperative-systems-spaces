@@ -6,7 +6,11 @@ mod places;
 mod profile_config;
 mod schedules;
 mod tools;
-pub(crate) mod trainers;
+// `pub`, not `pub(crate)`: these types appear in the public signatures of
+// handlers and models reachable through AppState, and a public item exposing a
+// crate-private type trips `private_interfaces`, which is a hard error under
+// -D warnings. It also has to be reachable from server/tests/.
+pub mod trainers;
 mod training;
 mod webhooks;
 

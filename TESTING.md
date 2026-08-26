@@ -37,11 +37,11 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 
 | Tier | Question only it answers | State |
 |---|---|---|
-| 1 Pure unit | Is this calculation right, at its boundaries? | **Partial.** 75 Rust tests + 36 TypeScript, from 44 Rust and 0 TypeScript. 47 of the Rust tests run on the workstation; the rest need Linux. |
+| 1 Pure unit | Is this calculation right, at its boundaries? | **Partial.** 82 Rust tests + 36 TypeScript, from 44 Rust and 0 TypeScript. 51 of the Rust tests run on the workstation; the rest need Linux. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Not started.** Six copies of the ToolGuard wire types still exist. |
 | 2 Component conformance | Did the rendered output drift? | **Not started.** vitest and jsdom are installed and the harness works; no component is mounted yet. |
 | 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 9 checks in `checks/`, plus 4 in `frontend/tests/structure/`. This tier found more real defects than any other. |
-| 4 Server contract | Do the authorization and enum rules hold, in isolation? | **Not started.** Needs `server/src/lib.rs`, which does not exist yet — see §7. |
+| 4 Server contract | Do the authorization and enum rules hold, in isolation? | **Started.** `server/src/lib.rs` exists, `DatabaseManager::disconnected()` is the seam, and `server/tests/contract_auth.rs` runs 7 cases in-process with no database. The full route × credential matrix is not written. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Not started.** |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Skeleton only.** `e2e/run.sh` has its stage machinery, `preflight`, and provisioning; no stack is brought up yet. |
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Not started.** |
@@ -202,18 +202,23 @@ limit rather than assert correctness; they say so in their own comments.
 
 Being specific, because "not covered" without a reason is just a gap.
 
-**The server has no library target.** `server/src/main.rs` declares all 18
-modules privately, so `server/tests/` can reach nothing and the entire
-contract tier (Tier 4) is structurally impossible. This is the single biggest
-blocker. The split is mechanical — the crate has only two `pub(crate)` items,
-no `unsafe`, and no doctests — but it has not been done. `cli` and `edge` have
-both had this split already; the server has not.
+**The Tier 4 matrix is one route wide.** `server/src/lib.rs` now exists, all
+three crates have had the lib/bin split, and `server/tests/contract_auth.rs`
+proves the seam works: seven cases over the real router with a dead pool,
+including the liveness meta-test that makes the negative results mean
+something. What is missing is the breadth — the hand-written table of all 134
+routes × every credential state. The hard part is done; the table is not.
 
-**30 dead-code warnings in `css-server`.** Most resolve for free when the lib
-target lands, because a binary's private items are dead unless the binary calls
-them. Until then `-D warnings` cannot be turned on for that crate, so CI does
-not yet run clippy. The rule set is written and ready; it is the fallout that
-is outstanding.
+**Role gating cannot be asserted offline at all.** `AdminUser` and `StaffUser`
+delegate to `AuthUser`, which loads the user from the database, so 403-for-
+insufficient-role needs a real Postgres. Those rows belong to the container
+tier and are deliberately not folded into the offline file.
+
+**7 dead-code warnings remain in `css-server`**, down from 32 before the lib
+split. They are unused variables and one never-read field — each needs an
+individual judgement about whether the code is dead or the caller is missing,
+which is exactly the kind of thing that should not be batch-resolved. Until
+they are, `-D warnings` cannot go on and CI does not run clippy.
 
 **Tiers 5 through 11 are not implemented.** `e2e/run.sh` has its stage
 machinery, argument handling, result recording and a working `preflight`, and

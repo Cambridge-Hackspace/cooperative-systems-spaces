@@ -1,49 +1,29 @@
-use axum::extract::{FromRef, State};
-use axum::http::StatusCode;
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
 use clap::Parser;
+use css_server::devices_inbound::DeviceInbound;
+use css_server::{api, config, root, AppState};
 use dr_metrix_axum::{metrics_handler, PrometheusMetrics};
 use dr_metrix_core::collector::CollectorConfig;
 use dr_metrix_postgres::PostgresMetrics;
-use serde_json::json;
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-mod api;
-mod auth;
-mod calendar;
-mod config;
-mod database;
-mod devices_inbound;
-mod devices_transport;
-mod doors;
-mod mfa;
-mod models;
-mod mqtt;
-mod pages;
-mod profile;
-mod recaptcha;
-mod schedules;
-mod schema;
-mod throttle;
-mod webhooks;
-use crate::devices_inbound::DeviceInbound;
-use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
-use crate::doors::DoorService;
-use crate::mfa::MfaService;
-use crate::mqtt::MqttService;
-use crate::pages::PagesService;
-use crate::webhooks::WebhookDispatcher;
-use calendar::CalendarService;
-use config::{load_config, ConfigManager};
-use database::{initialize_database, DatabaseManager};
-use profile::{AuditLogger, ProfileValidator};
-use recaptcha::RecaptchaService;
-use throttle::RegistrationThrottleService;
+use css_server::calendar::CalendarService;
+use css_server::config::{load_config, ConfigManager};
+use css_server::database::{initialize_database, DatabaseManager};
+use css_server::devices_transport::{DeviceChannelRegistry, DeviceTransport};
+use css_server::doors::DoorService;
+use css_server::mfa::MfaService;
+use css_server::mqtt::MqttService;
+use css_server::pages::PagesService;
+use css_server::profile::{AuditLogger, ProfileValidator};
+use css_server::recaptcha::RecaptchaService;
+use css_server::throttle::RegistrationThrottleService;
+use css_server::webhooks::WebhookDispatcher;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -59,38 +39,6 @@ struct Args {
     /// FRONTEND_PATH environment variable
     #[arg(long, env = "FRONTEND_PATH", default_value = "./frontend/dist")]
     frontend_path: String,
-}
-
-#[derive(Clone)]
-pub struct AppState {
-    pub config_manager: Arc<ConfigManager>,
-    pub db: Arc<DatabaseManager>,
-    pub profile_validator: ProfileValidator,
-    pub audit_logger: AuditLogger,
-    pub throttle_service: Arc<RegistrationThrottleService>,
-    pub recaptcha_service: Arc<RecaptchaService>,
-    pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
-    pub pages_service: Arc<tokio::sync::RwLock<PagesService>>,
-    pub mqtt_service: Option<Arc<MqttService>>,
-    pub webhook_dispatcher: Arc<WebhookDispatcher>,
-    pub mfa_service: MfaService,
-    pub door_service: Arc<DoorService>,
-    /// Transport-agnostic outbound router (WS → MQTT fallback).
-    pub device_transport: Arc<DeviceTransport>,
-    /// Per-device WS session registry; the WS handler inserts/removes itself.
-    pub device_registry: Arc<DeviceChannelRegistry>,
-    /// Shared inbound dispatcher used by both transports.
-    pub device_inbound: Arc<DeviceInbound>,
-}
-
-// Main dashboard handler
-async fn root(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
-    let config = state.config_manager.get_config();
-    Ok(Json(json!({
-        "status": "ok",
-        "site_name": config.site.site_name,
-        "version": env!("CARGO_PKG_VERSION")
-    })))
 }
 
 #[tokio::main]
@@ -341,8 +289,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
 /// Test basic database operations
 async fn test_database_operations(db_manager: &DatabaseManager) -> Result<(), anyhow::Error> {
-    use auth::PasswordHashUtil;
-    use models::NewUser;
+    use css_server::auth::PasswordHashUtil;
+    use css_server::models::NewUser;
 
     // Test database health check
     db_manager.health_check()?;

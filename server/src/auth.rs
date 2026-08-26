@@ -2,7 +2,6 @@ use argon2::{
     password_hash::{PasswordHasher, PasswordVerifier, SaltString},
     Argon2, PasswordHash as ArgonPasswordHash,
 };
-use async_trait::async_trait;
 use axum::{
     extract::{FromRef, FromRequestParts},
     http::{request::Parts, StatusCode},
@@ -102,7 +101,12 @@ impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let (status, error_message) = match self {
             AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Wrong credentials"),
-            AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, "Missing credentials"),
+            // 401, not 400. A request with no Authorization header is
+            // well-formed; it is unauthenticated. 400 says "your request was
+            // malformed", which sends a client looking for a syntax problem
+            // that is not there, and it is not a status any HTTP client
+            // treats as "you need to log in".
+            AuthError::MissingCredentials => (StatusCode::UNAUTHORIZED, "Missing credentials"),
             AuthError::TokenCreation => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token")
             }

@@ -2948,6 +2948,7 @@ dependencies = [
  "clap",
  "comrak",
  "config",
+ "css-server",
  "css_lib",
  "diesel",
  "diesel_migrations",

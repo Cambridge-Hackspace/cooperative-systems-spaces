@@ -1,5 +1,3 @@
-use chrono::Utc;
-use diesel::prelude::*;
 use paho_mqtt as mqtt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -9,8 +7,6 @@ use uuid::Uuid;
 
 use crate::config::MqttConfig;
 use crate::database::DatabaseManager;
-use crate::models::{AuditEventType, NewAuditLog, SpaceDevicePlatform, UpdateSpaceDevice};
-use crate::schema::space_devices;
 
 /// Device data payload sent by devices
 #[derive(Debug, Clone, Serialize, Deserialize)]
