@@ -58,11 +58,18 @@ cache = ["cargo", "target", "npm", "node"]
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
 
 [run]
-# On the guest, not in the toolchain image above. run.sh brings up a pod --
-# postgres, mosquitto, the webhook sink, css-server, css-edge -- and a Rust
-# image has no container-engine client inside it. Host execution needs no
-# toolchain here because build.sh has already produced every binary, and every
-# driver run.sh invokes is itself a container.
+# On the guest, not in the toolchain image above. run.sh brings the stack up
+# with the engine directly, and a Rust image has no container-engine client
+# inside it. Host execution needs no toolchain here because build.sh has already
+# produced every binary, and every driver run.sh invokes is itself a container.
+#
+# Everything the stack runs -- postgres, mosquitto, css-server -- runs with
+# --network host rather than in a pod. That is forced by
+# `[server] bind_address = "127.0.0.1:4399"`: a service bound to one namespace's
+# loopback is unreachable from another, and nothing in the suite would be able
+# to say why. Sharing the host's namespace makes 127.0.0.1 mean the same thing
+# to every component, and it is also what lets CI run the identical stages
+# against services it provisioned itself, with --provision=external.
 exec = "host"
 
 # Not run.sh directly. reaper hands run.cmd to /bin/sh, which is dash, and dash

@@ -26,9 +26,12 @@ ENGINE="${ENGINE:-}"
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
-log()  { printf '[%s] %s\n' "$(date -u '+%H:%M:%S')" "$*"; }
+log() { printf '[%s] %s\n' "$(date -u '+%H:%M:%S')" "$*"; }
 warn() { printf '[%s] WARN  %s\n' "$(date -u '+%H:%M:%S')" "$*" >&2; }
-die()  { printf '[%s] FATAL %s\n' "$(date -u '+%H:%M:%S')" "$*" >&2; exit 1; }
+die() {
+  printf '[%s] FATAL %s\n' "$(date -u '+%H:%M:%S')" "$*" >&2
+  exit 1
+}
 
 stage_banner() { printf '\n========== stage: %s ==========\n' "$1"; }
 
@@ -48,15 +51,15 @@ CASE_FILE=""
 
 cases_begin() { # cases_begin <stage>
   CASE_FILE="${OUT}/.cases-${1}.tsv"
-  : > "${CASE_FILE}"
+  : >"${CASE_FILE}"
 }
 
 # record_case <name> <ok|fail|skip> [message]
 record_case() {
   local name="$1" status="$2" message="${3:-}"
-  printf '%s\t%s\t%s\n' "${name}" "${status}" "${message}" >> "${CASE_FILE}"
+  printf '%s\t%s\t%s\n' "${name}" "${status}" "${message}" >>"${CASE_FILE}"
   case "${status}" in
-    ok)   log "  ok    ${name}" ;;
+    ok) log "  ok    ${name}" ;;
     fail) log "  FAIL  ${name}${message:+ -- ${message}}" ;;
     skip) log "  skip  ${name}${message:+ -- ${message}}" ;;
   esac
@@ -65,7 +68,7 @@ record_case() {
 # assert_eq <name> <expected> <actual> -- the workhorse.
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
-  if [[ "${expected}" == "${actual}" ]]; then
+  if [[ ${expected} == "${actual}" ]]; then
     record_case "${name}" ok
   else
     record_case "${name}" fail "expected [${expected}], got [${actual}]"
@@ -74,21 +77,22 @@ assert_eq() {
 
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
-                         -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
+    -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
 }
 
 # emit_junit <stage> [key=value properties...]
 emit_junit() {
-  local stage="$1"; shift
+  local stage="$1"
+  shift
   local file="${OUT}/junit/${stage}.xml"
   local total=0 failures=0 skipped=0
 
-  [[ -f "${CASE_FILE}" ]] || { : > "${CASE_FILE}"; }
+  [[ -f ${CASE_FILE} ]] || { : >"${CASE_FILE}"; }
   while IFS=$'\t' read -r _ status _; do
     total=$((total + 1))
-    [[ "${status}" == "fail" ]] && failures=$((failures + 1))
-    [[ "${status}" == "skip" ]] && skipped=$((skipped + 1))
-  done < "${CASE_FILE}"
+    [[ ${status} == "fail" ]] && failures=$((failures + 1))
+    [[ ${status} == "skip" ]] && skipped=$((skipped + 1))
+  done <"${CASE_FILE}"
 
   {
     printf '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -111,13 +115,13 @@ emit_junit() {
         skip) printf '<skipped message="%s"/>' "$(xml_escape "${message}")" ;;
       esac
       printf '</testcase>\n'
-    done < "${CASE_FILE}"
+    done <"${CASE_FILE}"
     printf '</testsuite>\n'
-  } > "${file}"
+  } >"${file}"
 
   rm -f "${CASE_FILE}"
   log "stage ${stage}: ${total} case(s), ${failures} failure(s), ${skipped} skipped"
-  return "$(( failures > 0 ? 1 : 0 ))"
+  return "$((failures > 0 ? 1 : 0))"
 }
 
 # ---------------------------------------------------------------------------

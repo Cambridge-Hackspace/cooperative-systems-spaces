@@ -14,7 +14,8 @@ cd "${ROOT}"
 
 failed=''
 run() { # run <label> <command...>
-  local label="$1"; shift
+  local label="$1"
+  shift
   printf '\n=== %s ===\n' "${label}"
   if "$@"; then :; else failed="${failed} ${label}"; fi
 }
@@ -35,8 +36,67 @@ else
   failed="${failed} shfmt(missing)"
 fi
 
+# ---------------------------------------------------------------------------
+# The no-backdoors rule, enforced rather than documented
+# ---------------------------------------------------------------------------
+# Every row the stack battery asserts on is created through the shipping HTTP
+# API or the shipping CLI. The one permitted database access is `sql_ro` in
+# e2e/stack.sh, which sets PGOPTIONS so the *server* refuses a write.
+#
+# A rule of this kind written only as a comment lasts exactly until the first
+# stage that would be quicker to write with an INSERT. So it is a check: any
+# other psql invocation under e2e/ fails the lint, and the fix is to create the
+# row the way a user would.
+#
+# Comments are stripped before the search. The rule is about invocations, and
+# the two files that explain the rule necessarily contain the word -- a check
+# that fired on its own rationale would be switched off within the week.
+check_no_backdoors() {
+  local f line offenders=''
+  while IFS= read -r f; do
+    case "${f}" in
+      e2e/stack.sh | e2e/lint.sh) continue ;;
+    esac
+    line="$(sed -e 's://.*$::' -e 's:#.*$::' "${f}" | grep -n 'psql' || true)"
+    [[ -n ${line} ]] && offenders="${offenders}${f}:${line}"$'\n'
+  done < <(git ls-files 'e2e/*.sh' 'e2e/*.mjs' 'e2e/*/*.sh' 'e2e/*/*.mjs')
+
+  if [[ -z ${offenders} ]]; then
+    echo "no psql invocation outside sql_ro"
+    return 0
+  fi
+  echo "psql outside e2e/stack.sh's sql_ro:"
+  printf '%s' "${offenders}"
+  return 1
+}
+run "no-backdoors" check_no_backdoors
+
+# ---------------------------------------------------------------------------
+# The drivers parse
+# ---------------------------------------------------------------------------
+# `node --check` is not a linter, but it is the difference between a syntax
+# error surfacing here and surfacing as a stage that "produced no cases" forty
+# minutes into a session.
+check_drivers() {
+  local f rc=0
+  for f in e2e/drivers/*.mjs; do
+    [[ -e ${f} ]] || continue
+    if node --check "${f}"; then
+      echo "ok ${f}"
+    else
+      rc=1
+    fi
+  done
+  return "${rc}"
+}
+if command -v node >/dev/null 2>&1; then
+  run "drivers" check_drivers
+else
+  printf '\n=== drivers ===\nnode not installed; refusing to report a clean tree\n'
+  failed="${failed} drivers-missing-node"
+fi
 printf '\n'
-if [[ -n "${failed}" ]]; then
+if [[ -n ${failed} ]]; then
   echo "FAILED:${failed}"
   exit 1
 fi

@@ -30,7 +30,7 @@ OUT="${REAPER_OUT:-${HERE}/out}"
 # too is what makes out/ mean *this* run at both ends -- otherwise a trace from
 # three cycles ago sits beside a fresh one looking identical.
 rm -rf "${OUT:?}/junit" "${OUT:?}/logs" "${OUT:?}/evidence" \
-       "${OUT:?}/playwright-report" "${OUT:?}/test-results"
+  "${OUT:?}/playwright-report" "${OUT:?}/test-results"
 mkdir -p "${OUT}"/{junit,logs}
 
 status=0
@@ -39,13 +39,13 @@ status=0
 
 collect() { # collect <src> <name-under-out>
   local src="$1" name="$2"
-  [[ -e "${src}" ]] || return 0
+  [[ -e ${src} ]] || return 0
   rm -rf "${OUT:?}/${name}"
   cp -R "${src}" "${OUT}/${name}"
   echo "collected ${name}"
 }
 collect "${ROOT}/frontend/playwright-report" playwright-report
-collect "${ROOT}/frontend/test-results"      test-results
+collect "${ROOT}/frontend/test-results" test-results
 
 # Which of these belong to *this* run. The backward sync never deletes -- it is
 # not authoritative for what was in out/ beforehand -- so without this a stale
@@ -56,6 +56,6 @@ collect "${ROOT}/frontend/test-results"      test-results
   echo "arguments:    $*"
   echo "build:"
   sed 's/^/  /' "${ROOT}/e2e/artifacts/BUILD.txt" 2>/dev/null || echo "  (no BUILD.txt)"
-} > "${OUT}/RUN.txt"
+} >"${OUT}/RUN.txt"
 
 exit "${status}"

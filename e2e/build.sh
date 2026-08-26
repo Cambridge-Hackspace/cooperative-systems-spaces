@@ -83,11 +83,11 @@ cargo build --locked --release \
 cargo build --locked --bin css-edge
 
 mkdir -p e2e/artifacts
-install -m 0755 "${CARGO_TARGET_DIR}/release/css-server"        e2e/artifacts/css-server
-install -m 0755 "${CARGO_TARGET_DIR}/release/css-cli"           e2e/artifacts/css-cli
+install -m 0755 "${CARGO_TARGET_DIR}/release/css-server" e2e/artifacts/css-server
+install -m 0755 "${CARGO_TARGET_DIR}/release/css-cli" e2e/artifacts/css-cli
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-webhook-recvr" e2e/artifacts/css-webhook-recvr
-install -m 0755 "${CARGO_TARGET_DIR}/release/css-edge"          e2e/artifacts/css-edge
-install -m 0755 "${CARGO_TARGET_DIR}/debug/css-edge"            e2e/artifacts/css-edge-dbg
+install -m 0755 "${CARGO_TARGET_DIR}/release/css-edge" e2e/artifacts/css-edge
+install -m 0755 "${CARGO_TARGET_DIR}/debug/css-edge" e2e/artifacts/css-edge-dbg
 
 # run.sh's preflight stage asserts this commit matches the working tree, so a
 # run that skipped the build cannot silently test yesterday's binaries.
@@ -96,7 +96,7 @@ install -m 0755 "${CARGO_TARGET_DIR}/debug/css-edge"            e2e/artifacts/cs
   echo "commit: $(git rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "dirty:  $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   echo "rustc:  $(rustc --version)"
-} > e2e/artifacts/BUILD.txt
+} >e2e/artifacts/BUILD.txt
 
 log "build complete"
 cat e2e/artifacts/BUILD.txt
