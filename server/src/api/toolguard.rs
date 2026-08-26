@@ -200,8 +200,11 @@ async fn boot_reset(
 /// GET /api/toolguard/tool-on
 async fn tool_on(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(req): Query<ToolRequest>,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
+    authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
+
     tracing::info!("Tool on request: card={}, tool_id={}", req.card, req.tool_id);
 
     let user = match find_user_by_card(&state, &req.card).await? {
@@ -292,8 +295,11 @@ async fn tool_on(
 /// GET /api/toolguard/tool-off
 async fn tool_off(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(req): Query<ToolRequest>,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
+    authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
+
     tracing::info!("Tool off request: card={}, tool_id={}", req.card, req.tool_id);
 
     let user = match find_user_by_card(&state, &req.card).await? {
@@ -336,8 +342,11 @@ async fn tool_off(
 /// GET /api/toolguard/tool-log
 async fn tool_log(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(req): Query<ToolLogRequest>,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
+    authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
+
     tracing::info!(
         "Tool log request: card={}, tool_id={}, seconds={}, temp={:?}",
         req.card, req.tool_id, req.seconds, req.temperature
@@ -517,6 +526,56 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
             Err(e) => tracing::warn!("Failed to build sync payload for device {}: {}", device_id, e),
         }
     }
+}
+
+/// Authenticate a ToolGuard tool operation.
+///
+/// These endpoints energise and de-energise physical machinery and are
+/// reachable by URL, so until this existed anyone who could reach the server
+/// could turn a tool on for any card by visiting a link. `sync` and
+/// `boot_reset` beside them authenticated correctly; `tool_on`, `tool_off` and
+/// `tool_log` did not, and the mechanism meant to protect them —
+/// [`validate_api_key`], plus the `api_key` field on the request types — was
+/// fully written and called from nowhere.
+///
+/// Two accepted credentials, in cost order:
+///
+/// 1. A registered device's Bearer token. This is the normal path: the edge
+///    already sends `bearer_auth` on all three of these calls, so it needed no
+///    change to keep working — the server was simply discarding a credential
+///    it was being given.
+/// 2. A per-tool `external_api_key` or the global `toolguard.global_api_key`,
+///    for controllers that authenticate that way instead. Checked second
+///    because it needs a database round-trip to resolve the tool first.
+async fn authorize_toolguard(
+    state: &AppState,
+    headers: &HeaderMap,
+    api_key: Option<&str>,
+    toolguard_id: &str,
+) -> Result<(), ApiError> {
+    match extract_device_auth(state, headers).await {
+        Ok(_) => return Ok(()),
+        // A database fault must stay a database fault. Folding it into "not
+        // authenticated" would report an outage as a credential problem and
+        // send whoever is holding a dead tool looking in the wrong place.
+        Err(e @ ApiError::InternalServerError(_)) => return Err(e),
+        Err(_) => {}
+    }
+
+    if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+        let tool = find_tool_by_toolguard_id(state, toolguard_id).await?;
+        if validate_api_key(state, key, tool.as_ref()).await? {
+            return Ok(());
+        }
+    }
+
+    tracing::warn!(
+        "Rejected unauthenticated ToolGuard request for tool_id={}",
+        toolguard_id
+    );
+    Err(ApiError::Unauthorized(
+        "ToolGuard operations require a registered device token or a valid API key".to_string(),
+    ))
 }
 
 async fn validate_api_key(state: &AppState, api_key: &str, tool: Option<&crate::models::Tool>) -> Result<bool, ApiError> {
