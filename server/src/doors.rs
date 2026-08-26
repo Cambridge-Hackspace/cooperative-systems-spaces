@@ -78,16 +78,7 @@ impl DoorService {
     /// field. Accepts either a scalar string or an array of strings (matches
     /// what the new TextArray profile-field shape stores).
     fn cards_for_user(&self, user: &User) -> Vec<String> {
-        match user.profile.get(&self.profile_field) {
-            Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect(),
-            _ => Vec::new(),
-        }
+        cards_in_profile(&user.profile, &self.profile_field)
     }
 
     // ----- state compilation -------------------------------------------
@@ -137,62 +128,14 @@ impl DoorService {
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
     ) -> (BTreeSet<String>, BTreeSet<String>) {
-        let mut allow = BTreeSet::<String>::new();
-        let mut deny = BTreeSet::<String>::new();
-
-        for rule in rules {
-            // Rule's schedule, if any, must be in-window right now;
-            // otherwise the rule contributes nothing to either bucket.
-            if !schedule_is_active_now(rule.schedule_id, schedules, tz) {
-                continue;
-            }
-            let effect = DoorRuleEffect::parse(&rule.effect).unwrap_or(DoorRuleEffect::Allow);
-            let kind = match DoorRuleKind::parse(&rule.kind) {
-                Some(k) => k,
-                None => {
-                    warn!("Skipping door rule with unknown kind '{}'", rule.kind);
-                    continue;
-                }
-            };
-            let bucket = match effect {
-                DoorRuleEffect::Allow => &mut allow,
-                DoorRuleEffect::Deny => &mut deny,
-            };
-            match kind {
-                DoorRuleKind::Card => {
-                    bucket.insert(rule.value.clone());
-                }
-                DoorRuleKind::User => {
-                    if let Ok(uid) = Uuid::parse_str(&rule.value) {
-                        if let Some(u) = active_users.iter().find(|u| u.id == uid) {
-                            for c in self.cards_for_user(u) {
-                                bucket.insert(c);
-                            }
-                        }
-                    } else {
-                        warn!("Door rule of kind=user has non-UUID value '{}'", rule.value);
-                    }
-                }
-                DoorRuleKind::Role => {
-                    let required = match role_from_str(&rule.value) {
-                        Some(r) => r,
-                        None => {
-                            warn!("Door rule of kind=role has unknown role '{}'", rule.value);
-                            continue;
-                        }
-                    };
-                    for u in active_users.iter() {
-                        if role_level(&u.role) >= role_level(&required) {
-                            for c in self.cards_for_user(u) {
-                                bucket.insert(c);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        (allow, deny)
+        expand_rules_at(
+            rules,
+            active_users,
+            schedules,
+            tz,
+            &self.profile_field,
+            Utc::now(),
+        )
     }
 
     // ----- publishing ---------------------------------------------------
@@ -281,10 +224,15 @@ impl DoorService {
 
         for rule in &rules {
             // Schedule-gated rules are silent when their window is closed.
-            if !schedule_is_active_now(rule.schedule_id, &schedules, tz) {
+            if !schedule_is_active_at(rule.schedule_id, &schedules, tz, Utc::now()) {
                 continue;
             }
-            let effect = DoorRuleEffect::parse(&rule.effect).unwrap_or(DoorRuleEffect::Allow);
+            // Same fail-open as the compilation path: an unrecognised effect
+            // used to be treated as allow. Skipped now.
+            let effect = match DoorRuleEffect::parse(&rule.effect) {
+                Some(e) => e,
+                None => continue,
+            };
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
                 None => continue,
@@ -395,10 +343,11 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 
 /// Resolve a rule's schedule (by id) and ask whether *now* falls in any
 /// interval. Rules with no schedule are always active.
-fn schedule_is_active_now(
+fn schedule_is_active_at(
     schedule_id: Option<Uuid>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
+    now: chrono::DateTime<Utc>,
 ) -> bool {
     let sid = match schedule_id {
         Some(id) => id,
@@ -420,7 +369,7 @@ fn schedule_is_active_now(
             return false;
         }
     };
-    crate::schedules::matches_now(&intervals, tz)
+    crate::schedules::matches_at(&intervals, tz, now)
 }
 
 fn role_level(role: &UserRole) -> u8 {
@@ -442,4 +391,117 @@ fn role_from_str(s: &str) -> Option<UserRole> {
         "admin" => Some(UserRole::Admin),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pure rule expansion
+// ---------------------------------------------------------------------------
+//
+// Promoted out of `DoorService` so they can be driven by the shared vector file
+// in `contracts/door_rules.json`. Neither ever touched `self.db` -- the only
+// thing they needed from `self` was `profile_field` -- so this is a move, not a
+// rewrite, and the methods above are now one-line wrappers over these.
+//
+// Three implementations have to agree about door access: this compilation, the
+// QR path in `DoorService::evaluate`, and `DoorsState::decide` on the edge.
+// None of them is the oracle; the vector file is.
+
+/// Every card value stored at `field` in a user's profile JSONB.
+///
+/// Accepts a scalar string or an array of strings, matching what the TextArray
+/// profile-field shape stores.
+pub fn cards_in_profile(profile: &Value, field: &str) -> Vec<String> {
+    match profile.get(field) {
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Expand access rules into flat allow/deny card sets, as of `now`.
+pub fn expand_rules_at(
+    rules: &[DoorAccessRule],
+    active_users: &[User],
+    schedules: &[Schedule],
+    tz: chrono_tz::Tz,
+    profile_field: &str,
+    now: chrono::DateTime<Utc>,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut allow = BTreeSet::<String>::new();
+    let mut deny = BTreeSet::<String>::new();
+
+    for rule in rules {
+        // A schedule-gated rule contributes nothing while its window is shut.
+        if !schedule_is_active_at(rule.schedule_id, schedules, tz, now) {
+            continue;
+        }
+
+        // An unparseable effect used to default to Allow. On a door, that is a
+        // fail-open: a typo in a rule's effect column silently granted access
+        // to whatever the rule named. It is skipped now, and loudly.
+        let effect = match DoorRuleEffect::parse(&rule.effect) {
+            Some(e) => e,
+            None => {
+                warn!(
+                    "Skipping door rule {} with unrecognised effect '{}' -- refusing to \
+                     guess; an unknown effect used to be treated as allow",
+                    rule.id, rule.effect
+                );
+                continue;
+            }
+        };
+
+        let kind = match DoorRuleKind::parse(&rule.kind) {
+            Some(k) => k,
+            None => {
+                warn!("Skipping door rule with unknown kind '{}'", rule.kind);
+                continue;
+            }
+        };
+
+        let bucket = match effect {
+            DoorRuleEffect::Allow => &mut allow,
+            DoorRuleEffect::Deny => &mut deny,
+        };
+
+        match kind {
+            DoorRuleKind::Card => {
+                bucket.insert(rule.value.clone());
+            }
+            DoorRuleKind::User => {
+                if let Ok(uid) = Uuid::parse_str(&rule.value) {
+                    if let Some(u) = active_users.iter().find(|u| u.id == uid) {
+                        for c in cards_in_profile(&u.profile, profile_field) {
+                            bucket.insert(c);
+                        }
+                    }
+                } else {
+                    warn!("Door rule of kind=user has non-UUID value '{}'", rule.value);
+                }
+            }
+            DoorRuleKind::Role => {
+                let required = match role_from_str(&rule.value) {
+                    Some(r) => r,
+                    None => {
+                        warn!("Door rule of kind=role has unknown role '{}'", rule.value);
+                        continue;
+                    }
+                };
+                for u in active_users.iter() {
+                    if role_level(&u.role) >= role_level(&required) {
+                        for c in cards_in_profile(&u.profile, profile_field) {
+                            bucket.insert(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (allow, deny)
 }
