@@ -1,0 +1,10 @@
+# Prettier resolves .prettierignore relative to its working directory, and the
+# lint scripts run from this directory -- so the repo-root copy is not consulted
+# here. Without this file, `prettier --check .` walks dist/ and fails on
+# generated bundles the moment anyone has run a build.
+dist/
+coverage/
+node_modules/
+test-results/
+playwright-report/
+package-lock.json
