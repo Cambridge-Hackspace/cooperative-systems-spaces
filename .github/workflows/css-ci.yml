@@ -110,13 +110,18 @@ jobs:
       - working-directory: frontend_edge
         run: npm run build
 
-  # --- The e2e suite's own code ----------------------------------------------
+  # --- The e2e suite's own code, and the Tier 9 oracle ------------------------
+  # Runs on every PR and costs seconds. It needs no stack, and the tier it
+  # validates does not run on every PR -- which is exactly why the thing that
+  # decides whether that tier means anything should.
   shell:
     runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
       - uses: mfinelli/setup-shfmt@v3
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
       - run: ./e2e/lint.sh
 
   # --- Tiers 1, 1b, 3 and 4, Rust side ---------------------------------------

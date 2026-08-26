@@ -143,6 +143,25 @@ check_corpus() {
 if command -v node >/dev/null 2>&1; then
   run "corpus" check_corpus
 fi
+
+# ---------------------------------------------------------------------------
+# The Tier 9 oracle, before the tier
+# ---------------------------------------------------------------------------
+# Tier 9's whole value rests on its invariants being right: a journey that runs
+# a thousand actions past a broken invariant reports a thousand successes, and
+# nothing in the output distinguishes that from a healthy system.
+#
+# So the self-test feeds each invariant what a broken server would send and
+# requires it to fire -- and requires it to stay quiet on a healthy world, which
+# is the half that catches an invariant that fires on everything.
+#
+# It runs here rather than in the stack battery because it needs no stack, no
+# database and no network. The cheapest thing to run is the thing that decides
+# whether the most expensive thing means anything.
+if command -v node >/dev/null 2>&1; then
+  run "tier-9-oracle" node e2e/journeys/selftest.mjs
+fi
+
 printf '\n'
 if [[ -n ${failed} ]]; then
   echo "FAILED:${failed}"
