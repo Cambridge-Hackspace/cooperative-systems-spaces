@@ -28,7 +28,7 @@
 // on the update, or a transaction, and the finding is worth acting on whether
 // or not a later round reproduces it.
 
-import { GET, POST, PUT, account, record, ok, assertEq, main, RUN_TAG } from './lib.mjs'
+import { GET, POST, PUT, adminAccount, record, ok, assertEq, main, RUN_TAG } from './lib.mjs'
 
 const FANOUT = Number(process.env.CSS_RACE_FANOUT ?? 8)
 const ROUNDS = Number(process.env.CSS_RACE_ROUNDS ?? 3)
@@ -36,7 +36,7 @@ const TAG = `${RUN_TAG}_${process.hrtime.bigint().toString(36).slice(-6)}`
 
 main(async () => {
   console.log(`fan-out ${FANOUT}, rounds ${ROUNDS}, tag ${TAG}`)
-  const admin = await account(`race_admin_${TAG}`, { email: 'admin@e2e.invalid' })
+  const admin = await adminAccount(`race_admin_${TAG}`)
 
   await inviteRedemption(admin)
   await profileConfigVersions(admin)

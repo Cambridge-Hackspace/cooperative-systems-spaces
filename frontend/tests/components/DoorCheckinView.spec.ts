@@ -26,18 +26,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
-const info = vi.fn()
-const checkin = vi.fn()
+type Envelope = Promise<{ success: boolean; error?: string; data?: unknown }>
+
+// `vi.hoisted`, because `vi.mock` runs before every `const` in this file. See
+// the same note in RosterTable.spec.ts: the failure surfaces inside the
+// component's own import and reads like an application problem.
+const mocks = vi.hoisted(() => ({ info: vi.fn(), checkin: vi.fn() }))
 
 vi.mock('@/utils/api', () => ({
-  doorsApi: {
-    info: (...args: unknown[]) => info(...args),
-    checkin: (...args: unknown[]) => checkin(...args),
-  },
+  doorsApi: { info: mocks.info, checkin: mocks.checkin },
   // The module also exports apiClient; anything importing it in this tree gets
   // a stub rather than an axios instance that would try to reach the network.
   apiClient: {},
 }))
+
+const info = mocks.info as unknown as ReturnType<typeof vi.fn<(id: string) => Envelope>>
+const checkin = mocks.checkin as unknown as ReturnType<typeof vi.fn<(id: string) => Envelope>>
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { id: '00000000-0000-4000-8000-000000000001' } }),
@@ -110,7 +114,10 @@ describe('the four states of the door', () => {
   })
 
   it('falls back to a generic reason rather than showing nothing', async () => {
-    info.mockResolvedValue({ success: true, data: door({ you_are_authorized: false, reason: null }) })
+    info.mockResolvedValue({
+      success: true,
+      data: door({ you_are_authorized: false, reason: null }),
+    })
     const wrapper = await mountView()
     expect(wrapper.find('.alert-error').text()).toContain('No matching access rule.')
   })

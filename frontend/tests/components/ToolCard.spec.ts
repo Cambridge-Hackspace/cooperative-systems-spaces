@@ -137,7 +137,9 @@ describe('the two faces', () => {
     for (const status of STATUSES) {
       const wrapper = mountCard({ tool: tool({ status }), canManage: false })
       expect(wrapper.find('select').exists(), status).toBe(false)
-      expect(wrapper.findAll('button').length, `${status}: member has buttons`).toBeLessThanOrEqual(1)
+      expect(wrapper.findAll('button').length, `${status}: member has buttons`).toBeLessThanOrEqual(
+        1
+      )
     }
   })
 })
@@ -186,7 +188,10 @@ describe('status formatting', () => {
   })
 
   it('title-cases a multi-word category the same way', () => {
-    const wrapper = mountCard({ tool: tool({ category: ToolCategory.LaserCutting }), canManage: false })
+    const wrapper = mountCard({
+      tool: tool({ category: ToolCategory.LaserCutting }),
+      canManage: false,
+    })
     expect(wrapper.find('.tool-category').text()).toBe('Laser Cutting')
   })
 })
@@ -229,7 +234,7 @@ describe('the optional detail rows', () => {
     const wrapper = mountCard({ tool: tool({ purchase_price: 0 }), canManage: false })
     expect(
       wrapper.findAll('.info-row').some((r) => r.text().startsWith('Price:')),
-      'a zero purchase price is currently indistinguishable from an unknown one',
+      'a zero purchase price is currently indistinguishable from an unknown one'
     ).toBe(false)
   })
 })
@@ -245,7 +250,7 @@ describe('the manager status-change flow', () => {
     // Otherwise every click on the select arms an Update button that would
     // write a no-op status-change event into the tool's history.
     const wrapper = mountCard({ tool: tool({ status: ToolStatus.Idle }), canManage: true })
-    wrapper.find('select').setValue('idle')
+    void wrapper.find('select').setValue('idle')
     expect(wrapper.find('.status-controls button').exists()).toBe(false)
   })
 

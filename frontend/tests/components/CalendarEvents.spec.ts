@@ -57,11 +57,15 @@ async function mountWith(events: Event[] | { status: number }) {
   // gives the mock an empty argument tuple, so `calls[n][0]` is a type error --
   // and vue-tsc checks this directory as part of `npm run build`. Naming it also
   // makes the URL assertion below express what it is asserting.
-  const fetchMock = vi.fn(async (_url: string) => {
-    if (Array.isArray(events)) {
-      return { ok: true, statusText: 'OK', json: async () => events } as unknown as Response
-    }
-    return { ok: false, statusText: 'Service Unavailable' } as unknown as Response
+  // The URL parameter is declared but unused here: it exists so the mock's
+  // call tuple has an element the URL assertions can read. `void url` is the
+  // idiom the lint accepts for that, and it says so out loud.
+  const fetchMock = vi.fn((url: string): Promise<Response> => {
+    void url
+    const body = Array.isArray(events)
+      ? { ok: true, statusText: 'OK', json: () => Promise.resolve(events) }
+      : { ok: false, statusText: 'Service Unavailable' }
+    return Promise.resolve(body as unknown as Response)
   })
   vi.stubGlobal('fetch', fetchMock)
 
@@ -124,7 +128,7 @@ describe('the four states', () => {
   it('shows the spinner before the first response arrives, and nothing else', () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => new Promise(() => {})),
+      vi.fn(() => new Promise(() => {}))
     )
     const wrapper = mount(CalendarEvents)
 
@@ -161,11 +165,11 @@ describe('the four states', () => {
     // its own: the reader cannot tell which one is current.
     const responses = [
       { ok: false, statusText: 'Bad Gateway' },
-      { ok: true, statusText: 'OK', json: async () => [event()] },
+      { ok: true, statusText: 'OK', json: () => Promise.resolve([event()]) },
     ]
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => responses.shift() as unknown as Response),
+      vi.fn(() => Promise.resolve(responses.shift() as unknown as Response))
     )
 
     const wrapper = mount(CalendarEvents)
@@ -183,7 +187,7 @@ describe('the four states', () => {
     for (const payload of [[], [event()], { status: 500 }] as const) {
       const { wrapper } = await mountWith(payload as Event[] | { status: number })
       const shown = ['.loading-state', '.error-state', '.empty-state', '.events-list'].filter((s) =>
-        wrapper.find(s).exists(),
+        wrapper.find(s).exists()
       )
       expect(shown, JSON.stringify(payload)).toHaveLength(1)
     }
@@ -202,7 +206,9 @@ describe('the event list', () => {
   })
 
   it('carries the calendar colour onto the card and the tag', async () => {
-    const { wrapper } = await mountWith([event({ calendar_color: '#ff5733', calendar_name: 'Shop' })])
+    const { wrapper } = await mountWith([
+      event({ calendar_color: '#ff5733', calendar_name: 'Shop' }),
+    ])
     const card = wrapper.find('.event-card')
     expect(card.attributes('style')).toContain('border-left-color: rgb(255, 87, 51)')
     const tag = wrapper.find('.event-calendar-tag')
@@ -249,12 +255,12 @@ describe('the refresh', () => {
 
   it('replaces the list rather than appending to it', async () => {
     const responses = [
-      { ok: true, statusText: 'OK', json: async () => [event({ title: 'Old' })] },
-      { ok: true, statusText: 'OK', json: async () => [event({ title: 'New' })] },
+      { ok: true, statusText: 'OK', json: () => Promise.resolve([event({ title: 'Old' })]) },
+      { ok: true, statusText: 'OK', json: () => Promise.resolve([event({ title: 'New' })]) },
     ]
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => responses.shift() as unknown as Response),
+      vi.fn(() => Promise.resolve(responses.shift() as unknown as Response))
     )
     const wrapper = mount(CalendarEvents)
     await flushPromises()
@@ -283,7 +289,7 @@ describe('the refresh', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => new Promise(() => {})),
+      vi.fn(() => new Promise(() => {}))
     )
     vi.advanceTimersByTime(15 * 60 * 1000)
     await flushPromises()

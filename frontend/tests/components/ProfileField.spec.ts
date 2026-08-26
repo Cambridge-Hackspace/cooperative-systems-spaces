@@ -78,7 +78,7 @@ describe('the control rendered for each field type', () => {
     const wrapper = mountField(field({ field_type: 'Markdown' as ProfileFieldType }))
     expect(wrapper.find('textarea').exists()).toBe(true)
     expect(wrapper.find('textarea').attributes('class')).toBe(
-      'textarea textarea-bordered w-full h-24',
+      'textarea textarea-bordered w-full h-24'
     )
 
     // And a known type never reaches it.
@@ -90,7 +90,10 @@ describe('the control rendered for each field type', () => {
       ProfileFieldType.Date,
       ProfileFieldType.Boolean,
     ]) {
-      const w = mountField(field({ field_type: type }), type === ProfileFieldType.Boolean ? false : '')
+      const w = mountField(
+        field({ field_type: type }),
+        type === ProfileFieldType.Boolean ? false : ''
+      )
       expect(w.find('textarea').exists(), `${type} rendered a textarea`).toBe(false)
     }
   })
@@ -152,7 +155,7 @@ describe('error presentation', () => {
     ]
 
     for (const [type, selector, expected] of cases) {
-      const wrapper = mountField(field({ field_type: type as Field['field_type'] }), '', {
+      const wrapper = mountField(field({ field_type: type }), '', {
         errorMessage: 'That will not do',
       })
       expect(wrapper.find(selector).attributes('class')).toBe(expected)
@@ -173,7 +176,7 @@ describe('value handling', () => {
     const wrapper = mountField(field({ field_type: ProfileFieldType.Date }), '2026-01-01')
     const input = wrapper.find('input[type="date"]')
     ;(input.element as HTMLInputElement).value = ''
-    input.trigger('input')
+    void input.trigger('input')
 
     const emitted = wrapper.emitted('update:modelValue')
     expect(emitted).toBeTruthy()
@@ -185,11 +188,11 @@ describe('value handling', () => {
     const input = wrapper.find('input[type="number"]')
 
     ;(input.element as HTMLInputElement).value = ''
-    input.trigger('input')
+    void input.trigger('input')
     expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBeNull()
 
     ;(input.element as HTMLInputElement).value = '0'
-    input.trigger('input')
+    void input.trigger('input')
     // Zero, not null, not ''. A falsy number that becomes null is a value the
     // user typed and the form silently discarded.
     expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe(0)
@@ -214,7 +217,9 @@ describe('value handling', () => {
 
 describe('the select field', () => {
   it('renders a placeholder option plus one per configured option, in order', () => {
-    const wrapper = mountField(field({ field_type: { Select: { options: ['red', 'green', 'blue'] } } }))
+    const wrapper = mountField(
+      field({ field_type: { Select: { options: ['red', 'green', 'blue'] } } })
+    )
     const options = wrapper.findAll('option')
 
     expect(options).toHaveLength(4)
@@ -231,7 +236,11 @@ describe('the select field', () => {
 
 describe('the TextArray chip editor', () => {
   it('renders one badge per value, in order, with a remove control each', () => {
-    const wrapper = mountField(field({ field_type: ProfileFieldType.TextArray }), ['A1', 'B2', 'C3'])
+    const wrapper = mountField(field({ field_type: ProfileFieldType.TextArray }), [
+      'A1',
+      'B2',
+      'C3',
+    ])
     const badges = wrapper.findAll('.badge')
 
     expect(badges).toHaveLength(3)
@@ -242,7 +251,12 @@ describe('the TextArray chip editor', () => {
   it('ignores non-string entries rather than rendering them', () => {
     // Deployed profile data holds both shapes for this field, and a number that
     // renders as a chip is a chip that cannot be removed by value.
-    const wrapper = mountField(field({ field_type: ProfileFieldType.TextArray }), ['A1', 42, null, 'B2'])
+    const wrapper = mountField(field({ field_type: ProfileFieldType.TextArray }), [
+      'A1',
+      42,
+      null,
+      'B2',
+    ])
     expect(wrapper.findAll('.badge')).toHaveLength(2)
   })
 
@@ -288,7 +302,11 @@ describe('the TextArray chip editor', () => {
   it('removes the chip at the index clicked, not the one matching by value', async () => {
     // Duplicates cannot be added, but they can arrive from the server, and
     // removing by value would take the wrong one.
-    const wrapper = mountField(field({ field_type: ProfileFieldType.TextArray }), ['A1', 'B2', 'A1'])
+    const wrapper = mountField(field({ field_type: ProfileFieldType.TextArray }), [
+      'A1',
+      'B2',
+      'A1',
+    ])
     await wrapper.findAll('button[aria-label="Remove"]')[2].trigger('click')
     expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toEqual(['A1', 'B2'])
   })
@@ -306,10 +324,16 @@ describe('the TextArray chip editor', () => {
   })
 
   it('shows the placeholder only while there are no chips', () => {
-    const empty = mountField(field({ field_type: ProfileFieldType.TextArray, help_text: 'cards' }), [])
+    const empty = mountField(
+      field({ field_type: ProfileFieldType.TextArray, help_text: 'cards' }),
+      []
+    )
     expect(empty.find('input[type="text"]').attributes('placeholder')).toBe('cards')
 
-    const filled = mountField(field({ field_type: ProfileFieldType.TextArray, help_text: 'cards' }), ['A1'])
+    const filled = mountField(
+      field({ field_type: ProfileFieldType.TextArray, help_text: 'cards' }),
+      ['A1']
+    )
     expect(filled.find('input[type="text"]').attributes('placeholder')).toBe('')
   })
 })
@@ -329,7 +353,7 @@ describe('the disabled state', () => {
       for (const el of wrapper.findAll('input, select, textarea, button')) {
         expect(
           el.attributes('disabled'),
-          `${type}: <${el.element.tagName.toLowerCase()}> is still enabled`,
+          `${type}: <${el.element.tagName.toLowerCase()}> is still enabled`
         ).toBeDefined()
       }
     }
@@ -353,7 +377,7 @@ describe('the blur event', () => {
 
     for (const [type, selector, event] of cases) {
       const wrapper = mountField(field({ field_type: type }), '')
-      wrapper.find(selector).trigger(event)
+      void wrapper.find(selector).trigger(event)
       expect(wrapper.emitted('blur'), `${JSON.stringify(type)} did not emit blur`).toBeTruthy()
     }
   })

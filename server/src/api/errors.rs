@@ -89,6 +89,14 @@ impl From<AuthError> for ApiError {
             AuthError::InvalidToken => {
                 ApiError::Unauthorized("Invalid authentication token".to_string())
             }
+            // The second conversion path for the same error, and it has to
+            // agree with AuthError's own IntoResponse or a role rejection means
+            // one thing when the extractor rejects and another when a handler
+            // converts. That is precisely the divergence this file was changed
+            // for once already.
+            AuthError::Forbidden(what) => {
+                ApiError::Forbidden(format!("Insufficient permissions: {what} required"))
+            }
             AuthError::UserNotFound => ApiError::NotFound("User not found".to_string()),
             AuthError::UserInactive => ApiError::Forbidden("User account is inactive".to_string()),
             AuthError::InvalidPassword(_) => {
@@ -418,6 +426,77 @@ mod tests {
         ] {
             let described = err.to_string();
             assert_eq!(status_of(err), want, "{described}");
+        }
+    }
+
+    /// The test for the defect the stack battery found on its first full run.
+    ///
+    /// Every role gate returned `AuthError::InvalidToken` for an insufficient
+    /// role, carrying a comment saying a Forbidden variant could be created.
+    /// That is a 401, and `frontend/src/utils/api.ts:83` calls
+    /// `authStore.logout()` on any 401 -- which is correct for an expired token
+    /// and exactly wrong here. A Newbie who reached an admin-only endpoint was
+    /// silently signed out, with no message, and signing back in changed
+    /// nothing because the role had not changed either.
+    ///
+    /// Asserting the status is the narrow claim. The wider one is that 401 and
+    /// 403 stay distinct: a client cannot tell "your session ended" from "you
+    /// are not allowed" if the server says the same thing for both.
+    #[test]
+    fn an_insufficient_role_is_403_and_a_bad_token_is_401() {
+        assert_eq!(
+            status_of(ApiError::from(AuthError::Forbidden("administrator access"))),
+            StatusCode::FORBIDDEN,
+            "an authenticated caller who is not allowed must not be told to authenticate"
+        );
+        assert_eq!(
+            status_of(ApiError::from(AuthError::InvalidToken)),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status_of(ApiError::from(AuthError::MissingCredentials)),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// `AuthError` reaches a response by two routes, exactly as the diesel
+    /// error does: its own `IntoResponse`, taken when an extractor rejects, and
+    /// this `From` conversion, taken when a handler propagates one with `?`.
+    ///
+    /// The two are compared to **each other**, not to a table written here. A
+    /// third hand-written copy of the mapping would be a third thing to keep in
+    /// step, and it would agree with whichever of the two somebody updated
+    /// while writing it. What matters is that a caller cannot tell which path
+    /// their request took, so the two must not differ -- whatever they say.
+    #[test]
+    fn the_two_auth_conversion_paths_agree() {
+        // Built twice rather than cloned: AuthError is not Clone, and
+        // `into_response` consumes it.
+        let build = || {
+            vec![
+                AuthError::WrongCredentials,
+                AuthError::MissingCredentials,
+                AuthError::InvalidToken,
+                AuthError::Forbidden("administrator access"),
+                AuthError::UserNotFound,
+                AuthError::UserInactive,
+                AuthError::TokenCreation,
+                AuthError::InternalError,
+                AuthError::InvalidPassword("too short".to_string()),
+            ]
+        };
+
+        for (direct, converted) in build().into_iter().zip(build()) {
+            let described = direct.to_string();
+            let a = direct.into_response().status();
+            let b = status_of(ApiError::from(converted));
+            assert_eq!(
+                a, b,
+                "{described}: the extractor rejection answers {a} and the handler \
+                 conversion answers {b}. Which one a caller gets depends on \
+                 whether the error came out of an extractor or a `?`, which is \
+                 not something any caller can know."
+            );
         }
     }
 

@@ -442,8 +442,14 @@ stage_schema() {
   # changed; a name tells you which table went missing, and these are the ones
   # whose absence would make a later stage fail somewhere unrecognisable.
   local t
-  for t in users doors door_access_rules door_access_events schedules tools \
-    space_devices profile_config_versions webhooks toolguard_tools; do
+  # Names taken from server/src/schema.rs, not guessed. The first version of
+  # this list asked for `toolguard_tools`, which has never existed -- ToolGuard
+  # is a feature over `tools.external_id`, not a table -- so the stage reported
+  # a missing table on every run and the report was the check's, not the
+  # schema's.
+  for t in users doors door_access_rules door_access_events door_checkins \
+    schedules tools space_devices space_device_auth space_device_auth_requests \
+    profile_config_versions webhooks audit_logs places home_links; do
     if [[ "$(sql_ro "SELECT to_regclass('public.${t}') IS NOT NULL" | tr -d ' ')" == "t" ]]; then
       record_case "schema/table/${t}" ok
     else
@@ -487,9 +493,10 @@ stage_restart() {
   cases_begin restart
   stack_paths
 
-  local before after mig_before mig_after
+  local before after mig_before mig_after config_before config_after
   before="$(sql_ro "SELECT count(*) FROM profile_config_versions" | tr -d ' ')"
   mig_before="$(sql_ro "SELECT count(*) FROM __diesel_schema_migrations" | tr -d ' ')"
+  config_before="$(cksum <"${STACK_DIR}/config.toml")"
 
   if [[ -z ${before} ]]; then
     record_case "restart/baseline-read" fail "could not read the baseline; the stack is not up"
@@ -524,6 +531,26 @@ stage_restart() {
 
   assert_eq "restart/profile-config-not-duplicated" "${before}" "${after}"
   assert_eq "restart/migrations-not-reapplied" "${mig_before}" "${mig_after}"
+
+  # The configuration file is the operator's. A boot must not edit it.
+  #
+  # `AppConfig::from_file` rewrites it in place when a field is missing --
+  # backing the original up first, but still replacing what somebody wrote with
+  # a merge of their values and a set of defaults, and then refusing to start.
+  # For a while this suite was protected from that by mounting the file
+  # read-only, which is protection by accident: it went away the moment the
+  # mount had to become writable for update_profile_config to work.
+  #
+  # A checksum is the whole check. It notices the rewrite, and it notices any
+  # other write nobody expected.
+  config_after="$(cksum <"${STACK_DIR}/config.toml")"
+  assert_eq "restart/config-file-untouched-by-boot" "${config_before}" "${config_after}"
+  if [[ -n "$(find "${STACK_DIR}" -maxdepth 1 -name 'config.toml.*.backup' 2>/dev/null)" ]]; then
+    record_case "restart/no-config-backup-was-written" fail \
+      "the loader took the rewrite path; it backed the config up and refused to start"
+  else
+    record_case "restart/no-config-backup-was-written" ok
+  fi
 
   # And the versions that do exist are a contiguous run from 1. A bootstrap
   # that inserted and then rolled back would leave the count right and the
@@ -648,6 +675,10 @@ stage_health() {
   # The SPA fallback. `not_found_service` serves index.html for any unmatched
   # path, which is what makes client-side routing work -- and a missing bundle
   # turns the whole UI into 404s while every API assertion still passes.
+  # Two probes, because one cannot tell the two failures apart. If / is 200 and
+  # a nested path is 404, the not_found_service is not wired; if both are 404,
+  # the bundle is not where the server was told it is.
+  assert_eq "health/root-serves-the-app" "200" "$(http_status /)"
   assert_eq "health/spa-fallback" "200" "$(http_status /some/client/side/route)"
 
   # But not for /api. A fallback that swallowed unknown API paths would turn

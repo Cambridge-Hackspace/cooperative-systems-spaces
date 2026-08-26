@@ -29,3 +29,47 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
 })
+
+// ---------------------------------------------------------------------------
+// A Vue warning is a test failure
+// ---------------------------------------------------------------------------
+// `[Vue warn]` in a component test is almost never noise. It means an
+// unresolved component, a prop of the wrong type, a missing required prop, a
+// duplicate key in a v-for, or a ref used after unmount -- every one of which is
+// a defect the test was too permissive to notice. Left as console output it
+// scrolls past, and the run that eventually does contain a real warning looks
+// exactly like the fifty before it.
+//
+// There is deliberately no allowlist. An allowlist is where a warning goes to
+// be forgotten, and the two ways a genuine one arises are both better handled
+// at the call site: an unresolved component wants a stub, and a prop warning
+// wants the prop. If a warning ever turns out to be unavoidable, the right
+// answer is to say so in the test that provokes it, not here.
+//
+// `config.warnHandler` is Vue's own hook, so this catches warnings raised
+// during render as well as ones printed from a lifecycle hook.
+import { config } from '@vue/test-utils'
+
+const vueWarnings: string[] = []
+
+config.global.config.warnHandler = (msg, _instance, trace) => {
+  vueWarnings.push(`${msg}${trace ? `\n${trace}` : ''}`)
+}
+
+beforeEach(() => {
+  vueWarnings.length = 0
+})
+
+afterEach(() => {
+  if (vueWarnings.length > 0) {
+    const count = vueWarnings.length
+    const collected = vueWarnings.join('\n\n')
+    // Cleared before throwing, or one warning fails every test after it too.
+    vueWarnings.length = 0
+    throw new Error(
+      `Vue raised ${count} warning(s) during this test:\n\n${collected}\n\n` +
+        'Fix the cause rather than silencing it: an unresolved component wants a ' +
+        'stub in `global.stubs`, a prop warning wants the prop.'
+    )
+  }
+})

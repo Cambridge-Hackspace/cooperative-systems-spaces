@@ -311,6 +311,20 @@ write_stack_config() {
   fi
 }
 
+# The stack directory is mounted read-WRITE, and that is a decision rather than
+# an oversight.
+#
+# It began read-only, and the read-only mount did catch something: it turned
+# `AppConfig::from_file`'s silent rewrite-and-exit(0) into a visible error. But
+# it also broke `update_profile_config`, which writes `profiles_enabled` back to
+# the config file after committing the version row -- so the admin path the
+# contract stage exists to assert answered 500 for a reason that was the
+# fixture's.
+#
+# Protecting the file by making it unwritable is protection by accident. The
+# restart stage now asserts the file's contents are unchanged after a boot,
+# which is the same protection stated deliberately and survives the file being
+# writable for the reasons it has to be.
 start_server() {
   local frontend="${ROOT}/frontend/dist"
   log "starting css-server on ${SERVER_PORT}"
@@ -328,7 +342,7 @@ start_server() {
       -e RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       -e TZ="${STACK_TZ}" \
       -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
-      -v "${STACK_DIR}:/stack:ro" \
+      -v "${STACK_DIR}:/stack" \
       -v "${frontend}:/frontend:ro" \
       "${IMG_SERVER_LOCAL}" /artifacts/css-server \
       >/dev/null
@@ -371,6 +385,10 @@ collect_stack_logs() {
 # and on the host under external, where CI has already installed Node for the
 # frontend jobs.
 #
+# The whole e2e/ tree is mounted, not just e2e/drivers: the drivers read
+# ../corpus/hostile.json and ../corpus/endpoints.json, and mounting only the
+# scripts made the fuzz stage die on ENOENT before its first assertion.
+#
 # The driver's contract, in both environments: it writes a TSV of
 # `name<TAB>status<TAB>message` to $CASES_OUT and exits non-zero if any case
 # failed. Nothing parses its stdout, so a driver is free to log.
@@ -402,9 +420,9 @@ run_node() {
       -e CASES_OUT=/stack/driver-cases.tsv \
       -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       -e CSS_STACK_DIR=/stack \
-      -v "${ROOT}/e2e/drivers:/drivers:ro" \
+      -v "${ROOT}/e2e:/e2e:ro" \
       -v "${STACK_DIR}:/stack" \
-      "${IMG_NODE}" node "/drivers/${script}" "$@"
+      "${IMG_NODE}" node "/e2e/drivers/${script}" "$@"
   fi
 }
 

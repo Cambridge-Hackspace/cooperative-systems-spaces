@@ -91,7 +91,15 @@ function pickerThemes(): Array<{ value: string; label: string; group: string }> 
 }
 
 function fixtureThemes(): string[] {
-  return JSON.parse(read('tests/fixtures/themes.json')).themes
+  // Annotated rather than trusted. `JSON.parse` is `any`, and an `any` flowing
+  // into a comparison is how a fixture that lost its `themes` key would compare
+  // `undefined` against the config list and fail with a message about the wrong
+  // thing.
+  const doc = JSON.parse(read('tests/fixtures/themes.json')) as { themes?: unknown }
+  if (!Array.isArray(doc.themes)) {
+    throw new Error('tests/fixtures/themes.json has no themes array')
+  }
+  return doc.themes as string[]
 }
 
 describe('the theme list', () => {
@@ -113,11 +121,11 @@ describe('the theme list', () => {
     expect(
       onlyInPicker,
       'these themes are offered in the picker but daisyUI does not compile them; ' +
-        'selecting one switches to a theme with no CSS, which looks like a broken button',
+        'selecting one switches to a theme with no CSS, which looks like a broken button'
     ).toEqual([])
     expect(
       onlyInConfig,
-      'these themes are compiled into every stylesheet the site ships and nobody can select them',
+      'these themes are compiled into every stylesheet the site ships and nobody can select them'
     ).toEqual([])
   })
 
@@ -155,7 +163,7 @@ describe('the picker entries themselves', () => {
     expect(
       unordered,
       'themes in these groups are silently dropped by themeGroups, because the ' +
-        '`order` array filters them out',
+        '`order` array filters them out'
     ).toEqual([])
   })
 

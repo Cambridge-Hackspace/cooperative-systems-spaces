@@ -23,9 +23,16 @@ export function record(name, status, message = '') {
   console.log(`  ${mark} ${name}${message ? ` -- ${message}` : ''}`)
 }
 
-export function assertEq(name, expected, actual) {
-  if (expected === actual) record(name, 'ok')
-  else record(name, 'fail', `expected [${expected}], got [${actual}]`)
+/**
+ * `why` is for the assertions that pin a known defect in place rather than
+ * asserting correct behaviour. Those fail the day somebody fixes the defect,
+ * and at that moment the reader needs to know that failing is the good outcome
+ * and the assertion should be deleted -- which a bare "expected 500, got 400"
+ * does not say.
+ */
+export function assertEq(name, expected, actual, why) {
+  if (expected === actual) record(name, 'ok', why ? `${why}` : '')
+  else record(name, 'fail', `expected [${expected}], got [${actual}]${why ? ` -- ${why}` : ''}`)
 }
 
 export function assertNe(name, forbidden, actual) {
@@ -155,6 +162,49 @@ export async function account(kind, { email } = {}) {
   }
   return { username, email: addr, token: tokenOf(li), user: li.json.data.user }
 }
+
+/**
+ * The run's administrator.
+ *
+ * There is exactly one address that grants admin -- `[initial_setup]`'s -- so
+ * only the first driver to run can register it. Every later driver has to sign
+ * in as the account already there, and the first version of these drivers did
+ * not: the concurrency stage died on `409 Email already exists` before its
+ * first assertion, because the contract stage had run twenty seconds earlier.
+ *
+ * The password is the same for every account this suite creates, so signing in
+ * is possible without having been the one to register. That is a property of
+ * the fixture, not of the product.
+ */
+export async function adminAccount(kind) {
+  const username = `e2e_${kind}_${RUN_TAG}`
+  const reg = await register(username, ADMIN_EMAIL)
+
+  if (reg.status === 200 || reg.status === 201) {
+    const li = await login(username)
+    if (li.status !== 200) {
+      throw new Error(`login ${username} -> ${li.status}: ${li.text.slice(0, 400)}`)
+    }
+    return { username, email: ADMIN_EMAIL, token: tokenOf(li), user: li.json.data.user }
+  }
+
+  // Somebody already holds the address. Sign in as them.
+  const li = await login(ADMIN_EMAIL)
+  if (li.status !== 200) {
+    throw new Error(
+      `the admin address is taken (register said ${reg.status}) and signing in as it ` +
+        `answered ${li.status}: ${li.text.slice(0, 400)}`,
+    )
+  }
+  const user = li.json.data.user
+  if (user?.role !== 'Admin') {
+    throw new Error(`signed in as ${ADMIN_EMAIL} and got role ${user?.role}, not Admin`)
+  }
+  return { username: user.username, email: ADMIN_EMAIL, token: tokenOf(li), user }
+}
+
+/** Matches `[initial_setup] setup_admin_email` in e2e/stack-config.toml. */
+export const ADMIN_EMAIL = 'admin@e2e.invalid'
 
 export function appendLog(file, line) {
   try {

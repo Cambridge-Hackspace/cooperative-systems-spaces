@@ -36,7 +36,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { GET, account, record, assertEq, ok, main, RUN_TAG } from './lib.mjs'
+import { GET, account, adminAccount, record, assertEq, ok, main, RUN_TAG } from './lib.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CORPUS = JSON.parse(readFileSync(join(HERE, '../corpus/hostile.json'), 'utf8'))
@@ -193,7 +193,7 @@ main(async () => {
   // Credentials. Real ones, made through the shipping path, because most of the
   // interesting surface is behind a guard and a fuzzer holding no credential
   // spends its whole run confirming that 401 is not 500.
-  const admin = await account(`fuzz_admin_${TAG}`, { email: 'admin@e2e.invalid' })
+  const admin = await adminAccount(`fuzz_admin_${TAG}`)
   const member = await account(`fuzz_member_${TAG}`)
   const CREDS = [
     ['admin', admin.token],

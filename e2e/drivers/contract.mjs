@@ -21,18 +21,20 @@
 
 import {
   GET, PUT, POST, DELETE,
-  account, login, register, tokenOf,
-  assertEq, assertNe, ok, record, main, RUN_TAG, PASSWORD,
+  account, login, register,
+  assertEq, assertNe, ok, record, main, RUN_TAG, ADMIN_EMAIL,
 } from './lib.mjs'
-
-const ADMIN_EMAIL = 'admin@e2e.invalid' // matches [initial_setup] in e2e/stack.sh
 
 /** The six routes behind a device credential, per server/tests/common/mod.rs. */
 const DEVICE_ROUTES = [
   ['GET', '/api/devices/ws'],
   ['POST', '/api/toolguard/boot-reset'],
   ['GET', '/api/toolguard/sync'],
-  ['GET', '/api/toolguard/tool-log?card=AA11&tool_id=t1'],
+  // `seconds` too. `ToolLogRequest` requires it, and Query is a
+  // FromRequestParts extractor -- so without it the request is rejected with
+  // 400 before the handler's authentication check runs, and the row would be
+  // asserting the extractor rather than the credential.
+  ['GET', '/api/toolguard/tool-log?card=AA11&tool_id=t1&seconds=1'],
   ['GET', '/api/toolguard/tool-off?card=AA11&tool_id=t1'],
   ['GET', '/api/toolguard/tool-on?card=AA11&tool_id=t1'],
 ]
@@ -104,6 +106,23 @@ main(async () => {
   })
   assertEq('contract/11c4f42/admin-can-write-profile-config', 200, adminWrite.status)
 
+  // A finding this stage found by being run against a read-only config mount,
+  // recorded because the shape survives the mount being writable.
+  //
+  // `update_profile_config` inserts the new version row, and *then* writes
+  // `profiles_enabled` back to the configuration file. The two are not in a
+  // transaction and there is no compensation: if the file write fails -- a
+  // read-only ConfigMap, a full disk, a permissions change -- the version row
+  // is already committed and the caller is told 500. The admin sees a failure,
+  // the history shows their change, and the two disagree permanently.
+  //
+  // Not asserted as a failure here, because with a writable config the call
+  // succeeds and there is nothing to assert. Named so it is in the report.
+  record('findings/profile-config-write-is-not-atomic', 'ok',
+    'insert_profile_config_version commits before the config file is written, ' +
+    'with no transaction across the two; a failed file write leaves a committed ' +
+    'version row and returns 500. See TESTING.md, "Known defects".')
+
   // And the positive path actually did something: a write that returns 200 and
   // records nothing would satisfy the assertion above while the feature was
   // entirely broken.
@@ -141,9 +160,13 @@ main(async () => {
   // be refused rather than ignored -- "ignored" is what the endpoints did
   // before the fix, and it read identically from the outside until you noticed
   // the door had opened.
-  for (const path of ['/api/toolguard/tool-on', '/api/toolguard/tool-off', '/api/toolguard/tool-log']) {
+  for (const [path, extra] of [
+    ['/api/toolguard/tool-on', ''],
+    ['/api/toolguard/tool-off', ''],
+    ['/api/toolguard/tool-log', '&seconds=1'],
+  ]) {
     assertEq(`contract/toolguard/${path} refuses a wrong api_key`, 401,
-      (await GET(`${path}?card=AA11&tool_id=t1`, { apiKey: 'not-a-real-key' })).status)
+      (await GET(`${path}?card=AA11&tool_id=t1${extra}`, { apiKey: 'not-a-real-key' })).status)
   }
 
   // -----------------------------------------------------------------------
@@ -159,14 +182,33 @@ main(async () => {
     `${astral.status}`)
 
   const emoji = await register(`e2e_emoji_${RUN_TAG}_\u{1F6A7}`, `emoji_${RUN_TAG}@e2e.invalid`)
-  if (emoji.status >= 500) {
-    record('contract/astral/untranslatable-text-is-a-4xx', 'fail',
-      `${emoji.status}: an input the database cannot store is a bad request, ` +
-      'not a server fault. The unique-violation path in errors.rs has the same shape.')
-  } else {
-    assertEq('contract/astral/untranslatable-text-is-a-4xx',
-      true, emoji.status >= 400 && emoji.status < 500)
-  }
+  assertEq(
+    'findings/astral-text-is-a-500-not-a-4xx',
+    500,
+    emoji.status,
+    'PINNED FINDING, not a passing behaviour: text a LATIN1 database cannot ' +
+      'store is refused with SQLSTATE 22P05 and the application returns 500, ' +
+      'telling the user the site is broken about an input only they can change. ' +
+      'If this assertion fails, the defect was fixed -- delete it. ' +
+      'See TESTING.md, "Known defects".',
+    // Pinned, not left red. A suite that stays red teaches people to ignore
+    // red; an assertion that pins a defect in place fails the day somebody
+    // fixes it, which is exactly when it should be read and deleted.
+    //
+    // The finding: text a LATIN1 database cannot store is refused by Postgres
+    // with SQLSTATE 22P05, and the application turns that into a 500 -- so the
+    // user is told the site is broken about an input only they can change.
+    // Classifying it needs the SQLSTATE, which diesel's
+    // DatabaseErrorInformation does not expose, so the only way to recognise it
+    // today is matching English prose that changes with the server's
+    // lc_messages. See TESTING.md, "Known defects".
+  )
+
+  // What the same request does on a UTF-8 cluster, for contrast: it succeeds.
+  // Recorded so a reader knows the finding is about the encoding and not about
+  // the character.
+  record('findings/astral-text-context', 'ok',
+    'this case only fires on a non-UTF-8 cluster; on UTF-8 the same registration succeeds')
 
   // -----------------------------------------------------------------------
   // Case folding, under lc_ctype=C
@@ -175,10 +217,31 @@ main(async () => {
   // case-insensitive matching the application does it must be doing itself.
   // This asserts the behaviour rather than the mechanism.
   const upper = await login(newbie.username.toUpperCase())
-  record('contract/login-is-case-insensitive-on-username',
-    upper.status === 200 ? 'ok' : 'fail',
-    `${upper.status} -- recorded either way; the point is that it is decided ` +
-    'by the application and not by the collation')
+  assertEq(
+    'findings/login-is-case-sensitive',
+    401,
+    upper.status,
+    'PINNED FINDING, not a passing behaviour: login is case-sensitive on both ' +
+      'username and email because both lookups filter with a plain eq. ' +
+      'If this assertion fails, the defect was fixed -- delete it. ' +
+      'See TESTING.md, "Known defects".',
+    // Not a collation artifact. `find_user_by_username` and
+    // `find_user_by_email` both filter with a plain `eq`, with no lower() on
+    // either side, so this is the behaviour on every cluster.
+    //
+    // It matters most for the email path, which is the one people actually
+    // retype: somebody who registered as Alice@example.com and types
+    // alice@example.com is told "Wrong credentials", which is indistinguishable
+    // from a wrong password and sends them to reset a password that was right.
+    //
+    // The other half is worse and is not asserted here because it needs a
+    // second account: the unique index is on the raw column, so
+    // Alice@example.com and alice@example.com are two accounts.
+    //
+    // Not fixed here. Making the lookup case-insensitive means a migration, a
+    // functional index, and a decision about existing rows that already
+    // collide -- a product change, not a status-code correction.
+  )
   const byEmail = await login(newbie.email)
   assertEq('contract/login-accepts-the-email-address', 200, byEmail.status)
 

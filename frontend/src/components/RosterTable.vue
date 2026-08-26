@@ -492,12 +492,15 @@ const updateUserRole = async (userId: string, newRole: UserRole | null) => {
       }
       cancelEditingRole()
     } else {
-      error.value = response.error || 'Failed to update user role'
-      emit('error', error.value || 'Failed to update user role')
+      // Emitted, not assigned to `error`. That ref is the *load* error state and
+      // the template renders it in place of the table -- so writing an action
+      // failure into it replaced the whole roster with a banner, losing every
+      // row because one update was refused. The parent already receives this
+      // and puts it somewhere the user is looking.
+      emit('error', response.error || 'Failed to update user role')
     }
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Network error updating user role'
-    emit('error', error.value || 'Network error updating user role')
+    emit('error', err.response?.data?.error || 'Network error updating user role')
   } finally {
     isUpdatingRole.value = false
   }
@@ -517,12 +520,11 @@ const toggleUserStatus = async (user: User) => {
         emit('userUpdated', response.data)
       }
     } else {
-      error.value = response.error || 'Failed to update user status'
-      emit('error', error.value || 'Failed to update user status')
+      // See updateUserRole: `error` is the load channel and replaces the table.
+      emit('error', response.error || 'Failed to update user status')
     }
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Network error updating user status'
-    emit('error', error.value || 'Network error updating user status')
+    emit('error', err.response?.data?.error || 'Network error updating user status')
   } finally {
     isUpdatingStatus.value = false
   }

@@ -74,6 +74,21 @@ pub enum AuthError {
     MissingCredentials,
     TokenCreation,
     InvalidToken,
+    /// The caller authenticated successfully and is not allowed to do this.
+    ///
+    /// Distinct from every other variant here, and the distinction is not
+    /// pedantry. The three role gates below used to return `InvalidToken` for
+    /// an insufficient role -- with a comment saying a Forbidden variant could
+    /// be created -- so a Newbie touching an admin route was told 401. The
+    /// frontend's axios interceptor calls `authStore.logout()` on **any** 401
+    /// (utils/api.ts:83), which is the correct thing to do when a token has
+    /// expired and exactly the wrong thing here: a member who reached an
+    /// admin-only endpoint was silently signed out, with no message, and the
+    /// obvious next step -- signing back in -- changed nothing.
+    ///
+    /// The carried string is the role requirement, not the user's role, because
+    /// this is rendered to the caller.
+    Forbidden(&'static str),
     UserNotFound,
     UserInactive,
     InvalidPassword(String),
@@ -87,6 +102,7 @@ impl Display for AuthError {
             AuthError::MissingCredentials => write!(f, "Missing credentials"),
             AuthError::TokenCreation => write!(f, "Failed to create token"),
             AuthError::InvalidToken => write!(f, "Invalid token"),
+            AuthError::Forbidden(what) => write!(f, "Forbidden: {} required", what),
             AuthError::UserNotFound => write!(f, "User not found"),
             AuthError::UserInactive => write!(f, "User account is inactive"),
             AuthError::InvalidPassword(msg) => write!(f, "Invalid password: {}", msg),
@@ -111,6 +127,11 @@ impl IntoResponse for AuthError {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token")
             }
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
+            // 403, not 401. 401 means "authenticate"; 403 means "you have, and
+            // it is still no". Returning 401 here made the frontend log the
+            // user out, because that is what a client is supposed to do with a
+            // 401 and there is no way for it to tell the two situations apart.
+            AuthError::Forbidden(_) => (StatusCode::FORBIDDEN, "Insufficient permissions"),
             AuthError::UserNotFound => (StatusCode::NOT_FOUND, "User not found"),
             AuthError::UserInactive => (StatusCode::FORBIDDEN, "User account is inactive"),
             AuthError::InvalidPassword(_) => (StatusCode::BAD_REQUEST, "Invalid password"),
@@ -316,7 +337,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !user.role.can_access_admin() {
-            return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
+            return Err(AuthError::Forbidden("administrator access"));
         }
 
         Ok(AdminUser(user))
@@ -338,7 +359,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !user.role.can_access_staff() {
-            return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
+            return Err(AuthError::Forbidden("staff access"));
         }
 
         Ok(StaffUser(user))
@@ -360,7 +381,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !user.role.can_access_member() {
-            return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
+            return Err(AuthError::Forbidden("member access"));
         }
 
         Ok(MemberUser(user))
