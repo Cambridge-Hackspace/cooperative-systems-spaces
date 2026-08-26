@@ -199,9 +199,15 @@ async fn update_tool(
     Path(tool_id): Path<Uuid>,
     Json(payload): Json<UpdateToolRequest>,
 ) -> Result<Json<ApiResponse<Tool>>, ApiError> {
+    // Logged, then converted -- not replaced. `map_err` to a bare
+    // InternalServerError threw away everything the error knew: updating a tool
+    // that does not exist answered 500 rather than 404, and a name that
+    // collided answered 500 rather than 409. The fuzz tier found it by asking
+    // for a tool id that matches nothing, which is the first thing anybody
+    // would try by hand and the last thing anybody writes a test for.
     let updated_tool = state.db.update_tool(tool_id, &payload).map_err(|e| {
-        tracing::error!("Failed to update tool: {}", e);
-        ApiError::InternalServerError("Failed to update tool".to_string())
+        tracing::warn!("update_tool({tool_id}) failed: {e}");
+        ApiError::from(e)
     })?;
 
     Ok(Json(ApiResponse::success_with_message(

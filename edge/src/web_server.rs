@@ -266,7 +266,10 @@ pub fn create_router(state: AppState) -> Router {
 pub fn create_router(state: AppState) -> Router {
     use tower_http::services::{ServeDir, ServeFile};
 
-    let serve_dir = ServeDir::new(&state.frontend_path).not_found_service(ServeFile::new(format!(
+    // `fallback`, not `not_found_service` -- see the note in server/src/main.rs.
+    // `not_found_service` overrides the status to 404, so every client-side
+    // route was served the right page with the wrong status.
+    let serve_dir = ServeDir::new(&state.frontend_path).fallback(ServeFile::new(format!(
         "{}/index.html",
         state.frontend_path
     )));

@@ -275,8 +275,26 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Serve frontend static files
     let frontend_path = args.frontend_path.clone();
+    // `fallback`, not `not_found_service`. They differ in exactly one way and it
+    // is the one that matters here: tower-http's `not_found_service` is
+    // documented as "set the fallback service **and override the fallback's
+    // status code to 404 Not Found**". So every client-side route -- /tools,
+    // /profile, /door/{id}/checkin -- was served the correct index.html with a
+    // 404 status.
+    //
+    // In a browser that is invisible: the body arrives, Vue Router takes over,
+    // the page works. Everywhere else it is not. Uptime monitoring reports
+    // every deep link as missing. Anything checking `res.ok` treats the page as
+    // an error. Link previews and crawlers see a dead URL. And the concrete
+    // one for this product: /door/{id}/checkin is a QR code on a door, opened
+    // cold by a phone camera, and some in-app browsers and link scanners refuse
+    // or warn on a 404 before a person ever sees the page.
+    //
+    // Found by the stack battery probing the fallback at three depths rather
+    // than one. / was 200 because ServeDir found index.html for itself and the
+    // fallback never ran.
     let serve_dir = ServeDir::new(&frontend_path)
-        .not_found_service(ServeFile::new(format!("{}/index.html", frontend_path)));
+        .fallback(ServeFile::new(format!("{}/index.html", frontend_path)));
 
     let general_route = Router::new().route("/status", get(root));
     // .route("/profile", get(handlers::show_profile))

@@ -144,6 +144,53 @@ function fillPath(template) {
 }
 
 // ---------------------------------------------------------------------------
+// Findings this tier already reported, and why they are still here
+// ---------------------------------------------------------------------------
+// Each entry names one (method, template, status) and says why the run is
+// expected to produce it. Nothing broader: an exemption on a *route* would
+// cover the next real 500 on that route too, and an exemption on a *status*
+// would switch the oracle off.
+//
+// Every one of them is also asserted to still occur, further down. An exemption
+// for something that no longer happens is a claim about behaviour nobody is
+// checking, and it is the reason a suppression list eventually stops describing
+// anything.
+const KNOWN = [
+  {
+    method: 'POST',
+    template: '/api/admin/devices/invite',
+    status: 500,
+    only: (enc) => enc !== 'UTF8',
+    why:
+      'a device invite code is eight emoji, and this cluster cannot store one. ' +
+      'The finding is pinned by the concurrency tier. TESTING.md, "Known defects".',
+  },
+  {
+    method: 'POST',
+    template: '/api/tools/user-training/{id}',
+    status: 501,
+    only: () => true,
+    why:
+      'the route is registered and the handler returns 501 Not Implemented. ' +
+      'A 501 is honest rather than broken -- but it is a route the frontend can ' +
+      'call and that can never succeed, so it is recorded rather than ignored. ' +
+      'TESTING.md, "Known defects".',
+  },
+]
+
+const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
+
+function knownFor(f) {
+  return KNOWN.find(
+    (k) =>
+      k.method === f.method &&
+      k.template === f.template &&
+      k.status === f.status &&
+      k.only(ENCODING),
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Findings
 // ---------------------------------------------------------------------------
 // Collapsed by (oracle, method, template, status). A fuzzer that reports every
@@ -280,16 +327,44 @@ main(async () => {
     )
   }
 
+  const seenKnown = new Set()
+  let novel = 0
+
   for (const f of list) {
-    record(
-      `fuzz/${f.oracle}/${f.method} ${f.template}`,
-      'fail',
+    const known = knownFor(f)
+    const name = `fuzz/${f.oracle}/${f.method} ${f.template}`
+    const detail =
       `${f.count}x status=${f.status} seed=${SEED} cred=${f.repro.credential} ` +
-        `path=${f.repro.path} -- ${String(f.message).replace(/\s+/g, ' ').slice(0, 200)}`,
-    )
+      `path=${f.repro.path} -- ${String(f.message).replace(/\s+/g, ' ').slice(0, 200)}`
+
+    if (known) {
+      seenKnown.add(`${known.method} ${known.template} ${known.status}`)
+      record(`findings/${name}`, 'ok', `${known.why} (${detail})`)
+    } else {
+      novel += 1
+      record(name, 'fail', detail)
+    }
   }
-  if (list.length === 0) {
-    record('fuzz/no-oracle-violations', 'ok', `${requests} requests, seed ${SEED}`)
+
+  if (novel === 0) {
+    record('fuzz/no-new-oracle-violations', 'ok',
+      `${requests} requests, seed ${SEED}, ${seenKnown.size} known finding(s) reproduced`)
+  }
+
+  // The other direction. A KNOWN entry that did not fire is either fixed --
+  // delete it -- or the run stopped reaching that endpoint, which means the
+  // fuzzer's coverage narrowed without anybody noticing.
+  for (const k of KNOWN) {
+    if (!k.only(ENCODING)) continue
+    const key = `${k.method} ${k.template} ${k.status}`
+    if (seenKnown.has(key)) continue
+    record(`fuzz/known-finding-still-occurs: ${key}`, 'fail',
+      'this finding is exempted and did not occur in this run. Either it was ' +
+      'fixed -- delete the KNOWN entry -- or the fuzzer stopped reaching the ' +
+      'endpoint, which is a narrowing nobody asked for. ' +
+      `(seed ${SEED}, ${ITERATIONS} iterations; a short run may simply not have ` +
+      'tried it, in which case raise CSS_FUZZ_ITERATIONS rather than deleting ' +
+      'the entry.)')
   }
 
   // The seed, restated where somebody reading only the summary will see it.
