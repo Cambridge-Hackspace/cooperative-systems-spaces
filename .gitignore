@@ -29,4 +29,13 @@
 # AppConfig::from_file rewrites config in place on a missing-field error and
 # leaves the original beside it as <path>.<unixtime>.backup.
 *.backup
+
+# e2e/acceptance.sh leaves this behind while the four fixes are reverted, so a
+# tree left broken by an interrupted acceptance run announces itself rather than
+# being discovered as a mysterious wall of failures.
 .acceptance-broken
+
+# The Playwright browsers, if a browser tier is ever added here rather than run
+# out of the pinned image.
+/frontend/.playwright/
+
