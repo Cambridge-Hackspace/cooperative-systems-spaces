@@ -50,20 +50,15 @@ export interface Armed {
   /**
    * How many matching requests this fault applies to. Defaults to 1.
    *
-   * `abortNext` needs more than one, and the reason is a browser behaviour
-   * rather than a preference: **Chromium automatically retries an idempotent
-   * GET when a persistent connection is closed without a response.** So
-   * destroying the socket once produced exactly this in the fake's log --
+   * Kept because a spec occasionally wants a fault to survive a retry the
+   * *application* makes -- but it is no longer how `abortNext` defeats the
+   * browser's retry. That was the first attempt, and raising a retry budget is
+   * a guessing game: the browser's retry count is not a contract, and the log
+   * showed Chromium going three deep and succeeding on the fourth request.
    *
-   *     GET /doors/door-1/info left unanswered
-   *     GET /doors/door-1/info -> 200
-   *
-   * -- the retry found the fault already consumed, succeeded, and the
-   * application never saw a transport failure at all. The test then asserted an
-   * error message that had no reason to exist.
-   *
-   * An injection the browser can retry its way past is not an injection. This
-   * is what makes `abortNext` actually abort.
+   * `abortNext` now sends headers and a partial body before dropping the
+   * connection, which is a truncated response and is not retried at all. See
+   * the note in plugin.ts.
    */
   times?: number
 }
@@ -169,10 +164,7 @@ export class World {
   arm(a: Armed) {
     this.armed.push({
       ...a,
-      // Three, not one, for abortNext -- see the note on `times`. Three covers
-      // Chromium's single retry with room to spare, and any request the app
-      // itself retries.
-      times: a.times ?? (a.kind === 'abortNext' ? 3 : 1),
+      times: a.times ?? 1,
     })
   }
 

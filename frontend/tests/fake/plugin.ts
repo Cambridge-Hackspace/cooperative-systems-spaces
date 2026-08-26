@@ -129,10 +129,30 @@ function injected(path: string, res: ServerResponse): boolean {
       return true
 
     case 'abortNext':
-      // Destroy the socket rather than answering. This is the shape that has no
-      // `response` on the axios error, and therefore the only one that reaches
-      // a `|| 'fallback'` branch. Writing a 5xx here instead would leave that
-      // branch unexecuted while the suite reported it covered.
+      // Headers first, then a partial body, THEN destroy the socket.
+      //
+      // Destroying it before any bytes is the obvious implementation and it
+      // does not work: **Chromium automatically retries an idempotent GET when
+      // a persistent connection closes before any response is written.** The
+      // fake's own log showed it retrying three times and succeeding on the
+      // fourth, so the application never saw a transport failure and the test
+      // asserted an error message that had no reason to exist.
+      //
+      // Raising the retry budget was the first fix and it is a guessing game --
+      // the browser's retry count is not a contract. Announcing a
+      // `content-length` far larger than what is sent and then dropping the
+      // connection is a *truncated response*, which no browser retries: the
+      // request is surfaced as a network error, which is exactly the shape with
+      // no `response` on the axios error and therefore the only one that
+      // reaches a `|| 'fallback'` branch.
+      //
+      // It is also the more realistic failure. A connection that dies mid-flight
+      // has usually sent something.
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': '4096',
+      })
+      res.write('{"truncated":')
       res.socket?.destroy()
       return true
 
