@@ -103,10 +103,15 @@ stage_preflight() {
   # --- the tools this suite assumes ---------------------------------------
   # Named explicitly so that the next template gap fails in one line with the
   # missing tool's name, rather than deep inside a stage. Note what is NOT
-  # here: no jq, no python3, no unzip. Everything below is a shell builtin,
-  # coreutils, git, or the engine.
+  # here: no jq, no python3, no unzip, and no git. Everything below is a shell
+  # builtin, coreutils, or the engine.
+  #
+  # `git` is deliberately absent. The ubuntu-26.04 template carries
+  # ZFS, podman, rsync and a guest agent -- no git -- and the run verb executes
+  # on the host rather than in the toolchain image. preflight found that on the
+  # first real run, which is what it is for.
   local t
-  for t in git sed grep awk tr sort comm install; do
+  for t in sed grep awk tr sort comm install find; do
     if command -v "${t}" >/dev/null 2>&1; then
       record_case "tool/${t}" ok
     else
@@ -146,10 +151,41 @@ stage_preflight() {
   # binaries and reports on code that is not in the tree.
   if [[ -f e2e/artifacts/BUILD.txt ]]; then
     record_case "artifacts/present" ok
-    local built_commit head_commit
-    built_commit="$(awk '/^commit:/ {print $2}' e2e/artifacts/BUILD.txt)"
-    head_commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-    assert_eq "artifacts/commit-matches-tree" "${head_commit}" "${built_commit}"
+
+    # Staleness, checked without git.
+    #
+    # The risk is running the suite against binaries built from different code
+    # -- a `reaper run` after an edit but without a `reaper build`. The obvious
+    # check is `git rev-parse HEAD` against the commit build.sh recorded, and
+    # that is what this used to do; it failed on the first real session run
+    # because the guest has no git, and BUILD.txt's commit came from the
+    # toolchain container, which does. Comparing against a value that is
+    # always "unknown" on one side is a check that always fails, which is only
+    # marginally better than one that always passes.
+    #
+    # Modification time answers the same question with tools that are actually
+    # present: if any source file is newer than the artifacts, the artifacts
+    # are stale, whatever commit they claim.
+    local newer
+    newer="$(find server/src cli/src edge/src css_lib/src checks/src \
+      Cargo.toml Cargo.lock -newer e2e/artifacts/BUILD.txt 2>/dev/null | head -5)"
+    if [[ -z "${newer}" ]]; then
+      record_case "artifacts/not-stale" ok
+    else
+      record_case "artifacts/not-stale" fail \
+        "source is newer than BUILD.txt; run e2e/build.sh. First: ${newer//$'\n'/, }"
+    fi
+
+    # And when git *is* available -- the workstation, and CI -- take the
+    # stronger reading too.
+    if command -v git >/dev/null 2>&1 && git rev-parse HEAD >/dev/null 2>&1; then
+      local built_commit head_commit
+      built_commit="$(awk '/^commit:/ {print $2}' e2e/artifacts/BUILD.txt)"
+      head_commit="$(git rev-parse HEAD)"
+      assert_eq "artifacts/commit-matches-tree" "${head_commit}" "${built_commit}"
+    else
+      record_case "artifacts/commit-matches-tree" skip         "no git here; the modification-time check above is what covers staleness"
+    fi
   else
     record_case "artifacts/present" fail \
       "e2e/artifacts/BUILD.txt missing -- run e2e/build.sh first"
