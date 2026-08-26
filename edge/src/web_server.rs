@@ -11,7 +11,6 @@ use std::sync::{Arc, RwLock};
 use tracing::{error, info};
 
 #[cfg(not(debug_assertions))]
-use axum_embed::ServeEmbed;
 #[cfg(not(debug_assertions))]
 use rust_embed::RustEmbed;
 

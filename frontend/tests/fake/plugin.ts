@@ -1,0 +1,280 @@
+// Tier 5's fake API, as a Vite dev-server middleware.
+//
+// A middleware plugin rather than a standalone server, and the choice does a
+// lot of work:
+//
+//   * `@/` resolves and TypeScript transpiles, so the fake can import the real
+//     `validateProfile`, the real enums and the real types. It decides *what*
+//     to answer and never *whether* an answer is valid — a fake that
+//     reimplements the rules agrees with its own copy of them.
+//   * the fake and the real bundle share **one origin**, so `baseURL: '/api'`
+//     is exercised exactly as written. A separate server would need a proxy or
+//     CORS, and would then be testing the proxy.
+//   * there is one process to start and one port to wait for.
+//
+// The control surface lives under `/__fake`, outside `/api`, so nothing the
+// application can reach touches it and no route in the fake's own table can
+// collide with a real one.
+
+import type { Connect, Plugin } from 'vite'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+
+import { validateProfile } from '../../src/stores/profile'
+import { World } from './world'
+
+const world = new World()
+
+function json(res: ServerResponse, status: number, body: unknown) {
+  const text = JSON.stringify(body)
+  res.statusCode = status
+  res.setHeader('content-type', 'application/json')
+  res.setHeader('content-length', Buffer.byteLength(text))
+  res.end(text)
+}
+
+const ok = (res: ServerResponse, data: unknown, message?: string) =>
+  json(res, 200, { success: true, data, ...(message ? { message } : {}) })
+
+const err = (res: ServerResponse, status: number, error: string) =>
+  json(res, status, { success: false, error })
+
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      if (!raw) return resolve({})
+      try {
+        resolve(JSON.parse(raw))
+      } catch {
+        resolve({ __unparseable: raw })
+      }
+    })
+  })
+}
+
+function bearer(req: IncomingMessage): string | undefined {
+  const h = req.headers.authorization
+  if (!h || !h.startsWith('Bearer ')) return undefined
+  return h.slice('Bearer '.length)
+}
+
+/**
+ * Apply an armed fault, if one matches. Returns true when the request was
+ * answered (or deliberately abandoned) and the handler should not run.
+ */
+function injected(path: string, res: ServerResponse): boolean {
+  const armed = world.takeArmed(path)
+  if (!armed) return false
+
+  switch (armed.kind) {
+    case 'failNext':
+      json(res, armed.status ?? 500, armed.body ?? {
+        success: false,
+        error: 'Injected failure',
+      })
+      return true
+
+    case 'abortNext':
+      // Destroy the socket rather than answering. This is the shape that has no
+      // `response` on the axios error, and therefore the only one that reaches
+      // a `|| 'fallback'` branch. Writing a 5xx here instead would leave that
+      // branch unexecuted while the suite reported it covered.
+      res.socket?.destroy()
+      return true
+
+    case 'hangNext':
+      // Answer nothing, ever. The spec is responsible for its own timeout; the
+      // point is what the UI does while waiting, and whether it ever stops.
+      return true
+
+    case 'malformNext':
+      // A 200 whose body is not what the type says. `items` is absent, so
+      // anything doing `data.items.map(...)` throws inside a promise.
+      json(res, 200, armed.body ?? { success: true, data: { unexpected: true } })
+      return true
+  }
+}
+
+export function fakeApi(): Plugin {
+  return {
+    name: 'css-fake-api',
+    configureServer(server) {
+      server.middlewares.use('/__fake', control as Connect.NextHandleFunction)
+      server.middlewares.use('/api', api as Connect.NextHandleFunction)
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The control surface
+// ---------------------------------------------------------------------------
+const control: Connect.NextHandleFunction = (req, res) => {
+  void (async () => {
+    const url = new URL(req.url ?? '/', 'http://fake')
+    const path = url.pathname
+
+    if (path === '/reset') {
+      world.reset()
+      return ok(res, null, 'reset')
+    }
+    if (path === '/arm') {
+      const body = (await readBody(req)) as Record<string, unknown>
+      world.arm({
+        kind: body.kind as never,
+        path: String(body.path ?? ''),
+        status: body.status as number | undefined,
+        body: body.body,
+      })
+      return ok(res, world.armed.length)
+    }
+    if (path === '/requests') {
+      return ok(res, world.requests)
+    }
+    if (path === '/state') {
+      return ok(res, {
+        users: world.users.length,
+        tools: world.tools.length,
+        doorRules: world.doorRules.length,
+        profileFields: world.profileFields,
+        armed: world.armed,
+      })
+    }
+    return err(res, 404, `no such control endpoint: ${path}`)
+  })()
+}
+
+// ---------------------------------------------------------------------------
+// The API
+// ---------------------------------------------------------------------------
+const api: Connect.NextHandleFunction = (req, res) => {
+  void (async () => {
+    const url = new URL(req.url ?? '/', 'http://fake')
+    const path = url.pathname
+    const method = (req.method ?? 'GET').toUpperCase()
+    world.requests.push({ method, path })
+
+    if (injected(path, res)) return
+
+    const body = ['POST', 'PUT', 'PATCH'].includes(method)
+      ? ((await readBody(req)) as Record<string, unknown>)
+      : {}
+    const me = world.userByToken(bearer(req))
+
+    // --- public ------------------------------------------------------------
+    if (path === '/config/public') {
+      return ok(res, {
+        site_name: 'Fake Space',
+        site_url: 'http://localhost',
+        registration_enabled: true,
+        profiles_enabled: world.profilesEnabled,
+        theme: { dark_mode_enabled: true },
+        toolguard_enabled: true,
+        door_enabled: true,
+        place_enabled: false,
+      })
+    }
+
+    if (path === '/auth/login' && method === 'POST') {
+      const session = world.login(
+        String(body.username_or_email ?? ''),
+        String(body.password ?? ''),
+      )
+      if (!session) return err(res, 401, 'Wrong credentials')
+      return ok(res, { token: session.token, user: session.user, expires_in: 86400 })
+    }
+
+    if (path === '/auth/logout' && method === 'POST') {
+      return ok(res, null, 'Logged out')
+    }
+
+    // --- everything below needs a credential --------------------------------
+    // 401 for no credential, 403 for the wrong role. The distinction is the one
+    // the server had wrong, and the frontend's interceptor logs the user out on
+    // any 401 -- so a fake that answered 401 for both would make the app behave
+    // correctly here and wrongly against the real server.
+    if (!me) return err(res, 401, 'Missing credentials')
+
+    if (path === '/auth/me') return ok(res, me)
+
+    if (path === '/profiles/config' && method === 'GET') {
+      return ok(res, {
+        profile_fields: world.profileFields,
+        profiles_enabled: world.profilesEnabled,
+      })
+    }
+
+    if (path === '/profiles/config' && method === 'PUT') {
+      if (me.role !== 'Admin') return err(res, 403, 'Insufficient permissions')
+      world.profileFields = (body.profile_fields ?? []) as never
+      world.profilesEnabled = Boolean(body.profiles_enabled)
+      return ok(res, {
+        profile_fields: world.profileFields,
+        profiles_enabled: world.profilesEnabled,
+      })
+    }
+
+    const profileMatch = path.match(/^\/profiles\/([^/]+)$/)
+    if (profileMatch) {
+      const target = world.users.find((u) => u.id === profileMatch[1])
+      if (!target) return err(res, 404, 'User not found')
+      if (method === 'GET') {
+        return ok(res, { user_id: target.id, profile: target.profile })
+      }
+      if (method === 'PUT') {
+        // The real validator, imported rather than reimplemented. This is the
+        // whole reason the fake is a Vite plugin: a standalone server could not
+        // resolve `@/stores/profile`, and a hand-written copy of these rules
+        // would agree with itself.
+        const incoming = (body.profile ?? {}) as Record<string, unknown>
+        const problems = validateProfile(incoming, world.profileFields)
+        if (Object.keys(problems).length > 0) {
+          return json(res, 400, {
+            success: false,
+            error: 'Validation failed',
+            fields: problems,
+          })
+        }
+        target.profile = incoming as never
+        return ok(res, { user_id: target.id, profile: target.profile })
+      }
+    }
+
+    if (path === '/tools' && method === 'GET') return ok(res, world.tools)
+
+    if (path === '/users' && method === 'GET') {
+      if (me.role !== 'Admin') return err(res, 403, 'Insufficient permissions')
+      return ok(res, {
+        items: world.users,
+        total: world.users.length,
+        page: 1,
+        per_page: 50,
+        total_pages: 1,
+      })
+    }
+
+    const doorInfo = path.match(/^\/doors\/([^/]+)\/info$/)
+    if (doorInfo) {
+      const door = world.doors.find((d) => d.id === doorInfo[1])
+      if (!door) return err(res, 404, 'Door not found')
+      return ok(res, door)
+    }
+
+    const doorCheckin = path.match(/^\/doors\/([^/]+)\/checkin$/)
+    if (doorCheckin && method === 'POST') {
+      const door = world.doors.find((d) => d.id === doorCheckin[1])
+      if (!door) return err(res, 404, 'Door not found')
+      if (!door.enabled) return ok(res, { unlocked: false, reason: 'Door is disabled' })
+      if (!door.you_are_authorized) {
+        return ok(res, { unlocked: false, reason: 'Not authorized' })
+      }
+      return ok(res, { unlocked: true, reason: null })
+    }
+
+    // The API's own 404, in the same envelope -- matching what the server does
+    // now that `api_routes()` owns a fallback. A fake that answered HTML here
+    // would hide the very defect that fallback was added for.
+    return err(res, 404, `No such endpoint: /api${path}`)
+  })()
+}
