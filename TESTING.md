@@ -508,6 +508,24 @@ business. The number is what makes the conversation possible, and it is
 ratcheted so it can only go down.
 *(`frontend/tests/structure/contrast.spec.ts`)*
 
+### A failed configuration load says nothing at all
+
+`configStore.fetchConfig` catches its own errors and does not rethrow, so
+`App.vue`'s `Promise.all([authStore.initialize(), configStore.fetchConfig()])`
+resolves, its `catch` never runs, and the "Initialization Error" notification
+that exists for exactly this case is **unreachable** for the failure most likely
+to happen at boot.
+
+The application then runs on `PublicConfig`'s defaults — no site name, page
+links off, features gated — and nothing anywhere says the configuration failed
+to load. It looks like an administrator has not set anything up.
+
+*Why not fixed:* rethrowing changes what every other caller of `fetchConfig`
+sees, and the store's `error` ref is arguably the right channel — what is
+missing is anything rendering it. That is a product decision about where a
+degraded boot should be surfaced.
+*(`frontend/tests/components/AppBoot.spec.ts`, and the browser tier)*
+
 ### Smaller things, recorded where they live
 
 * The configured `site_name` is not in the page header. `/config/public` serves

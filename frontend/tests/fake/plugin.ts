@@ -147,6 +147,52 @@ function injected(path: string, res: ServerResponse): boolean {
   }
 }
 
+/**
+ * Run a handler and guarantee the response is *ended*, whatever happens.
+ *
+ * The first version of this file ran each handler as `void (async () => {..})()`.
+ * A throw inside that is an unhandled rejection, the response is never sent, and
+ * the browser waits -- axios gives up after its 30-second timeout, which is
+ * also Playwright's test timeout, so the whole run reports thirty identical
+ * "locator.click: Test timeout" failures and not one word about the cause.
+ *
+ * A fake that can hang on its own bug is worse than no fake: it produces
+ * failures that look like application defects and cannot be told apart from
+ * them. So a throw becomes a 500 with the message in it, and a log line the
+ * webServer output carries.
+ *
+ * Every request is logged either way. A tier whose failures are timeouts needs
+ * to be able to say what was asked and what was answered.
+ */
+async function guard(
+  which: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  handler: () => Promise<void>
+): Promise<void> {
+  const started = Date.now()
+  try {
+    await handler()
+  } catch (e) {
+    const message = e instanceof Error ? (e.stack ?? e.message) : String(e)
+    console.error(`[fake:${which}] ${req.method} ${req.url} threw:\n${message}`)
+    if (!res.writableEnded) {
+      err(res, 500, `the fake threw handling this request: ${message.split('\n')[0]}`)
+    }
+  } finally {
+    if (!res.writableEnded) {
+      // Reached by `hangNext`, which is deliberate -- and by a handler that
+      // fell through every branch without answering, which is not. The log
+      // distinguishes them.
+      console.error(`[fake:${which}] ${req.method} ${req.url} left unanswered`)
+    } else {
+      console.error(
+        `[fake:${which}] ${req.method} ${req.url} -> ${res.statusCode} (${Date.now() - started}ms)`
+      )
+    }
+  }
+}
+
 export function fakeApi(): Plugin {
   return {
     name: 'css-fake-api',
@@ -161,7 +207,7 @@ export function fakeApi(): Plugin {
 // The control surface
 // ---------------------------------------------------------------------------
 const control: Connect.NextHandleFunction = (req, res) => {
-  void (async () => {
+  void guard('control', req, res, async () => {
     const url = new URL(req.url ?? '/', 'http://fake')
     const path = url.pathname
 
@@ -195,14 +241,14 @@ const control: Connect.NextHandleFunction = (req, res) => {
       })
     }
     return err(res, 404, `no such control endpoint: ${path}`)
-  })()
+  })
 }
 
 // ---------------------------------------------------------------------------
 // The API
 // ---------------------------------------------------------------------------
 const api: Connect.NextHandleFunction = (req, res) => {
-  void (async () => {
+  void guard('api', req, res, async () => {
     const url = new URL(req.url ?? '/', 'http://fake')
     const path = url.pathname
     const method = (req.method ?? 'GET').toUpperCase()
@@ -335,5 +381,5 @@ const api: Connect.NextHandleFunction = (req, res) => {
     // now that `api_routes()` owns a fallback. A fake that answered HTML here
     // would hide the very defect that fallback was added for.
     return err(res, 404, `No such endpoint: /api${path}`)
-  })()
+  })
 }
