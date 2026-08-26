@@ -42,13 +42,13 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
 | 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 52 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
-| 5 Browser vs fake API | What does the app do when a request *fails*? | **Written, unexercised.** A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes, and 13 specs across two files including a phone viewport for the QR flow. **No browser has run it yet**: there is no FreeBSD Playwright build, so it is unexercised until a reaper session or CI runs it. Counting it as coverage before that would be exactly the claim this document exists to avoid. |
+| 5 Browser vs fake API | What does the app do when a request *fails*? | **Written; the fake is verified, the specs are not.** The fake API answers correctly end to end and all four injection shapes were exercised by hand against it. **No browser has run the specs**, because there is no FreeBSD Playwright build. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes, and 13 specs across two files including a phone viewport for the QR flow. **No browser has run it yet**: there is no FreeBSD Playwright build, so it is unexercised until a reaper session or CI runs it. Counting it as coverage before that would be exactly the claim this document exists to avoid. |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Oracle only.** Six invariants over the accumulated world, and a 20-case self-test that feeds each of them what a broken server would send and requires it to fire — written first, deliberately, because an invariant that never fires is indistinguishable from a passing suite. It runs in `e2e/lint.sh` with no stack at all. The journey driver that uses them is not written. |
 | 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Not started.** |
-| 11 Human evidence | Does this make sense to a newcomer? | **Not started.** |
+| 11 Human evidence | Does this make sense to a newcomer? | **Half started.** The contrast audit exists: WCAG relative luminance over all fourteen themes, with OKLCH converted for daisyUI's built-ins and the reference implementation checked against three known answers. It found **36 semantic/base pairings below AA**, pinned as a ratchet. The prose-transcript half needs Tier 9's journey driver and does not exist. |
 
 **Formatting and linting are complete and gating.** `rustfmt`, `prettier`,
 `eslint` (type-aware, flat config), `shellcheck` and `shfmt` all pass, and CI
@@ -477,6 +477,23 @@ endpoint: `api.ts` wraps every call in `.catch` and produces the same generic
 *Why not fixed:* they are unbuilt features, not defects.
 *(`checks/tests/unimplemented_endpoints.rs` pins the list and asserts each one
 says which feature is missing.)*
+
+### Thirty-six colour pairings are below WCAG AA
+
+`text-error`, `text-warning`, `text-success` and `text-info` set a foreground
+and leave the background to whatever card the element sits in — `base-100`,
+`base-200` or `base-300` in this application. Across the fourteen themes, 36 of
+those pairings fall below 4.5:1. `lofi`'s `text-success` on `base-300` is
+**1.01:1** — the same colour, effectively.
+
+Not hypothetical: `ProfileField.vue` renders both the required marker and the
+validation message in `text-error`, so a theme in that list is a theme where the
+reason a form will not submit cannot be read.
+
+*Why not fixed:* changing a designer's palette from a test is not a test's
+business. The number is what makes the conversation possible, and it is
+ratcheted so it can only go down.
+*(`frontend/tests/structure/contrast.spec.ts`)*
 
 ### Smaller things, recorded where they live
 

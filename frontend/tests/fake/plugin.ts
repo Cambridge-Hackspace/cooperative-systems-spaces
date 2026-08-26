@@ -19,36 +19,31 @@
 import type { Connect, Plugin } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { createPinia, setActivePinia } from 'pinia'
-
-import { useProfileStore } from '../../src/stores/profile'
+import { validateProfileAgainst } from '../../src/lib/profileValidation'
 import { UserRole } from '../../src/types'
 import { World, type Injection } from './world'
 
 const world = new World()
 
-// The real validator, reached through the real store.
+// The real validator, imported directly.
 //
-// `validateProfile` is a method on the Pinia store rather than a free function,
-// and it reads `profileConfig` off that store's state -- so the fake installs a
-// Pinia, seeds the config it is serving, and calls the method. That is more
-// ceremony than importing a function would be, and it is still the right trade:
-// the alternative is a second copy of the rules in this file, which would agree
-// with itself no matter what the application did.
+// It lives in `src/lib/profileValidation.ts` rather than in the Pinia store for
+// exactly this reason: **a Vite plugin is evaluated by Node when the config
+// loads, before the `@/` alias exists**, so anything it imports has to resolve
+// without the alias -- and `stores/profile.ts` imports `@/utils/api`.
 //
-// The store's setup touches no DOM, so it runs in the Vite dev server's Node
-// process. If it ever stops doing that, the fix is to extract the validator
-// into a pure module that both the store and this file import -- which is where
-// it belongs anyway.
-setActivePinia(createPinia())
-const profileStore = useProfileStore()
-
+// The first version of this file went through the store and failed in the
+// session with `Cannot find package '@/utils'`, from inside a
+// `vite.fake.config.ts.timestamp-*.mjs` -- an error naming a temporary file
+// nobody wrote. Extracting the rules is both the fix and the shape they should
+// have had: given a profile and a field list, is it valid? Nothing about that
+// needs a store.
+//
+// The alternative -- a copy of the rules in this file -- would agree with itself
+// no matter what the application did, which is the failure that makes fake-API
+// tiers worthless.
 function validateAgainstTheRealRules(profile: Record<string, unknown>) {
-  profileStore.profileConfig = {
-    profile_fields: world.profileFields,
-    profiles_enabled: world.profilesEnabled,
-  }
-  return profileStore.validateProfile(profile)
+  return validateProfileAgainst(profile, world.profileFields)
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -80,6 +75,25 @@ function readBody(req: IncomingMessage): Promise<unknown> {
     })
   })
 }
+
+/**
+ * Every path the fake serves.
+ *
+ * Written out so the 404 can be decided before the credential gate, the way the
+ * real router does it. Keeping it in step with the handlers below is the cost;
+ * the alternative is a fake whose 401/404 precedence differs from the server's,
+ * which is the one thing a fake must not get wrong -- the frontend logs the
+ * user out on any 401.
+ */
+const KNOWN_PATHS: RegExp[] = [
+  /^\/config\/public$/,
+  /^\/auth\/(login|logout|me)$/,
+  /^\/profiles\/config$/,
+  /^\/profiles\/[^/]+$/,
+  /^\/tools$/,
+  /^\/users$/,
+  /^\/doors\/[^/]+\/(info|checkin)$/,
+]
 
 /** A string, or the empty string. Never "[object Object]". */
 function asText(v: unknown): string {
@@ -223,6 +237,16 @@ const api: Connect.NextHandleFunction = (req, res) => {
 
     if (path === '/auth/logout' && method === 'POST') {
       return ok(res, null, 'Logged out')
+    }
+
+    // --- the 404, decided before the credential gate -------------------------
+    // The real router mounts `api_routes()` with its own fallback, and axum
+    // never runs an extractor for a path that matched no route -- so an unknown
+    // endpoint is 404 whether or not the caller is signed in. A fake that
+    // answered 401 for an unknown path would teach a spec the wrong precedence,
+    // and the frontend logs the user out on any 401.
+    if (!KNOWN_PATHS.some((p) => p.test(path))) {
+      return err(res, 404, `No such endpoint: /api${path}`)
     }
 
     // --- everything below needs a credential --------------------------------

@@ -33,6 +33,8 @@
 // says "the next call to this endpoint fails" rather than "the server is
 // broken", and the assertions after it are about recovery.
 
+// Relative, not aliased: this module is reachable from the Vite plugin, which
+// Node evaluates before the `@/` alias exists.
 import { ProfileFieldType, UserRole, type ProfileField, type User } from '../../src/types'
 
 export type Injection = 'failNext' | 'abortNext' | 'hangNext' | 'malformNext'
