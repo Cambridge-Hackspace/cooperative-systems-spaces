@@ -27,7 +27,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{Guard, ROUTES};
+use common::{Guard, R, ROUTES};
 use css_server::{api, test_support, AppState};
 use tower::ServiceExt;
 
