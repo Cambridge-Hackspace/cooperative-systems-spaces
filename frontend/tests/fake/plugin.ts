@@ -152,8 +152,19 @@ function injected(path: string, res: ServerResponse): boolean {
         'content-type': 'application/json',
         'content-length': '4096',
       })
-      res.write('{"truncated":')
-      res.socket?.destroy()
+      // Destroyed in the write callback, not on the next line.
+      //
+      // `res.write()` buffers; `socket.destroy()` immediately after discards
+      // the buffer before anything reaches the wire, which is a connection
+      // closed with *no* bytes -- exactly the case Chromium retries, which is
+      // what this was supposed to stop.
+      //
+      // The tell was in the local check and I read past it: curl exited 52,
+      // "empty reply from server", where a genuine truncation is 18, "partial
+      // transfer". The callback fires once the data is handed to the OS.
+      res.write('{"truncated":', () => {
+        res.socket?.destroy()
+      })
       return true
 
     case 'hangNext':
