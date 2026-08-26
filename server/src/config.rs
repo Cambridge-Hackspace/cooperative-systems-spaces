@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 pub use css_lib::MqttConfig;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
@@ -1006,6 +1007,46 @@ impl Default for AppConfig {
     }
 }
 
+/// Returned when `from_file` filled in fields a configuration was missing and
+/// rewrote it. The operator has to review the result before the server runs.
+///
+/// This is an error type rather than a `std::process::exit` inside the loader,
+/// and the distinction is the whole point of it existing.
+///
+/// `from_file` used to call `std::process::exit(0)` here. Zero is what a
+/// program returns when it did what it was asked, so systemd saw a clean stop
+/// and did not restart, `docker run` reported success, and any orchestrator
+/// watching exit codes was told the server had finished normally — while the
+/// server had in fact refused to start and rewritten its own configuration on
+/// the way out. A deployment could sit down for the length of a config upgrade
+/// and every automated signal would say it was fine.
+///
+/// The second reason is testability, and it is not a minor one: a test calling
+/// `from_file` would have terminated the whole test binary reporting success,
+/// taking every test scheduled after it with it, silently.
+#[derive(Debug)]
+pub struct ConfigRewritten {
+    /// The configuration file, now containing defaults for what was missing.
+    pub path: PathBuf,
+    /// The copy of the file as it was before the rewrite.
+    pub backup: PathBuf,
+}
+
+impl fmt::Display for ConfigRewritten {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the configuration at {} was missing required fields; defaults were \
+             written in and the original was backed up to {}. Review the result \
+             and start the server again.",
+            self.path.display(),
+            self.backup.display()
+        )
+    }
+}
+
+impl std::error::Error for ConfigRewritten {}
+
 impl AppConfig {
     /// Load configuration from a TOML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -1052,25 +1093,20 @@ impl AppConfig {
                     let merged_value = merge_toml_values(existing_value, default_value);
 
                     // Parse the merged config
-                    let merged_config: AppConfig =
-                        toml::from_str(&toml::to_string(&merged_value).unwrap())
-                            .with_context(|| "Failed to parse merged configuration")?;
+                    let merged_text = toml::to_string(&merged_value)
+                        .with_context(|| "Failed to serialise the merged configuration")?;
+                    let merged_config: AppConfig = toml::from_str(&merged_text)
+                        .with_context(|| "Failed to parse merged configuration")?;
 
                     // Write the updated config back to file
                     merged_config
                         .to_file(&path)
                         .with_context(|| "Failed to write updated configuration")?;
 
-                    eprintln!(
-                        "✅ Updated configuration file with default values for missing fields."
-                    );
-                    eprintln!(
-                        "📝 Please review the configuration at: {}",
-                        path.as_ref().display()
-                    );
-                    eprintln!("\n🛑 Server will now exit. Please restart after reviewing the configuration.\n");
-
-                    std::process::exit(0);
+                    return Err(anyhow::Error::new(ConfigRewritten {
+                        path: path.as_ref().to_path_buf(),
+                        backup: PathBuf::from(&backup_path),
+                    }));
                 } else {
                     // Some other parsing error
                     return Err(e).with_context(|| "Failed to parse TOML configuration");
@@ -1308,6 +1344,99 @@ mod tests {
 
         // Compare (using debug format since we don't implement PartialEq)
         assert_eq!(format!("{:?}", config), format!("{:?}", loaded_config));
+    }
+
+    /// A configuration missing a required field must come back as an error.
+    ///
+    /// **This test could not have existed before the change it covers.**
+    /// `from_file` responded to a missing field by calling
+    /// `std::process::exit(0)`, so running this would have terminated the whole
+    /// test binary — reporting success — and silently taken every test
+    /// scheduled after it. That is not a hypothetical: the stack battery's
+    /// first successful bring-up found the same code path in production, where
+    /// it told the container runtime the server had finished normally after
+    /// refusing to start.
+    #[test]
+    fn a_config_missing_a_field_is_an_error_and_not_an_exit() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("config.toml");
+
+        // A real configuration with one section incomplete. `calendars` has no
+        // `#[serde(default)]`, so omitting it is a missing-field error — which
+        // is exactly how the stack battery's own config was wrong on its first
+        // run.
+        let mut text = toml::to_string_pretty(&AppConfig::default()).expect("serialise");
+        text = text.replace("calendars = []", "");
+        std::fs::write(&path, &text).expect("write the config");
+
+        let err = AppConfig::from_file(&path)
+            .expect_err("a config missing a required field must not load silently");
+
+        let rewritten = err
+            .downcast_ref::<ConfigRewritten>()
+            .expect("the caller has to be able to tell this apart from a parse failure");
+
+        assert_eq!(rewritten.path, path, "the error names the file it rewrote");
+        assert!(
+            rewritten.backup.exists(),
+            "the original was not backed up to {}, so the operator's file is gone",
+            rewritten.backup.display()
+        );
+
+        // And the rewrite happened: the file now loads.
+        AppConfig::from_file(&path)
+            .expect("the rewritten configuration should load on the second attempt");
+    }
+
+    /// A file that is not TOML at all is a plain parse failure, not a rewrite.
+    ///
+    /// The two are different: one is a configuration a version upgrade left
+    /// incomplete, and rewriting it is a service. The other is a typo, and
+    /// rewriting *that* would replace whatever the operator meant to write with
+    /// a wall of defaults.
+    #[test]
+    fn a_config_that_is_not_toml_is_not_rewritten() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "this is not toml = = =").expect("write");
+
+        let err = AppConfig::from_file(&path).expect_err("invalid TOML must not load");
+        assert!(
+            err.downcast_ref::<ConfigRewritten>().is_none(),
+            "invalid TOML was treated as a missing-field migration and the file was rewritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            "this is not toml = = =",
+            "the file was modified"
+        );
+    }
+
+    /// The shipped sample must be loadable.
+    ///
+    /// It is the first thing a new deployment copies, and a sample that does
+    /// not parse turns the very first boot into the rewrite path above — which
+    /// then hands the operator `PagesConfig::default()`'s live GitHub URLs and
+    /// starts cloning them.
+    ///
+    /// Asserted with `toml::from_str` rather than `from_file`, deliberately:
+    /// `from_file` would repair the file in place, so a broken sample would
+    /// make this test pass and quietly edit a tracked file in the working tree.
+    #[test]
+    fn the_shipped_sample_config_parses() {
+        let sample = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.sample.toml");
+        let text = std::fs::read_to_string(sample)
+            .unwrap_or_else(|e| panic!("config.sample.toml must exist and be readable: {e}"));
+        let config: AppConfig = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("config.sample.toml does not parse as an AppConfig: {e}"));
+
+        // And it must not ship pointing at somebody's repositories. PagesService
+        // git-clones these at boot into a hardcoded /tmp path.
+        assert!(
+            config.pages.wiki_repo.is_none() && config.pages.site_repo.is_none(),
+            "the sample names a wiki or site repository; a fresh deployment would \
+             clone it on first boot without anybody asking for it"
+        );
     }
 
     #[test]

@@ -64,7 +64,21 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // Load configuration
-    let app_config = load_config(&args.config_path)?;
+    // A configuration that had to be rewritten is not a crash and it is not a
+    // success. It gets its own exit code -- 78, sysexits.h's EX_CONFIG -- so a
+    // supervisor can tell "this needs a human to look at the config" apart from
+    // both "the server stopped normally" and "the server fell over". The loader
+    // used to exit(0) here, which told every one of them the opposite.
+    let app_config = match load_config(&args.config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            if let Some(rewritten) = e.downcast_ref::<css_server::config::ConfigRewritten>() {
+                eprintln!("\n{rewritten}\n");
+                std::process::exit(78);
+            }
+            return Err(e);
+        }
+    };
     info!("Configuration loaded from: {}", args.config_path);
     info!(
         "Site: {} running in {} mode",
