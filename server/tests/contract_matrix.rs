@@ -373,6 +373,37 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     );
 }
 
+/// The "member or above" tier of the authorization model is empty.
+///
+/// `MemberUser` exists in `server/src/auth.rs` with its own extractor and its
+/// own rejection, and no route uses it — so no request has ever gone through
+/// that gate. rustc reports the symptom as "variant `Member` is never
+/// constructed" *in this file*, which reads like a tidying job in a test
+/// fixture rather than a statement about the product.
+///
+/// Asserting the count states it where it belongs and turns the first
+/// member-gated route into a failure that says what else has to move.
+/// `checks/tests/member_gate_is_dead.rs` carries the rest of that instruction.
+#[test]
+fn the_member_gate_currently_guards_nothing() {
+    let member_routes = ROUTES.iter().filter(|r| r.guard() == Guard::Member).count();
+    assert_eq!(
+        member_routes, 0,
+        "{member_routes} route(s) are now Guard::Member. Delete this test and \
+         add a live case to the stack battery's contract stage proving a Member \
+         is accepted and a Newbie is refused with 403 — the offline matrix \
+         cannot show acceptance, because accepting a credential means querying."
+    );
+
+    // Constructed on purpose. The arm exists for the first member-gated route,
+    // not for this assertion, and without a construction somewhere rustc calls
+    // it dead code — which is how a whole authorization tier comes to look like
+    // an unused enum variant somebody should tidy away.
+    let placeholder = R("GET", "/api/nothing-yet", Guard::Member);
+    assert_eq!(placeholder.guard(), Guard::Member);
+    assert!(placeholder.is_guarded());
+}
+
 #[tokio::test]
 async fn toolguard_parses_parameters_before_it_authenticates() {
     // A finding, recorded rather than fixed here.

@@ -446,3 +446,59 @@ absorb_driver_cases() {
   log "  absorbed ${n} case(s) from the driver"
   return 0
 }
+
+# ---------------------------------------------------------------------------
+# css-edge
+# ---------------------------------------------------------------------------
+# Started the same two ways css-server is, for the same reason: under
+# podman/docker in the bookworm runtime image, and as a host process under
+# --provision=external.
+#
+# `start_edge <binary> <frontend-path>` -- the binary is a name under
+# e2e/artifacts, so the caller chooses between `css-edge` (release, which
+# embeds its bundle) and `css-edge-dbg` (debug, which serves the path).
+C_EDGE="css-e2e-edge"
+
+start_edge() {
+  local binary="$1" frontend="$2"
+  if [[ ${PROVISION} == "external" ]]; then
+    CONFIG_PATH="${STACK_DIR}/edge.config.toml" \
+      RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
+      TZ="${STACK_TZ}" \
+      "${ROOT}/e2e/artifacts/${binary}" \
+      --config "${STACK_DIR}/edge.config.toml" \
+      --frontend-path "${frontend}" \
+      >>"${OUT}/logs/css-edge.log" 2>&1 &
+    echo $! >"${STACK_DIR}/edge.pid"
+    return 0
+  fi
+
+  pm run -d --name "${C_EDGE}" --network host \
+    -e RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
+    -e TZ="${STACK_TZ}" \
+    -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
+    -v "${STACK_DIR}:/stack" \
+    "${IMG_SERVER_LOCAL}" "/artifacts/${binary}" \
+    --config /stack/edge.config.toml \
+    --frontend-path "/stack/${frontend##*/}" \
+    >/dev/null
+}
+
+stop_edge() {
+  if [[ ${PROVISION} == "external" ]]; then
+    if [[ -f "${STACK_DIR}/edge.pid" ]]; then
+      kill "$(cat "${STACK_DIR}/edge.pid")" 2>/dev/null || true
+      rm -f "${STACK_DIR}/edge.pid"
+    fi
+  else
+    pm logs "${C_EDGE}" >>"${OUT}/logs/css-edge.log" 2>&1 || true
+    pm rm -f "${C_EDGE}" >/dev/null 2>&1 || true
+  fi
+  # The port has to actually be free before the next binary is started, or the
+  # second half of the devices stage asserts against the first half's process.
+  local waited=0
+  while tcp_open 8080 && [[ ${waited} -lt 15 ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+}

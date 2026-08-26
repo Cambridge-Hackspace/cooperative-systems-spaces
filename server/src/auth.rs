@@ -4,9 +4,8 @@ use argon2::{
 };
 use axum::{
     extract::{FromRef, FromRequestParts},
-    http::{request::Parts, StatusCode},
+    http::request::Parts,
     response::{IntoResponse, Response},
-    Json,
 };
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};

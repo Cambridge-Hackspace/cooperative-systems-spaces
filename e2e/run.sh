@@ -38,8 +38,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -711,6 +711,120 @@ stage_health() {
 # down -- tear the stack down
 
 # ===========================================================================
+# devices -- the one tier that can see a `cfg` branch
+# ===========================================================================
+# `edge/src/web_server.rs` has two `create_router` functions. The
+# `#[cfg(debug_assertions)]` one serves `state.frontend_path` through a
+# `ServeDir`; the `#[cfg(not(debug_assertions))]` one serves the `include_dir!`
+# embedding and ignores the flag entirely.
+#
+# So `--frontend-path` -- the subject of fdc887c -- exists only in a debug
+# build, and a release binary silently disregards it. No unit test can see that:
+# `cargo test` compiles one profile, and whichever one it compiles is the only
+# arm that exists as far as the test is concerned. Only running both binaries
+# distinguishes them, which is why e2e/build.sh produces both.
+#
+# The assertion is on the *bytes served*, not on the flag being accepted. A
+# binary that takes the flag and ignores it accepts it just as cheerfully.
+stage_devices() {
+  cases_begin devices
+  stack_paths
+
+  local fixture="${STACK_DIR}/edge-frontend"
+  local marker="EDGE-FIXTURE-${RANDOM}${RANDOM}"
+  mkdir -p "${fixture}"
+  cat >"${fixture}/index.html" <<EOF
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>fixture</title></head>
+<body><h1>${marker}</h1></body></html>
+EOF
+
+  # An Unauthenticated edge starts the web server and nothing else -- no broker,
+  # no server, no registration. That is exactly the surface being asserted here,
+  # and it keeps this stage independent of the emoji device codes a non-UTF-8
+  # cluster cannot store.
+  cat >"${STACK_DIR}/edge.config.toml" <<'EOF'
+name = "e2e-edge"
+auth_status = "Unauthenticated"
+remote_transport = "websocket"
+toolguard_sync_interval_secs = 300
+calendar_mqtt_topic = "cs/spaces/calendar/events"
+calendar_sync_interval_secs = 300
+EOF
+
+  local edge_port=8080
+  if tcp_open "${edge_port}"; then
+    record_case "devices/port-is-free" fail \
+      "something is already listening on ${edge_port}; css-edge hardcodes it"
+    emit_junit devices
+    return 1
+  fi
+  record_case "devices/port-is-free" ok
+
+  # --- the debug build honours --frontend-path -----------------------------
+  if start_edge css-edge-dbg "${fixture}"; then
+    if wait_for "css-edge (debug)" 30 edge_ready "${edge_port}"; then
+      record_case "devices/debug-binary-starts" ok
+      local served
+      served="$(http_head / "${edge_port}")"
+      if [[ ${served} == *"${marker}"* ]]; then
+        record_case "devices/debug-serves-the-path-it-was-given" ok
+      else
+        record_case "devices/debug-serves-the-path-it-was-given" fail \
+          "--frontend-path pointed at a fixture and the marker is not in the response"
+      fi
+      assert_eq "devices/debug-api-status" "200" "$(http_status /api/status "${edge_port}")"
+    else
+      record_case "devices/debug-binary-starts" fail "never answered on ${edge_port}"
+    fi
+  else
+    record_case "devices/debug-binary-starts" fail "could not start css-edge-dbg"
+  fi
+  stop_edge
+
+  # --- the release build ignores it, and says so ---------------------------
+  # Not a defect: it is what the cfg split means. Asserted so that the split
+  # itself cannot be removed by accident -- if a release build ever started
+  # honouring the flag, the embedded bundle would stop being what ships.
+  if start_edge css-edge "${fixture}"; then
+    if wait_for "css-edge (release)" 30 edge_ready "${edge_port}"; then
+      record_case "devices/release-binary-starts" ok
+      local served
+      served="$(http_head / "${edge_port}")"
+      if [[ ${served} == *"${marker}"* ]]; then
+        record_case "devices/release-ignores-frontend-path" fail \
+          "the release binary served the fixture; the include_dir! embedding is no longer what ships"
+      else
+        record_case "devices/release-ignores-frontend-path" ok
+      fi
+
+      # And what it does serve is a real bundle rather than build.rs's
+      # placeholder. An empty embedding compiles cleanly and serves a page
+      # saying the UI was not built -- which is a working binary with no
+      # interface, and nothing else in this suite would notice.
+      if [[ ${served} == *"UI not built"* ]]; then
+        record_case "devices/release-embeds-a-real-bundle" fail \
+          "css-edge is serving edge/build.rs's placeholder: frontend_edge was not built before cargo ran"
+      elif [[ ${served} == *"<div id=\"app\">"* || ${served} == *"<script"* ]]; then
+        record_case "devices/release-embeds-a-real-bundle" ok
+      else
+        record_case "devices/release-embeds-a-real-bundle" fail \
+          "the embedded index.html is neither the placeholder nor a built bundle: ${served:0:200}"
+      fi
+      assert_eq "devices/release-api-status" "200" "$(http_status /api/status "${edge_port}")"
+    else
+      record_case "devices/release-binary-starts" fail "never answered on ${edge_port}"
+    fi
+  else
+    record_case "devices/release-binary-starts" fail "could not start css-edge"
+  fi
+  stop_edge
+
+  emit_junit devices "edge_port=${edge_port}"
+}
+
+edge_ready() { [[ "$(http_status /api/status "$1")" == "200" ]]; }
+# ===========================================================================
 # logs -- what the server said that nobody was listening to
 # ===========================================================================
 # The cheapest oracle in the suite, and it exists because of a specific habit
@@ -815,6 +929,7 @@ stage_down() {
   stack_paths
   collect_stack_logs
   stop_server
+  stop_edge
   stop_mosquitto
   stack_rm_quiet
   record_case "down/torn-down" ok
@@ -836,25 +951,97 @@ for stage in ${STAGES//,/ }; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+# SUMMARY.md -- the human-facing report
+# ---------------------------------------------------------------------------
+# Written last, and written whatever happened. It is what somebody reads when
+# they were not watching, so it has to answer three questions without them
+# opening anything else: what ran, what did not run *and why*, and what this
+# run is not claiming.
+#
+# The per-case detail is in junit/ and the server's own words are in logs/.
+# This is the index.
 {
   echo "# e2e run summary"
   echo
-  echo "- finished: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  echo "- stages requested: ${STAGES}"
-  echo "- stages implemented: ${STAGES_ALL}"
-  echo "- provision: ${PROVISION}"
+  echo "- finished:  $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "- requested: ${STAGES}"
+  echo "- available: ${STAGES_ALL}"
+  echo "- provision: ${PROVISION}${ENGINE:+ (engine: ${ENGINE})}"
+  echo "- cluster:   ${PG_ENCODING}, lc_collate=C, lc_ctype=C, TZ=${STACK_TZ}"
   echo
+
   if [[ -n ${FAILED_STAGES} ]]; then
     echo "## FAILED:${FAILED_STAGES}"
   else
     echo "## All requested stages passed."
   fi
   echo
+
+  # --- per-stage counts, from the JUnit this run actually wrote -------------
+  # Read back rather than accumulated in a variable, so the summary describes
+  # the files that exist rather than what the driver believes it did.
+  echo "## Stages"
+  echo
+  echo "| Stage | Cases | Failures | Skipped |"
+  echo "|---|---|---|---|"
+  local_stage=""
+  for local_stage in ${STAGES//,/ }; do
+    xml="${OUT}/junit/${local_stage}.xml"
+    if [[ -f ${xml} ]]; then
+      counts="$(sed -n 's/.*tests="\([0-9]*\)".*failures="\([0-9]*\)".*skipped="\([0-9]*\)".*/\1 | \2 | \3/p' "${xml}" | head -1)"
+      echo "| ${local_stage} | ${counts:-? | ? | ?} |"
+    else
+      echo "| ${local_stage} | (no JUnit written -- the stage died before emitting one) | | |"
+    fi
+  done
+  echo
+
+  # --- seeds ---------------------------------------------------------------
+  echo "## Replay"
+  echo
+  if [[ -s "${STACK_DIR:-}/fuzz-seed.txt" ]]; then
+    seed="$(cat "${STACK_DIR}/fuzz-seed.txt")"
+    echo "    CSS_FUZZ_SEED=${seed} ./e2e/run.sh --provision=${PROVISION} --only up,fuzz"
+    echo
+    echo "The seed reproduces the *sequence of choices*, not the run: entity ids"
+    echo "differ between runs, so a replay follows a similar path rather than an"
+    echo "identical one. Every finding in stack/fuzz-findings.json carries its"
+    echo "whole request verbatim, which needs no replay at all."
+  else
+    echo "No fuzz seed recorded -- the fuzz stage did not run."
+  fi
+  echo
+
+  # --- what this run is not claiming ---------------------------------------
   echo "## Narrowings in force"
   echo
-  echo "- Stages beyond those listed under 'implemented' do not exist yet."
-  echo "  They are absent from STAGES_ALL rather than present-and-skipped, so"
-  echo "  this run makes no claim about the tiers they will cover."
+  echo "- Tiers 5, 9, 10 and 11 have no stage here. They are absent from"
+  echo "  STAGES_ALL rather than present-and-skipped, so this run makes no claim"
+  echo "  about them at all. TESTING.md \S2 is the tier-by-tier status."
+  if [[ ${PG_ENCODING} != "UTF8" ]]; then
+    echo "- The invite-redemption race was NOT exercised: a device invite code is"
+    echo "  eight emoji and this cluster (${PG_ENCODING}) cannot store one. The"
+    echo "  finding is asserted instead. Run with CSS_E2E_DB_ENCODING=UTF8 to"
+    echo "  exercise the race itself."
+  fi
+  if [[ ${PROVISION} == "external" ]]; then
+    echo "- --provision=external: postgres and the container images are the"
+    echo "  caller's. The engine checks in preflight are skipped, because there"
+    echo "  is no engine to check."
+  fi
+  echo "- Assertions named findings/... pin a known defect in place rather"
+  echo "  than asserting correct behaviour. They FAIL when the defect is fixed,"
+  echo "  which is when they should be read and deleted. TESTING.md \S8 lists them."
+  echo
+  echo "## Where to look"
+  echo
+  echo "- junit/<stage>.xml  -- every case, written in a trap so a stage that"
+  echo "                        died still leaves the failures it had"
+  echo "- logs/              -- the components' own words, which is what a"
+  echo "                        human reading a failure actually wants"
+  echo "- e2e.log            -- the whole run"
+  echo "- RUN.txt            -- which artifacts belong to *this* run"
 } >"${OUT}/SUMMARY.md"
 
 if [[ -n ${FAILED_STAGES} ]]; then
