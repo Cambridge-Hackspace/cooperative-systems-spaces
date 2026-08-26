@@ -4,15 +4,9 @@
       <div class="hero-content text-center">
         <div class="max-w-5xl">
           <h1 class="text-5xl font-bold">{{ siteName }}</h1>
-          <div class="py-6">
-            &nbsp;
-          </div>
+          <div class="py-6">&nbsp;</div>
           <div class="flex gap-4 justify-center flex-wrap">
-            <router-link
-              v-if="!authStore.isAuthenticated"
-              to="/login"
-              class="btn btn-primary"
-            >
+            <router-link v-if="!authStore.isAuthenticated" to="/login" class="btn btn-primary">
               Get Started
             </router-link>
             <router-link
@@ -60,24 +54,19 @@
           Posted hours for {{ todayLabel }}. Times are local to the space.
         </p>
         <div class="grid gap-3">
-          <div
-            v-for="row in scheduleRowsToday"
-            :key="row.id"
-            class="card bg-base-200 shadow-sm"
-          >
+          <div v-for="row in scheduleRowsToday" :key="row.id" class="card bg-base-200 shadow-sm">
             <div class="card-body py-4">
               <div class="flex items-center justify-between">
                 <h3 class="font-semibold">{{ row.name }}</h3>
-                <span
-                  class="badge badge-sm"
-                  :class="row.openNow ? 'badge-success' : 'badge-ghost'"
-                >
+                <span class="badge badge-sm" :class="row.openNow ? 'badge-success' : 'badge-ghost'">
                   {{ row.openNow ? 'Open now' : 'Closed' }}
                 </span>
               </div>
-              <p v-if="row.description" class="text-xs text-base-content/70">{{ row.description }}</p>
+              <p v-if="row.description" class="text-xs text-base-content/70">
+                {{ row.description }}
+              </p>
               <div v-if="row.windows.length" class="font-mono text-sm">
-                {{ row.windows.map(w => `${w.start}–${w.end}`).join(', ') }}
+                {{ row.windows.map((w) => `${w.start}–${w.end}`).join(', ') }}
               </div>
               <div v-else class="text-sm text-base-content/60 italic">Closed today</div>
             </div>
@@ -88,9 +77,7 @@
       <!-- Links (audience-gated by the server). -->
       <div v-if="homeLinks.length">
         <h2 class="text-2xl font-semibold mb-2">Links</h2>
-        <p class="text-sm text-base-content/70 mb-4">
-          Useful destinations curated by your admins.
-        </p>
+        <p class="text-sm text-base-content/70 mb-4">Useful destinations curated by your admins.</p>
         <div class="grid gap-3">
           <a
             v-for="l in homeLinks"
@@ -103,7 +90,8 @@
             <div class="card-body py-4">
               <div class="flex items-start justify-between gap-2">
                 <h3 class="font-semibold">
-                  <span v-if="l.icon" class="mr-1">{{ l.icon }}</span>{{ l.label }}
+                  <span v-if="l.icon" class="mr-1">{{ l.icon }}</span
+                  >{{ l.label }}
                 </h3>
                 <span
                   v-if="l.audience !== 'everyone'"
@@ -184,28 +172,39 @@ const shouldShowWikiLink = computed(() => {
 const publicSchedules = ref<Schedule[]>([])
 
 const dowMap: Record<number, DayOfWeek> = {
-  0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat',
+  0: 'sun',
+  1: 'mon',
+  2: 'tue',
+  3: 'wed',
+  4: 'thu',
+  5: 'fri',
+  6: 'sat',
 }
 const dowLabel: Record<DayOfWeek, string> = {
-  mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
-  fri: 'Friday', sat: 'Saturday', sun: 'Sunday',
+  mon: 'Monday',
+  tue: 'Tuesday',
+  wed: 'Wednesday',
+  thu: 'Thursday',
+  fri: 'Friday',
+  sat: 'Saturday',
+  sun: 'Sunday',
 }
 const today: DayOfWeek = dowMap[new Date().getDay()]
 const todayLabel = dowLabel[today]
 
 const scheduleRowsToday = computed(() =>
-  publicSchedules.value.map(s => {
+  publicSchedules.value.map((s) => {
     const windows = s.intervals
-      .filter(iv => iv.day === today)
+      .filter((iv) => iv.day === today)
       .sort((a, b) => a.start.localeCompare(b.start))
     return {
       id: s.id,
       name: s.name,
       description: s.description,
       windows,
-      openNow: windows.some(w => isNowBetween(w.start, w.end)),
+      openNow: windows.some((w) => isNowBetween(w.start, w.end)),
     }
-  }),
+  })
 )
 
 function isNowBetween(start: string, end: string): boolean {
@@ -214,7 +213,7 @@ function isNowBetween(start: string, end: string): boolean {
   return toMin(start) <= nowMin && nowMin < toMin(end)
 }
 function toMin(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map(n => parseInt(n, 10))
+  const [h, m] = hhmm.split(':').map((n) => parseInt(n, 10))
   return (h || 0) * 60 + (m || 0)
 }
 
@@ -287,16 +286,18 @@ onMounted(async () => {
     if (hl) {
       homepageLinks.value = {
         view_my_profile: hl.view_my_profile !== false,
-        browse_tools:    hl.browse_tools    !== false,
-        admin_panel:     hl.admin_panel     !== false,
-        wiki:            hl.wiki            !== false,
+        browse_tools: hl.browse_tools !== false,
+        admin_panel: hl.admin_panel !== false,
+        wiki: hl.wiki !== false,
       }
     }
   } catch (error) {
     console.error('Failed to load site configuration:', error)
     siteName.value = 'Cooperative Systems Spaces'
   }
-  loadPublicSchedules()
-  loadHomeLinks()
+  // Awaited together rather than fired and forgotten: neither handles its own
+  // errors, so an unawaited rejection here was an unhandled promise rejection
+  // and the section it feeds simply stayed empty with no indication why.
+  await Promise.allSettled([loadPublicSchedules(), loadHomeLinks()])
 })
 </script>

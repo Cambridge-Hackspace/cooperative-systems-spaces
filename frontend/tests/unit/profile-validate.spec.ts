@@ -9,13 +9,13 @@ function field(over: Partial<ProfileField> & Pick<ProfileField, 'key'>): Profile
     field_type: ProfileFieldType.Text,
     required: false,
     ...over,
-  } as ProfileField
+  }
 }
 
 /** Seed the store's config directly; `validateProfile` is pure given it. */
 function validateWith(fields: ProfileField[], data: Record<string, unknown>) {
   const store = useProfileStore()
-  store.profileConfig = { profiles_enabled: true, profile_fields: fields } as never
+  store.profileConfig = { profiles_enabled: true, profile_fields: fields }
   return store.validateProfile(data)
 }
 
@@ -24,7 +24,7 @@ beforeEach(() => setActivePinia(createPinia()))
 describe('with no config loaded', () => {
   it('accepts anything, because there is nothing to validate against', () => {
     const store = useProfileStore()
-    store.profileConfig = null as never
+    store.profileConfig = null
     expect(store.validateProfile({ whatever: 'x' })).toEqual({ valid: true, errors: [] })
   })
 })
@@ -58,8 +58,15 @@ describe('required fields', () => {
   // unsaveable.
   it('accepts an explicit false for a required boolean', () => {
     const r = validateWith(
-      [field({ key: 'waiver', label: 'Waiver', required: true, field_type: ProfileFieldType.Boolean })],
-      { waiver: false },
+      [
+        field({
+          key: 'waiver',
+          label: 'Waiver',
+          required: true,
+          field_type: ProfileFieldType.Boolean,
+        }),
+      ],
+      { waiver: false }
     )
     expect(r.errors).toEqual([])
     expect(r.valid).toBe(true)
@@ -67,8 +74,15 @@ describe('required fields', () => {
 
   it('accepts an explicit zero for a required number', () => {
     const r = validateWith(
-      [field({ key: 'hours', label: 'Hours', required: true, field_type: ProfileFieldType.Number })],
-      { hours: 0 },
+      [
+        field({
+          key: 'hours',
+          label: 'Hours',
+          required: true,
+          field_type: ProfileFieldType.Number,
+        }),
+      ],
+      { hours: 0 }
     )
     expect(r.errors).toEqual([])
     expect(r.valid).toBe(true)
@@ -78,7 +92,7 @@ describe('required fields', () => {
 describe('optional fields', () => {
   it('skip validation when absent', () => {
     expect(
-      validateWith([field({ key: 'email', field_type: ProfileFieldType.Email })], {}).valid,
+      validateWith([field({ key: 'email', field_type: ProfileFieldType.Email })], {}).valid
     ).toBe(true)
   })
 })
@@ -87,13 +101,13 @@ describe('per-type rules', () => {
   it('Email must contain an @', () => {
     const bad = validateWith(
       [field({ key: 'email', label: 'Email', field_type: ProfileFieldType.Email })],
-      { email: 'nope' },
+      { email: 'nope' }
     )
     expect(bad.errors).toEqual(['Email must be a valid email address'])
     expect(
       validateWith([field({ key: 'email', field_type: ProfileFieldType.Email })], {
         email: 'a@b.co',
-      }).valid,
+      }).valid
     ).toBe(true)
   })
 
@@ -101,11 +115,11 @@ describe('per-type rules', () => {
     expect(
       validateWith([field({ key: 'p', label: 'P', field_type: ProfileFieldType.Phone })], {
         p: '12345',
-      }).valid,
+      }).valid
     ).toBe(false)
     expect(
       validateWith([field({ key: 'p', field_type: ProfileFieldType.Phone })], { p: '5551234' })
-        .valid,
+        .valid
     ).toBe(true)
   })
 
@@ -113,11 +127,11 @@ describe('per-type rules', () => {
     expect(
       validateWith([field({ key: 'd', label: 'D', field_type: ProfileFieldType.Date })], {
         d: '15/01/2026',
-      }).valid,
+      }).valid
     ).toBe(false)
     expect(
       validateWith([field({ key: 'd', field_type: ProfileFieldType.Date })], { d: '2026-01-15' })
-        .valid,
+        .valid
     ).toBe(true)
   })
 
@@ -128,7 +142,7 @@ describe('per-type rules', () => {
   it('does not check that a well-shaped date is a real one', () => {
     expect(
       validateWith([field({ key: 'd', field_type: ProfileFieldType.Date })], { d: '2026-13-45' })
-        .valid,
+        .valid
     ).toBe(true)
   })
 
@@ -136,7 +150,7 @@ describe('per-type rules', () => {
     const select = field({
       key: 'tier',
       label: 'Tier',
-      field_type: { Select: { options: ['gold', 'silver'] } } as never,
+      field_type: { Select: { options: ['gold', 'silver'] } },
     })
     const bad = validateWith([select], { tier: 'bronze' })
     expect(bad.valid).toBe(false)
@@ -148,7 +162,7 @@ describe('per-type rules', () => {
     expect(
       validateWith([field({ key: 'b', label: 'B', field_type: ProfileFieldType.Boolean })], {
         b: 'yes',
-      }).valid,
+      }).valid
     ).toBe(false)
   })
 })
@@ -176,7 +190,7 @@ describe('multiple errors', () => {
         field({ key: 'email', label: 'Email', field_type: ProfileFieldType.Email }),
         field({ key: 'phone', label: 'Phone', field_type: ProfileFieldType.Phone }),
       ],
-      { email: 'nope', phone: '1' },
+      { email: 'nope', phone: '1' }
     )
     expect(r.errors).toHaveLength(2)
   })

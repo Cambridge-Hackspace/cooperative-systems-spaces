@@ -8,28 +8,28 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: () => import('@/views/HomeView.vue')
+      component: () => import('@/views/HomeView.vue'),
     },
     {
       path: '/about',
       name: 'about',
-      component: () => import('@/views/AboutView.vue')
+      component: () => import('@/views/AboutView.vue'),
     },
     {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
       meta: {
-        requiresGuest: true
-      }
+        requiresGuest: true,
+      },
     },
     {
       path: '/register',
       name: 'register',
       component: () => import('@/views/RegisterView.vue'),
       meta: {
-        requiresGuest: true
-      }
+        requiresGuest: true,
+      },
     },
     {
       path: '/profile/mfa',
@@ -44,8 +44,8 @@ const router = createRouter({
       name: 'profile',
       component: () => import('@/views/ProfileView.vue'),
       meta: {
-        requiresAuth: true
-      }
+        requiresAuth: true,
+      },
     },
     {
       path: '/admin',
@@ -53,8 +53,8 @@ const router = createRouter({
       component: () => import('@/views/AdminView.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     {
       path: '/admin/roster',
@@ -62,8 +62,8 @@ const router = createRouter({
       component: () => import('@/views/RosterView.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Staff
-      }
+        requiredRole: UserRole.Staff,
+      },
     },
     {
       path: '/admin/audit',
@@ -71,8 +71,8 @@ const router = createRouter({
       component: () => import('@/views/AuditView.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     {
       path: '/admin/devices',
@@ -80,8 +80,8 @@ const router = createRouter({
       component: () => import('@/components/DeviceManagement.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     {
       path: '/admin/webhooks',
@@ -89,8 +89,8 @@ const router = createRouter({
       component: () => import('@/components/WebhookManagement.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     {
       path: '/admin/profile-config',
@@ -98,12 +98,12 @@ const router = createRouter({
       component: () => import('@/components/ProfileConfigAdmin.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     {
       path: '/admin/doors',
-      redirect: { name: 'admin-facility', query: { tab: 'doors' } }
+      redirect: { name: 'admin-facility', query: { tab: 'doors' } },
     },
     {
       path: '/admin/facility',
@@ -111,8 +111,8 @@ const router = createRouter({
       component: () => import('@/components/FacilityManagement.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     {
       path: '/admin/home-links',
@@ -120,29 +120,29 @@ const router = createRouter({
       component: () => import('@/components/HomeLinkManagement.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Admin
-      }
+        requiredRole: UserRole.Admin,
+      },
     },
     // Backward-compatible deep links — redirect into the combined Facility page.
     {
       path: '/admin/places',
-      redirect: { name: 'admin-facility', query: { tab: 'places' } }
+      redirect: { name: 'admin-facility', query: { tab: 'places' } },
     },
     {
       path: '/door/:id/checkin',
       name: 'door-checkin',
       component: () => import('@/views/DoorCheckinView.vue'),
       meta: {
-        requiresAuth: true
-      }
+        requiresAuth: true,
+      },
     },
     {
       path: '/tools',
       name: 'tools',
       component: () => import('@/views/ToolsView.vue'),
       meta: {
-        requiresAuth: true
-      }
+        requiresAuth: true,
+      },
     },
     {
       path: '/training',
@@ -150,8 +150,8 @@ const router = createRouter({
       component: () => import('@/views/TrainingView.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Staff
-      }
+        requiredRole: UserRole.Staff,
+      },
     },
     {
       path: '/users',
@@ -159,47 +159,48 @@ const router = createRouter({
       component: () => import('@/views/UsersView.vue'),
       meta: {
         requiresAuth: true,
-        requiredRole: UserRole.Staff
-      }
+        requiredRole: UserRole.Staff,
+      },
     },
     {
       path: '/users/:userId',
       name: 'user-detail',
       component: () => import('@/views/ProfileView.vue'),
       meta: {
-        requiresAuth: true
-      }
+        requiresAuth: true,
+      },
     },
     {
       path: '/wiki/:slug(.*)*',
       name: 'wiki',
-      component: () => import('@/views/WikiView.vue')
+      component: () => import('@/views/WikiView.vue'),
     },
     {
       path: '/page/:slug(.*)*',
       name: 'site',
-      component: () => import('@/views/SiteView.vue')
+      component: () => import('@/views/SiteView.vue'),
     },
     {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
-      component: () => import('@/views/NotFoundView.vue')
-    }
-  ]
+      component: () => import('@/views/NotFoundView.vue'),
+    },
+  ],
 })
 
 // Navigation guard for authentication and authorization
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  
+
   // Initialize auth store if needed
   if (!authStore.initialized) {
     await authStore.initialize()
   }
 
-  const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
-  const requiresGuest = to.matched.some(record => record.meta.requiresGuest)
-  const requiredRole = to.matched.find(record => record.meta.requiredRole)?.meta.requiredRole as UserRole | undefined
+  const requiresAuth = to.matched.some((record) => record.meta.requiresAuth)
+  const requiresGuest = to.matched.some((record) => record.meta.requiresGuest)
+  const requiredRole = to.matched.find((record) => record.meta.requiredRole)?.meta.requiredRole as
+    UserRole | undefined
 
   // Handle guest-only routes (login, register)
   if (requiresGuest && authStore.isAuthenticated) {
@@ -208,31 +209,31 @@ router.beforeEach(async (to) => {
 
   // Handle authentication requirement
   if (requiresAuth && !authStore.isAuthenticated) {
-    return { 
-      name: 'login', 
-      query: { redirect: to.fullPath }
+    return {
+      name: 'login',
+      query: { redirect: to.fullPath },
     }
   }
 
   // Handle role-based access control
   if (requiredRole && authStore.user) {
     const userRole = authStore.user.role
-    
+
     // Check if user has required role or higher
     const roleHierarchy: Record<string, number> = {
-      'unknown': 0,
-      'newbie': 1,
-      'member': 2,
-      'staff': 3,
-      'admin': 4
+      unknown: 0,
+      newbie: 1,
+      member: 2,
+      staff: 3,
+      admin: 4,
     }
-    
+
     const userRoleString = String(userRole).toLowerCase()
     const requiredRoleString = String(requiredRole).toLowerCase()
-    
+
     const userLevel = roleHierarchy[userRoleString] || 0
     const requiredLevel = roleHierarchy[requiredRoleString] || 0
-    
+
     if (userLevel < requiredLevel) {
       return { name: 'home' }
     }

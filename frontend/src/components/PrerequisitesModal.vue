@@ -6,7 +6,7 @@
           <h3>Manage Prerequisites</h3>
           <p class="subtitle">{{ step?.step_name }}</p>
         </div>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -17,19 +17,15 @@
             No prerequisites defined for this training step.
           </div>
           <div v-else class="prerequisites-list">
-            <div 
-              v-for="prereq in prerequisites" 
-              :key="prereq.id"
-              class="prerequisite-item"
-            >
+            <div v-for="prereq in prerequisites" :key="prereq.id" class="prerequisite-item">
               <div class="prerequisite-info">
                 <strong>Step {{ prereq.step_number }}: {{ prereq.step_name }}</strong>
                 <p class="prerequisite-description">{{ prereq.description }}</p>
               </div>
-              <button 
-                @click="removePrerequisite(prereq.id)"
+              <button
                 class="btn btn-danger btn-sm"
                 :disabled="loading"
+                @click="removePrerequisite(prereq.id)"
               >
                 Remove
               </button>
@@ -40,21 +36,31 @@
         <!-- Add New Prerequisite -->
         <div class="section">
           <h4>Add Prerequisite</h4>
-          <form @submit.prevent="addPrerequisite" class="add-form">
+          <form class="add-form" @submit.prevent="addPrerequisite">
             <div class="form-group">
               <label for="prerequisite">Select Training Step:</label>
-              <select v-model="selectedPrerequisite" id="prerequisite" class="form-control" required>
+              <select
+                id="prerequisite"
+                v-model="selectedPrerequisite"
+                class="form-control"
+                required
+              >
                 <option value="">Choose a training step</option>
-                <option 
-                  v-for="availableStep in availableSteps" 
-                  :key="availableStep.id" 
+                <option
+                  v-for="availableStep in availableSteps"
+                  :key="availableStep.id"
                   :value="availableStep.id"
                 >
-                  {{ getToolName(availableStep.tool_id) }} - Step {{ availableStep.step_number }}: {{ availableStep.step_name }}
+                  {{ getToolName(availableStep.tool_id) }} - Step {{ availableStep.step_number }}:
+                  {{ availableStep.step_name }}
                 </option>
               </select>
             </div>
-            <button type="submit" class="btn btn-primary" :disabled="loading || !selectedPrerequisite">
+            <button
+              type="submit"
+              class="btn btn-primary"
+              :disabled="loading || !selectedPrerequisite"
+            >
               {{ loading ? 'Adding...' : 'Add Prerequisite' }}
             </button>
           </form>
@@ -70,8 +76,8 @@
               </div>
             </div>
             <template v-else>
-              <div 
-                v-for="(prereq, index) in sortedPrerequisites" 
+              <div
+                v-for="(prereq, index) in sortedPrerequisites"
                 :key="prereq.id"
                 class="flow-item"
               >
@@ -83,9 +89,7 @@
                 </div>
               </div>
               <div v-if="step" class="flow-item current">
-                <div class="flow-step">
-                  Step {{ step.step_number }}: {{ step.step_name }}
-                </div>
+                <div class="flow-step">Step {{ step.step_number }}: {{ step.step_name }}</div>
               </div>
             </template>
           </div>
@@ -96,9 +100,7 @@
         </div>
 
         <div class="modal-footer">
-          <button type="button" @click="$emit('close')" class="btn btn-secondary">
-            Close
-          </button>
+          <button type="button" class="btn btn-secondary" @click="$emit('close')">Close</button>
         </div>
       </div>
     </div>
@@ -108,7 +110,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { trainingApi } from '../utils/api'
-import type { TrainingStep, Tool } from '../types'
+import type { TrainingStep } from '../types'
 
 interface Props {
   step: TrainingStep | null
@@ -129,24 +131,21 @@ const selectedPrerequisite = ref('')
 
 const availableSteps = computed(() => {
   if (!props.step) return []
-  
+
   // Filter out the current step and steps that are already prerequisites
-  const existingPrereqIds = prerequisites.value.map(p => p.id)
-  return props.allSteps.filter(step => 
-    step.id !== props.step?.id && 
-    !existingPrereqIds.includes(step.id)
+  const existingPrereqIds = prerequisites.value.map((p) => p.id)
+  return props.allSteps.filter(
+    (step) => step.id !== props.step?.id && !existingPrereqIds.includes(step.id)
   )
 })
 
 const sortedPrerequisites = computed(() => {
-  return [...prerequisites.value].sort((a, b) => 
-    a.step_number - b.step_number
-  )
+  return [...prerequisites.value].sort((a, b) => a.step_number - b.step_number)
 })
 
 const loadPrerequisites = async () => {
   if (!props.step) return
-  
+
   try {
     loading.value = true
     const response = await trainingApi.getTrainingPrerequisites(props.step.id)
@@ -162,14 +161,14 @@ const loadPrerequisites = async () => {
 
 const addPrerequisite = async () => {
   if (!props.step || !selectedPrerequisite.value) return
-  
+
   loading.value = true
   try {
     const response = await trainingApi.addTrainingPrerequisite({
       training_step_id: props.step.id,
-      prerequisite_step_id: selectedPrerequisite.value
+      prerequisite_step_id: selectedPrerequisite.value,
     })
-    
+
     if (response.success) {
       await loadPrerequisites()
       selectedPrerequisite.value = ''
@@ -186,11 +185,11 @@ const addPrerequisite = async () => {
 
 const removePrerequisite = async (prerequisiteId: string) => {
   if (!confirm('Are you sure you want to remove this prerequisite?')) return
-  
+
   loading.value = true
   try {
     const response = await trainingApi.removeTrainingPrerequisite(prerequisiteId)
-    
+
     if (response.success) {
       await loadPrerequisites()
       emit('updated')
@@ -210,15 +209,19 @@ const getToolName = (toolId: string): string => {
   return `Tool ${toolId.slice(0, 8)}...`
 }
 
-watch(() => props.step, (newStep) => {
-  if (newStep) {
-    loadPrerequisites()
-  }
-}, { immediate: true })
+watch(
+  () => props.step,
+  (newStep) => {
+    if (newStep) {
+      void loadPrerequisites()
+    }
+  },
+  { immediate: true }
+)
 
 onMounted(() => {
   if (props.step) {
-    loadPrerequisites()
+    void loadPrerequisites()
   }
 })
 </script>
@@ -485,12 +488,12 @@ onMounted(() => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .add-form {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .prerequisite-item {
     flex-direction: column;
     align-items: stretch;

@@ -60,9 +60,20 @@ describe('templates', () => {
   })
 
   it('build fresh arrays, so editing one applied template cannot mutate the preset', () => {
+    // A real narrowing rather than `!`: the non-null assertion is unnecessary
+    // under the base tsconfig (where indexing yields T) and required under
+    // tsconfig.strict.json's noUncheckedIndexedAccess (where it yields
+    // T | undefined), so eslint and the strict type-check disagreed about it.
+    // Throwing narrows for both, and an empty array would otherwise make this
+    // test pass vacuously.
     const first = template('weekday-9-5').build()
-    first[0]!.start = '06:00'
-    expect(template('weekday-9-5').build()[0]!.start).toBe('09:00')
+    const firstInterval = first[0]
+    if (!firstInterval) throw new Error('weekday-9-5 built no intervals')
+    firstInterval.start = '06:00'
+
+    const rebuilt = template('weekday-9-5').build()[0]
+    if (!rebuilt) throw new Error('weekday-9-5 built no intervals on rebuild')
+    expect(rebuilt.start).toBe('09:00')
   })
 
   it('weekday-9-5 is five intervals, 09:00 to 17:00', () => {
@@ -73,7 +84,11 @@ describe('templates', () => {
   })
 
   it('weekends is two intervals covering Saturday and Sunday', () => {
-    expect(template('weekends').build().map((i) => i.day)).toEqual(WEEKEND)
+    expect(
+      template('weekends')
+        .build()
+        .map((i) => i.day)
+    ).toEqual(WEEKEND)
   })
 })
 

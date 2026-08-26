@@ -28,9 +28,11 @@ frontend/src/
 ## 🧩 Components
 
 ### ProfileField.vue
+
 Dynamic form field component that renders different input types based on field configuration:
 
 **Features:**
+
 - ✅ Supports all profile field types (Text, Email, Phone, Number, Date, Boolean, Select)
 - ✅ Real-time validation with error display
 - ✅ Help text tooltips
@@ -38,6 +40,7 @@ Dynamic form field component that renders different input types based on field c
 - ✅ Disabled state for read-only mode
 
 **Usage:**
+
 ```vue
 <ProfileField
   :field="fieldConfig"
@@ -49,9 +52,11 @@ Dynamic form field component that renders different input types based on field c
 ```
 
 ### UserProfile.vue
+
 Complete user profile management component:
 
 **Features:**
+
 - ✅ View/Edit mode toggle
 - ✅ Permission-based editing (own profile + staff override)
 - ✅ Real-time form validation
@@ -60,14 +65,17 @@ Complete user profile management component:
 - ✅ Audit logging integration
 
 **Usage:**
+
 ```vue
 <UserProfile :user-id="userId" :user="userObject" />
 ```
 
 ### ProfileConfigAdmin.vue
+
 Admin interface for configuring profile fields:
 
 **Features:**
+
 - ✅ CRUD operations for profile fields
 - ✅ Live preview of profile form
 - ✅ Field type selection with options
@@ -80,12 +88,14 @@ Admin interface for configuring profile fields:
 ### Profile Store (`stores/profile.ts`)
 
 **State:**
+
 - `profiles`: Cache of user profiles by user ID
 - `profileConfig`: Current profile field configuration
 - `loading`: Loading state for async operations
 - `error`: Error state for failed operations
 
 **Getters:**
+
 - `getProfileForUser(userId)`: Get cached profile data
 - `canEditProfile(userId)`: Check edit permissions
 - `canManageProfileConfig`: Check admin permissions
@@ -94,6 +104,7 @@ Admin interface for configuring profile fields:
 - `getRequiredFields`: Get only required fields
 
 **Actions:**
+
 - `fetchUserProfile(userId)`: Load user profile from API
 - `updateUserProfile(userId, data)`: Update user profile
 - `fetchProfileConfig()`: Load profile configuration
@@ -106,12 +117,14 @@ Admin interface for configuring profile fields:
 ### Profile API (`utils/api.ts`)
 
 **Endpoints:**
+
 - `profileApi.getUserProfile(userId)`: GET `/api/profiles/{userId}`
 - `profileApi.updateUserProfile(userId, data)`: PUT `/api/profiles/{userId}`
 - `profileApi.getProfileConfig()`: GET `/api/profiles/config`
 - `profileApi.updateProfileConfig(config)`: PUT `/api/profiles/config`
 
 **Features:**
+
 - ✅ Automatic JWT token injection
 - ✅ Error handling and 401 redirect
 - ✅ TypeScript typed responses
@@ -122,15 +135,18 @@ Admin interface for configuring profile fields:
 ### Route Configuration
 
 **User Routes:**
+
 - `/profile` → Redirects to `/profile/me`
 - `/profile/me` → Current user's profile
 - `/profile/:userId` → Specific user's profile
 - `/users/:userId` → Alternative user profile route
 
 **Admin Routes:**
+
 - `/admin/profile-config` → Profile field configuration
 
 **Guards:**
+
 - Authentication required for all profile routes
 - Admin role required for configuration routes
 - Permission checks for viewing/editing other users' profiles
@@ -138,12 +154,14 @@ Admin interface for configuring profile fields:
 ## 🎨 UI/UX Features
 
 ### Responsive Design
+
 - ✅ Mobile-first approach with Tailwind CSS
 - ✅ Card-based layout with DaisyUI components
 - ✅ Responsive grid for form fields
 - ✅ Touch-friendly form controls
 
 ### User Experience
+
 - ✅ Loading states and progress indicators
 - ✅ Error messages and validation feedback
 - ✅ Success notifications
@@ -151,6 +169,7 @@ Admin interface for configuring profile fields:
 - ✅ Intuitive edit/save workflow
 
 ### Accessibility
+
 - ✅ Semantic HTML structure
 - ✅ Proper ARIA labels and roles
 - ✅ Keyboard navigation support
@@ -160,6 +179,7 @@ Admin interface for configuring profile fields:
 ## 🔧 Development Setup
 
 ### Prerequisites
+
 ```bash
 # Install dependencies
 cd frontend
@@ -170,12 +190,14 @@ npm run dev
 ```
 
 ### Environment Variables
+
 ```env
 # Add to .env.local
 VITE_API_BASE_URL=http://localhost:4399
 ```
 
 ### Build and Deploy
+
 ```bash
 # Build for production
 npm run build
@@ -187,6 +209,7 @@ npm run preview
 ## 🧪 Testing
 
 ### Component Testing
+
 ```bash
 # Run component tests
 npm run test:unit
@@ -196,6 +219,7 @@ npm run test:unit ProfileField.vue
 ```
 
 ### Integration Testing
+
 ```bash
 # Run integration tests
 npm run test:integration
@@ -207,6 +231,7 @@ npm run test:api
 ## 🚀 Usage Examples
 
 ### Basic Profile Display
+
 ```vue
 <template>
   <div class="container mx-auto">
@@ -222,6 +247,7 @@ const currentUserId = computed(() => authStore.user?.id)
 ```
 
 ### Admin Configuration
+
 ```vue
 <template>
   <div class="admin-panel">
@@ -232,6 +258,7 @@ const currentUserId = computed(() => authStore.user?.id)
 ```
 
 ### Custom Field Validation
+
 ```ts
 // Add custom validation in profile store
 function validateCustomField(fieldKey: string, value: any): string | null {
@@ -248,6 +275,7 @@ function validateCustomField(fieldKey: string, value: any): string | null {
 ## 🎯 Future Enhancements
 
 ### Planned Features
+
 - [ ] **Profile Templates**: Predefined field sets for different user types
 - [ ] **Bulk Field Management**: Import/export field configurations
 - [ ] **Field Dependencies**: Conditional field visibility
@@ -258,12 +286,14 @@ function validateCustomField(fieldKey: string, value: any): string | null {
 - [ ] **Multi-language Support**: Internationalized field labels
 
 ### Performance Optimizations
+
 - [ ] **Lazy Loading**: Load profiles on-demand
 - [ ] **Caching Strategy**: Smart cache invalidation
 - [ ] **Virtual Scrolling**: For large user lists
 - [ ] **Image Optimization**: Profile picture compression
 
 ### Accessibility Improvements
+
 - [ ] **Voice Control**: Voice-to-text input
 - [ ] **High Contrast Mode**: Enhanced visual accessibility
 - [ ] **Screen Reader**: Enhanced announcements

@@ -3,17 +3,17 @@
     <div class="modal-content bg-base-100" @click.stop>
       <div class="modal-header">
         <h3 class="text-accent">Edit Tool</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
-      <form @submit.prevent="updateTool" class="tool-form">
+      <form class="tool-form" @submit.prevent="updateTool">
         <div class="form-row">
           <div class="form-group">
             <label for="name">Name *</label>
-            <input 
+            <input
               id="name"
-              v-model="form.name" 
-              type="text" 
+              v-model="form.name"
+              type="text"
               required
               placeholder="Tool name"
               class="input"
@@ -33,9 +33,9 @@
 
         <div class="form-group">
           <label for="description">Description</label>
-          <textarea 
+          <textarea
             id="description"
-            v-model="form.description" 
+            v-model="form.description"
             placeholder="Brief description of the tool"
             rows="3"
             class="input"
@@ -45,10 +45,10 @@
         <div class="form-row">
           <div class="form-group">
             <label for="manufacturer">Manufacturer</label>
-            <input 
+            <input
               id="manufacturer"
-              v-model="form.manufacturer" 
-              type="text" 
+              v-model="form.manufacturer"
+              type="text"
               placeholder="e.g., DeWalt, Milwaukee"
               class="input"
             />
@@ -56,10 +56,10 @@
 
           <div class="form-group">
             <label for="model">Model</label>
-            <input 
+            <input
               id="model"
-              v-model="form.model" 
-              type="text" 
+              v-model="form.model"
+              type="text"
               placeholder="Model number"
               class="input"
             />
@@ -69,10 +69,10 @@
         <div class="form-row">
           <div class="form-group">
             <label for="serial_number">Serial Number</label>
-            <input 
+            <input
               id="serial_number"
-              v-model="form.serial_number" 
-              type="text" 
+              v-model="form.serial_number"
+              type="text"
               placeholder="Serial number"
               class="input"
             />
@@ -80,10 +80,10 @@
 
           <div class="form-group">
             <label for="barcode">Barcode</label>
-            <input 
+            <input
               id="barcode"
-              v-model="form.barcode" 
-              type="text" 
+              v-model="form.barcode"
+              type="text"
               placeholder="Barcode or QR code"
               class="input"
             />
@@ -99,7 +99,9 @@
             placeholder="External system ID (e.g., ToolPass device ID)"
             class="input"
           />
-          <small class="help-text">Optional ID for external system integration (ToolPass, etc.)</small>
+          <small class="help-text"
+            >Optional ID for external system integration (ToolPass, etc.)</small
+          >
         </div>
 
         <div class="form-group">
@@ -107,20 +109,20 @@
           <SchedulePicker
             :model-value="form.schedule_id"
             :schedules="schedules"
-            @update:model-value="(v) => form.schedule_id = v"
+            @update:model-value="(v) => (form.schedule_id = v)"
           />
           <small class="help-text">
-            Optional. When the schedule is closed the tool is removed from
-            every authorized list at sync time (same effect as deactivating it).
+            Optional. When the schedule is closed the tool is removed from every authorized list at
+            sync time (same effect as deactivating it).
           </small>
         </div>
 
         <div class="form-group">
           <label for="location">Location</label>
-          <input 
+          <input
             id="location"
-            v-model="form.location" 
-            type="text" 
+            v-model="form.location"
+            type="text"
             placeholder="Where the tool is stored"
             class="input"
           />
@@ -129,20 +131,15 @@
         <div class="form-row">
           <div class="form-group">
             <label for="purchase_date">Purchase Date</label>
-            <input 
-              id="purchase_date"
-              v-model="form.purchase_date" 
-              type="date"
-              class="input"
-            />
+            <input id="purchase_date" v-model="form.purchase_date" type="date" class="input" />
           </div>
 
           <div class="form-group">
             <label for="purchase_price">Purchase Price</label>
-            <input 
+            <input
               id="purchase_price"
-              v-model.number="form.purchase_price" 
-              type="number" 
+              v-model.number="form.purchase_price"
+              type="number"
               step="0.01"
               placeholder="0.00"
               class="input"
@@ -152,34 +149,28 @@
 
         <div class="form-group">
           <label class="checkbox-label">
-            <input 
-              v-model="form.requires_training" 
-              type="checkbox"
-              class="checkbox"
-            />
+            <input v-model="form.requires_training" type="checkbox" class="checkbox" />
             Requires Training
           </label>
         </div>
 
         <div class="form-group">
           <label for="notes">Notes</label>
-          <textarea 
+          <textarea
             id="notes"
-            v-model="form.notes" 
+            v-model="form.notes"
             placeholder="Additional notes about the tool"
             rows="3"
             class="textarea"
           ></textarea>
         </div>
 
-        <div class="error" v-if="error">
+        <div v-if="error" class="error">
           {{ error }}
         </div>
 
         <div class="modal-actions">
-          <button type="button" @click="$emit('close')" class="btn btn-secondary">
-            Cancel
-          </button>
+          <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
           <button type="submit" class="btn btn-primary" :disabled="loading">
             {{ loading ? 'Updating...' : 'Update Tool' }}
           </button>
@@ -230,10 +221,10 @@ const form = ref({
   external_id: '',
   location: '',
   purchase_date: '',
-  purchase_price: undefined as number | undefined,
+  purchase_price: undefined,
   requires_training: false,
   notes: '',
-  schedule_id: null as string | null,
+  schedule_id: null,
 })
 
 // Methods
@@ -249,7 +240,7 @@ const loadCategories = async () => {
       { value: 'hand_tools', label: 'Hand Tools' },
       { value: 'measuring', label: 'Measuring' },
       { value: 'safety', label: 'Safety' },
-      { value: 'other', label: 'Other' }
+      { value: 'other', label: 'Other' },
     ]
   }
 }
@@ -277,7 +268,9 @@ const loadSchedules = async () => {
   try {
     const r = await schedulesApi.list()
     if (r.success && r.data) schedules.value = r.data
-  } catch { schedules.value = [] }
+  } catch {
+    schedules.value = []
+  }
 }
 
 const updateTool = async () => {
@@ -287,11 +280,11 @@ const updateTool = async () => {
 
     // Clean up form data
     const toolData = { ...form.value }
-    
+
     // Convert empty strings to null for optional fields
-    Object.keys(toolData).forEach(key => {
+    Object.keys(toolData).forEach((key) => {
       if (toolData[key as keyof typeof toolData] === '') {
-        (toolData as any)[key] = null
+        ;(toolData as any)[key] = null
       }
     })
 
@@ -461,11 +454,11 @@ onMounted(async () => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-row {
     grid-template-columns: 1fr;
   }
-  
+
   .modal-actions {
     flex-direction: column;
   }

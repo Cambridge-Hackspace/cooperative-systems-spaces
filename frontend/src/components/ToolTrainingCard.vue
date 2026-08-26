@@ -1,6 +1,6 @@
 <template>
   <!-- Debug: Component mounted check -->
-  <div style="background: red; color: white; padding: 5px; margin: 5px;">
+  <div style="background: red; color: white; padding: 5px; margin: 5px">
     ToolTrainingCard is rendering! Tool: {{ tool.name }}
   </div>
   <div class="training-card">
@@ -12,56 +12,83 @@
     </div>
 
     <div class="card-body">
-      <div class="progress-overview" v-if="trainingOverview">
+      <div v-if="trainingOverview" class="progress-overview">
         <div class="progress-bar-container">
-        <div class="progress-bar">
-          <div 
-            class="progress-fill" 
-            :style="{ width: trainingOverview.overall_progress + '%' }"
-          ></div>
+          <div class="progress-bar">
+            <div
+              class="progress-fill"
+              :style="{ width: trainingOverview.overall_progress + '%' }"
+            ></div>
+          </div>
+          <span class="progress-text"
+            >{{ Math.round(trainingOverview.overall_progress) }}% Complete</span
+          >
         </div>
-        <span class="progress-text">{{ Math.round(trainingOverview.overall_progress) }}% Complete</span>
-      </div>
 
-      <div class="access-status">
+        <div class="access-status">
           <span v-if="trainingOverview.can_access_tool" class="status-badge status-success">
             ✓ Tool Access Granted
           </span>
-          <span v-else class="status-badge status-warning">
-            ⚠ Training Required
-          </span>
+          <span v-else class="status-badge status-warning"> ⚠ Training Required </span>
         </div>
       </div>
 
-      <div class="training-steps" v-if="trainingOverview?.steps.length">
+      <div v-if="trainingOverview?.steps.length" class="training-steps">
         <h4>Training Steps</h4>
         <!-- Debug info -->
-        <div style="background: #f0f8ff; padding: 10px; margin-bottom: 10px; font-size: 12px; border: 1px solid #ccc;" v-if="trainingOverview">
-          <strong>Debug Info:</strong><br>
-          Overall Progress: {{ trainingOverview.overall_progress }}%<br>
-          Can Access Tool: {{ trainingOverview.can_access_tool }}<br>
-          Steps Count: {{ trainingOverview.steps?.length || 0 }}<br>
-          Raw Steps Data: <pre style="font-size: 10px; max-height: 100px; overflow: auto;">{{ JSON.stringify(trainingOverview.steps, null, 2) }}</pre>
+        <div
+          v-if="trainingOverview"
+          style="
+            background: #f0f8ff;
+            padding: 10px;
+            margin-bottom: 10px;
+            font-size: 12px;
+            border: 1px solid #ccc;
+          "
+        >
+          <strong>Debug Info:</strong><br />
+          Overall Progress: {{ trainingOverview.overall_progress }}%<br />
+          Can Access Tool: {{ trainingOverview.can_access_tool }}<br />
+          Steps Count: {{ trainingOverview.steps?.length || 0 }}<br />
+          Raw Steps Data:
+          <pre style="font-size: 10px; max-height: 100px; overflow: auto">{{
+            JSON.stringify(trainingOverview.steps, null, 2)
+          }}</pre>
         </div>
         <div class="steps-list">
-          <div 
-            v-for="stepWithProgress in trainingOverview.steps" 
+          <div
+            v-for="stepWithProgress in trainingOverview.steps"
             :key="stepWithProgress.step.id"
             class="step-item"
             :class="getStepStatusClass(stepWithProgress)"
           >
             <div class="step-number" :class="getStepNumberClass(stepWithProgress)">
               <!-- Debug info for each step -->
-              <div style="position: absolute; top: -20px; left: 0; font-size: 10px; background: yellow; padding: 2px;" v-if="stepWithProgress.step.step_number === 1">
+              <div
+                v-if="stepWithProgress.step.step_number === 1"
+                style="
+                  position: absolute;
+                  top: -20px;
+                  left: 0;
+                  font-size: 10px;
+                  background: yellow;
+                  padding: 2px;
+                "
+              >
                 Status: {{ stepWithProgress.user_progress?.status || 'null' }}
               </div>
-              <span v-if="stepWithProgress.user_progress?.status === 'completed'" class="checkmark">✓</span>
+              <span v-if="stepWithProgress.user_progress?.status === 'completed'" class="checkmark"
+                >✓</span
+              >
               <span v-else>{{ stepWithProgress.step.step_number }}</span>
             </div>
             <div class="step-content">
               <div class="step-title-container">
                 <h5>{{ stepWithProgress.step.step_name }}</h5>
-                <div v-if="stepWithProgress.user_progress?.status === 'completed'" class="completion-badge">
+                <div
+                  v-if="stepWithProgress.user_progress?.status === 'completed'"
+                  class="completion-badge"
+                >
                   <span class="badge-text">✓ COMPLETED</span>
                   <span v-if="stepWithProgress.user_progress?.completed_at" class="completion-date">
                     {{ formatDate(stepWithProgress.user_progress.completed_at) }}
@@ -70,42 +97,47 @@
               </div>
               <p>{{ stepWithProgress.step.description }}</p>
               <div class="step-meta">
-                <span class="assessment-type">{{ formatAssessmentType(stepWithProgress.step.assessment_type) }}</span>
+                <span class="assessment-type">{{
+                  formatAssessmentType(stepWithProgress.step.assessment_type)
+                }}</span>
                 <span v-if="stepWithProgress.step.expiry_days" class="expiry-info">
                   Expires after {{ stepWithProgress.step.expiry_days }} days
                 </span>
               </div>
             </div>
             <div class="step-actions">
-<!--              <div class="step-status" :class="getStepStatusTextClass(stepWithProgress)">-->
-<!--                {{ f(stepWithProgress) }}-->
-<!--              </div>-->
+              <!--              <div class="step-status" :class="getStepStatusTextClass(stepWithProgress)">-->
+              <!--                {{ f(stepWithProgress) }}-->
+              <!--              </div>-->
               <!-- Progress indicator for completed steps -->
-              <div v-if="stepWithProgress.user_progress?.status === 'completed'" class="completion-indicator">
+              <div
+                v-if="stepWithProgress.user_progress?.status === 'completed'"
+                class="completion-indicator"
+              >
                 <div class="progress-circle completed">
                   <span class="progress-icon">✓</span>
                 </div>
                 <span class="completion-text">Step Complete</span>
               </div>
-              <div class="action-buttons" v-if="canManageTraining">
-                <button 
+              <div v-if="canManageTraining" class="action-buttons">
+                <button
                   v-if="stepWithProgress.is_available && !stepWithProgress.user_progress"
-                  @click="startTraining(stepWithProgress.step)"
                   class="btn btn-sm btn-primary"
+                  @click="startTraining(stepWithProgress.step)"
                 >
                   Start Training
                 </button>
-                <button 
+                <button
                   v-if="stepWithProgress.user_progress?.status === 'in_progress' && isInstructor"
-                  @click="completeTraining(stepWithProgress.step)"
                   class="btn btn-sm btn-success"
+                  @click="completeTraining(stepWithProgress.step)"
                 >
                   Mark Complete
                 </button>
-                <button 
+                <button
                   v-if="stepWithProgress.user_progress?.status === 'failed'"
-                  @click="retryTraining(stepWithProgress.step)"
                   class="btn btn-sm btn-secondary"
+                  @click="retryTraining(stepWithProgress.step)"
                 >
                   Retry
                 </button>
@@ -115,13 +147,9 @@
         </div>
       </div>
 
-      <div class="no-training" v-else>
+      <div v-else class="no-training">
         <p>No training steps configured for this tool.</p>
-        <button 
-          v-if="canManageTraining" 
-          @click="showSetupModal = true"
-          class="btn btn-primary"
-        >
+        <button v-if="canManageTraining" class="btn btn-primary" @click="showSetupModal = true">
           Set Up Training
         </button>
       </div>
@@ -165,7 +193,7 @@ import type {
   ToolTrainingOverview,
   TrainingStepWithProgress,
   AssessmentType,
-  User
+  User,
 } from '../types'
 import StartTrainingModal from './StartTrainingModal.vue'
 import CompleteTrainingModal from './CompleteTrainingModal.vue'
@@ -209,7 +237,7 @@ const isInstructor = computed(() => {
 
 const statusClass = computed(() => {
   if (!trainingOverview.value) return 'status-unknown'
-  
+
   if (trainingOverview.value.can_access_tool) return 'status-success'
   if (trainingOverview.value.overall_progress > 0) return 'status-progress'
   return 'status-pending'
@@ -220,12 +248,12 @@ const loadTrainingOverview = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const userId = props.user?.id || 'me'
     console.log('🔍 Loading training overview for tool:', props.tool.id, 'user:', userId)
-    
+
     const response = await trainingApi.getToolTrainingOverview(props.tool.id, userId)
-    
+
     if (response.success && response.data) {
       console.log('API Response:', response.data)
       console.log('Overall progress:', response.data.overall_progress)
@@ -234,7 +262,7 @@ const loadTrainingOverview = async () => {
       // Emit training status to parent
       console.log('📊 Steps in response:', response.data.steps?.length)
       console.log('🔍 First step details:', response.data.steps?.[0])
-      
+
       trainingOverview.value = response.data
 
       // Emit training status to parent
@@ -253,7 +281,7 @@ const loadTrainingOverview = async () => {
 
 const formatTrainingStatus = (): string => {
   if (!trainingOverview.value) return 'Loading...'
-  
+
   if (trainingOverview.value.can_access_tool) {
     return 'Training Complete'
   } else if (trainingOverview.value.overall_progress > 0) {
@@ -268,7 +296,7 @@ const formatAssessmentType = (type: AssessmentType): string => {
     practical: 'Practical Assessment',
     written: 'Written Test',
     both: 'Practical + Written',
-    observation_only: 'Observation Only'
+    observation_only: 'Observation Only',
   }
   return types[type] || type
 }
@@ -277,40 +305,21 @@ const getStepStatusClass = (stepWithProgress: TrainingStepWithProgress): string 
   if (!stepWithProgress.user_progress) {
     return stepWithProgress.is_available ? 'step-available' : 'step-locked'
   }
-  
+
   const status = stepWithProgress.user_progress.status
   return `step-${status.replace('_', '-')}`
 }
 
-const formatStepStatus = (stepWithProgress: TrainingStepWithProgress): string => {
-  if (!stepWithProgress.user_progress) {
-    return stepWithProgress.is_available ? 'Available' : 'Prerequisites Required'
-  }
-  
-  const status = stepWithProgress.user_progress.status
-  const statusMap = {
-    not_started: 'Not Started',
-    in_progress: 'In Progress',
-    completed: 'Completed',
-    failed: 'Failed',
-    expired: 'Expired'
-  }
-  
-  return statusMap[status] || status
-}
-
 const getStepNumberClass = (stepWithProgress: TrainingStepWithProgress): string => {
-  console.log('Step', stepWithProgress.step.step_number, 'user_progress:', stepWithProgress.user_progress)
+  console.log(
+    'Step',
+    stepWithProgress.step.step_number,
+    'user_progress:',
+    stepWithProgress.user_progress
+  )
   console.log('Status check:', stepWithProgress.user_progress?.status === 'completed')
   if (stepWithProgress.user_progress?.status === 'completed') {
     return 'step-number-completed'
-  }
-  return ''
-}
-
-const getStepStatusTextClass = (stepWithProgress: TrainingStepWithProgress): string => {
-  if (stepWithProgress.user_progress?.status === 'completed') {
-    return 'status-completed-text'
   }
   return ''
 }
@@ -337,26 +346,26 @@ const retryTraining = (step: TrainingStep) => {
 const onTrainingStarted = () => {
   showStartModal.value = false
   selectedStep.value = null
-  loadTrainingOverview()
+  void loadTrainingOverview()
   emit('training-updated')
 }
 
 const onTrainingCompleted = () => {
   showCompleteModal.value = false
   selectedStep.value = null
-  loadTrainingOverview()
+  void loadTrainingOverview()
   emit('training-updated')
 }
 
 const onTrainingSetupCreated = () => {
   showSetupModal.value = false
-  loadTrainingOverview()
+  void loadTrainingOverview()
   emit('training-updated')
 }
 
 // Lifecycle
 onMounted(() => {
-  loadTrainingOverview()
+  void loadTrainingOverview()
 })
 </script>
 
@@ -386,10 +395,22 @@ onMounted(() => {
   font-size: 0.9rem;
 }
 
-.status-success { color: #28a745; font-weight: 500; }
-.status-progress { color: #ffc107; font-weight: 500; }
-.status-pending { color: #6c757d; font-weight: 500; }
-.status-unknown { color: #dc3545; font-weight: 500; }
+.status-success {
+  color: #28a745;
+  font-weight: 500;
+}
+.status-progress {
+  color: #ffc107;
+  font-weight: 500;
+}
+.status-pending {
+  color: #6c757d;
+  font-weight: 500;
+}
+.status-unknown {
+  color: #dc3545;
+  font-weight: 500;
+}
 
 .card-body {
   padding: 1.5rem;
@@ -710,15 +731,15 @@ onMounted(() => {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .step-actions {
     align-items: stretch;
   }
-  
+
   .action-buttons {
     justify-content: stretch;
   }
-  
+
   .btn {
     flex: 1;
   }

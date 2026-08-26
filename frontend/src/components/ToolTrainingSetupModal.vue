@@ -6,26 +6,28 @@
           <h3 class="font">Set Up Training for {{ tool.name }}</h3>
           <p class="subtitle font-bold">Create a comprehensive training program for this tool</p>
         </div>
-        <button @click="closeModal" class="close-btn">&times;</button>
+        <button class="close-btn" @click="closeModal">&times;</button>
       </div>
 
       <div class="modal-body">
         <!-- Step 1: Training Overview -->
         <div v-if="currentStep === 1" class="setup-step">
           <h4>Step 1: Training Overview</h4>
-          <p>Let's set up the training requirements for <strong>{{ tool.name }}</strong>. This will determine who can access this tool and what they need to learn.</p>
-          
+          <p>
+            Let's set up the training requirements for <strong>{{ tool.name }}</strong
+            >. This will determine who can access this tool and what they need to learn.
+          </p>
+
           <div class="form-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
-                v-model="trainingConfig.requiresTraining"
-                class="checkbox"
+              <input v-model="trainingConfig.requiresTraining" type="checkbox" class="checkbox" />
+              <span class="checkbox-text text-secondary"
+                >&nbsp; This tool requires training before use</span
               >
-              <span class="checkbox-text text-secondary">&nbsp; This tool requires training before use</span>
             </label>
             <div class="help-text text-accent">
-              If checked, users will need to complete training steps before they can access this tool.
+              If checked, users will need to complete training steps before they can access this
+              tool.
             </div>
           </div>
 
@@ -35,7 +37,9 @@
               <ul>
                 <li>Tool will show as "Training Required" for untrained users</li>
                 <li>Users must complete all training steps to access the tool</li>
-                <li>Training can include safety orientation, skill assessments, and certifications</li>
+                <li>
+                  Training can include safety orientation, skill assessments, and certifications
+                </li>
                 <li>Instructors can track progress and issue certifications</li>
               </ul>
             </div>
@@ -48,17 +52,13 @@
           <p>Define the training steps users must complete. Steps will be completed in order.</p>
 
           <div class="training-steps-config">
-            <div 
-              v-for="(step, index) in trainingConfig.steps" 
-              :key="index"
-              class="step-config"
-            >
+            <div v-for="(step, index) in trainingConfig.steps" :key="index" class="step-config">
               <div class="step-header">
                 <h5>Step {{ index + 1 }}</h5>
-                <button 
+                <button
                   v-if="trainingConfig.steps.length > 1"
-                  @click="removeStep(index)"
                   class="btn btn-sm btn-danger"
+                  @click="removeStep(index)"
                 >
                   Remove
                 </button>
@@ -67,18 +67,18 @@
               <div class="step-form">
                 <div class="form-group">
                   <label>Step Title:</label>
-                  <input 
-                    type="text"
+                  <input
                     v-model="step.step_name"
+                    type="text"
                     class="form-control input"
                     :placeholder="`e.g., ${getStepTitleSuggestion(index)}`"
                     required
-                  >
+                  />
                 </div>
 
                 <div class="form-group">
                   <label>Description:</label>
-                  <textarea 
+                  <textarea
                     v-model="step.description"
                     class="form-control input"
                     rows="2"
@@ -98,38 +98,34 @@
                     </select>
                   </div>
 
-                  <div class="form-group" v-if="step.assessment_type !== 'observation_only'">
+                  <div v-if="step.assessment_type !== 'observation_only'" class="form-group">
                     <label>Passing Score (%):</label>
-                    <input 
-                      type="number"
+                    <input
                       v-model.number="step.passing_score"
+                      type="number"
                       class="form-control input"
                       min="1"
                       max="100"
                       placeholder="80"
-                    >
+                    />
                   </div>
                 </div>
 
                 <div class="form-row">
                   <div class="form-group">
                     <label>Certification Expires After (days):</label>
-                    <input 
-                      type="number"
+                    <input
                       v-model.number="step.expiry_days"
+                      type="number"
                       class="form-control input"
                       min="1"
                       placeholder="365 (leave blank for no expiration)"
-                    >
+                    />
                   </div>
 
                   <div class="form-group">
                     <label class="checkbox-label">
-                      <input 
-                        type="checkbox" 
-                        v-model="step.is_active"
-                        class="checkbox"
-                      >
+                      <input v-model="step.is_active" type="checkbox" class="checkbox" />
                       <span class="checkbox-text">Active</span>
                     </label>
                   </div>
@@ -137,9 +133,7 @@
               </div>
             </div>
 
-            <button @click="addStep" class="btn btn-secondary">
-              + Add Another Step
-            </button>
+            <button class="btn btn-secondary" @click="addStep">+ Add Another Step</button>
           </div>
         </div>
 
@@ -149,12 +143,15 @@
           <p>Set up dependencies between training steps if needed.</p>
 
           <div v-if="trainingConfig.steps.length < 2" class="info-message">
-            <p>Prerequisites are only available when you have multiple training steps. Each step can require previous steps to be completed first.</p>
+            <p>
+              Prerequisites are only available when you have multiple training steps. Each step can
+              require previous steps to be completed first.
+            </p>
           </div>
 
           <div v-else class="prerequisites-config">
-            <div 
-              v-for="(step, stepIndex) in trainingConfig.steps.slice(1)" 
+            <div
+              v-for="(step, stepIndex) in trainingConfig.steps.slice(1)"
               :key="stepIndex + 1"
               class="prerequisite-config"
             >
@@ -163,16 +160,19 @@
                 <label>Required Prerequisites:</label>
                 <div class="checkbox-group">
                   <label
-                    v-for="(prereqStep, prereqIndex) in trainingConfig.steps.slice(0, stepIndex + 1)"
+                    v-for="(prereqStep, prereqIndex) in trainingConfig.steps.slice(
+                      0,
+                      stepIndex + 1
+                    )"
                     :key="prereqIndex"
                     class="checkbox-label"
                   >
                     <input
+                      v-model="step.prerequisites"
                       type="checkbox"
                       :value="prereqIndex"
-                      v-model="step.prerequisites"
                       class="checkbox"
-                    >
+                    />
                     <span class="checkbox-text">
                       Step {{ prereqIndex + 1 }}: {{ prereqStep.step_name }}
                     </span>
@@ -189,27 +189,19 @@
           <p>Review your training configuration before creating the training steps.</p>
 
           <div class="review-section bg-secondary text-secondary-content">
+            <div class="review-item"><strong>Tool:</strong> {{ tool.name }}</div>
             <div class="review-item">
-              <strong>Tool:</strong> {{ tool.name }}
-            </div>
-            <div class="review-item">
-              <strong>Requires Training:</strong> 
+              <strong>Requires Training:</strong>
               <span :class="trainingConfig.requiresTraining ? 'text-success' : 'text-muted'">
                 {{ trainingConfig.requiresTraining ? 'Yes' : 'No' }}
               </span>
             </div>
-            
+
             <div v-if="trainingConfig.requiresTraining" class="review-item">
               <strong>Training Steps:</strong>
               <div class="steps-review">
-                <div 
-                  v-for="(step, index) in trainingConfig.steps" 
-                  :key="index"
-                  class="step-review"
-                >
-                  <div class="step-title">
-                    Step {{ index + 1 }}: {{ step.step_name }}
-                  </div>
+                <div v-for="(step, index) in trainingConfig.steps" :key="index" class="step-review">
+                  <div class="step-title">Step {{ index + 1 }}: {{ step.step_name }}</div>
                   <div class="step-details">
                     <div>{{ step.description }}</div>
                     <div class="step-meta">
@@ -220,10 +212,14 @@
                         • {{ step.is_active ? 'Active' : 'Inactive' }}
                       </span>
                     </div>
-                    <div v-if="step.prerequisites && step.prerequisites.length > 0" class="prerequisites-info">
-                      Prerequisites: 
+                    <div
+                      v-if="step.prerequisites && step.prerequisites.length > 0"
+                      class="prerequisites-info"
+                    >
+                      Prerequisites:
                       <span v-for="(prereqIndex, i) in step.prerequisites" :key="prereqIndex">
-                        Step {{ prereqIndex + 1 }}{{ i < step.prerequisites.length - 1 ? ', ' : '' }}
+                        Step {{ prereqIndex + 1
+                        }}{{ i < step.prerequisites.length - 1 ? ', ' : '' }}
                       </span>
                     </div>
                   </div>
@@ -240,8 +236,8 @@
         <!-- Navigation -->
         <div class="modal-footer">
           <div class="step-indicator">
-            <span 
-              v-for="step in totalSteps" 
+            <span
+              v-for="step in totalSteps"
               :key="step"
               class="step-dot"
               :class="{ active: step === currentStep, completed: step < currentStep }"
@@ -249,35 +245,26 @@
           </div>
 
           <div class="navigation-buttons">
-            <button 
-              v-if="currentStep > 1"
-              @click="previousStep" 
-              class="btn btn-secondary"
-            >
+            <button v-if="currentStep > 1" class="btn btn-secondary" @click="previousStep">
               Previous
             </button>
-            
-            <button 
-              @click="closeModal" 
-              class="btn btn-outline"
-            >
-              Cancel
-            </button>
-            
-            <button 
+
+            <button class="btn btn-outline" @click="closeModal">Cancel</button>
+
+            <button
               v-if="currentStep < totalSteps"
-              @click="nextStep" 
               class="btn btn-primary"
               :disabled="!canProceedToNextStep"
+              @click="nextStep"
             >
               Next
             </button>
-            
-            <button 
+
+            <button
               v-if="currentStep === totalSteps"
-              @click="createTrainingSetup" 
               class="btn btn-success"
               :disabled="loading || !canCreateSetup"
+              @click="createTrainingSetup"
             >
               {{ loading ? 'Creating...' : 'Create Training Setup' }}
             </button>
@@ -289,12 +276,12 @@
 </template>
 
 <script setup lang="ts">
-import {computed, reactive, ref} from 'vue'
-import {toolsApi, trainingApi} from '../utils/api'
-import {AssessmentType, CreateTrainingStepRequest, Tool} from '../types'
+import { computed, reactive, ref } from 'vue'
+import { toolsApi, trainingApi } from '../utils/api'
+import { AssessmentType, CreateTrainingStepRequest, Tool } from '../types'
 
 interface TrainingStepConfig {
-  step_name: string  // Changed from 'title' to match backend
+  step_name: string // Changed from 'title' to match backend
   description: string
   assessment_type: AssessmentType
   passing_score?: number
@@ -335,9 +322,9 @@ const trainingConfig = reactive<TrainingConfig>({
       passing_score: 80,
       expiry_days: undefined,
       is_active: true,
-      prerequisites: []
-    }
-  ]
+      prerequisites: [],
+    },
+  ],
 })
 
 // Computed
@@ -346,9 +333,7 @@ const canProceedToNextStep = computed(() => {
     case 1:
       return true // Always can proceed from overview
     case 2:
-      return trainingConfig.steps.every(step => 
-        step.step_name.trim() && step.description.trim()
-      )
+      return trainingConfig.steps.every((step) => step.step_name.trim() && step.description.trim())
     case 3:
       return true // Prerequisites are optional
     default:
@@ -357,9 +342,11 @@ const canProceedToNextStep = computed(() => {
 })
 
 const canCreateSetup = computed(() => {
-  return trainingConfig.requiresTraining && 
-         trainingConfig.steps.length > 0 &&
-         trainingConfig.steps.every(step => step.step_name.trim() && step.description.trim())
+  return (
+    trainingConfig.requiresTraining &&
+    trainingConfig.steps.length > 0 &&
+    trainingConfig.steps.every((step) => step.step_name.trim() && step.description.trim())
+  )
 })
 
 // Methods
@@ -387,7 +374,7 @@ const addStep = () => {
     passing_score: 80,
     expiry_days: undefined,
     is_active: true,
-    prerequisites: []
+    prerequisites: [],
   })
 }
 
@@ -402,7 +389,7 @@ const getStepTitleSuggestion = (index: number): string => {
     'Safety Orientation',
     'Basic Operation Training',
     'Advanced Techniques',
-    'Maintenance Certification'
+    'Maintenance Certification',
   ]
   return suggestions[index] || `Training Step ${index + 1}`
 }
@@ -412,7 +399,7 @@ const getStepDescriptionSuggestion = (index: number): string => {
     'Learn safety procedures and protective equipment requirements',
     'Master basic operation and common techniques',
     'Advanced skills and complex projects',
-    'Maintenance procedures and troubleshooting'
+    'Maintenance procedures and troubleshooting',
   ]
   return suggestions[index] || `Description for training step ${index + 1}`
 }
@@ -422,7 +409,7 @@ const formatAssessmentType = (type: AssessmentType): string => {
     practical: 'Practical Assessment',
     written: 'Written Test',
     both: 'Practical + Written',
-    observation_only: 'Observation Only'
+    observation_only: 'Observation Only',
   }
   return types[type] || type
 }
@@ -435,15 +422,15 @@ const createTrainingSetup = async () => {
     // First, update the tool to require training
     if (trainingConfig.requiresTraining) {
       await toolsApi.updateTool(props.tool.id, {
-        requires_training: true
+        requires_training: true,
       })
 
       // Create each training step
       const createdSteps: any[] = []
-      
+
       for (let i = 0; i < trainingConfig.steps.length; i++) {
         const stepConfig = trainingConfig.steps[i]
-        
+
         const stepRequest: CreateTrainingStepRequest = {
           tool_id: props.tool.id,
           step_number: i + 1,
@@ -452,11 +439,11 @@ const createTrainingSetup = async () => {
           assessment_type: stepConfig.assessment_type,
           passing_score: stepConfig.passing_score,
           expiry_days: stepConfig.expiry_days,
-          is_active: stepConfig.is_active
+          is_active: stepConfig.is_active,
         }
 
         const response = await trainingApi.createTrainingStep(stepRequest)
-        
+
         if (response.success && response.data) {
           createdSteps.push(response.data)
         } else {
@@ -467,12 +454,12 @@ const createTrainingSetup = async () => {
       // Create prerequisites if any
       for (let i = 0; i < trainingConfig.steps.length; i++) {
         const stepConfig = trainingConfig.steps[i]
-        
+
         if (stepConfig.prerequisites && stepConfig.prerequisites.length > 0) {
           for (const prereqIndex of stepConfig.prerequisites) {
             await trainingApi.addTrainingPrerequisite({
               training_step_id: createdSteps[i].id,
-              prerequisite_step_id: createdSteps[prereqIndex].id
+              prerequisite_step_id: createdSteps[prereqIndex].id,
             })
           }
         }
@@ -480,13 +467,12 @@ const createTrainingSetup = async () => {
     } else {
       // Just update tool to not require training
       await toolsApi.updateTool(props.tool.id, {
-        requires_training: false
+        requires_training: false,
       })
     }
 
     emit('created')
     closeModal()
-    
   } catch (err: any) {
     error.value = err.message || 'Failed to create training setup'
   } finally {
@@ -828,19 +814,19 @@ const createTrainingSetup = async () => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-row {
     flex-direction: column;
   }
-  
+
   .navigation-buttons {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }
-  
+
   .modal-footer {
     flex-direction: column;
     gap: 1rem;

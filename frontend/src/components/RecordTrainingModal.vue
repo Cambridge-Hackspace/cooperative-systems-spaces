@@ -3,7 +3,7 @@
     <div class="modal" @click.stop>
       <div class="modal-header">
         <h3>Record Training Session</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -11,28 +11,14 @@
           <div class="form-row">
             <div class="form-group">
               <label for="tool">Tool</label>
-              <input 
-                id="tool"
-                :value="tool ? tool.name : ''"
-                class="form-control"
-                disabled
-              />
+              <input id="tool" :value="tool ? tool.name : ''" class="form-control" disabled />
             </div>
 
             <div class="form-group">
               <label for="trainee">Trainee</label>
-              <select 
-                id="trainee"
-                v-model="formData.trainee_user_id"
-                class="form-control"
-                required
-              >
+              <select id="trainee" v-model="formData.trainee_user_id" class="form-control" required>
                 <option value="">Select trainee...</option>
-                <option 
-                  v-for="user in users" 
-                  :key="user.id"
-                  :value="user.id"
-                >
+                <option v-for="user in users" :key="user.id" :value="user.id">
                   {{ user.full_name || user.username }} ({{ user.email }})
                 </option>
               </select>
@@ -42,7 +28,7 @@
           <div class="form-row">
             <div class="form-group">
               <label for="training_date">Training Date</label>
-              <input 
+              <input
                 id="training_date"
                 v-model="formData.training_date"
                 type="date"
@@ -54,7 +40,7 @@
 
             <div class="form-group">
               <label for="completion_status">Completion Status</label>
-              <select 
+              <select
                 id="completion_status"
                 v-model="formData.completion_status"
                 class="form-control"
@@ -70,7 +56,7 @@
 
           <div class="form-group">
             <label for="minutes_trained">Duration (Minutes)</label>
-            <input 
+            <input
               id="minutes_trained"
               v-model.number="formData.minutes_trained"
               type="number"
@@ -85,35 +71,34 @@
           <div class="form-group">
             <label for="skills_covered">Skills Covered</label>
             <div class="skills-input">
-              <input 
+              <input
                 v-model="newSkill"
                 type="text"
                 class="form-control"
                 placeholder="Type a skill and press Enter"
                 @keydown.enter.prevent="addSkill"
               />
-              <button 
-                type="button" 
-                @click="addSkill"
+              <button
+                type="button"
                 class="btn btn-sm btn-secondary"
                 :disabled="!newSkill.trim()"
+                @click="addSkill"
               >
                 Add
               </button>
             </div>
-            
-            <div v-if="formData.skills_covered && formData.skills_covered.length > 0" class="skills-list">
-              <span 
+
+            <div
+              v-if="formData.skills_covered && formData.skills_covered.length > 0"
+              class="skills-list"
+            >
+              <span
                 v-for="(skill, index) in formData.skills_covered"
                 :key="index"
                 class="skill-tag"
               >
                 {{ skill }}
-                <button 
-                  type="button"
-                  @click="removeSkill(index)"
-                  class="skill-remove"
-                >
+                <button type="button" class="skill-remove" @click="removeSkill(index)">
                   &times;
                 </button>
               </span>
@@ -122,7 +107,7 @@
 
           <div class="form-group">
             <label for="notes">Training Notes</label>
-            <textarea 
+            <textarea
               id="notes"
               v-model="formData.notes"
               class="form-control"
@@ -133,7 +118,7 @@
 
           <div class="form-group">
             <label for="next_steps">Next Steps</label>
-            <textarea 
+            <textarea
               id="next_steps"
               v-model="formData.next_steps"
               class="form-control"
@@ -145,9 +130,7 @@
           <div v-if="error" class="error">{{ error }}</div>
 
           <div class="modal-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="submitting" class="btn btn-primary">
               {{ submitting ? 'Recording...' : 'Record Training' }}
             </button>
@@ -169,8 +152,8 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
-  'close': []
-  'recorded': []
+  close: []
+  recorded: []
 }>()
 
 // State
@@ -188,7 +171,7 @@ const formData = ref<CreateTrainingRecordRequest>({
   minutes_trained: undefined,
   skills_covered: [],
   notes: '',
-  next_steps: ''
+  next_steps: '',
 })
 
 // Computed
@@ -201,11 +184,11 @@ const loadUsers = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const response = await userApi.getAllUsers()
-    
+
     if (response.success && response.data?.items) {
-      users.value = response.data.items.filter(user => user.is_active)
+      users.value = response.data.items.filter((user) => user.is_active)
     } else {
       error.value = response.error || 'Failed to load users'
     }
@@ -239,9 +222,11 @@ const submitForm = async () => {
     // Clean up the data
     const requestData: CreateTrainingRecordRequest = {
       ...formData.value,
-      skills_covered: formData.value.skills_covered?.length ? formData.value.skills_covered : undefined,
+      skills_covered: formData.value.skills_covered?.length
+        ? formData.value.skills_covered
+        : undefined,
       notes: formData.value.notes || undefined,
-      next_steps: formData.value.next_steps || undefined
+      next_steps: formData.value.next_steps || undefined,
     }
 
     const response = await trainerApi.createTrainingRecord(requestData)
@@ -260,7 +245,7 @@ const submitForm = async () => {
 
 // Lifecycle
 onMounted(() => {
-  loadUsers()
+  void loadUsers()
 })
 </script>
 
@@ -498,24 +483,24 @@ textarea.form-control {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .modal-header,
   .modal-body {
     padding: 1rem;
   }
-  
+
   .form-row {
     grid-template-columns: 1fr;
   }
-  
+
   .skills-input {
     flex-direction: column;
   }
-  
+
   .modal-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

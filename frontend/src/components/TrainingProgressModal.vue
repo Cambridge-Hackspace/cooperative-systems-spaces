@@ -6,13 +6,11 @@
           <h3>Training Progress</h3>
           <p class="subtitle">{{ step?.step_name }}</p>
         </div>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
-        <div v-if="loading" class="loading">
-          Loading progress data...
-        </div>
+        <div v-if="loading" class="loading">Loading progress data...</div>
 
         <div v-else>
           <!-- Summary Stats -->
@@ -38,10 +36,10 @@
           <!-- Progress List -->
           <div class="progress-section">
             <h4>User Progress</h4>
-            
+
             <!-- Filters -->
             <div class="filters">
-              <select v-model="statusFilter" @change="applyFilters" class="filter-select">
+              <select v-model="statusFilter" class="filter-select" @change="applyFilters">
                 <option value="">All Statuses</option>
                 <option value="completed">Completed</option>
                 <option value="in_progress">In Progress</option>
@@ -49,14 +47,14 @@
                 <option value="not_started">Not Started</option>
                 <option value="expired">Expired</option>
               </select>
-              
-              <input 
-                v-model="searchQuery" 
-                @input="applyFilters"
-                type="text" 
+
+              <input
+                v-model="searchQuery"
+                type="text"
                 placeholder="Search users..."
                 class="search-input"
-              >
+                @input="applyFilters"
+              />
             </div>
 
             <div v-if="filteredProgress.length === 0" class="empty-state">
@@ -65,14 +63,16 @@
             </div>
 
             <div v-else class="progress-list">
-              <div 
-                v-for="progress in paginatedProgress" 
+              <div
+                v-for="progress in paginatedProgress"
                 :key="progress.id"
                 class="progress-item"
                 :class="getProgressStatusClass(progress.status)"
               >
                 <div class="user-info">
-                  <div class="user-name">{{ progress.user?.full_name || progress.user?.username || 'Unknown User' }}</div>
+                  <div class="user-name">
+                    {{ progress.user?.full_name || progress.user?.username || 'Unknown User' }}
+                  </div>
                   <div class="user-details">
                     <span class="user-email">{{ progress.user?.email }}</span>
                     <span class="user-role">{{ progress.user?.role }}</span>
@@ -91,26 +91,38 @@
                       <div v-if="progress.completed_at" class="date-info">
                         Completed: {{ formatDate(progress.completed_at) }}
                       </div>
-                      <div v-if="progress.expires_at" class="date-info expiry" :class="{ 'expired': isExpired(progress.expires_at) }">
-                        {{ isExpired(progress.expires_at) ? 'Expired:' : 'Expires:' }} {{ formatDate(progress.expires_at) }}
+                      <div
+                        v-if="progress.expires_at"
+                        class="date-info expiry"
+                        :class="{ expired: isExpired(progress.expires_at) }"
+                      >
+                        {{ isExpired(progress.expires_at) ? 'Expired:' : 'Expires:' }}
+                        {{ formatDate(progress.expires_at) }}
                       </div>
                     </div>
                   </div>
 
-                  <div class="assessment-info" v-if="progress.assessment_score !== null">
+                  <div v-if="progress.assessment_score !== null" class="assessment-info">
                     <div class="score">Score: {{ progress.assessment_score }}%</div>
-                    <div v-if="step?.passing_score" class="passing-indicator" :class="{ 'passed': progress.assessment_score >= step.passing_score }">
-                      {{ progress.assessment_score >= step.passing_score ? 'PASS' : 'FAIL' }} ({{ step.passing_score }}% required)
+                    <div
+                      v-if="step?.passing_score"
+                      class="passing-indicator"
+                      :class="{ passed: progress.assessment_score >= step.passing_score }"
+                    >
+                      {{ progress.assessment_score >= step.passing_score ? 'PASS' : 'FAIL' }} ({{
+                        step.passing_score
+                      }}% required)
                     </div>
                   </div>
 
-                  <div class="instructor-info" v-if="progress.instructor">
+                  <div v-if="progress.instructor" class="instructor-info">
                     <div class="instructor">
-                      Instructor: {{ progress.instructor.full_name || progress.instructor.username }}
+                      Instructor:
+                      {{ progress.instructor.full_name || progress.instructor.username }}
                     </div>
                   </div>
 
-                  <div class="notes" v-if="progress.notes">
+                  <div v-if="progress.notes" class="notes">
                     <strong>Notes:</strong> {{ progress.notes }}
                   </div>
                 </div>
@@ -118,23 +130,23 @@
             </div>
 
             <!-- Pagination -->
-            <div class="pagination" v-if="totalPages > 1">
-              <button 
-                @click="currentPage = Math.max(1, currentPage - 1)"
+            <div v-if="totalPages > 1" class="pagination">
+              <button
                 :disabled="currentPage === 1"
                 class="btn btn-sm btn-secondary"
+                @click="currentPage = Math.max(1, currentPage - 1)"
               >
                 Previous
               </button>
-              
+
               <span class="page-info">
                 Page {{ currentPage }} of {{ totalPages }} ({{ filteredProgress.length }} total)
               </span>
-              
-              <button 
-                @click="currentPage = Math.min(totalPages, currentPage + 1)"
+
+              <button
                 :disabled="currentPage === totalPages"
                 class="btn btn-sm btn-secondary"
+                @click="currentPage = Math.min(totalPages, currentPage + 1)"
               >
                 Next
               </button>
@@ -147,9 +159,7 @@
         </div>
 
         <div class="modal-footer">
-          <button type="button" @click="$emit('close')" class="btn btn-secondary">
-            Close
-          </button>
+          <button type="button" class="btn btn-secondary" @click="$emit('close')">Close</button>
         </div>
       </div>
     </div>
@@ -158,7 +168,6 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { trainingApi } from '../utils/api'
 import type { TrainingStep, UserTrainingProgress, TrainingStatus } from '../types'
 
 interface Props {
@@ -167,7 +176,7 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const emit = defineEmits<{
+defineEmits<{
   close: []
 }>()
 
@@ -184,13 +193,13 @@ const filteredProgress = computed(() => {
 
   // Filter by status
   if (statusFilter.value) {
-    filtered = filtered.filter(p => p.status === statusFilter.value)
+    filtered = filtered.filter((p) => p.status === statusFilter.value)
   }
 
   // Filter by search query
   if (searchQuery.value.trim()) {
     const search = searchQuery.value.toLowerCase()
-    filtered = filtered.filter(p => {
+    filtered = filtered.filter((p) => {
       const user = p.user
       return (
         user?.full_name?.toLowerCase().includes(search) ||
@@ -216,18 +225,23 @@ const totalPages = computed(() => {
 
 // Stats computed properties
 const totalUsers = computed(() => allProgress.value.length)
-const completedUsers = computed(() => allProgress.value.filter(p => p.status === 'completed').length)
-const inProgressUsers = computed(() => allProgress.value.filter(p => p.status === 'in_progress').length)
-const failedUsers = computed(() => allProgress.value.filter(p => p.status === 'failed').length)
+const completedUsers = computed(
+  () => allProgress.value.filter((p) => p.status === 'completed').length
+)
+const inProgressUsers = computed(
+  () => allProgress.value.filter((p) => p.status === 'in_progress').length
+)
+const failedUsers = computed(() => allProgress.value.filter((p) => p.status === 'failed').length)
 
-const loadProgress = async () => {
+const loadProgress = () => {
   if (!props.step) return
-  
+
   loading.value = true
   try {
     // In a real implementation, you'd have an endpoint to get all user progress for a training step
     // For now, we'll simulate this
-    error.value = 'Training progress viewing is not fully implemented yet. This would show all users who have attempted this training step.'
+    error.value =
+      'Training progress viewing is not fully implemented yet. This would show all users who have attempted this training step.'
   } catch (err: any) {
     error.value = err.message || 'Failed to load training progress'
   } finally {
@@ -245,11 +259,16 @@ const getProgressStatusClass = (status: TrainingStatus): string => {
 
 const getStatusBadgeClass = (status: TrainingStatus): string => {
   switch (status) {
-    case 'completed': return 'badge-success'
-    case 'in_progress': return 'badge-warning'
-    case 'failed': return 'badge-danger'
-    case 'expired': return 'badge-dark'
-    default: return 'badge-secondary'
+    case 'completed':
+      return 'badge-success'
+    case 'in_progress':
+      return 'badge-warning'
+    case 'failed':
+      return 'badge-danger'
+    case 'expired':
+      return 'badge-dark'
+    default:
+      return 'badge-secondary'
   }
 }
 
@@ -259,7 +278,7 @@ const formatStatus = (status: TrainingStatus): string => {
     in_progress: 'In Progress',
     completed: 'Completed',
     failed: 'Failed',
-    expired: 'Expired'
+    expired: 'Expired',
   }
   return statusMap[status] || status
 }
@@ -270,7 +289,7 @@ const formatDate = (dateString: string): string => {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   })
 }
 
@@ -278,15 +297,19 @@ const isExpired = (dateString: string): boolean => {
   return new Date(dateString) <= new Date()
 }
 
-watch(() => props.step, (newStep) => {
-  if (newStep) {
-    loadProgress()
-  }
-}, { immediate: true })
+watch(
+  () => props.step,
+  (newStep) => {
+    if (newStep) {
+      void loadProgress()
+    }
+  },
+  { immediate: true }
+)
 
 onMounted(() => {
   if (props.step) {
-    loadProgress()
+    void loadProgress()
   }
 })
 </script>
@@ -401,7 +424,8 @@ onMounted(() => {
   align-items: center;
 }
 
-.filter-select, .search-input {
+.filter-select,
+.search-input {
   padding: 0.5rem;
   border: 1px solid #ced4da;
   border-radius: 4px;
@@ -646,22 +670,22 @@ onMounted(() => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .filters {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .search-input {
     max-width: none;
   }
-  
+
   .status-info,
   .dates {
     flex-direction: column;
     gap: 0.25rem;
   }
-  
+
   .assessment-info {
     flex-direction: column;
     align-items: flex-start;

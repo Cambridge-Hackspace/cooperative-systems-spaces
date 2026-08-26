@@ -13,11 +13,11 @@
   .btn-css-primary {
     @apply btn btn-primary;
   }
-  
+
   .card-css {
     @apply card bg-base-200 shadow-md;
   }
-  
+
   .navbar-css {
     @apply navbar bg-base-200 border-b border-base-300;
   }

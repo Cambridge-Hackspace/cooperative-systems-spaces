@@ -44,7 +44,7 @@ describe('hasRole', () => {
       const store = signedInAs(userRole)
       for (const [requiredRole, requiredLevel] of LEVELS) {
         expect(store.hasRole(requiredRole), `${userRole} asked for ${requiredRole}`).toBe(
-          userLevel >= requiredLevel,
+          userLevel >= requiredLevel
         )
       }
     }

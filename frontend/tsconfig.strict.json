@@ -1,0 +1,28 @@
+{
+  // The type-strictness ratchet.
+  //
+  // The base tsconfig has "strict": false, and 24,000 lines were written under
+  // it. Flipping that flag produces hundreds of strictNullChecks errors at
+  // once, and the two ways that ends are both bad: an unreviewable diff, or a
+  // stream of `as any` that makes the flag mean nothing.
+  //
+  // So strictness is applied to an explicit list instead, and the list grows.
+  // GROWING IT IS THE UNIT OF WORK. Shrinking it is a narrowing and needs a
+  // stated reason, because every path removed is code that stops being checked.
+  //
+  // eslint.config.js reads the same idea: the type-aware `no-unsafe-*` family
+  // is enabled for exactly these paths and off elsewhere, so the two ratchets
+  // move together.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    // The flag that makes `roleHierarchy[roleString] || 0` type-check as
+    // written rather than by luck, and turns its `|| 0` fallback into a
+    // documented decision instead of an accident.
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["src/types/**/*.ts", "src/components/schedule_templates.ts", "tests/**/*.ts"]
+}

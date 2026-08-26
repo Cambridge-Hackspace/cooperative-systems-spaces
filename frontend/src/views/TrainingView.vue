@@ -10,39 +10,31 @@
               {{ tool.name }}
             </option>
           </select>
-          
-          <input 
-            v-model="searchQuery" 
-            @input="loadTrainingSteps"
-            type="text" 
-            placeholder="Search training steps..." 
+
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search training steps..."
             class="search-input"
+            @input="loadTrainingSteps"
           />
         </div>
-        
-        <button 
-          v-if="canManageTraining" 
-          @click="showCreateModal = true"
-          class="btn btn-primary"
-        >
+
+        <button v-if="canManageTraining" class="btn btn-primary" @click="showCreateModal = true">
           Add Training Step
         </button>
       </div>
     </div>
 
-    <div class="loading" v-if="loading">Loading training steps...</div>
-    
-    <div class="error" v-else-if="error">
+    <div v-if="loading" class="loading">Loading training steps...</div>
+
+    <div v-else-if="error" class="error">
       {{ error }}
     </div>
 
-    <div class="training-content" v-else>
-      <div class="training-steps-list" v-if="trainingSteps.length">
-        <div 
-          v-for="step in trainingSteps" 
-          :key="step.id"
-          class="step-card"
-        >
+    <div v-else class="training-content">
+      <div v-if="trainingSteps.length" class="training-steps-list">
+        <div v-for="step in trainingSteps" :key="step.id" class="step-card">
           <div class="step-header">
             <h3>{{ step.step_name }}</h3>
             <div class="step-meta">
@@ -67,33 +59,22 @@
             </div>
           </div>
 
-          <div class="step-actions" v-if="canManageTraining">
-            <button @click="editStep(step)" class="btn btn-sm btn-secondary">
-              Edit
-            </button>
-            <button @click="managePrerequisites(step)" class="btn btn-sm btn-info">
+          <div v-if="canManageTraining" class="step-actions">
+            <button class="btn btn-sm btn-secondary" @click="editStep(step)">Edit</button>
+            <button class="btn btn-sm btn-info" @click="managePrerequisites(step)">
               Prerequisites
             </button>
-            <button @click="viewProgress(step)" class="btn btn-sm btn-primary">
+            <button class="btn btn-sm btn-primary" @click="viewProgress(step)">
               View Progress
             </button>
-            <button 
-              @click="deleteStep(step)" 
-              class="btn btn-sm btn-danger"
-            >
-              Delete
-            </button>
+            <button class="btn btn-sm btn-danger" @click="deleteStep(step)">Delete</button>
           </div>
         </div>
       </div>
 
-      <div class="no-training" v-else>
+      <div v-else class="no-training">
         <p>No training steps found.</p>
-        <button 
-          v-if="canManageTraining" 
-          @click="showCreateModal = true"
-          class="btn btn-primary"
-        >
+        <button v-if="canManageTraining" class="btn btn-primary" @click="showCreateModal = true">
           Create First Training Step
         </button>
       </div>
@@ -111,7 +92,7 @@
     <EditTrainingStepModal
       v-if="editingStep"
       :step="editingStep"
-      :tool="tools.find(t => t.id === editingStep?.tool_id) || tools[0]"
+      :tool="tools.find((t) => t.id === editingStep?.tool_id) || tools[0]"
       :existing-steps="trainingSteps"
       @close="editingStep = null"
       @step-updated="onStepUpdated"
@@ -139,11 +120,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { trainingApi, toolsApi } from '../utils/api'
-import type {
-  TrainingStep,
-  Tool,
-  AssessmentType
-} from '../types'
+import type { TrainingStep, Tool, AssessmentType } from '../types'
 import CreateTrainingStepModal from '../components/CreateTrainingStepModal.vue'
 import EditTrainingStepModal from '../components/EditTrainingStepModal.vue'
 import PrerequisitesModal from '../components/PrerequisitesModal.vue'
@@ -185,24 +162,25 @@ const loadTrainingSteps = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const query: any = {}
     if (selectedTool.value) query.tool_id = selectedTool.value
-    
+
     const response = await trainingApi.getTrainingSteps(query)
-    
+
     if (response.success && response.data) {
       let steps = response.data
-      
+
       // Filter by search query if provided
       if (searchQuery.value.trim()) {
         const search = searchQuery.value.toLowerCase()
-        steps = steps.filter(step => 
-          step.step_name.toLowerCase().includes(search) ||
-          step.description.toLowerCase().includes(search)
+        steps = steps.filter(
+          (step) =>
+            step.step_name.toLowerCase().includes(search) ||
+            step.description.toLowerCase().includes(search)
         )
       }
-      
+
       trainingSteps.value = steps.sort((a, b) => {
         // Sort by tool name, then by step number
         const toolA = getToolName(a.tool_id)
@@ -221,7 +199,7 @@ const loadTrainingSteps = async () => {
 }
 
 const getToolName = (toolId: string): string => {
-  const tool = tools.value.find(t => t.id === toolId)
+  const tool = tools.value.find((t) => t.id === toolId)
   return tool ? tool.name : 'Unknown Tool'
 }
 
@@ -230,7 +208,7 @@ const formatAssessmentType = (type: AssessmentType): string => {
     practical: 'Practical',
     written: 'Written',
     both: 'Both',
-    observation_only: 'Observation'
+    observation_only: 'Observation',
   }
   return types[type] || type
 }
@@ -249,7 +227,7 @@ const viewProgress = (step: TrainingStep) => {
 
 const deleteStep = async (step: TrainingStep) => {
   if (!confirm(`Are you sure you want to delete the training step "${step.step_name}"?`)) return
-  
+
   try {
     const response = await trainingApi.deleteTrainingStep(step.id)
     if (response.success) {
@@ -264,17 +242,17 @@ const deleteStep = async (step: TrainingStep) => {
 
 const onStepCreated = () => {
   showCreateModal.value = false
-  loadTrainingSteps()
+  void loadTrainingSteps()
 }
 
 const onStepUpdated = () => {
   editingStep.value = null
-  loadTrainingSteps()
+  void loadTrainingSteps()
 }
 
 const onPrerequisitesUpdated = () => {
   managingPrerequisites.value = null
-  loadTrainingSteps()
+  void loadTrainingSteps()
 }
 
 // Lifecycle
@@ -318,7 +296,8 @@ onMounted(async () => {
   align-items: center;
 }
 
-.filters select, .search-input {
+.filters select,
+.search-input {
   padding: 0.5rem;
   border: 1px solid #ddd;
   border-radius: 4px;
@@ -384,7 +363,8 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 
-.loading, .error {
+.loading,
+.error {
   text-align: center;
   padding: 2rem;
   font-size: 1.1rem;
@@ -524,35 +504,35 @@ onMounted(async () => {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .training-controls {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .filters {
     flex-wrap: wrap;
   }
-  
+
   .step-header {
     flex-direction: column;
     align-items: stretch;
     gap: 1rem;
   }
-  
+
   .step-meta {
     align-items: flex-start;
   }
-  
+
   .step-details {
     flex-direction: column;
     gap: 0.5rem;
   }
-  
+
   .step-actions {
     justify-content: stretch;
   }
-  
+
   .btn {
     flex: 1;
   }

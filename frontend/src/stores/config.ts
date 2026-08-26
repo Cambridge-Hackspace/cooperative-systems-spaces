@@ -5,7 +5,7 @@ import { apiClient } from '@/utils/api'
 export enum LinkLocation {
   Navigation = 'Navigation',
   HomePage = 'HomePage',
-  Both = 'Both'
+  Both = 'Both',
 }
 
 export interface PublicPagesConfig {
@@ -70,13 +70,13 @@ export const useConfigStore = defineStore('config', () => {
   async function fetchConfig() {
     loading.value = true
     error.value = null
-    
+
     try {
       console.log('Fetching config from /config/public...')
       const response = await apiClient.get<PublicConfig>('/config/public')
       console.log('Raw API response:', response)
       console.log('Response data:', response.data)
-      
+
       // Check if data is wrapped in ApiResponse structure
       if (response.success && response.data) {
         // Wrapped response: { success: true, data: { ... } }
@@ -87,12 +87,12 @@ export const useConfigStore = defineStore('config', () => {
           console.error('API returned unsuccessful response:', response)
           throw new Error(response.error || 'Failed to fetch config')
         }
-        
+
         // This shouldn't happen, but handle it just in case
         console.error('Invalid response structure:', response)
         throw new Error('Failed to fetch config - no data in response')
       }
-      
+
       console.log('Config loaded successfully:', config.value)
       console.log('Pages config:', config.value.pages)
       console.log('Wiki enabled:', config.value.pages?.wiki_enabled)
@@ -164,6 +164,6 @@ export const useConfigStore = defineStore('config', () => {
     shouldShowSiteOnHomePage,
     doorsEnabled,
     calendarEnabled,
-    toolguardEnabled
+    toolguardEnabled,
   }
 })

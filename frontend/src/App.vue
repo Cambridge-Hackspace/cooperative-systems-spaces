@@ -6,10 +6,18 @@
         <div class="dropdown">
           <div tabindex="0" role="button" class="btn btn-ghost lg:hidden">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"/>
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 6h16M4 12h8m-8 6h16"
+              />
             </svg>
           </div>
-          <ul tabindex="0" class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow">
+          <ul
+            tabindex="0"
+            class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow"
+          >
             <li><router-link to="/">Home</router-link></li>
             <li v-if="authStore.isAuthenticated">
               <router-link :to="`/profile/me`">My Profile</router-link>
@@ -40,34 +48,49 @@
         </div>
         <router-link to="/about" class="btn btn-ghost text-xl">
           <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-4m-5 0H9m0 0H7m2 0v-4a2 2 0 012-2h2a2 2 0 012 2v4"/>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-4m-5 0H9m0 0H7m2 0v-4a2 2 0 012-2h2a2 2 0 012 2v4"
+            />
           </svg>
           CSS
         </router-link>
       </div>
-      
+
       <div class="navbar-center hidden lg:flex">
         <ul class="menu menu-horizontal px-1">
-          <li><router-link to="/" :class="{ 'active': $route.name === 'home' }">Home</router-link></li>
+          <li>
+            <router-link to="/" :class="{ active: $route.name === 'home' }">Home</router-link>
+          </li>
           <li v-if="authStore.isAuthenticated">
-            <router-link 
-              :to="`/profile/me`" 
-              :class="{ 'active': $route.name === 'profile' && $route.params.userId === 'me' }"
+            <router-link
+              :to="`/profile/me`"
+              :class="{ active: $route.name === 'profile' && $route.params.userId === 'me' }"
             >
               My Profile
             </router-link>
           </li>
           <li v-if="authStore.isAuthenticated">
-            <router-link to="/tools" :class="{ 'active': $route.name === 'tools' }">Tools</router-link>
+            <router-link to="/tools" :class="{ active: $route.name === 'tools' }"
+              >Tools</router-link
+            >
           </li>
           <li v-if="showWikiInNav">
-            <router-link to="/wiki" :class="{ 'active': $route.path.startsWith('/wiki') }">Wiki</router-link>
+            <router-link to="/wiki" :class="{ active: $route.path.startsWith('/wiki') }"
+              >Wiki</router-link
+            >
           </li>
           <li v-if="showSiteInNav">
-            <router-link to="/page" :class="{ 'active': $route.path.startsWith('/page') }">Pages</router-link>
+            <router-link to="/page" :class="{ active: $route.path.startsWith('/page') }"
+              >Pages</router-link
+            >
           </li>
           <li v-if="authStore.isAuthenticated && canAccessStaff">
-            <router-link to="/users" :class="{ 'active': $route.name === 'users' }">Users</router-link>
+            <router-link to="/users" :class="{ active: $route.name === 'users' }"
+              >Users</router-link
+            >
           </li>
           <li v-if="authStore.isAuthenticated && canAccessAdmin">
             <details>
@@ -81,7 +104,7 @@
           </li>
         </ul>
       </div>
-      
+
       <div class="navbar-end">
         <div v-if="!authStore.isAuthenticated" class="flex gap-2">
           <router-link to="/login" class="btn btn-ghost btn-sm">Login</router-link>
@@ -92,12 +115,19 @@
             <div class="w-10 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
               <div class="w-full h-full bg-primary/20 flex items-center justify-center">
                 <span class="text-primary font-semibold">
-                  {{ authStore.user?.full_name?.charAt(0) || authStore.user?.username?.charAt(0) || '?' }}
+                  {{
+                    authStore.user?.full_name?.charAt(0) ||
+                    authStore.user?.username?.charAt(0) ||
+                    '?'
+                  }}
                 </span>
               </div>
             </div>
           </div>
-          <ul tabindex="0" class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow">
+          <ul
+            tabindex="0"
+            class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow"
+          >
             <li>
               <router-link :to="`/profile/me`" class="justify-between">
                 My Profile
@@ -126,62 +156,81 @@
           'alert-success': notification.type === 'success',
           'alert-error': notification.type === 'error',
           'alert-warning': notification.type === 'warning',
-          'alert-info': notification.type === 'info'
+          'alert-info': notification.type === 'info',
         }"
       >
-        <svg 
+        <svg
           v-if="notification.type === 'success'"
-          class="w-6 h-6" 
-          fill="none" 
-          stroke="currentColor" 
+          class="w-6 h-6"
+          fill="none"
+          stroke="currentColor"
           viewBox="0 0 24 24"
         >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M5 13l4 4L19 7"
+          />
         </svg>
-        <svg 
+        <svg
           v-else-if="notification.type === 'error'"
-          class="w-6 h-6" 
-          fill="none" 
-          stroke="currentColor" 
+          class="w-6 h-6"
+          fill="none"
+          stroke="currentColor"
           viewBox="0 0 24 24"
         >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
-        <svg 
+        <svg
           v-else-if="notification.type === 'warning'"
-          class="w-6 h-6" 
-          fill="none" 
-          stroke="currentColor" 
+          class="w-6 h-6"
+          fill="none"
+          stroke="currentColor"
           viewBox="0 0 24 24"
         >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16c-.77.833.192 2.5 1.732 2.5z"/>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16c-.77.833.192 2.5 1.732 2.5z"
+          />
         </svg>
-        <svg 
-          v-else
-          class="w-6 h-6" 
-          fill="none" 
-          stroke="currentColor" 
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        <svg v-else class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <div>
           <h3 class="font-bold">{{ notification.title }}</h3>
           <div class="text-xs">{{ notification.message }}</div>
         </div>
-        <button 
-          @click="removeNotification(notification.id)" 
-          class="btn btn-sm btn-ghost"
-        >
+        <button class="btn btn-sm btn-ghost" @click="removeNotification(notification.id)">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
     </div>
 
     <!-- Loading overlay -->
-    <div v-if="globalLoading" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div
+      v-if="globalLoading"
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+    >
       <div class="bg-base-100 p-8 rounded-lg shadow-xl text-center">
         <div class="loading loading-spinner loading-lg mb-4"></div>
         <p class="text-lg">Loading...</p>
@@ -233,7 +282,7 @@ const showSiteInNav = computed(() => {
 async function logout() {
   globalLoading.value = true
   try {
-    await authStore.logout()
+    authStore.logout()
     await router.push('/')
   } finally {
     globalLoading.value = false
@@ -255,7 +304,7 @@ function addNotification(notification: Omit<Notification, 'id'>) {
 }
 
 function removeNotification(id: string) {
-  const index = notifications.value.findIndex(n => n.id === id)
+  const index = notifications.value.findIndex((n) => n.id === id)
   if (index > -1) {
     notifications.value.splice(index, 1)
   }
@@ -264,8 +313,14 @@ function removeNotification(id: string) {
 // Apply theme from user meta
 function applyTheme() {
   const user = authStore.user
-  if (user?.meta?.theme) {
-    document.documentElement.setAttribute('data-theme', user.meta.theme)
+  // `meta` is a free-form JSON blob the server owns, so `theme` is genuinely
+  // of unknown type here. Narrowed rather than trusted: it was `any` before,
+  // which meant a non-string value would have been coerced by setAttribute
+  // into whatever `String(value)` produced -- silently setting a nonsense
+  // theme instead of falling back to the default below.
+  const theme = user?.meta?.theme
+  if (typeof theme === 'string' && theme !== '') {
+    document.documentElement.setAttribute('data-theme', theme)
   } else {
     // Default theme
     document.documentElement.setAttribute('data-theme', 'css-light')
@@ -273,29 +328,33 @@ function applyTheme() {
 }
 
 // Watch for user changes to apply theme
-watch(() => authStore.user, () => {
-  applyTheme()
-}, { deep: true })
+watch(
+  () => authStore.user,
+  () => {
+    applyTheme()
+  },
+  { deep: true }
+)
 
 // Lifecycle
 onMounted(async () => {
   globalLoading.value = true
   try {
-    await Promise.all([
-      authStore.initialize(),
-      configStore.fetchConfig()
-    ])
+    await Promise.all([authStore.initialize(), configStore.fetchConfig()])
   } catch (error) {
+    // Logged rather than discarded: a swallowed error is indistinguishable
+    // from a successful no-op to anyone reading the console.
+    console.error(error)
     addNotification({
       type: 'error',
       title: 'Initialization Error',
       message: 'Failed to initialize application',
-      duration: 8000
+      duration: 8000,
     })
   } finally {
     globalLoading.value = false
   }
-  
+
   // Apply theme after initialization
   applyTheme()
 })

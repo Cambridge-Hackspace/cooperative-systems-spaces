@@ -3,13 +3,13 @@
     <div class="modal-content bg-base-100" @click.stop>
       <div class="modal-header">
         <h3>{{ tool.name }} - Event History</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
-        <div class="loading" v-if="loading">Loading events...</div>
-        
-        <div class="error" v-else-if="error">
+        <div v-if="loading" class="loading">Loading events...</div>
+
+        <div v-else-if="error" class="error">
           {{ error }}
         </div>
 
@@ -18,9 +18,9 @@
         </div>
 
         <div v-else class="events-list">
-          <div 
-            v-for="event in events" 
-            :key="event.id" 
+          <div
+            v-for="event in events"
+            :key="event.id"
             class="event-item bg-primary text-primary-content"
             :class="`event-${event.event_type}`"
           >
@@ -35,10 +35,8 @@
             </div>
 
             <div class="event-details">
-              <div v-if="event.user_username" class="event-user">
-                By: {{ event.user_username }}
-              </div>
-              
+              <div v-if="event.user_username" class="event-user">By: {{ event.user_username }}</div>
+
               <div v-if="event.old_status || event.new_status" class="status-change">
                 <span v-if="event.old_status" class="old-status">
                   {{ formatStatus(event.old_status) }}
@@ -67,9 +65,7 @@
       </div>
 
       <div class="modal-actions">
-        <button @click="$emit('close')" class="btn btn-secondary">
-          Close
-        </button>
+        <button class="btn btn-secondary" @click="$emit('close')">Close</button>
       </div>
     </div>
   </div>
@@ -89,7 +85,7 @@ interface Emits {
 }
 
 const props = defineProps<Props>()
-const emit = defineEmits<Emits>()
+defineEmits<Emits>()
 
 // State
 const events = ref<ToolEvent[]>([])
@@ -101,7 +97,7 @@ const loadEvents = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const response = await toolsApi.getToolEvents(props.tool.id)
     events.value = response.data || []
   } catch (err: any) {
@@ -112,11 +108,11 @@ const loadEvents = async () => {
 }
 
 const formatEventType = (eventType: string) => {
-  return eventType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return eventType.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
 const formatStatus = (status: string) => {
-  return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
 const formatDate = (dateString: string) => {
@@ -126,20 +122,20 @@ const formatDate = (dateString: string) => {
 
 const getEventIcon = (eventType: string) => {
   const icons: Record<string, string> = {
-    'created': '🆕',
-    'status_change': '🔄',
-    'maintenance': '🔧',
-    'scan': '📱',
-    'checkout': '📤',
-    'return': '📥',
-    'deleted': '🗑️'
+    created: '🆕',
+    status_change: '🔄',
+    maintenance: '🔧',
+    scan: '📱',
+    checkout: '📤',
+    return: '📥',
+    deleted: '🗑️',
   }
   return icons[eventType] || '📝'
 }
 
 // Lifecycle
 onMounted(() => {
-  loadEvents()
+  void loadEvents()
 })
 </script>
 
@@ -355,19 +351,18 @@ onMounted(() => {
   transition: background-color 0.2s;
 }
 
-
 @media (max-width: 768px) {
   .modal-content {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .event-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 0.25rem;
   }
-  
+
   .status-change {
     flex-wrap: wrap;
   }

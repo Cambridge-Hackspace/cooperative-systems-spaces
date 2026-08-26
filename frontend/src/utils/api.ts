@@ -1,9 +1,9 @@
 import axios, { type AxiosResponse, type AxiosError } from 'axios'
-import type { 
-  ApiResponse, 
-  ProfileResponse, 
-  UpdateProfileRequest, 
-  ProfileConfigResponse, 
+import type {
+  ApiResponse,
+  ProfileResponse,
+  UpdateProfileRequest,
+  ProfileConfigResponse,
   UpdateProfileConfigRequest,
   User,
   UserRole,
@@ -13,6 +13,7 @@ import type {
   CreateToolRequest,
   UpdateToolRequest,
   ChangeToolStatusRequest,
+  ToolStatus,
   ToolEvent,
   TrainingStep,
   CreateTrainingStepRequest,
@@ -34,7 +35,7 @@ import type {
   TrainingRecordWithUsers,
   CreateTrainingRecordRequest,
   UpdateTrainingRecordRequest,
-  TrainingRecordsQuery
+  TrainingRecordsQuery,
 } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 
@@ -52,15 +53,21 @@ api.interceptors.request.use(
   (config) => {
     const authStore = useAuthStore()
     const token = authStore.token
-    
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
-    
+
     return config
   },
-  (error) => {
-    return Promise.reject(error)
+  (error: unknown) => {
+    // Typed so the rejection reason is visibly an Error rather than `any`.
+    // axios always rejects a request interceptor with an AxiosError.
+    return Promise.reject(
+      error instanceof Error
+        ? error
+        : new Error(typeof error === 'string' ? error : JSON.stringify(error))
+    )
   }
 )
 
@@ -71,14 +78,14 @@ api.interceptors.response.use(
   },
   (error: AxiosError) => {
     const authStore = useAuthStore()
-    
+
     // Handle 401 unauthorized - clear auth and redirect to login
     if (error.response?.status === 401) {
       authStore.logout()
       // Note: In a real app, you might want to redirect to login page here
       // But we'll let the components handle this
     }
-    
+
     return Promise.reject(error)
   }
 )
@@ -122,7 +129,10 @@ export const profileApi = {
   },
 
   // Update user profile
-  updateUserProfile(userId: string, data: UpdateProfileRequest): Promise<ApiResponse<ProfileResponse>> {
+  updateUserProfile(
+    userId: string,
+    data: UpdateProfileRequest
+  ): Promise<ApiResponse<ProfileResponse>> {
     return apiClient.put(`/profiles/${userId}`, data)
   },
 
@@ -132,18 +142,21 @@ export const profileApi = {
   },
 
   // Update profile configuration (admin only)
-  updateProfileConfig(data: UpdateProfileConfigRequest): Promise<ApiResponse<ProfileConfigResponse>> {
+  updateProfileConfig(
+    data: UpdateProfileConfigRequest
+  ): Promise<ApiResponse<ProfileConfigResponse>> {
     return apiClient.put('/profiles/config', data)
   },
 }
 
-// User/Roster API functions  
+// User/Roster API functions
 export const userApi = {
   // Get all users for roster (admin only)
   getAllUsers(): Promise<ApiResponse<any>> {
     // Use the admin roster endpoint instead
-    return apiClient.get('/admin/roster')
-      .then(response => {
+    return apiClient
+      .get('/admin/roster')
+      .then((response) => {
         if (response.success && response.data) {
           // Transform the response to match expected paginated format
           const users = Array.isArray(response.data) ? response.data : []
@@ -154,13 +167,13 @@ export const userApi = {
               page: 1,
               per_page: users.length,
               total: users.length,
-              total_pages: 1
-            }
+              total_pages: 1,
+            },
           }
         }
         return response
       })
-      .catch(error => {
+      .catch((error) => {
         console.error('Error fetching roster:', error)
         return { success: false, error: error.message || 'Failed to fetch users' }
       })
@@ -170,11 +183,14 @@ export const userApi = {
   getUsersForTraining(toolId?: string): Promise<ApiResponse<any>> {
     // Use the new training-specific roster endpoint that allows trainers to see all users
     const endpoint = toolId ? `/training/roster/${toolId}` : '/training/roster'
-    
-    return apiClient.get(endpoint)
-      .then(response => {
+
+    return apiClient
+      .get(endpoint)
+      .then((response) => {
         if (response.success && response.data) {
-          const users = Array.isArray(response.data) ? response.data : ((response.data as any).items || [])
+          const users = Array.isArray(response.data)
+            ? response.data
+            : (response.data as any).items || []
           return {
             success: true,
             data: {
@@ -182,20 +198,23 @@ export const userApi = {
               page: 1,
               per_page: users.length,
               total: users.length,
-              total_pages: 1
-            }
+              total_pages: 1,
+            },
           }
         }
         return response
       })
-      .catch(error => {
+      .catch((error) => {
         // If training roster endpoint fails, try the old trainer-specific endpoint
         if (error.response?.status === 404) {
           console.log('Training roster endpoint not available, trying legacy trainer endpoint')
-          return apiClient.get('/trainers/users')
-            .then(response => {
+          return apiClient
+            .get('/trainers/users')
+            .then((response) => {
               if (response.success && response.data) {
-                const users = Array.isArray(response.data) ? response.data : ((response.data as any).items || [])
+                const users = Array.isArray(response.data)
+                  ? response.data
+                  : (response.data as any).items || []
                 return {
                   success: true,
                   data: {
@@ -203,13 +222,13 @@ export const userApi = {
                     page: 1,
                     per_page: users.length,
                     total: users.length,
-                    total_pages: 1
-                  }
+                    total_pages: 1,
+                  },
                 }
               }
               return response
             })
-            .catch(legacyError => {
+            .catch((legacyError) => {
               // If both training roster and legacy trainer endpoints fail, try admin roster for admins
               if (legacyError.response?.status === 401 || legacyError.response?.status === 403) {
                 console.log('Trainer endpoints not accessible, trying admin roster')
@@ -218,7 +237,7 @@ export const userApi = {
               throw legacyError
             })
         }
-        
+
         console.error('Error fetching users for training:', error)
         return { success: false, error: error.message || 'Failed to fetch users for training' }
       })
@@ -226,18 +245,19 @@ export const userApi = {
 
   // Get training history for a specific tool (trainers and staff can access)
   getTrainingHistory(toolId: string, queryParams?: any): Promise<ApiResponse<any>> {
-    return apiClient.get(`/training/history/${toolId}`, queryParams)
-      .then(response => {
+    return apiClient
+      .get(`/training/history/${toolId}`, queryParams)
+      .then((response) => {
         if (response.success && response.data) {
           const records = Array.isArray(response.data) ? response.data : []
           return {
             success: true,
-            data: records
+            data: records,
           }
         }
         return response
       })
-      .catch(error => {
+      .catch((error) => {
         console.error('Error fetching training history:', error)
         return { success: false, error: error.message || 'Failed to fetch training history' }
       })
@@ -274,15 +294,18 @@ export default apiClient
 // Admin API functions
 export const adminApi = {
   // Get audit logs (admin only)
-  getAuditLogs(page: number = 1, per_page: number = 50, event_type?: string): Promise<ApiResponse<AuditLog[]>> {
+  getAuditLogs(
+    page: number = 1,
+    per_page: number = 50,
+    event_type?: string
+  ): Promise<ApiResponse<AuditLog[]>> {
     const params: any = { page, per_page }
     if (event_type) params.event_type = event_type
 
-    return apiClient.get<AuditLog[]>('/admin/audit-logs', params)
-      .catch(error => {
-        console.error('Error fetching audit logs:', error)
-        return { success: false, error: error.message || 'Failed to fetch audit logs', data: [] }
-      })
+    return apiClient.get<AuditLog[]>('/admin/audit-logs', params).catch((error) => {
+      console.error('Error fetching audit logs:', error)
+      return { success: false, error: error.message || 'Failed to fetch audit logs', data: [] }
+    })
   },
 
   /** Wipe every MFA artifact for a user — lockout recovery (admin only). */
@@ -399,7 +422,10 @@ export const doorsApi = {
     return apiClient.get<{ url: string }>(`/admin/doors/${doorId}/qr`)
   },
   events(doorId: string, params?: { limit?: number; offset?: number }) {
-    return apiClient.get<import('@/types').DoorAccessEvent[]>(`/admin/doors/${doorId}/events`, params)
+    return apiClient.get<import('@/types').DoorAccessEvent[]>(
+      `/admin/doors/${doorId}/events`,
+      params
+    )
   },
   listRules(doorId: string) {
     return apiClient.get<import('@/types').DoorAccessRule[]>(`/admin/doors/${doorId}/rules`)
@@ -430,10 +456,16 @@ export const mfaApi = {
     return apiClient.get<import('@/types').MfaWebauthnCredential[]>('/auth/mfa/webauthn')
   },
   webauthnRegisterBegin(label: string) {
-    return apiClient.post<import('@/types').MfaWebauthnRegisterBegin>('/auth/mfa/webauthn/register/begin', { label })
+    return apiClient.post<import('@/types').MfaWebauthnRegisterBegin>(
+      '/auth/mfa/webauthn/register/begin',
+      { label }
+    )
   },
   webauthnRegisterFinish(challenge_token: string, response: unknown) {
-    return apiClient.post<{ credential_id: string }>('/auth/mfa/webauthn/register/finish', { challenge_token, response })
+    return apiClient.post<{ credential_id: string }>('/auth/mfa/webauthn/register/finish', {
+      challenge_token,
+      response,
+    })
   },
   webauthnRemove(id: string) {
     return apiClient.delete<void>(`/auth/mfa/webauthn/${id}`)
@@ -461,7 +493,10 @@ export const webhooksApi = {
     return apiClient.post<import('@/types').WebhookAuthHeader>('/admin/webhooks/auth-headers', data)
   },
   updateAuthHeader(id: string, data: import('@/types').UpdateAuthHeaderRequest) {
-    return apiClient.patch<import('@/types').WebhookAuthHeader>(`/admin/webhooks/auth-headers/${id}`, data)
+    return apiClient.patch<import('@/types').WebhookAuthHeader>(
+      `/admin/webhooks/auth-headers/${id}`,
+      data
+    )
   },
   deleteAuthHeader(id: string) {
     return apiClient.delete<void>(`/admin/webhooks/auth-headers/${id}`)
@@ -502,153 +537,165 @@ export const webhooksApi = {
 export const toolsApi = {
   // List tools (staff only)
   getTools(query?: ToolQuery): Promise<ApiResponse<Tool[]>> {
-    return apiClient.get<Tool[]>('/tools', query)
-      .catch(error => {
-        console.error('Error fetching tools:', error)
-        return { success: false, error: error.message || 'Failed to fetch tools', data: [] }
-      })
+    return apiClient.get<Tool[]>('/tools', query).catch((error) => {
+      console.error('Error fetching tools:', error)
+      return { success: false, error: error.message || 'Failed to fetch tools', data: [] }
+    })
   },
 
   // Get a specific tool (staff only)
   getTool(toolId: string): Promise<ApiResponse<Tool>> {
-    return apiClient.get<Tool>(`/tools/${toolId}`)
-      .catch(error => {
-        console.error('Error fetching tool:', error)
-        return { success: false, error: error.message || 'Failed to fetch tool' }
-      })
+    return apiClient.get<Tool>(`/tools/${toolId}`).catch((error) => {
+      console.error('Error fetching tool:', error)
+      return { success: false, error: error.message || 'Failed to fetch tool' }
+    })
   },
 
   // Create a new tool (staff only)
   createTool(toolData: CreateToolRequest): Promise<ApiResponse<Tool>> {
-    return apiClient.post<Tool>('/tools', toolData)
-      .catch(error => {
-        console.error('Error creating tool:', error)
-        return { success: false, error: error.message || 'Failed to create tool' }
-      })
+    return apiClient.post<Tool>('/tools', toolData).catch((error) => {
+      console.error('Error creating tool:', error)
+      return { success: false, error: error.message || 'Failed to create tool' }
+    })
   },
 
   // Update a tool (staff only)
   updateTool(toolId: string, updates: UpdateToolRequest): Promise<ApiResponse<Tool>> {
-    return apiClient.put<Tool>(`/tools/${toolId}`, updates)
-      .catch(error => {
-        console.error('Error updating tool:', error)
-        return { success: false, error: error.message || 'Failed to update tool' }
-      })
+    return apiClient.put<Tool>(`/tools/${toolId}`, updates).catch((error) => {
+      console.error('Error updating tool:', error)
+      return { success: false, error: error.message || 'Failed to update tool' }
+    })
   },
 
   // Delete a tool (staff only)
   deleteTool(toolId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/tools/${toolId}`)
-      .catch(error => {
-        console.error('Error deleting tool:', error)
-        return { success: false, error: error.message || 'Failed to delete tool' }
-      })
+    return apiClient.delete<void>(`/tools/${toolId}`).catch((error) => {
+      console.error('Error deleting tool:', error)
+      return { success: false, error: error.message || 'Failed to delete tool' }
+    })
   },
 
   // Change tool status (staff only)
-  changeToolStatus(toolId: string, statusData: ChangeToolStatusRequest): Promise<ApiResponse<Tool>> {
-    return apiClient.put<Tool>(`/tools/${toolId}/status`, statusData)
-      .catch(error => {
-        console.error('Error changing tool status:', error)
-        return { success: false, error: error.message || 'Failed to change tool status' }
-      })
+  changeToolStatus(
+    toolId: string,
+    statusData: ChangeToolStatusRequest
+  ): Promise<ApiResponse<Tool>> {
+    return apiClient.put<Tool>(`/tools/${toolId}/status`, statusData).catch((error) => {
+      console.error('Error changing tool status:', error)
+      return { success: false, error: error.message || 'Failed to change tool status' }
+    })
   },
 
   // Get tool events (staff only)
   getToolEvents(toolId: string): Promise<ApiResponse<ToolEvent[]>> {
-    return apiClient.get<ToolEvent[]>(`/tools/${toolId}/events`)
-      .catch(error => {
-        console.error('Error fetching tool events:', error)
-        return { success: false, error: error.message || 'Failed to fetch tool events', data: [] }
-      })
+    return apiClient.get<ToolEvent[]>(`/tools/${toolId}/events`).catch((error) => {
+      console.error('Error fetching tool events:', error)
+      return { success: false, error: error.message || 'Failed to fetch tool events', data: [] }
+    })
   },
 
   // Get available tools (members)
   getAvailableTools(): Promise<ApiResponse<Tool[]>> {
-    return apiClient.get<Tool[]>('/tools/available')
-      .catch(error => {
-        console.error('Error fetching available tools:', error)
-        return { success: false, error: error.message || 'Failed to fetch available tools', data: [] }
-      })
+    return apiClient.get<Tool[]>('/tools/available').catch((error) => {
+      console.error('Error fetching available tools:', error)
+      return { success: false, error: error.message || 'Failed to fetch available tools', data: [] }
+    })
   },
 
   // Check if user can use a tool (members)
   canUseTool(toolId: string): Promise<ApiResponse<{ can_use: boolean; reason?: string }>> {
-    return apiClient.get<{ can_use: boolean; reason?: string }>(`/tools/${toolId}/can-use`)
-      .catch(error => {
+    return apiClient
+      .get<{ can_use: boolean; reason?: string }>(`/tools/${toolId}/can-use`)
+      .catch((error) => {
         console.error('Error checking tool usage:', error)
-        return { success: false, error: error.message || 'Failed to check tool usage', data: { can_use: false } }
+        return {
+          success: false,
+          error: error.message || 'Failed to check tool usage',
+          data: { can_use: false },
+        }
       })
   },
 
   // Update tool status helper (shortcut method)
-  updateToolStatus(toolId: string, status: string, notes?: string): Promise<ApiResponse<Tool>> {
+  //
+  // `status` is a ToolStatus, not a string. It was typed as `string` and passed
+  // straight into changeToolStatus, whose request type requires the enum -- so
+  // any caller could send an arbitrary status the server would reject, and
+  // nothing said so until the type-strictness ratchet included this file.
+  updateToolStatus(toolId: string, status: ToolStatus, notes?: string): Promise<ApiResponse<Tool>> {
     return this.changeToolStatus(toolId, { status, notes })
   },
 
   // Get tool training steps (if available)
   getToolTrainingSteps(toolId: string): Promise<ApiResponse<any[]>> {
-    return apiClient.get<any[]>(`/training/tools/${toolId}/steps`)
-      .catch(error => {
-        console.debug('No training steps for tool:', toolId)
-        return { success: true, data: [] } // Return empty array if no training
-      })
+    return apiClient.get<any[]>(`/training/tools/${toolId}/steps`).catch((error) => {
+      // The error is logged rather than discarded. This previously swallowed
+      // it entirely and reported success with an empty list, so a 500 or a
+      // dropped connection was indistinguishable from "this tool has no
+      // training steps" -- on a system that gates machine access on training,
+      // that is a failure that reads as an answer.
+      //
+      // What this does NOT do is distinguish the two: the empty-list fallback
+      // is kept because callers render it directly and changing that is a UI
+      // decision. A caller that needs to tell them apart cannot, yet.
+      console.warn(`Could not load training steps for tool ${toolId}:`, error)
+      return { success: true, data: [] }
+    })
   },
 }
 
 // Training API functions
 export const trainingApi = {
   // === Training Steps ===
-  
+
   // Get training steps
   getTrainingSteps(query?: TrainingQuery): Promise<ApiResponse<TrainingStep[]>> {
-    return apiClient.get<TrainingStep[]>('/training/steps', query)
-      .catch(error => {
-        console.error('Error fetching training steps:', error)
-        return { success: false, error: error.message || 'Failed to fetch training steps', data: [] }
-      })
+    return apiClient.get<TrainingStep[]>('/training/steps', query).catch((error) => {
+      console.error('Error fetching training steps:', error)
+      return { success: false, error: error.message || 'Failed to fetch training steps', data: [] }
+    })
   },
 
   // Get training step by ID
   getTrainingStep(stepId: string): Promise<ApiResponse<TrainingStep>> {
-    return apiClient.get<TrainingStep>(`/training/steps/${stepId}`)
-      .catch(error => {
-        console.error('Error fetching training step:', error)
-        return { success: false, error: error.message || 'Failed to fetch training step' }
-      })
+    return apiClient.get<TrainingStep>(`/training/steps/${stepId}`).catch((error) => {
+      console.error('Error fetching training step:', error)
+      return { success: false, error: error.message || 'Failed to fetch training step' }
+    })
   },
 
   // Create training step (staff only)
   createTrainingStep(stepData: CreateTrainingStepRequest): Promise<ApiResponse<TrainingStep>> {
-    return apiClient.post<TrainingStep>('/training/steps', stepData)
-      .catch(error => {
-        console.error('Error creating training step:', error)
-        return { success: false, error: error.message || 'Failed to create training step' }
-      })
+    return apiClient.post<TrainingStep>('/training/steps', stepData).catch((error) => {
+      console.error('Error creating training step:', error)
+      return { success: false, error: error.message || 'Failed to create training step' }
+    })
   },
 
   // Update training step (staff only)
-  updateTrainingStep(stepId: string, updates: UpdateTrainingStepRequest): Promise<ApiResponse<TrainingStep>> {
-    return apiClient.put<TrainingStep>(`/training/steps/${stepId}`, updates)
-      .catch(error => {
-        console.error('Error updating training step:', error)
-        return { success: false, error: error.message || 'Failed to update training step' }
-      })
+  updateTrainingStep(
+    stepId: string,
+    updates: UpdateTrainingStepRequest
+  ): Promise<ApiResponse<TrainingStep>> {
+    return apiClient.put<TrainingStep>(`/training/steps/${stepId}`, updates).catch((error) => {
+      console.error('Error updating training step:', error)
+      return { success: false, error: error.message || 'Failed to update training step' }
+    })
   },
 
   // Delete training step (staff only)
   deleteTrainingStep(stepId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/training/steps/${stepId}`)
-      .catch(error => {
-        console.error('Error deleting training step:', error)
-        return { success: false, error: error.message || 'Failed to delete training step' }
-      })
+    return apiClient.delete<void>(`/training/steps/${stepId}`).catch((error) => {
+      console.error('Error deleting training step:', error)
+      return { success: false, error: error.message || 'Failed to delete training step' }
+    })
   },
 
   // Update training step position/order (staff only)
   updateTrainingStepPosition(stepId: string, newPosition: number): Promise<ApiResponse<void>> {
-    return apiClient.put<void>(`/training/steps/${stepId}/position`, { step_number: newPosition })
-      .catch(error => {
+    return apiClient
+      .put<void>(`/training/steps/${stepId}/position`, { step_number: newPosition })
+      .catch((error) => {
         console.error('Error updating training step position:', error)
         return { success: false, error: error.message || 'Failed to update training step position' }
       })
@@ -658,55 +705,76 @@ export const trainingApi = {
 
   // Get training prerequisites
   getTrainingPrerequisites(stepId: string): Promise<ApiResponse<TrainingStep[]>> {
-    return apiClient.get<TrainingStep[]>(`/training/steps/${stepId}/prerequisites`)
-      .catch(error => {
+    return apiClient
+      .get<TrainingStep[]>(`/training/steps/${stepId}/prerequisites`)
+      .catch((error) => {
         console.error('Error fetching training prerequisites:', error)
-        return { success: false, error: error.message || 'Failed to fetch training prerequisites', data: [] }
+        return {
+          success: false,
+          error: error.message || 'Failed to fetch training prerequisites',
+          data: [],
+        }
       })
   },
 
   // Add training prerequisite (staff only)
-  addTrainingPrerequisite(data: CreateTrainingPrerequisiteRequest): Promise<ApiResponse<TrainingPrerequisite>> {
-    return apiClient.post<TrainingPrerequisite>('/training/prerequisites', data)
-      .catch(error => {
-        console.error('Error adding training prerequisite:', error)
-        return { success: false, error: error.message || 'Failed to add training prerequisite' }
-      })
+  addTrainingPrerequisite(
+    data: CreateTrainingPrerequisiteRequest
+  ): Promise<ApiResponse<TrainingPrerequisite>> {
+    return apiClient.post<TrainingPrerequisite>('/training/prerequisites', data).catch((error) => {
+      console.error('Error adding training prerequisite:', error)
+      return { success: false, error: error.message || 'Failed to add training prerequisite' }
+    })
   },
 
   // Remove training prerequisite (staff only)
   removeTrainingPrerequisite(prerequisiteId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/training/prerequisites/${prerequisiteId}`)
-      .catch(error => {
-        console.error('Error removing training prerequisite:', error)
-        return { success: false, error: error.message || 'Failed to remove training prerequisite' }
-      })
+    return apiClient.delete<void>(`/training/prerequisites/${prerequisiteId}`).catch((error) => {
+      console.error('Error removing training prerequisite:', error)
+      return { success: false, error: error.message || 'Failed to remove training prerequisite' }
+    })
   },
 
   // === User Progress ===
 
   // Get user training progress
-  getUserTrainingProgress(userId: string, query?: TrainingQuery): Promise<ApiResponse<UserTrainingProgress[]>> {
-    return apiClient.get<UserTrainingProgress[]>(`/training/progress/${userId}`, query)
-      .catch(error => {
+  getUserTrainingProgress(
+    userId: string,
+    query?: TrainingQuery
+  ): Promise<ApiResponse<UserTrainingProgress[]>> {
+    return apiClient
+      .get<UserTrainingProgress[]>(`/training/progress/${userId}`, query)
+      .catch((error) => {
         console.error('Error fetching user training progress:', error)
-        return { success: false, error: error.message || 'Failed to fetch user training progress', data: [] }
+        return {
+          success: false,
+          error: error.message || 'Failed to fetch user training progress',
+          data: [],
+        }
       })
   },
 
   // Start training session
-  startTrainingSession(userId: string, data: StartTrainingRequest): Promise<ApiResponse<UserTrainingProgress>> {
-    return apiClient.post<UserTrainingProgress>(`/training/progress/${userId}/start`, data)
-      .catch(error => {
+  startTrainingSession(
+    userId: string,
+    data: StartTrainingRequest
+  ): Promise<ApiResponse<UserTrainingProgress>> {
+    return apiClient
+      .post<UserTrainingProgress>(`/training/progress/${userId}/start`, data)
+      .catch((error) => {
         console.error('Error starting training session:', error)
         return { success: false, error: error.message || 'Failed to start training session' }
       })
   },
 
   // Complete training session (instructor only)
-  completeTrainingSession(userId: string, data: CompleteTrainingRequest): Promise<ApiResponse<UserTrainingProgress>> {
-    return apiClient.post<UserTrainingProgress>(`/training/progress/${userId}/complete`, data)
-      .catch(error => {
+  completeTrainingSession(
+    userId: string,
+    data: CompleteTrainingRequest
+  ): Promise<ApiResponse<UserTrainingProgress>> {
+    return apiClient
+      .post<UserTrainingProgress>(`/training/progress/${userId}/complete`, data)
+      .catch((error) => {
         console.error('Error completing training session:', error)
         return { success: false, error: error.message || 'Failed to complete training session' }
       })
@@ -716,61 +784,72 @@ export const trainingApi = {
 
   // Get tool training steps with progress for a specific user
   getToolTrainingSteps(toolId: string, userId?: string): Promise<ApiResponse<any[]>> {
-    const url = userId ? `/training/tools/${toolId}/steps/${userId}` : `/training/tools/${toolId}/steps`
-    return apiClient.get<any[]>(url)
-      .catch(error => {
-        console.error('Error fetching tool training steps:', error)
-        return { success: false, error: error.message || 'Failed to fetch tool training steps', data: [] }
-      })
+    const url = userId
+      ? `/training/tools/${toolId}/steps/${userId}`
+      : `/training/tools/${toolId}/steps`
+    return apiClient.get<any[]>(url).catch((error) => {
+      console.error('Error fetching tool training steps:', error)
+      return {
+        success: false,
+        error: error.message || 'Failed to fetch tool training steps',
+        data: [],
+      }
+    })
   },
 
   // Get tool training overview for user
-  getToolTrainingOverview(toolId: string, userId?: string): Promise<ApiResponse<ToolTrainingOverview>> {
-    const url = userId ? `/training/tools/${toolId}/overview/${userId}` : `/training/tools/${toolId}/overview/me`
-    return apiClient.get<ToolTrainingOverview>(url)
-      .catch(error => {
-        console.error('Error fetching tool training overview:', error)
-        return { success: false, error: error.message || 'Failed to fetch tool training overview' }
-      })
+  getToolTrainingOverview(
+    toolId: string,
+    userId?: string
+  ): Promise<ApiResponse<ToolTrainingOverview>> {
+    const url = userId
+      ? `/training/tools/${toolId}/overview/${userId}`
+      : `/training/tools/${toolId}/overview/me`
+    return apiClient.get<ToolTrainingOverview>(url).catch((error) => {
+      console.error('Error fetching tool training overview:', error)
+      return { success: false, error: error.message || 'Failed to fetch tool training overview' }
+    })
   },
 
   // Check if user can access tool
   canAccessTool(toolId: string, userId?: string): Promise<ApiResponse<boolean>> {
-    const url = userId ? `/training/tools/${toolId}/can-access/${userId}` : `/training/tools/${toolId}/can-access/me`
-    return apiClient.get<boolean>(url)
-      .catch(error => {
-        console.error('Error checking tool access:', error)
-        return { success: false, error: error.message || 'Failed to check tool access', data: false }
-      })
+    const url = userId
+      ? `/training/tools/${toolId}/can-access/${userId}`
+      : `/training/tools/${toolId}/can-access/me`
+    return apiClient.get<boolean>(url).catch((error) => {
+      console.error('Error checking tool access:', error)
+      return { success: false, error: error.message || 'Failed to check tool access', data: false }
+    })
   },
 
   // === Instructors ===
 
   // Get training instructors
   getTrainingInstructors(query?: TrainingQuery): Promise<ApiResponse<TrainingInstructor[]>> {
-    return apiClient.get<TrainingInstructor[]>('/training/instructors', query)
-      .catch(error => {
-        console.error('Error fetching training instructors:', error)
-        return { success: false, error: error.message || 'Failed to fetch training instructors', data: [] }
-      })
+    return apiClient.get<TrainingInstructor[]>('/training/instructors', query).catch((error) => {
+      console.error('Error fetching training instructors:', error)
+      return {
+        success: false,
+        error: error.message || 'Failed to fetch training instructors',
+        data: [],
+      }
+    })
   },
 
   // Certify instructor (admin only)
   certifyInstructor(data: CertifyInstructorRequest): Promise<ApiResponse<TrainingInstructor>> {
-    return apiClient.post<TrainingInstructor>('/training/instructors', data)
-      .catch(error => {
-        console.error('Error certifying instructor:', error)
-        return { success: false, error: error.message || 'Failed to certify instructor' }
-      })
+    return apiClient.post<TrainingInstructor>('/training/instructors', data).catch((error) => {
+      console.error('Error certifying instructor:', error)
+      return { success: false, error: error.message || 'Failed to certify instructor' }
+    })
   },
 
   // Revoke instructor certification (admin only)
   revokeInstructorCertification(instructorId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/training/instructors/${instructorId}`)
-      .catch(error => {
-        console.error('Error revoking instructor certification:', error)
-        return { success: false, error: error.message || 'Failed to revoke instructor certification' }
-      })
+    return apiClient.delete<void>(`/training/instructors/${instructorId}`).catch((error) => {
+      console.error('Error revoking instructor certification:', error)
+      return { success: false, error: error.message || 'Failed to revoke instructor certification' }
+    })
   },
 }
 
@@ -780,26 +859,38 @@ export const trainerApi = {
 
   // Assign a trainer to a tool (staff only)
   assignToolTrainer(data: AssignTrainerRequest): Promise<ApiResponse<ToolTrainer>> {
-    return apiClient.post<ToolTrainer>(`/trainers/tools/${data.tool_id}/trainers`, data)
-      .catch(error => {
+    return apiClient
+      .post<ToolTrainer>(`/trainers/tools/${data.tool_id}/trainers`, data)
+      .catch((error) => {
         console.error('Error assigning tool trainer:', error)
         return { success: false, error: error.message || 'Failed to assign tool trainer' }
       })
   },
 
   // Get trainers for a tool
-  getToolTrainers(toolId: string, includeInactive: boolean = false): Promise<ApiResponse<ToolTrainerWithUser[]>> {
-    return apiClient.get<ToolTrainerWithUser[]>(`/trainers/tools/${toolId}/trainers`, { include_inactive: includeInactive })
-      .catch(error => {
+  getToolTrainers(
+    toolId: string,
+    includeInactive: boolean = false
+  ): Promise<ApiResponse<ToolTrainerWithUser[]>> {
+    return apiClient
+      .get<ToolTrainerWithUser[]>(`/trainers/tools/${toolId}/trainers`, {
+        include_inactive: includeInactive,
+      })
+      .catch((error) => {
         console.error('Error fetching tool trainers:', error)
         return { success: false, error: error.message || 'Failed to fetch tool trainers', data: [] }
       })
   },
 
   // Update trainer assignment (staff only)
-  updateToolTrainer(toolId: string, userId: string, data: UpdateTrainerRequest): Promise<ApiResponse<ToolTrainer>> {
-    return apiClient.put<ToolTrainer>(`/trainers/tools/${toolId}/trainers/${userId}`, data)
-      .catch(error => {
+  updateToolTrainer(
+    toolId: string,
+    userId: string,
+    data: UpdateTrainerRequest
+  ): Promise<ApiResponse<ToolTrainer>> {
+    return apiClient
+      .put<ToolTrainer>(`/trainers/tools/${toolId}/trainers/${userId}`, data)
+      .catch((error) => {
         console.error('Error updating tool trainer:', error)
         return { success: false, error: error.message || 'Failed to update tool trainer' }
       })
@@ -807,17 +898,17 @@ export const trainerApi = {
 
   // Remove trainer from tool (staff only)
   removeToolTrainer(toolId: string, userId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/trainers/tools/${toolId}/trainers/${userId}`)
-      .catch(error => {
-        console.error('Error removing tool trainer:', error)
-        return { success: false, error: error.message || 'Failed to remove tool trainer' }
-      })
+    return apiClient.delete<void>(`/trainers/tools/${toolId}/trainers/${userId}`).catch((error) => {
+      console.error('Error removing tool trainer:', error)
+      return { success: false, error: error.message || 'Failed to remove tool trainer' }
+    })
   },
 
   // Check if user is authorized trainer for tool
   checkTrainerAuthorization(toolId: string, userId: string): Promise<ApiResponse<boolean>> {
-    return apiClient.get<boolean>(`/trainers/tools/${toolId}/trainers/check/${userId}`)
-      .catch(error => {
+    return apiClient
+      .get<boolean>(`/trainers/tools/${toolId}/trainers/check/${userId}`)
+      .catch((error) => {
         // Don't log error as this might be expected for non-trainers
         console.debug('Trainer authorization check result:', error.response?.status)
         if (error.response?.status === 401 || error.response?.status === 403) {
@@ -825,7 +916,11 @@ export const trainerApi = {
           return { success: true, data: false }
         }
         console.error('Error checking trainer authorization:', error)
-        return { success: false, error: error.message || 'Failed to check trainer authorization', data: false }
+        return {
+          success: false,
+          error: error.message || 'Failed to check trainer authorization',
+          data: false,
+        }
       })
   },
 
@@ -833,37 +928,57 @@ export const trainerApi = {
 
   // Create training record (trainers only)
   createTrainingRecord(data: CreateTrainingRecordRequest): Promise<ApiResponse<TrainingRecord>> {
-    return apiClient.post<TrainingRecord>('/trainers/training-records', data)
-      .catch(error => {
-        console.error('Error creating training record:', error)
-        return { success: false, error: error.message || 'Failed to create training record' }
-      })
+    return apiClient.post<TrainingRecord>('/trainers/training-records', data).catch((error) => {
+      console.error('Error creating training record:', error)
+      return { success: false, error: error.message || 'Failed to create training record' }
+    })
   },
 
   // Get training records with filters
-  getTrainingRecords(query?: TrainingRecordsQuery): Promise<ApiResponse<TrainingRecordWithUsers[]>> {
-    return apiClient.get<TrainingRecordWithUsers[]>('/trainers/training-records', query)
-      .catch(error => {
+  getTrainingRecords(
+    query?: TrainingRecordsQuery
+  ): Promise<ApiResponse<TrainingRecordWithUsers[]>> {
+    return apiClient
+      .get<TrainingRecordWithUsers[]>('/trainers/training-records', query)
+      .catch((error) => {
         console.error('Error fetching training records:', error)
-        return { success: false, error: error.message || 'Failed to fetch training records', data: [] }
+        return {
+          success: false,
+          error: error.message || 'Failed to fetch training records',
+          data: [],
+        }
       })
   },
 
   // Update training record (trainers and staff)
-  updateTrainingRecord(recordId: string, data: UpdateTrainingRecordRequest): Promise<ApiResponse<TrainingRecord>> {
-    return apiClient.put<TrainingRecord>(`/trainers/training-records/${recordId}`, data)
-      .catch(error => {
+  updateTrainingRecord(
+    recordId: string,
+    data: UpdateTrainingRecordRequest
+  ): Promise<ApiResponse<TrainingRecord>> {
+    return apiClient
+      .put<TrainingRecord>(`/trainers/training-records/${recordId}`, data)
+      .catch((error) => {
         console.error('Error updating training record:', error)
         return { success: false, error: error.message || 'Failed to update training record' }
       })
   },
 
   // Get training records for a user
-  getUserTrainingRecords(userId: string, asTrainer: boolean = false): Promise<ApiResponse<TrainingRecordWithUsers[]>> {
-    return apiClient.get<TrainingRecordWithUsers[]>(`/trainers/users/${userId}/training-records`, { as_trainer: asTrainer })
-      .catch(error => {
+  getUserTrainingRecords(
+    userId: string,
+    asTrainer: boolean = false
+  ): Promise<ApiResponse<TrainingRecordWithUsers[]>> {
+    return apiClient
+      .get<TrainingRecordWithUsers[]>(`/trainers/users/${userId}/training-records`, {
+        as_trainer: asTrainer,
+      })
+      .catch((error) => {
         console.error('Error fetching user training records:', error)
-        return { success: false, error: error.message || 'Failed to fetch user training records', data: [] }
+        return {
+          success: false,
+          error: error.message || 'Failed to fetch user training records',
+          data: [],
+        }
       })
   },
 }

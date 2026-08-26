@@ -1,19 +1,19 @@
 <template>
   <div class="modal-overlay" @click="$emit('close')">
     <div class="modal-content bg-base-100" @click.stop>
-      <div class="modal-header  bg-gradient-to-br from-primary via-secondary to-primary">
+      <div class="modal-header bg-gradient-to-br from-primary via-secondary to-primary">
         <h3>Create New Tool</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
-      <form @submit.prevent="createTool" class="tool-form">
+      <form class="tool-form" @submit.prevent="createTool">
         <div class="form-row">
           <div class="form-group">
             <label for="name">Name *</label>
-            <input 
+            <input
               id="name"
-              v-model="form.name" 
-              type="text" 
+              v-model="form.name"
+              type="text"
               required
               placeholder="Tool name"
               class="input"
@@ -22,7 +22,7 @@
 
           <div class="form-group">
             <label for="category">Category *</label>
-            <select id="category" class="select" v-model="form.category" required>
+            <select id="category" v-model="form.category" class="select" required>
               <option value="">Select Category</option>
               <option value="saw">Saw</option>
               <option value="powertool">Power Tool</option>
@@ -36,9 +36,9 @@
 
         <div class="form-group">
           <label for="description">Description</label>
-          <textarea 
+          <textarea
             id="description"
-            v-model="form.description" 
+            v-model="form.description"
             placeholder="Brief description of the tool"
             rows="3"
             class="textarea"
@@ -48,10 +48,10 @@
         <div class="form-row">
           <div class="form-group">
             <label for="manufacturer">Manufacturer</label>
-            <input 
+            <input
               id="manufacturer"
-              v-model="form.manufacturer" 
-              type="text" 
+              v-model="form.manufacturer"
+              type="text"
               placeholder="e.g., DeWalt, Milwaukee"
               class="input"
             />
@@ -59,10 +59,10 @@
 
           <div class="form-group">
             <label for="model">Model</label>
-            <input 
+            <input
               id="model"
-              v-model="form.model" 
-              type="text" 
+              v-model="form.model"
+              type="text"
               placeholder="Model number"
               class="input"
             />
@@ -72,10 +72,10 @@
         <div class="form-row">
           <div class="form-group">
             <label for="serial_number">Serial Number</label>
-            <input 
+            <input
               id="serial_number"
-              v-model="form.serial_number" 
-              type="text" 
+              v-model="form.serial_number"
+              type="text"
               placeholder="Serial number"
               class="input"
             />
@@ -83,10 +83,10 @@
 
           <div class="form-group">
             <label for="barcode">Barcode</label>
-            <input 
+            <input
               id="barcode"
-              v-model="form.barcode" 
-              type="text" 
+              v-model="form.barcode"
+              type="text"
               placeholder="Barcode or QR code"
               class="input"
             />
@@ -110,14 +110,14 @@
             <SchedulePicker
               :model-value="form.schedule_id ?? null"
               :schedules="schedules"
-              @update:model-value="(v) => form.schedule_id = v ?? undefined"
+              @update:model-value="(v) => (form.schedule_id = v ?? undefined)"
             />
             <small class="help-text">Optional — restrict when the tool can be used.</small>
           </div>
 
           <div class="form-group">
             <label for="status">Initial Status</label>
-            <select id="status" class="select" v-model="form.status">
+            <select id="status" v-model="form.status" class="select">
               <option value="idle">Idle</option>
               <option value="maintenance">Maintenance</option>
               <option value="broken">Broken</option>
@@ -129,20 +129,15 @@
         <div class="form-row">
           <div class="form-group">
             <label for="purchase_date">Purchase Date</label>
-            <input 
-              id="purchase_date"
-              v-model="form.purchase_date" 
-              type="date"
-              class="input"
-            />
+            <input id="purchase_date" v-model="form.purchase_date" type="date" class="input" />
           </div>
 
           <div class="form-group">
             <label for="purchase_price">Purchase Price</label>
-            <input 
+            <input
               id="purchase_price"
-              v-model.number="form.purchase_price" 
-              type="number" 
+              v-model.number="form.purchase_price"
+              type="number"
               step="0.01"
               placeholder="0.00"
               class="input"
@@ -152,34 +147,28 @@
 
         <div class="form-group">
           <label class="checkbox-label">
-            <input 
-              v-model="form.requires_training" 
-              type="checkbox"
-              class="checkbox"
-            />
+            <input v-model="form.requires_training" type="checkbox" class="checkbox" />
             Requires Training
           </label>
         </div>
 
         <div class="form-group">
           <label for="notes">Notes</label>
-          <textarea 
+          <textarea
             id="notes"
-            v-model="form.notes" 
+            v-model="form.notes"
             placeholder="Additional notes about the tool"
             rows="3"
             class="textarea"
           ></textarea>
         </div>
 
-        <div class="error" v-if="error">
+        <div v-if="error" class="error">
           {{ error }}
         </div>
 
         <div class="modal-actions">
-          <button type="button" @click="$emit('close')" class="btn btn-secondary">
-            Cancel
-          </button>
+          <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
           <button type="submit" class="btn btn-primary" :disabled="loading">
             {{ loading ? 'Creating...' : 'Create Tool' }}
           </button>
@@ -229,7 +218,9 @@ const loadSchedules = async () => {
   try {
     const r = await schedulesApi.list()
     if (r.success && r.data) schedules.value = r.data
-  } catch { schedules.value = [] }
+  } catch {
+    schedules.value = []
+  }
 }
 
 // Methods
@@ -240,11 +231,11 @@ const createTool = async () => {
 
     // Clean up form data
     const toolData = { ...form.value }
-    
+
     // Convert empty strings to null for optional fields
-    Object.keys(toolData).forEach(key => {
+    Object.keys(toolData).forEach((key) => {
       if (toolData[key as keyof NewTool] === '') {
-        (toolData as any)[key] = null
+        ;(toolData as any)[key] = null
       }
     })
 
@@ -403,11 +394,11 @@ onMounted(loadSchedules)
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-row {
     grid-template-columns: 1fr;
   }
-  
+
   .modal-actions {
     flex-direction: column;
   }

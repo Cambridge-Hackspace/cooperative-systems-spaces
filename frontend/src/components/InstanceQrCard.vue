@@ -4,8 +4,8 @@
       <div>
         <div class="font-medium">Share this instance</div>
         <div class="text-sm text-base-content/70">
-          Scan this from the Cooperative Spaces app's first-launch screen to connect
-          another device to {{ payload?.name || 'this instance' }}.
+          Scan this from the Cooperative Spaces app's first-launch screen to connect another device
+          to {{ payload?.name || 'this instance' }}.
         </div>
       </div>
     </div>
@@ -62,7 +62,10 @@ async function load() {
 // Encode the full payload JSON (not just the URL) so client onboarding flows
 // can read the display name without a second round-trip.
 watch(payload, async (p) => {
-  if (!p) { qrDataUrl.value = ''; return }
+  if (!p) {
+    qrDataUrl.value = ''
+    return
+  }
   try {
     qrDataUrl.value = await QRCode.toDataURL(JSON.stringify(p), { margin: 1, width: 256 })
   } catch (e: any) {

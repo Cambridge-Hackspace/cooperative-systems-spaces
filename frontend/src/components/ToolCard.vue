@@ -13,35 +13,33 @@
     </div>
 
     <div class="tool-info">
-      <div class="info-row" v-if="tool.description">
+      <div v-if="tool.description" class="info-row">
         <strong>Description:</strong> {{ tool.description }}
       </div>
-      <div class="info-row" v-if="tool.location">
+      <div v-if="tool.location" class="info-row">
         <strong>Location:</strong> {{ tool.location }}
       </div>
-      <div class="info-row" v-if="tool.manufacturer">
+      <div v-if="tool.manufacturer" class="info-row">
         <strong>Manufacturer:</strong> {{ tool.manufacturer }}
       </div>
-      <div class="info-row" v-if="tool.model">
-        <strong>Model:</strong> {{ tool.model }}
-      </div>
-      <div class="info-row" v-if="tool.serial_number">
+      <div v-if="tool.model" class="info-row"><strong>Model:</strong> {{ tool.model }}</div>
+      <div v-if="tool.serial_number" class="info-row">
         <strong>Serial #:</strong> {{ tool.serial_number }}
       </div>
-      <div class="info-row" v-if="tool.purchase_date">
+      <div v-if="tool.purchase_date" class="info-row">
         <strong>Purchased:</strong> {{ formatDate(tool.purchase_date) }}
       </div>
-      <div class="info-row" v-if="tool.purchase_price">
+      <div v-if="tool.purchase_price" class="info-row">
         <strong>Price:</strong> ${{ tool.purchase_price }}
       </div>
     </div>
 
-    <div class="tool-actions" v-if="canManage">
+    <div v-if="canManage" class="tool-actions">
       <div class="status-controls">
         <select
           :value="tool.status"
-          @change="onStatusChange"
           class="status-select select select-primary"
+          @change="onStatusChange"
         >
           <option value="idle">Idle</option>
           <option value="in_use">In Use</option>
@@ -50,11 +48,7 @@
           <option value="repair">Repair</option>
           <option value="retired">Retired</option>
         </select>
-        <button
-          v-if="selectedStatus"
-          @click="confirmStatusChange"
-          class="btn btn-sm btn-primary"
-        >
+        <button v-if="selectedStatus" class="btn btn-sm btn-primary" @click="confirmStatusChange">
           Update
         </button>
       </div>
@@ -68,62 +62,53 @@
       ></textarea>
 
       <div class="action-buttons">
-        <button @click="$emit('edit', tool)" class="btn btn-sm btn-secondary">
-          Edit
-        </button>
-        <button @click="$emit('view-history', tool)" class="btn btn-sm btn-info">
-          History
-        </button>
-        <button
-          v-if="hasTrainingSteps"
-          @click="showTraining"
-          class="btn btn-sm btn-info"
-        >
+        <button class="btn btn-sm btn-secondary" @click="$emit('edit', tool)">Edit</button>
+        <button class="btn btn-sm btn-info" @click="$emit('view-history', tool)">History</button>
+        <button v-if="hasTrainingSteps" class="btn btn-sm btn-info" @click="showTraining">
           <span class="training-icon">🎓</span>
           Manage Training
         </button>
-        <button
-          v-else
-          @click="showSetupTraining"
-          class="btn btn-sm btn-primary"
-        >
+        <button v-else class="btn btn-sm btn-primary" @click="showSetupTraining">
           <span class="training-icon">🎓</span>
           Set Up Training
         </button>
         <button
-          @click="$emit('delete', tool)"
           class="btn btn-sm btn-danger"
           :disabled="tool.status === 'in_use'"
+          @click="$emit('delete', tool)"
         >
           Delete
         </button>
-
       </div>
     </div>
 
-    <div class="member-actions" v-else>
+    <div v-else class="member-actions">
       <div class="availability-info">
-        <div v-if="tool.status === 'idle'" class="available">
-          ✅ Available for use
-        </div>
-        <div v-else-if="tool.status === 'in_use'" class="in-use">
-          ⏳ Currently in use
-        </div>
-        <div v-else class="unavailable">
-          ❌ Not available ({{ formatStatus(tool.status) }})
-        </div>
+        <div v-if="tool.status === 'idle'" class="available">✅ Available for use</div>
+        <div v-else-if="tool.status === 'in_use'" class="in-use">⏳ Currently in use</div>
+        <div v-else class="unavailable">❌ Not available ({{ formatStatus(tool.status) }})</div>
       </div>
       <!-- Training Button -->
-      <button
-        v-if="hasTrainingSteps"
-        @click="showTraining"
-        class="btn btn-info training-btn"
-      >
+      <button v-if="hasTrainingSteps" class="btn btn-info training-btn" @click="showTraining">
         <span class="training-icon">🎓</span>
         View Training
       </button>
 
-      <div v-else-if="tool.status === 'idle' && hasTrainingSteps && !canUseBasedOnTraining" class="training-warning">
+      <!--
+        `v-if`, not `v-else-if`. This was chained onto the button above, whose
+        condition is `hasTrainingSteps` -- so the else branch only ran when
+        there were no training steps, while its own condition required there to
+        be some. The two are mutually exclusive, and this warning could
+        therefore never render: nobody was ever told that training is required
+        before using a tool.
+
+        They are also not alternatives. A tool with training steps that the
+        viewer has not completed should show both the button and the warning.
+      -->
+      <div
+        v-if="tool.status === 'idle' && hasTrainingSteps && !canUseBasedOnTraining"
+        class="training-warning"
+      >
         <p>⚠️ Training required before using this tool</p>
         <small>Click "View Training" to see requirements</small>
       </div>
@@ -143,7 +128,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { Tool, ToolStatus } from '../types/tools'
-import { toolsApi } from '../utils/api'
 import ToolTrainingModal from './ToolTrainingModal.vue'
 
 interface Props {
@@ -164,7 +148,7 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), {
   canUseBasedOnTraining: true,
-  hasTrainingSteps: false
+  hasTrainingSteps: false,
 })
 
 const emit = defineEmits<Emits>()
@@ -172,7 +156,6 @@ const emit = defineEmits<Emits>()
 // State
 const statusChangeNotes = ref<string | null>(null)
 const selectedStatus = ref<ToolStatus | null>(null)
-const loading = ref(false)
 const showTrainingModal = ref(false)
 
 // Methods
@@ -182,7 +165,7 @@ const onStatusChange = (event: Event) => {
 
   if (newStatus !== props.tool.status) {
     statusChangeNotes.value = ''
-    selectedStatus.value = newStatus  // Store the selected status
+    selectedStatus.value = newStatus // Store the selected status
   }
 }
 
@@ -194,34 +177,12 @@ const confirmStatusChange = () => {
   }
 }
 
-const checkCanUse = async () => {
-  try {
-    loading.value = true
-    const response = await toolsApi.canUseTool(props.tool.id)
-
-    if (response.success && response.data) {
-      if (response.data.can_use) {
-        // TODO: Implement checkout flow
-        alert('Tool checkout would begin here')
-      } else {
-        alert(`Cannot use tool: ${response.data.reason}`)
-      }
-    } else {
-      alert('Failed to check tool availability')
-    }
-  } catch (err: any) {
-    alert('Failed to check tool availability')
-  } finally {
-    loading.value = false
-  }
-}
-
 const formatCategory = (category: string) => {
-  return category.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return category.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
 const formatStatus = (status: string) => {
-  return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
 const formatDate = (dateString: string) => {
@@ -365,7 +326,8 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
   font-weight: 600;
 }
 
-.tool-actions, .member-actions {
+.tool-actions,
+.member-actions {
   border-top: 1px solid #ecf0f1;
   padding-top: 1rem;
   margin-top: auto;

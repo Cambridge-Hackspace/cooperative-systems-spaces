@@ -7,7 +7,7 @@ export const WEEKEND: DayOfWeek[] = ['sat', 'sun']
 
 /** Helpers used by template builders. */
 function window(days: DayOfWeek[], start: string, end: string): ScheduleInterval[] {
-  return days.map(day => ({ day, start, end }))
+  return days.map((day) => ({ day, start, end }))
 }
 function allDay(days: DayOfWeek[]): ScheduleInterval[] {
   return window(days, '00:00', '23:59')

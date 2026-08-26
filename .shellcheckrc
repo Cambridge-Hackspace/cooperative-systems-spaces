@@ -1,0 +1,10 @@
+# Every script in this tree is bash with `set -Eeuo pipefail`. Declaring it here
+# means a `#!/usr/bin/env bash` typo cannot silently downgrade the analysis to
+# POSIX sh, which would stop shellcheck flagging bashisms that then break under
+# dash -- and dash is exactly what reaper hands `run.cmd` to.
+shell=bash
+external-sources=true
+enable=quote-safe-variables
+enable=check-unassigned-uppercase
+enable=deprecate-which
+enable=avoid-nullary-conditions

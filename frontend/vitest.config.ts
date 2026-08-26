@@ -49,5 +49,5 @@ export default mergeConfig(
         reporter: ['text-summary', 'lcov'],
       },
     },
-  }),
+  })
 )

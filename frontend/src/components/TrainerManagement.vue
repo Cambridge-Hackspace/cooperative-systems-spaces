@@ -6,189 +6,184 @@
           <h3 class="font-bold">Manage Trainers - {{ tool.name }}</h3>
           <p class="subtitle font-bold">Assign and manage authorized trainers for this tool</p>
         </div>
-        <button @click="closeModal" class="close-btn">&times;</button>
+        <button class="close-btn" @click="closeModal">&times;</button>
       </div>
 
       <div class="modal-body">
         <div class="trainer-management-content">
-  <div class="trainer-management bg-secondary text-secondary-content">
-    <div class="trainer-header">
-      <button
-        v-if="canManageTrainers"
-        @click="showAssignForm = !showAssignForm"
-        class="btn btn-primary"
-      >
-        <i class="icon-plus"></i>
-        {{ showAssignForm ? 'Cancel' : 'Assign Trainer' }}
-      </button>
-    </div>
-
-    <!-- Inline Assign Trainer Form -->
-    <div v-if="showAssignForm" class="assign-trainer-form bg-primary text-primary-content">
-      <h4>Assign New Trainer</h4>
-      
-      <div v-if="loadingUsers" class="loading">
-        <div class="spinner"></div>
-        <p>Loading users...</p>
-      </div>
-      
-      <div v-else-if="availableUsers.length === 0" class="no-users">
-        <p>No available users to assign as trainers.</p>
-      </div>
-      
-      <form v-else @submit.prevent="submitAssignForm" class="assign-form">
-        <div class="form-group">
-          <label for="user">Select User</label>
-          <select 
-            id="user"
-            v-model="assignFormData.user_id"
-            class="form-control select"
-            required
-          >
-            <option value="">Choose a user...</option>
-            <option 
-              v-for="user in availableUsers" 
-              :key="user.id"
-              :value="user.id"
-            >
-              {{ user.full_name || user.username }} ({{ user.email }})
-            </option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="expires_at">Expiration Date (Optional)</label>
-          <input 
-            id="expires_at"
-            v-model="assignFormData.expires_at"
-            type="date"
-            class="form-control input"
-            :min="today"
-          />
-          <small class="form-text">Leave blank for no expiration</small>
-        </div>
-
-        <div class="form-group">
-          <label for="notes">Notes (Optional)</label>
-          <textarea 
-            id="notes"
-            v-model="assignFormData.notes"
-            class="form-control textarea"
-            rows="3"
-            placeholder="Add any notes about this trainer assignment..."
-          ></textarea>
-        </div>
-
-        <div v-if="assignError" class="error">{{ assignError }}</div>
-
-        <div class="form-actions">
-          <button type="submit" :disabled="assignSubmitting" class="btn btn-success">
-            {{ assignSubmitting ? 'Assigning...' : 'Assign Trainer' }}
-          </button>
-        </div>
-      </form>
-    </div>
-
-    <div class="trainer-list" v-if="trainers.length > 0">
-      <div 
-        v-for="trainerWithUser in trainers" 
-        :key="trainerWithUser.trainer.id"
-        class="trainer-item"
-        :class="{ 'inactive': !trainerWithUser.trainer.is_active }"
-      >
-        <div class="trainer-info">
-          <div class="trainer-name">
-            <h4>{{ trainerWithUser.user_full_name || trainerWithUser.user_name }}</h4>
-            <span class="trainer-email">{{ trainerWithUser.user_email }}</span>
-          </div>
-          
-          <div class="trainer-meta">
-            <div class="status">
-              <span 
-                :class="{
-                  'status-active': trainerWithUser.trainer.is_active && !isExpired(trainerWithUser.trainer),
-                  'status-inactive': !trainerWithUser.trainer.is_active,
-                  'status-expired': isExpired(trainerWithUser.trainer)
-                }"
+          <div class="trainer-management bg-secondary text-secondary-content">
+            <div class="trainer-header">
+              <button
+                v-if="canManageTrainers"
+                class="btn btn-primary"
+                @click="showAssignForm = !showAssignForm"
               >
-                {{ getTrainerStatus(trainerWithUser.trainer) }}
-              </span>
+                <i class="icon-plus"></i>
+                {{ showAssignForm ? 'Cancel' : 'Assign Trainer' }}
+              </button>
             </div>
 
-            <div class="dates">
-              <div class="authorized-date">
-                Authorized: {{ formatDate(trainerWithUser.trainer.authorized_at) }}
+            <!-- Inline Assign Trainer Form -->
+            <div v-if="showAssignForm" class="assign-trainer-form bg-primary text-primary-content">
+              <h4>Assign New Trainer</h4>
+
+              <div v-if="loadingUsers" class="loading">
+                <div class="spinner"></div>
+                <p>Loading users...</p>
               </div>
-              <div v-if="trainerWithUser.trainer.expires_at" class="expires-date">
-                Expires: {{ formatDate(trainerWithUser.trainer.expires_at) }}
+
+              <div v-else-if="availableUsers.length === 0" class="no-users">
+                <p>No available users to assign as trainers.</p>
+              </div>
+
+              <form v-else class="assign-form" @submit.prevent="submitAssignForm">
+                <div class="form-group">
+                  <label for="user">Select User</label>
+                  <select
+                    id="user"
+                    v-model="assignFormData.user_id"
+                    class="form-control select"
+                    required
+                  >
+                    <option value="">Choose a user...</option>
+                    <option v-for="user in availableUsers" :key="user.id" :value="user.id">
+                      {{ user.full_name || user.username }} ({{ user.email }})
+                    </option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="expires_at">Expiration Date (Optional)</label>
+                  <input
+                    id="expires_at"
+                    v-model="assignFormData.expires_at"
+                    type="date"
+                    class="form-control input"
+                    :min="today"
+                  />
+                  <small class="form-text">Leave blank for no expiration</small>
+                </div>
+
+                <div class="form-group">
+                  <label for="notes">Notes (Optional)</label>
+                  <textarea
+                    id="notes"
+                    v-model="assignFormData.notes"
+                    class="form-control textarea"
+                    rows="3"
+                    placeholder="Add any notes about this trainer assignment..."
+                  ></textarea>
+                </div>
+
+                <div v-if="assignError" class="error">{{ assignError }}</div>
+
+                <div class="form-actions">
+                  <button type="submit" :disabled="assignSubmitting" class="btn btn-success">
+                    {{ assignSubmitting ? 'Assigning...' : 'Assign Trainer' }}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div v-if="trainers.length > 0" class="trainer-list">
+              <div
+                v-for="trainerWithUser in trainers"
+                :key="trainerWithUser.trainer.id"
+                class="trainer-item"
+                :class="{ inactive: !trainerWithUser.trainer.is_active }"
+              >
+                <div class="trainer-info">
+                  <div class="trainer-name">
+                    <h4>{{ trainerWithUser.user_full_name || trainerWithUser.user_name }}</h4>
+                    <span class="trainer-email">{{ trainerWithUser.user_email }}</span>
+                  </div>
+
+                  <div class="trainer-meta">
+                    <div class="status">
+                      <span
+                        :class="{
+                          'status-active':
+                            trainerWithUser.trainer.is_active &&
+                            !isExpired(trainerWithUser.trainer),
+                          'status-inactive': !trainerWithUser.trainer.is_active,
+                          'status-expired': isExpired(trainerWithUser.trainer),
+                        }"
+                      >
+                        {{ getTrainerStatus(trainerWithUser.trainer) }}
+                      </span>
+                    </div>
+
+                    <div class="dates">
+                      <div class="authorized-date">
+                        Authorized: {{ formatDate(trainerWithUser.trainer.authorized_at) }}
+                      </div>
+                      <div v-if="trainerWithUser.trainer.expires_at" class="expires-date">
+                        Expires: {{ formatDate(trainerWithUser.trainer.expires_at) }}
+                      </div>
+                    </div>
+
+                    <div v-if="trainerWithUser.trainer.notes" class="notes">
+                      {{ trainerWithUser.trainer.notes }}
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="canManageTrainers" class="trainer-actions">
+                  <button class="btn btn-sm btn-secondary" @click="editTrainer(trainerWithUser)">
+                    Edit
+                  </button>
+                  <button
+                    v-if="trainerWithUser.trainer.is_active"
+                    class="btn btn-sm btn-warning"
+                    @click="deactivateTrainer(trainerWithUser.trainer)"
+                  >
+                    Deactivate
+                  </button>
+                  <button
+                    v-else
+                    class="btn btn-sm btn-success"
+                    @click="activateTrainer(trainerWithUser.trainer)"
+                  >
+                    Activate
+                  </button>
+                  <button
+                    class="btn btn-sm btn-danger"
+                    @click="removeTrainer(trainerWithUser.trainer)"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div v-if="trainerWithUser.trainer.notes" class="notes">
-              {{ trainerWithUser.trainer.notes }}
+            <div v-else-if="!loading" class="no-trainers">
+              <p>No trainers assigned to this tool.</p>
+              <button
+                v-if="canManageTrainers"
+                class="btn btn-primary"
+                @click="showAssignForm = true"
+              >
+                Assign First Trainer
+              </button>
             </div>
+
+            <div v-if="loading" class="loading">Loading trainers...</div>
+            <div v-if="error" class="error">{{ error }}</div>
+
+            <!-- Edit Trainer Modal -->
+            <EditTrainerModal
+              v-if="showEditModal && selectedTrainer"
+              :tool="tool"
+              :trainer-with-user="selectedTrainer"
+              @close="showEditModal = false"
+              @updated="onTrainerUpdated"
+            />
           </div>
         </div>
-
-        <div class="trainer-actions" v-if="canManageTrainers">
-          <button 
-            @click="editTrainer(trainerWithUser)"
-            class="btn btn-sm btn-secondary"
-          >
-            Edit
-          </button>
-          <button 
-            v-if="trainerWithUser.trainer.is_active"
-            @click="deactivateTrainer(trainerWithUser.trainer)"
-            class="btn btn-sm btn-warning"
-          >
-            Deactivate
-          </button>
-          <button 
-            v-else
-            @click="activateTrainer(trainerWithUser.trainer)"
-            class="btn btn-sm btn-success"
-          >
-            Activate
-          </button>
-          <button 
-            @click="removeTrainer(trainerWithUser.trainer)"
-            class="btn btn-sm btn-danger"
-          >
-            Remove
-          </button>
-        </div>
       </div>
-    </div>
 
-    <div v-else-if="!loading" class="no-trainers">
-      <p>No trainers assigned to this tool.</p>
-      <button 
-        v-if="canManageTrainers"
-        @click="showAssignForm = true"
-        class="btn btn-primary"
-      >
-        Assign First Trainer
-      </button>
-    </div>
-
-    <div v-if="loading" class="loading">Loading trainers...</div>
-    <div v-if="error" class="error">{{ error }}</div>
-
-    <!-- Edit Trainer Modal -->
-    <EditTrainerModal
-      v-if="showEditModal && selectedTrainer"
-      :tool="tool"
-      :trainer-with-user="selectedTrainer"
-      @close="showEditModal = false"
-      @updated="onTrainerUpdated"
-    />
-  </div>
-        </div>
-      </div>
-      
       <div class="modal-footer bg-base-200">
-        <button @click="closeModal" class="btn btn-secondary">Close</button>
+        <button class="btn btn-secondary" @click="closeModal">Close</button>
       </div>
     </div>
   </div>
@@ -208,12 +203,11 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   'trainer-updated': []
-  'close': []
+  close: []
 }>()
 
 const closeModal = () => {
   emit('close')
-
 }
 const auth = useAuthStore()
 
@@ -229,7 +223,7 @@ const showAssignForm = ref(false)
 const assignFormData = ref({
   user_id: '',
   notes: '',
-  expires_at: ''
+  expires_at: '',
 })
 const showEditModal = ref(false)
 const selectedTrainer = ref<ToolTrainerWithUser | null>(null)
@@ -246,9 +240,8 @@ const today = computed(() => {
 })
 
 const availableUsers = computed(() => {
-  return users.value.filter(user => 
-    user.is_active && 
-    !trainers.value.map(t => t.trainer.user_id).includes(user.id)
+  return users.value.filter(
+    (user) => user.is_active && !trainers.value.map((t) => t.trainer.user_id).includes(user.id)
   )
 })
 
@@ -260,9 +253,9 @@ const loadUsers = async () => {
   try {
     loadingUsers.value = true
     assignError.value = ''
-    
+
     const response = await userApi.getAllUsers()
-    
+
     if (response.success && response.data?.items) {
       users.value = response.data.items
     } else {
@@ -279,9 +272,9 @@ const loadTrainers = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const response = await trainerApi.getToolTrainers(props.tool.id, includeInactive.value)
-    
+
     if (response.success && response.data) {
       trainers.value = response.data
     } else {
@@ -318,11 +311,9 @@ const deactivateTrainer = async (trainer: ToolTrainer) => {
   if (!confirm('Are you sure you want to deactivate this trainer?')) return
 
   try {
-    const response = await trainerApi.updateToolTrainer(
-      props.tool.id,
-      trainer.user_id,
-      { is_active: false }
-    )
+    const response = await trainerApi.updateToolTrainer(props.tool.id, trainer.user_id, {
+      is_active: false,
+    })
 
     if (response.success) {
       await loadTrainers()
@@ -337,11 +328,9 @@ const deactivateTrainer = async (trainer: ToolTrainer) => {
 
 const activateTrainer = async (trainer: ToolTrainer) => {
   try {
-    const response = await trainerApi.updateToolTrainer(
-      props.tool.id,
-      trainer.user_id,
-      { is_active: true }
-    )
+    const response = await trainerApi.updateToolTrainer(props.tool.id, trainer.user_id, {
+      is_active: true,
+    })
 
     if (response.success) {
       await loadTrainers()
@@ -355,7 +344,12 @@ const activateTrainer = async (trainer: ToolTrainer) => {
 }
 
 const removeTrainer = async (trainer: ToolTrainer) => {
-  if (!confirm('Are you sure you want to permanently remove this trainer? This action cannot be undone.')) return
+  if (
+    !confirm(
+      'Are you sure you want to permanently remove this trainer? This action cannot be undone.'
+    )
+  )
+    return
 
   try {
     const response = await trainerApi.removeToolTrainer(props.tool.id, trainer.user_id)
@@ -381,7 +375,7 @@ const submitAssignForm = async () => {
       user_id: assignFormData.value.user_id,
       tool_id: props.tool.id,
       notes: assignFormData.value.notes || undefined,
-      expires_at: assignFormData.value.expires_at || undefined
+      expires_at: assignFormData.value.expires_at || undefined,
     }
 
     const response = await trainerApi.assignToolTrainer(requestData)
@@ -391,7 +385,7 @@ const submitAssignForm = async () => {
       assignFormData.value = {
         user_id: '',
         notes: '',
-        expires_at: ''
+        expires_at: '',
       }
       showAssignForm.value = false
       await loadTrainers()
@@ -406,29 +400,19 @@ const submitAssignForm = async () => {
   }
 }
 
-const onTrainerAssigned = () => {
-  loadTrainers()
-  emit('trainer-updated')
-}
-
 const onTrainerUpdated = () => {
   showEditModal.value = false
   selectedTrainer.value = null
-  loadTrainers()
+  void loadTrainers()
   emit('trainer-updated')
-}
-
-const toggleInactive = () => {
-  includeInactive.value = !includeInactive.value
-  loadTrainers()
 }
 
 // Lifecycle
 onMounted(() => {
-  loadTrainers()
+  void loadTrainers()
   // Load users when form is first shown
   if (canManageTrainers.value) {
-    loadUsers()
+    void loadUsers()
   }
 })
 </script>
@@ -578,8 +562,12 @@ onMounted(() => {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .loading {
@@ -767,7 +755,6 @@ textarea.form-control {
   font-size: 0.8rem;
 }
 
-
 .icon-plus::before {
   content: '+';
   font-weight: bold;
@@ -779,12 +766,12 @@ textarea.form-control {
     align-items: stretch;
     gap: 1rem;
   }
-  
+
   .trainer-actions {
     justify-content: flex-end;
     flex-wrap: wrap;
   }
-  
+
   .dates {
     flex-direction: column;
     gap: 0.25rem;

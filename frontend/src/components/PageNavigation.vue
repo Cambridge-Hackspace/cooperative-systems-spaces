@@ -18,41 +18,39 @@
         <p>No pages available</p>
       </div>
       <div v-else>
-        <div
-          v-for="item in navItems"
-          :key="item.slug"
-          class="nav-item-container"
-        >
+        <div v-for="item in navItems" :key="item.slug" class="nav-item-container">
           <a
             :href="`${baseUrl}/${item.slug}`"
-            @click.prevent="$emit('select', item.slug)"
             class="nav-item active:bg-primary hover:bg-secondary"
             :class="{ active: currentSlug === item.slug }"
+            @click.prevent="$emit('select', item.slug)"
           >
             <span class="nav-title">{{ item.title }}</span>
             <span v-if="item.children && item.children.length > 0" class="nav-arrow">
               {{ expandedItems.has(item.slug) ? '▼' : '▶' }}
             </span>
           </a>
-          
+
           <!-- Toggle button for items with children -->
           <button
             v-if="item.children && item.children.length > 0"
-            @click="toggleExpanded(item.slug)"
             class="expand-button"
             :aria-label="expandedItems.has(item.slug) ? 'Collapse' : 'Expand'"
-          >
-          </button>
-          
+            @click="toggleExpanded(item.slug)"
+          ></button>
+
           <!-- Child items -->
-          <div v-if="item.children && item.children.length > 0 && expandedItems.has(item.slug)" class="nav-children">
+          <div
+            v-if="item.children && item.children.length > 0 && expandedItems.has(item.slug)"
+            class="nav-children"
+          >
             <a
               v-for="child in item.children"
               :key="child.slug"
               :href="`${baseUrl}/${child.slug}`"
-              @click.prevent="$emit('select', child.slug)"
               class="nav-item nav-item-child"
               :class="{ active: currentSlug === child.slug }"
+              @click.prevent="$emit('select', child.slug)"
             >
               <span class="nav-title">{{ child.title }}</span>
             </a>
@@ -82,10 +80,13 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   title: 'Pages',
-  baseUrl: '/pages'
+  baseUrl: '/pages',
+  // Explicit: "no slug is current" is a real state for this component, and
+  // saying so beats leaving the reader to infer it from the `?`.
+  currentSlug: undefined,
 })
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'select', slug: string): void
 }>()
 
@@ -95,7 +96,7 @@ const error = ref<string | null>(null)
 const expandedItems = ref<Set<string>>(new Set())
 
 onMounted(() => {
-  fetchNavigation()
+  void fetchNavigation()
 })
 
 async function fetchNavigation() {
@@ -104,7 +105,7 @@ async function fetchNavigation() {
 
   try {
     const response = await fetch('/api/pages/navigation')
-    
+
     if (!response.ok) {
       throw new Error(`Failed to fetch navigation: ${response.statusText}`)
     }
@@ -168,8 +169,12 @@ function toggleExpanded(slug: string) {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .error-state {

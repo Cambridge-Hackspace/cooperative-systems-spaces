@@ -19,11 +19,7 @@
       </aside>
 
       <main class="site-main">
-        <PageViewer
-          type="site"
-          :slug="currentSlug"
-          @back="currentSlug = undefined"
-        />
+        <PageViewer type="site" :slug="currentSlug" @back="currentSlug = undefined" />
       </main>
     </div>
   </div>
@@ -55,7 +51,10 @@ onMounted(() => {
 function handlePageSelect(slug: string) {
   currentSlug.value = slug
   // Update URL without navigation
-  router.push({ name: 'site', params: { slug } })
+  // A rejected navigation is a NavigationFailure (aborted or redirected by a
+  // guard), which is an outcome rather than an error -- but it is still a
+  // promise, and leaving it floating is an unhandled rejection.
+  void router.push({ name: 'site', params: { slug } })
 }
 </script>
 

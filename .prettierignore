@@ -1,0 +1,11 @@
+dist/
+coverage/
+node_modules/
+test-results/
+playwright-report/
+package-lock.json
+Cargo.lock
+*.min.*
+/e2e/out/
+/e2e/artifacts/
+/LICENSE.md

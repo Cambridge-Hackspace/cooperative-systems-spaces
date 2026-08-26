@@ -53,7 +53,12 @@ function roleHierarchyIn(file: string): Record<string, number> {
   const body = text.slice(open + 1, close)
   const found: Record<string, number> = {}
   for (const m of body.matchAll(/['"]?([a-z]+)['"]?\s*:\s*(\d+)/g)) {
-    found[m[1]!] = Number(m[2]!)
+    // Narrowed rather than asserted with `!`. A capture group can be undefined
+    // if the pattern ever changes, and silently writing `found[undefined]`
+    // would corrupt the comparison the whole test rests on.
+    const [, name, level] = m
+    if (name === undefined || level === undefined) continue
+    found[name] = Number(level)
   }
   return found
 }
@@ -99,7 +104,7 @@ describe('the api.ts <-> auth.ts import cycle', () => {
     expect(
       offenders,
       'useAuthStore() must stay inside the interceptor callbacks; calling it at ' +
-        'module scope turns a benign import cycle into an initialisation-order bug',
+        'module scope turns a benign import cycle into an initialisation-order bug'
     ).toEqual([])
   })
 

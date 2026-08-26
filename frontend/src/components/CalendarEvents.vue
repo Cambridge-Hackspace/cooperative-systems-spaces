@@ -2,12 +2,12 @@
   <div class="calendar-events bg-base-300">
     <div class="calendar-header">
       <h2>📅 Upcoming Events</h2>
-      <button 
-        v-if="!loading" 
-        @click="refreshEvents" 
+      <button
+        v-if="!loading"
         class="refresh-btn"
         :disabled="refreshing"
         title="Refresh calendar events"
+        @click="refreshEvents"
       >
         <span v-if="refreshing">🔄</span>
         <span v-else>↻</span>
@@ -21,7 +21,7 @@
 
     <div v-else-if="error" class="error-state">
       <p>{{ error }}</p>
-      <button @click="() => fetchEvents()" class="retry-btn">Try Again</button>
+      <button class="retry-btn" @click="() => fetchEvents()">Try Again</button>
     </div>
 
     <div v-else-if="events.length === 0" class="empty-state">
@@ -29,8 +29,8 @@
     </div>
 
     <div v-else class="events-list">
-      <div 
-        v-for="event in events" 
+      <div
+        v-for="event in events"
         :key="event.title + event.start"
         class="event-card bg-base-200 text-base-content"
         :style="{ borderLeftColor: event.calendar_color }"
@@ -42,29 +42,28 @@
 
         <div class="event-details text-accent">
           <h3 class="event-title">{{ event.title }}</h3>
-          
+
           <div class="event-meta">
             <span class="event-time">
-              <span v-if="event.all_day">
-                🕐 All Day
-              </span>
+              <span v-if="event.all_day"> 🕐 All Day </span>
               <span v-else>
                 🕐 {{ formatTime(event.start) }}
                 <span v-if="event.end"> - {{ formatTime(event.end) }}</span>
               </span>
             </span>
 
-            <span 
-              v-if="event.location" 
-              class="event-location"
-              :title="event.location"
-            >
+            <span v-if="event.location" class="event-location" :title="event.location">
               📍 {{ event.location }}
             </span>
           </div>
 
-          <p v-if="event.description" class="event-description" v-html="event.description">
-          </p>
+          <!--
+            Interpolated, not v-html. This description comes from a third-party
+            iCal feed (server/src/calendar.rs fetches source.ical_link), so
+            rendering it as HTML let a feed the space does not control inject
+            markup into every viewer's page. An ICS DESCRIPTION is plain text.
+          -->
+          <p v-if="event.description" class="event-description">{{ event.description }}</p>
 
           <div class="event-calendar-tag" :style="{ backgroundColor: event.calendar_color }">
             {{ event.calendar_name }}
@@ -96,11 +95,14 @@ const error = ref<string | null>(null)
 let refreshInterval: number | null = null
 
 onMounted(() => {
-  fetchEvents()
+  void fetchEvents()
   // Auto-refresh every 15 minutes
-  refreshInterval = window.setInterval(() => {
-    fetchEvents(true) // Silent refresh
-  }, 15 * 60 * 1000)
+  refreshInterval = window.setInterval(
+    () => {
+      void fetchEvents(true) // Silent refresh
+    },
+    15 * 60 * 1000
+  )
 })
 
 onBeforeUnmount(() => {
@@ -117,7 +119,7 @@ async function fetchEvents(silent = false) {
 
   try {
     const response = await fetch('/api/calendar/events')
-    
+
     if (!response.ok) {
       throw new Error(`Failed to fetch events: ${response.statusText}`)
     }
@@ -137,7 +139,7 @@ async function refreshEvents() {
 
   try {
     const response = await fetch('/api/calendar/events/refresh')
-    
+
     if (!response.ok) {
       throw new Error(`Failed to refresh events: ${response.statusText}`)
     }
@@ -163,10 +165,10 @@ function formatMonth(dateString: string): string {
 
 function formatTime(dateString: string): string {
   const date = new Date(dateString)
-  return date.toLocaleTimeString('en-US', { 
-    hour: 'numeric', 
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
     minute: '2-digit',
-    hour12: true 
+    hour12: true,
   })
 }
 </script>
@@ -229,8 +231,12 @@ function formatTime(dateString: string): string {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .error-state {

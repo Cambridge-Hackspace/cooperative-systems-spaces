@@ -3,38 +3,38 @@
     <div class="modal-content" @click.stop>
       <div class="modal-header">
         <h3>Edit Training Step</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
         <form @submit.prevent="updateStep">
           <div class="form-group">
             <label for="step_number">Step Number:</label>
-            <input 
+            <input
               id="step_number"
-              type="number"
               v-model.number="form.step_number"
+              type="number"
               class="form-control"
               min="1"
               required
-            >
+            />
           </div>
 
           <div class="form-group">
             <label for="step_name">Title:</label>
             <input
               id="step_name"
-              type="text"
               v-model="form.step_name"
+              type="text"
               class="form-control"
               required
               placeholder="e.g., Safety Orientation"
-            >
+            />
           </div>
 
           <div class="form-group">
             <label for="description">Description:</label>
-            <textarea 
+            <textarea
               id="description"
               v-model="form.description"
               class="form-control"
@@ -46,8 +46,8 @@
 
           <div class="form-group">
             <label for="assessment_type">Assessment Type:</label>
-            <select 
-              id="assessment_type" 
+            <select
+              id="assessment_type"
               v-model="form.assessment_type"
               class="form-control"
               required
@@ -59,49 +59,43 @@
             </select>
           </div>
 
-          <div class="form-group" v-if="form.assessment_type !== 'observation_only'">
+          <div v-if="form.assessment_type !== 'observation_only'" class="form-group">
             <label for="passing_score">Passing Score (%):</label>
-            <input 
+            <input
               id="passing_score"
-              type="number"
               v-model.number="form.passing_score"
+              type="number"
               class="form-control"
               min="0"
               max="100"
               placeholder="e.g., 80"
-            >
+            />
           </div>
 
           <div class="form-group">
             <label for="expiry_days">Expires After (days):</label>
-            <input 
+            <input
               id="expiry_days"
-              type="number"
               v-model.number="form.expiry_days"
+              type="number"
               class="form-control"
               min="1"
               placeholder="Leave blank for no expiration"
-            >
+            />
           </div>
 
           <div class="form-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
-                v-model="form.is_active"
-                class="checkbox"
-              >
+              <input v-model="form.is_active" type="checkbox" class="checkbox" />
               <span class="checkbox-text">Active (visible to users)</span>
             </label>
           </div>
 
           <div class="form-actions">
-            <button type="button" @click="deleteStep" :disabled="loading" class="btn btn-danger">
+            <button type="button" :disabled="loading" class="btn btn-danger" @click="deleteStep">
               {{ loading ? 'Deleting...' : 'Delete Step' }}
             </button>
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="loading" class="btn btn-primary">
               {{ loading ? 'Updating...' : 'Update Training Step' }}
             </button>
@@ -117,9 +111,9 @@
 </template>
 
 <script setup lang="ts">
-import {reactive, ref, watch} from 'vue'
-import {trainingApi} from '../utils/api'
-import {AssessmentType, Tool, TrainingStep, UpdateTrainingStepRequest} from '../types'
+import { reactive, ref, watch } from 'vue'
+import { trainingApi } from '../utils/api'
+import { AssessmentType, Tool, TrainingStep, UpdateTrainingStepRequest } from '../types'
 
 interface Props {
   step: TrainingStep | null
@@ -146,7 +140,7 @@ const form = reactive<UpdateTrainingStepRequest>({
   assessment_type: AssessmentType.Practical,
   passing_score: undefined,
   expiry_days: undefined,
-  is_active: true
+  is_active: true,
 })
 
 // Methods
@@ -162,13 +156,13 @@ const populateForm = (step: TrainingStep) => {
 
 const updateStep = async () => {
   if (!props.step) return
-  
+
   try {
     loading.value = true
     error.value = ''
 
     const response = await trainingApi.updateTrainingStep(props.step.id, form)
-    
+
     if (response.success && response.data) {
       emit('step-updated', response.data)
       emit('close')
@@ -183,16 +177,19 @@ const updateStep = async () => {
 }
 
 const deleteStep = async () => {
-  if (!props.step || !confirm('Are you sure you want to delete this training step? This action cannot be undone.')) {
+  if (
+    !props.step ||
+    !confirm('Are you sure you want to delete this training step? This action cannot be undone.')
+  ) {
     return
   }
-  
+
   try {
     loading.value = true
     error.value = ''
 
     const response = await trainingApi.deleteTrainingStep(props.step.id)
-    
+
     if (response.success) {
       emit('step-deleted', props.step.id)
       emit('close')
@@ -207,11 +204,15 @@ const deleteStep = async () => {
 }
 
 // Watch for changes to the step prop
-watch(() => props.step, (newStep) => {
-  if (newStep) {
-    populateForm(newStep)
-  }
-}, { immediate: true })
+watch(
+  () => props.step,
+  (newStep) => {
+    if (newStep) {
+      populateForm(newStep)
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
@@ -382,11 +383,11 @@ watch(() => props.step, (newStep) => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

@@ -3,7 +3,7 @@
     <div class="modal" @click.stop>
       <div class="modal-header">
         <h3>Edit Trainer Assignment</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -15,7 +15,7 @@
         <form @submit.prevent="submitForm">
           <div class="form-group">
             <label for="expires_at">Expiration Date</label>
-            <input 
+            <input
               id="expires_at"
               v-model="formData.expires_at"
               type="date"
@@ -27,7 +27,7 @@
 
           <div class="form-group">
             <label for="notes">Notes</label>
-            <textarea 
+            <textarea
               id="notes"
               v-model="formData.notes"
               class="form-control"
@@ -38,11 +38,7 @@
 
           <div class="form-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
-                v-model="formData.is_active"
-                class="checkbox"
-              />
+              <input v-model="formData.is_active" type="checkbox" class="checkbox" />
               Active Trainer
             </label>
             <small class="form-text">Uncheck to temporarily deactivate this trainer</small>
@@ -51,9 +47,7 @@
           <div v-if="error" class="error">{{ error }}</div>
 
           <div class="modal-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="submitting" class="btn btn-primary">
               {{ submitting ? 'Updating...' : 'Update Trainer' }}
             </button>
@@ -65,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { trainerApi } from '../utils/api'
 import type { Tool, ToolTrainerWithUser, UpdateTrainerRequest } from '../types'
 
@@ -76,8 +70,8 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
-  'close': []
-  'updated': []
+  close: []
+  updated: []
 }>()
 
 // State
@@ -86,10 +80,10 @@ const error = ref('')
 
 const formData = ref<UpdateTrainerRequest & { expires_at: string }>({
   notes: props.trainerWithUser.trainer.notes || '',
-  expires_at: props.trainerWithUser.trainer.expires_at 
+  expires_at: props.trainerWithUser.trainer.expires_at
     ? new Date(props.trainerWithUser.trainer.expires_at).toISOString().split('T')[0]
     : '',
-  is_active: props.trainerWithUser.trainer.is_active
+  is_active: props.trainerWithUser.trainer.is_active,
 })
 
 // Computed
@@ -107,7 +101,7 @@ const submitForm = async () => {
     const requestData: UpdateTrainerRequest = {
       notes: formData.value.notes || undefined,
       expires_at: formData.value.expires_at || undefined,
-      is_active: formData.value.is_active
+      is_active: formData.value.is_active,
     }
 
     const response = await trainerApi.updateToolTrainer(
@@ -331,16 +325,16 @@ textarea.form-control {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .modal-header,
   .modal-body {
     padding: 1rem;
   }
-  
+
   .modal-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

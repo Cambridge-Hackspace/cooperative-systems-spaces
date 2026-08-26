@@ -8,7 +8,12 @@
 
         <div v-if="authStore.error" class="alert alert-error mb-4">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
           </svg>
           <span>{{ authStore.error }}</span>
         </div>
@@ -53,13 +58,36 @@
         <!-- ===== MFA challenge step ===== -->
         <div v-else class="space-y-4">
           <div role="tablist" class="tabs tabs-boxed">
-            <a v-if="methodAvailable('totp')" role="tab" class="tab" :class="{ 'tab-active': method === 'totp' }" @click="method = 'totp'">Code</a>
-            <a v-if="methodAvailable('webauthn')" role="tab" class="tab" :class="{ 'tab-active': method === 'webauthn' }" @click="method = 'webauthn'">Security key</a>
-            <a v-if="methodAvailable('recovery')" role="tab" class="tab" :class="{ 'tab-active': method === 'recovery' }" @click="method = 'recovery'">Recovery</a>
+            <a
+              v-if="methodAvailable('totp')"
+              role="tab"
+              class="tab"
+              :class="{ 'tab-active': method === 'totp' }"
+              @click="method = 'totp'"
+              >Code</a
+            >
+            <a
+              v-if="methodAvailable('webauthn')"
+              role="tab"
+              class="tab"
+              :class="{ 'tab-active': method === 'webauthn' }"
+              @click="method = 'webauthn'"
+              >Security key</a
+            >
+            <a
+              v-if="methodAvailable('recovery')"
+              role="tab"
+              class="tab"
+              :class="{ 'tab-active': method === 'recovery' }"
+              @click="method = 'recovery'"
+              >Recovery</a
+            >
           </div>
 
           <div v-if="method === 'totp'">
-            <label class="label"><span class="label-text">6-digit code from your authenticator</span></label>
+            <label class="label"
+              ><span class="label-text">6-digit code from your authenticator</span></label
+            >
             <input
               v-model="totpCode"
               type="text"
@@ -71,7 +99,11 @@
               :disabled="mfaBusy"
               @keydown.enter="submitTotp"
             />
-            <button class="btn btn-primary w-full mt-3" :disabled="mfaBusy || totpCode.length < 6" @click="submitTotp">
+            <button
+              class="btn btn-primary w-full mt-3"
+              :disabled="mfaBusy || totpCode.length < 6"
+              @click="submitTotp"
+            >
               <span v-if="mfaBusy" class="loading loading-spinner loading-sm"></span>
               <span v-else>Verify</span>
             </button>
@@ -98,7 +130,11 @@
               :disabled="mfaBusy"
               @keydown.enter="submitRecovery"
             />
-            <button class="btn btn-primary w-full mt-3" :disabled="mfaBusy || !recoveryCode.trim()" @click="submitRecovery">
+            <button
+              class="btn btn-primary w-full mt-3"
+              :disabled="mfaBusy || !recoveryCode.trim()"
+              @click="submitRecovery"
+            >
               <span v-if="mfaBusy" class="loading loading-spinner loading-sm"></span>
               <span v-else>Verify</span>
             </button>
@@ -122,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { mfaApi } from '@/utils/api'
@@ -149,12 +185,11 @@ watch(
   () => authStore.pendingMfa,
   (c) => {
     if (!c) return
-    method.value = (c.methods.find((m) => m === 'webauthn') as any)
-      || (c.methods[0] as any)
-      || 'totp'
+    method.value =
+      (c.methods.find((m) => m === 'webauthn') as any) || (c.methods[0] as any) || 'totp'
     totpCode.value = ''
     recoveryCode.value = ''
-  },
+  }
 )
 
 async function handleLogin() {
@@ -180,7 +215,7 @@ async function submitWebauthn() {
   mfaBusy.value = true
   authStore.clearError()
   try {
-    const credential = await webauthnGet(authStore.pendingMfa.webauthn_options as any)
+    const credential = await webauthnGet(authStore.pendingMfa.webauthn_options)
     await verify({ method: 'webauthn', response: credential })
   } catch (e: any) {
     authStore.$patch({ error: e?.message || 'Security key request failed' })
@@ -216,11 +251,14 @@ async function verify(body: {
 }
 
 async function afterAuthenticated() {
+  // Awaited. A navigation that a guard aborts leaves the user sitting on the
+  // login form having just authenticated successfully, with nothing said --
+  // and unawaited it was an unhandled rejection as well.
   if (authStore.mustEnrollMfa) {
-    router.push('/profile/mfa')
+    await router.push('/profile/mfa')
     return
   }
   const redirect = router.currentRoute.value.query.redirect as string
-  router.push(redirect || '/')
+  await router.push(redirect || '/')
 }
 </script>

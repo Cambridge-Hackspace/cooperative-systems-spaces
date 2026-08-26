@@ -12,8 +12,8 @@
       <div>
         <h1 v-if="!embedded" class="text-3xl font-bold mb-1">Schedules</h1>
         <p class="text-base-content/70">
-          Reusable weekly windows you can attach to a door's access rules.
-          Times are evaluated in the configured site time zone.
+          Reusable weekly windows you can attach to a door's access rules. Times are evaluated in
+          the configured site time zone.
         </p>
       </div>
       <button class="btn btn-primary btn-sm whitespace-nowrap" @click="openNew">
@@ -30,8 +30,8 @@
       <span class="loading loading-spinner loading-lg"></span>
     </div>
     <div v-else-if="!schedules.length" class="text-center py-8 text-base-content/60">
-      No schedules yet. Click <strong>+ New schedule</strong> to create one
-      from a template (24/7, 9–5 weekdays, …) and tweak it from there.
+      No schedules yet. Click <strong>+ New schedule</strong> to create one from a template (24/7,
+      9–5 weekdays, …) and tweak it from there.
     </div>
     <div v-else class="overflow-x-auto">
       <table class="table">
@@ -47,7 +47,9 @@
           <tr v-for="s in schedules" :key="s.id">
             <td>
               <div class="font-medium">{{ s.name }}</div>
-              <div v-if="s.description" class="text-xs text-base-content/60">{{ s.description }}</div>
+              <div v-if="s.description" class="text-xs text-base-content/60">
+                {{ s.description }}
+              </div>
             </td>
             <td class="text-xs">
               <div v-for="(line, i) in summarize(s)" :key="i">{{ line }}</div>
@@ -58,7 +60,8 @@
                 v-if="s.is_public"
                 class="badge badge-success badge-sm"
                 title="Surfaced on the public home page"
-              >Public</span>
+                >Public</span
+              >
               <span v-else class="badge badge-ghost badge-sm">Internal</span>
             </td>
             <td class="text-right whitespace-nowrap">
@@ -80,7 +83,12 @@
         <div class="grid grid-cols-2 gap-3 mb-3">
           <div class="form-control">
             <label class="label py-1"><span class="label-text">Name</span></label>
-            <input v-model="form.name" type="text" class="input input-bordered" placeholder="Member Hours" />
+            <input
+              v-model="form.name"
+              type="text"
+              class="input input-bordered"
+              placeholder="Member Hours"
+            />
           </div>
           <div class="form-control">
             <label class="label py-1"><span class="label-text">Apply template</span></label>
@@ -105,9 +113,7 @@
         <div class="form-control mb-4">
           <label class="label cursor-pointer justify-start gap-3">
             <input v-model="form.is_public" type="checkbox" class="toggle toggle-success" />
-            <span class="label-text">
-              Public — show on the home page "Hours today" card
-            </span>
+            <span class="label-text"> Public — show on the home page "Hours today" card </span>
           </label>
         </div>
 
@@ -128,16 +134,22 @@
                     :value="iv.start"
                     type="time"
                     class="input input-bordered input-sm w-32"
-                    @change="updateInterval(day, idx, 'start', ($event.target as HTMLInputElement).value)"
+                    @change="
+                      updateInterval(day, idx, 'start', ($event.target as HTMLInputElement).value)
+                    "
                   />
                   <span class="text-base-content/60">–</span>
                   <input
                     :value="iv.end"
                     type="time"
                     class="input input-bordered input-sm w-32"
-                    @change="updateInterval(day, idx, 'end', ($event.target as HTMLInputElement).value)"
+                    @change="
+                      updateInterval(day, idx, 'end', ($event.target as HTMLInputElement).value)
+                    "
                   />
-                  <button class="btn btn-ghost btn-xs text-error" @click="removeInterval(day, idx)">×</button>
+                  <button class="btn btn-ghost btn-xs text-error" @click="removeInterval(day, idx)">
+                    ×
+                  </button>
                 </div>
                 <button class="btn btn-ghost btn-xs" @click="addInterval(day)">+ Add window</button>
               </div>
@@ -191,7 +203,13 @@ const form = ref<{
 /** Group the working list by day so the editor can render a row per day. */
 const intervalsByDay = computed<Record<DayOfWeek, ScheduleInterval[]>>(() => {
   const out: Record<DayOfWeek, ScheduleInterval[]> = {
-    mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [],
+    mon: [],
+    tue: [],
+    wed: [],
+    thu: [],
+    fri: [],
+    sat: [],
+    sun: [],
   }
   for (const iv of form.value.intervals) out[iv.day].push(iv)
   for (const list of Object.values(out)) list.sort((a, b) => a.start.localeCompare(b.start))
@@ -201,7 +219,9 @@ const intervalsByDay = computed<Record<DayOfWeek, ScheduleInterval[]>>(() => {
 function notify(msg: string, ok = true) {
   flash.value = msg
   flashOk.value = ok
-  setTimeout(() => { if (flash.value === msg) flash.value = '' }, 5000)
+  setTimeout(() => {
+    if (flash.value === msg) flash.value = ''
+  }, 5000)
 }
 
 /** Human-friendly summary lines for the table: groups identical windows
@@ -216,7 +236,15 @@ function summarize(s: Schedule): string[] {
     arr.push(iv.day)
     groups.set(k, arr)
   }
-  const dayOrder: Record<DayOfWeek, number> = { mon:0,tue:1,wed:2,thu:3,fri:4,sat:5,sun:6 }
+  const dayOrder: Record<DayOfWeek, number> = {
+    mon: 0,
+    tue: 1,
+    wed: 2,
+    thu: 3,
+    fri: 4,
+    sat: 5,
+    sun: 6,
+  }
   const out: string[] = []
   for (const [windowKey, days] of groups) {
     days.sort((a, b) => dayOrder[a] - dayOrder[b])
@@ -230,18 +258,30 @@ function summarize(s: Schedule): string[] {
 /** ["mon","tue","wed","fri"] → "Mon–Wed, Fri" */
 function compactDayRange(days: DayOfWeek[]): string {
   const labels: Record<DayOfWeek, string> = {
-    mon:'Mon', tue:'Tue', wed:'Wed', thu:'Thu', fri:'Fri', sat:'Sat', sun:'Sun',
+    mon: 'Mon',
+    tue: 'Tue',
+    wed: 'Wed',
+    thu: 'Thu',
+    fri: 'Fri',
+    sat: 'Sat',
+    sun: 'Sun',
   }
-  const dayOrder: Record<DayOfWeek, number> = { mon:0,tue:1,wed:2,thu:3,fri:4,sat:5,sun:6 }
+  const dayOrder: Record<DayOfWeek, number> = {
+    mon: 0,
+    tue: 1,
+    wed: 2,
+    thu: 3,
+    fri: 4,
+    sat: 5,
+    sun: 6,
+  }
   const sorted = [...days].sort((a, b) => dayOrder[a] - dayOrder[b])
   const ranges: string[] = []
   let i = 0
   while (i < sorted.length) {
     let j = i
     while (j + 1 < sorted.length && dayOrder[sorted[j + 1]] === dayOrder[sorted[j]] + 1) j++
-    ranges.push(
-      j === i ? labels[sorted[i]] : `${labels[sorted[i]]}–${labels[sorted[j]]}`,
-    )
+    ranges.push(j === i ? labels[sorted[i]] : `${labels[sorted[i]]}–${labels[sorted[j]]}`)
     i = j + 1
   }
   return ranges.join(', ')
@@ -254,7 +294,7 @@ function openNew() {
   form.value = {
     name: '',
     description: null,
-    intervals: SCHEDULE_TEMPLATES.find(t => t.id === 'weekday-9-5')!.build(),
+    intervals: SCHEDULE_TEMPLATES.find((t) => t.id === 'weekday-9-5').build(),
     is_public: false,
   }
   showForm.value = true
@@ -266,7 +306,7 @@ function openEdit(s: Schedule) {
     name: s.name,
     description: s.description,
     // Clone to avoid mutating the table row.
-    intervals: s.intervals.map(iv => ({ ...iv })),
+    intervals: s.intervals.map((iv) => ({ ...iv })),
     is_public: s.is_public,
   }
   showForm.value = true
@@ -274,9 +314,10 @@ function openEdit(s: Schedule) {
 
 function onTemplate(id: string) {
   if (!id) return
-  const t = SCHEDULE_TEMPLATES.find(t => t.id === id)
+  const t = SCHEDULE_TEMPLATES.find((t) => t.id === id)
   if (!t) return
-  if (form.value.intervals.length && !confirm('Replace the current windows with this template?')) return
+  if (form.value.intervals.length && !confirm('Replace the current windows with this template?'))
+    return
   form.value.intervals = t.build()
 }
 
@@ -289,7 +330,10 @@ function removeInterval(day: DayOfWeek, idxWithinDay: number) {
   let seen = 0
   for (let i = 0; i < form.value.intervals.length; i++) {
     if (form.value.intervals[i].day !== day) continue
-    if (seen === idxWithinDay) { form.value.intervals.splice(i, 1); return }
+    if (seen === idxWithinDay) {
+      form.value.intervals.splice(i, 1)
+      return
+    }
     seen++
   }
 }
@@ -314,7 +358,10 @@ async function load() {
 }
 
 async function save() {
-  if (!form.value.name.trim()) { notify('Name is required', false); return }
+  if (!form.value.name.trim()) {
+    notify('Name is required', false)
+    return
+  }
   for (const iv of form.value.intervals) {
     if (iv.end <= iv.start) {
       notify(`Interval ${iv.day} ${iv.start}–${iv.end} must end after it starts`, false)
@@ -342,8 +389,10 @@ async function save() {
 async function onDelete(s: Schedule) {
   if (!confirm(`Delete "${s.name}"? Rules referencing it will revert to "always".`)) return
   const r = await schedulesApi.remove(s.id)
-  if (r.success) { notify('Schedule deleted'); await load() }
-  else notify(r.error || 'Failed to delete', false)
+  if (r.success) {
+    notify('Schedule deleted')
+    await load()
+  } else notify(r.error || 'Failed to delete', false)
 }
 
 onMounted(load)
