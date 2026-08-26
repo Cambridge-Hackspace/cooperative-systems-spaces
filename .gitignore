@@ -29,3 +29,4 @@
 # AppConfig::from_file rewrites config in place on a missing-field error and
 # leaves the original beside it as <path>.<unixtime>.backup.
 *.backup
+.acceptance-broken
