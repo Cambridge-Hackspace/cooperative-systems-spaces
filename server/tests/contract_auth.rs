@@ -28,7 +28,11 @@ use tower::ServiceExt;
 
 /// The real API router, over the real `AppState`, with a dead pool behind it.
 async fn router() -> axum::Router {
-    api::api_routes().with_state(test_support::app_state().await)
+    // Nested under `/api` as main.rs mounts it, so these paths are the ones a
+    // client actually requests.
+    axum::Router::new()
+        .nest("/api", api::api_routes())
+        .with_state(test_support::app_state().await)
 }
 
 async fn send(req: Request<Body>) -> (StatusCode, String) {
@@ -61,7 +65,7 @@ fn get_with_auth(path: &str, value: &str) -> Request<Body> {
 
 /// A route behind `AuthUser`, chosen because it is the cheapest guarded thing
 /// in the API and takes no path parameters.
-const GUARDED: &str = "/auth/me";
+const GUARDED: &str = "/api/auth/me";
 
 #[tokio::test]
 async fn a_guarded_route_refuses_a_request_with_no_authorization_header() {
@@ -117,7 +121,7 @@ async fn an_unguarded_route_is_still_reachable() {
     // Guards the guard. If every route 404'd — a mistyped path, a router that
     // failed to build — the assertions above would pass for the wrong reason,
     // because a 404 is not a 401 but neither is it evidence of authentication.
-    let (status, _) = send(get("/config/public")).await;
+    let (status, _) = send(get("/api/config/public")).await;
     assert_ne!(
         status,
         StatusCode::NOT_FOUND,
@@ -158,7 +162,7 @@ async fn the_database_really_is_unreachable() {
     // the database was consulted".
     let req = Request::builder()
         .method("POST")
-        .uri("/auth/login")
+        .uri("/api/auth/login")
         .header("content-type", "application/json")
         .body(Body::from(
             r#"{"username_or_email":"nobody","password":"x"}"#,
@@ -186,14 +190,14 @@ async fn a_router_nested_at_slash_answers_without_the_trailing_slash() {
     // This is asserted rather than assumed because a client that writes the
     // trailing slash gets a 404 that looks like a deployment problem.
     // `toolpass-client`'s status command was doing exactly that.
-    let (bare, _) = send(get("/toolguard")).await;
+    let (bare, _) = send(get("/api/toolguard")).await;
     assert_ne!(
         bare,
         StatusCode::NOT_FOUND,
         "/toolguard should be the status route"
     );
 
-    let (trailing, _) = send(get("/toolguard/")).await;
+    let (trailing, _) = send(get("/api/toolguard/")).await;
     assert_eq!(
         trailing,
         StatusCode::NOT_FOUND,
