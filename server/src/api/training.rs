@@ -379,8 +379,10 @@ async fn update_training_step(
         .db
         .update_training_step(step_id, &update_step)
         .map_err(|e| {
-            tracing::error!("Failed to update training step: {}", e);
-            ApiError::InternalServerError("Failed to update training step".to_string())
+            // Logged, then converted. See update_tool: a blanket 500 tells the
+            // caller the server broke when the row they named does not exist.
+            tracing::warn!("update_training_step({step_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(updated_step)))
@@ -460,8 +462,10 @@ async fn update_training_step_position(
         .db
         .update_training_step_position(step_id, payload.step_number)
         .map_err(|e| {
-            tracing::error!("Failed to update training step position: {}", e);
-            ApiError::InternalServerError("Failed to update training step position".to_string())
+            // Logged, then converted. See update_tool: a blanket 500 tells the
+            // caller the server broke when the row they named does not exist.
+            tracing::warn!("update_training_step_position({step_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(())))
@@ -940,8 +944,11 @@ async fn check_my_tool_access(
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
     let can_access = state.db.can_access_tool(user.0.id, tool_id).map_err(|e| {
-        tracing::error!("Failed to check tool access: {}", e);
-        ApiError::InternalServerError("Failed to check tool access".to_string())
+        // The sibling of check_tool_access, and it had the same blanket 500.
+        // Converting one and not the other is how "the same request answers
+        // differently depending on which endpoint you used" happens.
+        tracing::warn!("can_access_tool({}, {tool_id}) failed: {e}", user.0.id);
+        ApiError::from(e)
     })?;
 
     Ok(Json(ApiResponse::success(can_access)))

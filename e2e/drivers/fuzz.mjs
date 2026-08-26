@@ -73,14 +73,38 @@ const TAG = `${RUN_TAG}_${process.hrtime.bigint().toString(36).slice(-6)}`
 // ---------------------------------------------------------------------------
 // Request construction
 // ---------------------------------------------------------------------------
+const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
+
 const ALL_STRINGS = CORPUS.strings.map((s) => s.v)
 const ALL_SCALARS = CORPUS.scalars.map((s) => s.v)
 const ALL_TIMES = CORPUS.timestamps.map((s) => s.v)
 
+/**
+ * A NARROWING, scoped to exactly one corpus entry on exactly one kind of
+ * cluster.
+ *
+ * On a non-UTF-8 database, astral-plane text cannot be stored at all, so any
+ * route that writes it answers 500. That is a real finding and it is already
+ * pinned by the contract stage -- `findings/astral-text-is-a-500-not-a-4xx` --
+ * with the reasoning and the reason it was not fixed.
+ *
+ * Reproducing it on every text-writing route the fuzzer happens to reach adds
+ * no information and buries the findings that are new. The alternative
+ * considered and rejected: exempting 500 for those routes in KNOWN, which would
+ * switch the no-5xx oracle off for them entirely.
+ *
+ * The full corpus runs on a UTF-8 cluster, which is what
+ * `CSS_E2E_DB_ENCODING=UTF8` and the nightly are for.
+ */
+const STORABLE_STRINGS =
+  ENCODING === 'UTF8'
+    ? ALL_STRINGS
+    : ALL_STRINGS.filter((v) => typeof v !== 'string' || [...v].every((c) => c.codePointAt(0) < 0x10000))
+
 /** A value from somewhere in the corpus, weighted towards text. */
 function hostileValue() {
   const r = rnd()
-  if (r < 0.55) return pick(ALL_STRINGS)
+  if (r < 0.55) return pick(STORABLE_STRINGS)
   if (r < 0.8) return pick(ALL_SCALARS)
   return pick(ALL_TIMES)
 }
@@ -189,8 +213,6 @@ const KNOWN = [
   })),
 ]
 
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-
 function knownFor(f) {
   return KNOWN.find(
     (k) =>
@@ -237,6 +259,15 @@ function finding(oracle, req, detail) {
 main(async () => {
   console.log(`fuzz seed: ${SEED}`)
   console.log(`iterations: ${ITERATIONS}, endpoints: ${INVENTORY.count}, tag: ${TAG}`)
+  console.log(`cluster encoding: ${ENCODING}`)
+  if (STORABLE_STRINGS.length !== ALL_STRINGS.length) {
+    record('fuzz/corpus-narrowed-for-this-cluster', 'skip',
+      `${ALL_STRINGS.length - STORABLE_STRINGS.length} astral-plane corpus ` +
+      `entr(y|ies) omitted: a ${ENCODING} database cannot store them, so they ` +
+      'reproduce findings/astral-text-is-a-500-not-a-4xx on every route that ' +
+      'writes text and bury anything new. Run with CSS_E2E_DB_ENCODING=UTF8 ' +
+      'for the full corpus.')
+  }
 
   // The inventory has to be complete or this tier is a sampling exercise
   // wearing a fuzzer's name. e2e/lint.sh keeps endpoints.json in step with the
