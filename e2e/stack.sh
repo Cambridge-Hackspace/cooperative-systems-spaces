@@ -233,10 +233,37 @@ allow_anonymous true
 log_dest stdout
 EOF
   log "starting mosquitto on ${MQTT_PORT}"
+
+  # Under --provision=external there is no engine, so the broker runs as a host
+  # process. That path is CI's, and it exists rather than the alternative --
+  # switching edge_enabled off there -- because `MqttService::new` connects
+  # during boot and `main.rs` propagates the failure. Turning it off in one
+  # environment would mean CI never executes the boot path most likely to break,
+  # and the first anybody heard of a regression would be a session run or a
+  # deployment.
+  #
+  # A service container cannot do this job: mosquitto 2 binds to loopback inside
+  # its own namespace unless told otherwise, and a GitHub service container
+  # takes no command override with which to point one at a config file.
+  if [[ ${PROVISION} == "external" ]]; then
+    command -v mosquitto >/dev/null 2>&1 \
+      || die "--provision=external needs mosquitto on PATH (apt-get install mosquitto)"
+    mosquitto -c "${STACK_DIR}/mosquitto.conf" >"${OUT}/logs/mosquitto.log" 2>&1 &
+    echo $! >"${STACK_DIR}/mosquitto.pid"
+    return 0
+  fi
+
   pm run -d --name "${C_MQTT}" --network host \
     -v "${STACK_DIR}/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
     "${IMG_MOSQUITTO}" \
     >/dev/null
+}
+
+stop_mosquitto() {
+  if [[ -f "${STACK_DIR}/mosquitto.pid" ]]; then
+    kill "$(cat "${STACK_DIR}/mosquitto.pid")" 2>/dev/null || true
+    rm -f "${STACK_DIR}/mosquitto.pid"
+  fi
 }
 
 # The runtime image: the shipping Dockerfile's runtime stage, minus the parts
@@ -354,7 +381,18 @@ run_node() {
   : >"${cases_out}"
 
   if [[ ${PROVISION} == "external" ]]; then
-    command -v node >/dev/null 2>&1 || die "--provision=external needs node on PATH for the API stages"
+    # e2e/build.sh bootstraps a checksum-pinned Node into $REAPER_CACHE_NODE (or
+    # e2e/.node), so the drivers have a toolchain even where the environment
+    # supplies none. An already-present `node` wins, which keeps CI on the one
+    # its own setup step installed.
+    if ! command -v node >/dev/null 2>&1; then
+      local bootstrapped
+      bootstrapped="$(find "${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}" -maxdepth 3 -type f -name node -perm -u+x 2>/dev/null | head -1)"
+      [[ -n ${bootstrapped} ]] \
+        || die "--provision=external needs node; none on PATH and none bootstrapped by e2e/build.sh"
+      PATH="$(dirname "${bootstrapped}"):${PATH}"
+      export PATH
+    fi
     CASES_OUT="${cases_out}" \
       CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       CSS_STACK_DIR="${STACK_DIR}" \

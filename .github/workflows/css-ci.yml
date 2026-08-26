@@ -166,40 +166,73 @@ jobs:
   # runner defect to fix, not a suite to skip.
   stack:
     runs-on: arc-runner-set
-    needs: [assets, rust]
-    timeout-minutes: 45
+    # Deliberately NOT `needs: assets`. This job runs e2e/build.sh, which is the
+    # same script the reaper session runs, and that script builds both frontends
+    # itself. Downloading the bundle instead would leave build.sh -- the thing
+    # every session depends on -- exercised only where reaper exists.
+    needs: rust
+    timeout-minutes: 60
     services:
       postgres:
-        # Deliberately not UTF-8. Under the image's default the text assertions
-        # pass whether or not the application does anything right, which is the
-        # failure mode the methodology names. See e2e/run.sh for what LATIN1 and
-        # a C locale actually make load-bearing here.
+        # Deliberately not UTF-8, and this is the configuration that found the
+        # migration this suite could not apply: an ellipsis in a SQL comment
+        # made the schema impossible to create on a LATIN1 cluster, invisibly,
+        # because every developer machine and every default runner is UTF-8.
+        #
+        # lc_collate=C also makes every "alphabetical" list an actual assertion,
+        # and lc_ctype=C means no case folding outside ASCII, which exercises
+        # case-insensitive email and username lookup for real.
         image: postgres:18-bookworm
         env:
           POSTGRES_DB: css
           POSTGRES_USER: css_user
           POSTGRES_PASSWORD: css_pass
-          POSTGRES_INITDB_ARGS: '--encoding=LATIN1 --locale=C'
+          # The same flags e2e/stack.sh passes, so the two environments
+          # provision the same cluster rather than two similar ones.
+          POSTGRES_INITDB_ARGS: '--encoding=LATIN1 --lc-collate=C --lc-ctype=C'
+          # Not UTC. The schema stage asserts this, because chrono::Local falls
+          # back to UTC when tzdata is absent and every timezone check
+          # downstream would then be a no-op that passes.
+          TZ: America/Chicago
+          PGTZ: America/Chicago
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U css_user -d css"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       CSS_TEST_DATABASE_URL: postgres://css_user:css_pass@localhost:5432/css
-      FUZZ_ITERATIONS: '600'
+      # The driver reads CSS_-prefixed names. A bare FUZZ_ITERATIONS was read by
+      # nothing and the fuzz tier quietly ran its default.
+      CSS_FUZZ_ITERATIONS: '600'
+      CSS_RACE_ROUNDS: '4'
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: dist, path: . }
       - name: System dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev libpq-dev cmake \
-            libasound2-dev libudev-dev
+            libasound2-dev libudev-dev \
+            postgresql-client mosquitto
+          # mosquitto's package starts a broker on 1883 with its own
+          # configuration. The suite starts its own, pointed at a config it
+          # wrote, so the packaged service has to be out of the way first --
+          # otherwise the port is taken and the failure reads as a bind error.
+          sudo systemctl stop mosquitto 2>/dev/null || true
+          sudo systemctl disable mosquitto 2>/dev/null || true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build the artifacts the stack runs
+      # Node for the API, fuzz and concurrency drivers. e2e/build.sh will
+      # bootstrap its own if this step is ever removed, but using the runner's
+      # is faster and is the version the frontend jobs use.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend_edge/package-lock.json
+      - name: Build everything the stack runs
         run: ./e2e/build.sh
       - name: Run the stack tiers
         run: ./e2e/run.sh --provision=external

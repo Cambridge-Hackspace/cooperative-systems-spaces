@@ -18,14 +18,28 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import ToolCard from '@/components/ToolCard.vue'
-import type { Tool } from '@/types/tools'
+import { ToolCategory, ToolStatus, type Tool } from '@/types/tools'
+
+// The enum members, not their string values. `ToolStatus` is a TypeScript
+// enum, so `'idle'` is not assignable to it -- and vue-tsc type-checks this
+// directory as part of `npm run build`, which is how the first version of
+// this file broke the production build rather than just the test run. Using
+// the members also means a renamed variant fails to compile here.
+const STATUSES = [
+  ToolStatus.Idle,
+  ToolStatus.InUse,
+  ToolStatus.Maintenance,
+  ToolStatus.Broken,
+  ToolStatus.Repair,
+  ToolStatus.Retired,
+] as const
 
 function tool(overrides: Partial<Tool> = {}): Tool {
   return {
     id: '00000000-0000-4000-8000-000000000001',
     name: 'Bandsaw',
-    category: 'saw',
-    status: 'idle',
+    category: ToolCategory.Saw,
+    status: ToolStatus.Idle,
     description: null,
     location: null,
     manufacturer: null,
@@ -85,7 +99,7 @@ describe('the training warning', () => {
   it('is absent for a tool that cannot be used right now anyway', () => {
     // "You need training" on a broken tool is advice about a tool nobody can
     // touch, competing for attention with the reason they cannot touch it.
-    for (const status of ['in_use', 'maintenance', 'broken', 'repair', 'retired'] as const) {
+    for (const status of STATUSES.filter((s) => s !== ToolStatus.Idle)) {
       const wrapper = mountCard({
         tool: tool({ status }),
         canManage: false,
@@ -120,7 +134,7 @@ describe('the two faces', () => {
   it('offers no status control to a member, on any status', () => {
     // The status select is how a tool is taken out of service. It must not
     // appear for somebody who cannot manage the tool, whatever state it is in.
-    for (const status of ['idle', 'in_use', 'maintenance', 'broken', 'repair', 'retired'] as const) {
+    for (const status of STATUSES) {
       const wrapper = mountCard({ tool: tool({ status }), canManage: false })
       expect(wrapper.find('select').exists(), status).toBe(false)
       expect(wrapper.findAll('button').length, `${status}: member has buttons`).toBeLessThanOrEqual(1)
@@ -129,14 +143,21 @@ describe('the two faces', () => {
 })
 
 describe('availability, as a member sees it', () => {
-  const EXPECTED: Array<[Tool['status'], string, string]> = [
-    ['idle', '.available', '✅ Available for use'],
-    ['in_use', '.in-use', '⏳ Currently in use'],
-    ['maintenance', '.unavailable', '❌ Not available (Maintenance)'],
-    ['broken', '.unavailable', '❌ Not available (Broken)'],
-    ['repair', '.unavailable', '❌ Not available (Repair)'],
-    ['retired', '.unavailable', '❌ Not available (Retired)'],
+  const EXPECTED: Array<[ToolStatus, string, string]> = [
+    [ToolStatus.Idle, '.available', '✅ Available for use'],
+    [ToolStatus.InUse, '.in-use', '⏳ Currently in use'],
+    [ToolStatus.Maintenance, '.unavailable', '❌ Not available (Maintenance)'],
+    [ToolStatus.Broken, '.unavailable', '❌ Not available (Broken)'],
+    [ToolStatus.Repair, '.unavailable', '❌ Not available (Repair)'],
+    [ToolStatus.Retired, '.unavailable', '❌ Not available (Retired)'],
   ]
+
+  it('covers every status the enum declares', () => {
+    // The table above is hand-written, which is what makes it an independent
+    // statement of what each status should read as. This is what stops it
+    // silently falling behind the enum.
+    expect(EXPECTED.map(([s]) => s).sort()).toEqual([...STATUSES].sort())
+  })
 
   it.each(EXPECTED)('%s reads as %s', (status, selector, text) => {
     const wrapper = mountCard({ tool: tool({ status }), canManage: false })
@@ -158,14 +179,14 @@ describe('status formatting', () => {
     // The label is `In Use`; the class stays `status-in_use`, because that is
     // what the stylesheet keys on. Formatting both would silently unstyle the
     // card.
-    const wrapper = mountCard({ tool: tool({ status: 'in_use' }), canManage: false })
+    const wrapper = mountCard({ tool: tool({ status: ToolStatus.InUse }), canManage: false })
     expect(wrapper.find('.status-badge').text()).toBe('In Use')
     expect(wrapper.find('.status-badge').classes()).toContain('status-in_use')
     expect(wrapper.classes()).toContain('status-in_use')
   })
 
   it('title-cases a multi-word category the same way', () => {
-    const wrapper = mountCard({ tool: tool({ category: 'laser_cutting' }), canManage: false })
+    const wrapper = mountCard({ tool: tool({ category: ToolCategory.LaserCutting }), canManage: false })
     expect(wrapper.find('.tool-category').text()).toBe('Laser Cutting')
   })
 })
@@ -223,13 +244,13 @@ describe('the manager status-change flow', () => {
   it('ignores re-selecting the status the tool already has', () => {
     // Otherwise every click on the select arms an Update button that would
     // write a no-op status-change event into the tool's history.
-    const wrapper = mountCard({ tool: tool({ status: 'idle' }), canManage: true })
+    const wrapper = mountCard({ tool: tool({ status: ToolStatus.Idle }), canManage: true })
     wrapper.find('select').setValue('idle')
     expect(wrapper.find('.status-controls button').exists()).toBe(false)
   })
 
   it('reveals Update and the notes box once a new status is chosen', async () => {
-    const wrapper = mountCard({ tool: tool({ status: 'idle' }), canManage: true })
+    const wrapper = mountCard({ tool: tool({ status: ToolStatus.Idle }), canManage: true })
     await wrapper.find('select').setValue('broken')
 
     expect(wrapper.find('.status-controls button').text()).toBe('Update')
@@ -239,7 +260,7 @@ describe('the manager status-change flow', () => {
   })
 
   it('emits the chosen status with the notes, then disarms', async () => {
-    const wrapper = mountCard({ tool: tool({ status: 'idle' }), canManage: true })
+    const wrapper = mountCard({ tool: tool({ status: ToolStatus.Idle }), canManage: true })
     await wrapper.find('select').setValue('maintenance')
     await wrapper.find('textarea').setValue('Blade replacement')
     await wrapper.find('.status-controls button').trigger('click')
@@ -256,7 +277,7 @@ describe('the manager status-change flow', () => {
   it('sends undefined rather than an empty string when there are no notes', async () => {
     // An empty string written into a tool's history is a note that says
     // nothing, displayed as though somebody had left one.
-    const wrapper = mountCard({ tool: tool({ status: 'idle' }), canManage: true })
+    const wrapper = mountCard({ tool: tool({ status: ToolStatus.Idle }), canManage: true })
     await wrapper.find('select').setValue('broken')
     await wrapper.find('.status-controls button').trigger('click')
     expect(wrapper.emitted('status-change')?.[0]?.[2]).toBeUndefined()
@@ -280,11 +301,11 @@ describe('the manager status-change flow', () => {
 
 describe('the manager action buttons', () => {
   it('refuses to delete a tool that is in use', () => {
-    const inUse = mountCard({ tool: tool({ status: 'in_use' }), canManage: true })
+    const inUse = mountCard({ tool: tool({ status: ToolStatus.InUse }), canManage: true })
     const del = inUse.findAll('button').find((b) => b.text() === 'Delete')
     expect(del?.attributes('disabled')).toBeDefined()
 
-    const idle = mountCard({ tool: tool({ status: 'idle' }), canManage: true })
+    const idle = mountCard({ tool: tool({ status: ToolStatus.Idle }), canManage: true })
     const delIdle = idle.findAll('button').find((b) => b.text() === 'Delete')
     expect(delIdle?.attributes('disabled')).toBeUndefined()
   })

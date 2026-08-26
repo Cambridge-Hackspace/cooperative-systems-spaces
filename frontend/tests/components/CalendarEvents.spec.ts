@@ -53,7 +53,11 @@ function event(overrides: Partial<Event> = {}): Event {
 
 /** Mount with `fetch` answering once with `events`, and wait for the render. */
 async function mountWith(events: Event[] | { status: number }) {
-  const fetchMock = vi.fn(async () => {
+  // The parameter is declared even though the body ignores it: `vi.fn(async () => ..)`
+  // gives the mock an empty argument tuple, so `calls[n][0]` is a type error --
+  // and vue-tsc checks this directory as part of `npm run build`. Naming it also
+  // makes the URL assertion below express what it is asserting.
+  const fetchMock = vi.fn(async (_url: string) => {
     if (Array.isArray(events)) {
       return { ok: true, statusText: 'OK', json: async () => events } as unknown as Response
     }

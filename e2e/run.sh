@@ -673,6 +673,7 @@ stage_down() {
   stack_paths
   collect_stack_logs
   stop_server
+  stop_mosquitto
   stack_rm_quiet
   record_case "down/torn-down" ok
   emit_junit down
