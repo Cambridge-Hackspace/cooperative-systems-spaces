@@ -1,0 +1,161 @@
+# cooperative-systems-spaces as a reaper tenant.
+#
+# What this buys, and why it is not optional here: the development workstation
+# is FreeBSD, and `css-server` cannot be built on it at all. dr-metrix-axum
+# 0.1.0 calls prometheus::process_collector::ProcessCollector::for_self()
+# unguarded, and `prometheus` gates that module behind
+# `all(feature = "process", target_os = "linux")`. So a session is not merely
+# where the containerized tiers run -- it is where the server crate compiles.
+#
+# What this deliberately does NOT buy: coverage that only exists here. reaper is
+# the pre-push loop; GitHub CI is the gate, and every tier below is runnable
+# there without reaper. e2e/run.sh takes its Postgres and MQTT endpoints from
+# the environment and only provisions them itself when asked, which is the
+# whole reason `--provision` exists.
+
+schema  = 1
+project = "css"
+
+# One guest. This suite needs a container engine and a Linux userland; the other
+# registered guest is FreeBSD host-execution with neither, so listing it would
+# produce a session per guest, one of which fails on every single run.
+guests = ["ubuntu-26.04"]
+
+# The toolchain arrives pinned and the guest template stays generic. Stated at
+# the root because TOML cannot return to the top scope once a table has opened.
+exec = "container"
+
+[build]
+# rust:1.97-bookworm, resolved 2026-08-26. Two deliberate choices:
+#
+#   1.97 matches the workstation's rustc 1.97.1, so a failure here is a failure
+#   of the code rather than of a version difference.
+#
+#   -bookworm explicitly, not the default tag. The default has moved to trixie,
+#   and the binaries this produces are run in a debian:bookworm-slim container
+#   by e2e/run.sh -- they must be linked against the same glibc and libpq. (The
+#   repo's own Dockerfile pairs a bookworm builder with a trixie-slim runtime,
+#   which happens to work forward but is a latent mismatch; it is reported
+#   separately rather than copied here.)
+image = "docker.io/library/rust@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97"
+
+# A script, not an inline chain. The build is a guarded apt line and several
+# cargo invocations, and an `&&` chain that long is one `;` typo away from the
+# false-pass class docs/tenants.md warns about. build.sh is bash with
+# `set -Eeuo pipefail` and owns its own exit status.
+cmd = "e2e/build.sh"
+
+# Named by us and meaningless to the framework. Kept out of tank/state so a
+# rollback never destroys the thing that makes the next iteration fast, and out
+# of $HOME because the guest's boot disk has under 4 GiB free while these are
+# several gibibytes between them.
+cache = ["cargo", "target", "npm", "node"]
+
+[build.env]
+# @playwright/test's postinstall would otherwise fetch ~400 MB of browsers on
+# `npm ci`. Nothing opens them: every browser tier drives Playwright out of the
+# pinned Playwright image, which carries its own and sets PLAYWRIGHT_BROWSERS_PATH.
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+
+[run]
+# On the guest, not in the toolchain image above. run.sh brings up a pod --
+# postgres, mosquitto, the webhook sink, css-server, css-edge -- and a Rust
+# image has no container-engine client inside it. Host execution needs no
+# toolchain here because build.sh has already produced every binary, and every
+# driver run.sh invokes is itself a container.
+exec = "host"
+
+# Not run.sh directly. reaper hands run.cmd to /bin/sh, which is dash, and dash
+# has no pipefail: `run.sh | tee log` would exit with tee's status, report a
+# failing suite as a pass, and then take @pristine on the strength of that false
+# pass -- so every later reset would return to a broken state. The wrapper owns
+# the pipeline under bash and collects artifacts whether the suite passed or
+# failed. (This is not hypothetical: the same trap produced a false "the server
+# compiles" reading while this tenant was being planned.)
+#
+# ${CSS_E2E_STAGES:-default} expands in that shell. A value under [run.env]
+# would not -- the framework never interpolates one, by design.
+cmd = "e2e/reaper-run.sh --provision=podman --only ${CSS_E2E_STAGES:-default}"
+
+# Pre-pulled into tank/images before the run, so no run pays a registry
+# round-trip. e2e/images.env references the same digests, and
+# `run.sh --only preflight` asserts the two lists are identical -- the
+# duplication is the check.
+#
+# The application's own images are built in-session from the debian base by
+# copying in the binaries build.sh produced, which is why the base is listed
+# and css-e2e-server / css-e2e-edge are not.
+images = [
+  # postgres:18-bookworm
+  "docker.io/library/postgres@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af",
+  # eclipse-mosquitto:2
+  "docker.io/library/eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797",
+  # debian:bookworm-slim -- the runtime base, matching the builder above.
+  "docker.io/library/debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+  # node:24-bookworm -- runs the .mjs drivers (fuzz, concurrency, journeys).
+  # Matches the workstation's Node 24.18. Not alpine: the node_modules build.sh
+  # produces are glibc, and a musl runtime would not load their native bindings.
+  "docker.io/library/node@sha256:4196d66a565c6f195728d9952f161f4adfe2ad753052a08b7ec7f1c5a6bda42b",
+  # mcr.microsoft.com/playwright:v1.62.1-noble
+  "mcr.microsoft.com/playwright@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e",
+]
+
+[sync]
+exclude = [
+  # Built on FreeBSD, for FreeBSD, and rebuilt into $REAPER_CACHE_TARGET anyway.
+  "/target/",
+  # The sharp ones: esbuild and rollup ship native binaries, so a synced copy is
+  # not merely stale, it is the wrong operating system and npm would not notice.
+  "/frontend/node_modules/",
+  "/frontend_edge/node_modules/",
+  # The session builds its own from the tree it was given. frontend_edge/dist in
+  # particular is compiled into css-edge by include_dir!, so a stale copy would
+  # be a stale binary rather than a stale file.
+  "/frontend/dist/",
+  "/frontend_edge/dist/",
+  # Local artifacts; the session's equivalents come back through out/.
+  "/e2e/artifacts/",
+  "/e2e/out/",
+  "/frontend/coverage/",
+  "/frontend/test-results/",
+  "/frontend/playwright-report/",
+  "/.idea/",
+]
+
+[reset]
+# The PostgreSQL data directory, and only that. e2e/run.sh puts PGDATA under
+# $REAPER_STATE when that is set and mounts nothing when it is not, so CI and
+# the workstation are unaffected by the presence of this line.
+#
+# The rollback point is taken by run.sh itself through $REAPER_CONTROL, at the
+# moment initdb has finished producing a deliberately hostile cluster and before
+# css-server has applied a single migration. That placement is load-bearing:
+# left alone, reaper snapshots after a whole successful run, and every later run
+# would then start from a schema all 27 migrations had already built -- which
+# silently retires the migration and bootstrap assertions the stage exists for.
+datasets = ["state"]
+
+[resources]
+# The pod is five containers plus a driver and a browser, and a cold build
+# compiles the workspace in two profiles. disk_gb is the load-bearing one: the
+# target dir is several GiB, node_modules twice is ~600 MiB, and the pre-pulled
+# images are ~3.5 GiB.
+cores   = 6
+ram_gb  = 12
+disk_gb = 96
+
+[profiles.dev]
+ttl        = "4h"
+warm_cache = true
+
+[profiles.nightly]
+ttl        = "12h"
+# Cold, so a warm cache can never be the reason a nightly run passed.
+warm_cache = false
+env = { CSS_E2E_STAGES = "all", FUZZ_ITERATIONS = "4000", JOURNEY_ITERATIONS = "2000", CSS_E2E_DB_ENCODING = "SQL_ASCII" }
+
+[profiles.hunt]
+# Long seeded hunting runs. Opt-in, because cost has to stay known by default.
+ttl        = "8h"
+warm_cache = true
+env = { CSS_E2E_STAGES = "up,journeys", JOURNEY_ITERATIONS = "20000", JOURNEY_SEEDS = "hunt" }
