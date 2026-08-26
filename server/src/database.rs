@@ -1691,7 +1691,7 @@ impl DatabaseManager {
         // First check if tool requires training
         let tool = self
             .get_tool_by_id(tool_id)?
-            .ok_or_else(|| DatabaseError::Other("Tool not found".to_string()))?;
+            .ok_or_else(|| DatabaseError::Diesel(diesel::result::Error::NotFound))?;
 
         if !tool.requires_training {
             return Ok(true); // No training required
@@ -1738,7 +1738,7 @@ impl DatabaseManager {
         // Implementation: Get tool and training steps
         let tool = self
             .get_tool_by_id(tool_id)?
-            .ok_or_else(|| DatabaseError::Other("Tool not found".to_string()))?;
+            .ok_or_else(|| DatabaseError::Diesel(diesel::result::Error::NotFound))?;
 
         // Get all training steps for this tool with user progress
         let steps = self.get_tool_training_steps_with_progress(tool_id, user_id)?;
@@ -2080,7 +2080,7 @@ impl DatabaseManager {
         for (record, trainee_user, tool) in results {
             let trainer_user = self
                 .find_user_by_id(record.trainer_user_id)?
-                .ok_or_else(|| DatabaseError::Other("Trainer user not found".to_string()))?;
+                .ok_or_else(|| DatabaseError::Diesel(diesel::result::Error::NotFound))?;
 
             records_with_users.push(crate::models::trainers::TrainingRecordWithUsers {
                 record,

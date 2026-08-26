@@ -262,9 +262,14 @@ main(async () => {
 
   let requests = 0
   let alive = true
-  // Which endpoints the run actually reached, so a KNOWN entry that did not
-  // fire can be told apart from one whose endpoint was never tried.
-  const attempts = new Set()
+  // Every status each endpoint answered, so a KNOWN entry that did not fire can
+  // be told apart from one whose endpoint was never really reached.
+  //
+  // "Attempted" is not enough on its own. A fuzzer sends whatever credential it
+  // drew, so an endpoint behind a staff guard hit with a member token answers
+  // 403 and the handler never runs -- which is the fuzzer's input being
+  // refused, not news about the endpoint.
+  const observed = new Map()
 
   for (let i = 0; i < ITERATIONS && alive; i += 1) {
     const ep = pick(INVENTORY.endpoints)
@@ -274,7 +279,7 @@ main(async () => {
     const body = sendsBody ? hostileBody() : undefined
 
     const req = { method: ep.method, template: ep.template, path, credName, body, iteration: i }
-    attempts.add(`${ep.method} ${ep.template}`)
+
 
     let res
     try {
@@ -287,6 +292,9 @@ main(async () => {
       break
     }
     requests += 1
+    const key = `${ep.method} ${ep.template}`
+    if (!observed.has(key)) observed.set(key, new Set())
+    observed.get(key).add(res.status)
 
     // --- oracle 1: no 5xx --------------------------------------------------
     if (res.status >= 500) {
@@ -382,18 +390,31 @@ main(async () => {
     //     about a tenth of the time. That is not news.
     //   * the run DID try it and got something else -- either the defect was
     //     fixed, or it changed shape. That is news either way.
-    const attempted = attempts.has(`${k.method} ${k.template}`)
-    if (attempted) {
-      record(`fuzz/known-finding-changed: ${key}`, 'fail',
-        'this endpoint was exercised and did not produce the exempted result. ' +
-        'Either the defect was fixed -- delete the KNOWN entry, here and in ' +
-        'checks/tests/unimplemented_endpoints.rs if it is named there -- or it ' +
-        `changed shape, which is worth a look. (seed ${SEED})`)
-    } else {
+    const statuses = observed.get(`${k.method} ${k.template}`) ?? new Set()
+    const succeeded = [...statuses].some((s) => s >= 200 && s < 300)
+    const onlyRefused = statuses.size > 0 && [...statuses].every((s) => s >= 400 && s < 500)
+
+    if (succeeded) {
+      record(`fuzz/known-finding-fixed: ${key}`, 'fail',
+        `this endpoint answered ${[...statuses].join(',')} -- it works now. Delete ` +
+        'the KNOWN entry, here and in checks/tests/unimplemented_endpoints.rs if ' +
+        `it is named there. (seed ${SEED})`)
+    } else if (onlyRefused || statuses.size === 0) {
+      // Either never tried, or tried with a credential or a body the endpoint
+      // refused before the handler ran. Neither says anything about the
+      // finding, and reporting them as failures would make this check fire on
+      // roughly half of all runs -- which is how a check gets deleted.
       record(`fuzz/known-finding-not-reached: ${key}`, 'skip',
-        `this run never tried ${k.method} ${k.template}. At ${ITERATIONS} ` +
-        'iterations across 164 endpoints that is ordinary; raise ' +
-        'CSS_FUZZ_ITERATIONS to make the coverage claim stronger.')
+        statuses.size === 0
+          ? `this run never tried ${k.method} ${k.template}. At ${ITERATIONS} ` +
+            'iterations across 164 endpoints that is ordinary; raise ' +
+            'CSS_FUZZ_ITERATIONS to make the coverage claim stronger.'
+          : `every attempt was refused before the handler ran (${[...statuses].join(',')}), ` +
+            'so this run says nothing about the finding.')
+    } else {
+      record(`fuzz/known-finding-changed: ${key}`, 'fail',
+        `this endpoint answered ${[...statuses].join(',')} rather than ${k.status}. ` +
+        `It did not fail the way it is recorded as failing. (seed ${SEED})`)
     }
   }
 
