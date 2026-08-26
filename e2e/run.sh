@@ -875,18 +875,16 @@ stage_logs() {
   #
   # Each exemption covers one message and says why. A pattern broad enough to
   # cover two things covers the next real one too.
+  # One entry, and the list is meant to stay short. Two others lived here until
+  # the handlers behind them stopped logging a correct 404 at ERROR level --
+  # which was the right fix, and is why they are deleted rather than kept as
+  # permanent skips. An exemption nobody has to justify again is an exemption
+  # that outlives its reason.
   local expected=(
-    # The pinned encoding finding: a device invite code is eight emoji and the
-    # suite's cluster is LATIN1. TESTING.md, "Known defects".
+    # The pinned encoding finding: a device invite code is eight emoji and this
+    # suite's cluster is LATIN1, so the row cannot be written at all.
+    # TESTING.md, "Known defects".
     'Failed to insert device invite: character with byte sequence'
-    # The fuzz tier asks for things that do not exist, and several handlers log
-    # a perfectly correct 404 at ERROR level. Wrong level, not wrong behaviour.
-    #
-    # Matched on the prefix rather than the whole line: the suffix is the
-    # database's own words and changes with the query. This is as narrow as it
-    # can be while still matching.
-    'Failed to get training overview'
-    'update_tool('
   )
 
   local unexpected=0 sample=''

@@ -444,6 +444,32 @@ even when `should_grant_admin_role` has just made the account an admin. The
 account is correct; the record of how it came to exist is not — which is the
 opposite of what an audit trail is for.
 
+### A repository nobody configured answered 500
+
+`POST /api/admin/pages/{wiki,site}/refresh` returned 500 with "repo not
+configured" — a state an administrator put the instance in, not a fault, so the
+server told them it had broken about a setting they can change in the next
+screen. **Fixed**: it is a 409 now, and the check is against the configuration
+rather than against the error's text, because a status code that depends on a
+string is a status code that changes when a message is reworded.
+
+*(Found by the fuzz tier. Listed here because the reasoning generalises to the
+121 sites in the ratchet.)*
+
+### Four routes are registered and can never succeed
+
+`create_training_type`, `authorize_trainer`, `complete_training` and
+`revoke_training` return 501. That is an honest answer — better than a 500, and
+far better than a route that silently does nothing — but from outside the
+codebase a registered route is a promise, and the training UI calls two of them
+with no way for anybody reading the frontend to tell a stub from a working
+endpoint: `api.ts` wraps every call in `.catch` and produces the same generic
+"Failed to …" for both.
+
+*Why not fixed:* they are unbuilt features, not defects.
+*(`checks/tests/unimplemented_endpoints.rs` pins the list and asserts each one
+says which feature is missing.)*
+
 ### Smaller things, recorded where they live
 
 * `api/toolguard.rs` hand-rolls device auth from a bare `HeaderMap` beside the
