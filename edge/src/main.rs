@@ -5,24 +5,17 @@ use std::sync::{Arc, RwLock};
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
 
-mod calendar;
-mod config;
-mod registration;
-mod system_info;
-mod mqtt;
-mod toolguard;
-mod doors;
-mod edge_inbound;
-mod ws;
-mod web_server;
-
-use config::{generate_sample_config, load_config};
-use crate::config::AuthStatus;
-use crate::registration::{register_device, is_registered};
-use crate::mqtt::{EdgeMqttClient, LocalMqttClient, run_mqtt_event_loop, run_local_mqtt_event_loop};
-use crate::toolguard::ToolGuardState;
-use crate::doors::DoorsState;
-use crate::web_server::start_web_server;
+// The modules live in the library (see src/lib.rs); this binary is a shim over
+// it, so that `edge/tests/` can reach them and so that live-but-binary-private
+// code is not reported as dead.
+use css_edge::config::{generate_sample_config, load_config, AuthStatus};
+use css_edge::doors::DoorsState;
+use css_edge::mqtt::{
+    run_local_mqtt_event_loop, run_mqtt_event_loop, EdgeMqttClient, LocalMqttClient,
+};
+use css_edge::registration::{is_registered, register_device};
+use css_edge::toolguard::ToolGuardState;
+use css_edge::web_server::start_web_server;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -138,9 +131,9 @@ async fn main() -> Result<()> {
             // `doors_event_*` flows local → remote (scans → server audit log).
             let doors_state = DoorsState::new();
             let (doors_unlock_tx, doors_unlock_rx) =
-                tokio::sync::mpsc::unbounded_channel::<crate::doors::UnlockCommand>();
+                tokio::sync::mpsc::unbounded_channel::<css_edge::doors::UnlockCommand>();
             let (doors_event_tx, doors_event_rx) =
-                tokio::sync::mpsc::unbounded_channel::<crate::doors::DoorsEvent>();
+                tokio::sync::mpsc::unbounded_channel::<css_edge::doors::DoorsEvent>();
 
             // Extract device credentials once
             let device_info = app_config.remote_device_info.clone()
@@ -257,7 +250,7 @@ async fn main() -> Result<()> {
             drop(doors_unlock_rx);
 
             // ── Shared inbound dispatcher (used by whichever remote transport runs) ──
-            let edge_inbound = std::sync::Arc::new(crate::edge_inbound::EdgeInbound {
+            let edge_inbound = std::sync::Arc::new(css_edge::edge_inbound::EdgeInbound {
                 config_manager: config_arc.clone(),
                 toolguard_state: Arc::clone(&toolguard_state),
                 doors_state: Arc::clone(&doors_state),
@@ -276,7 +269,7 @@ async fn main() -> Result<()> {
             });
 
             // ── Remote transport: MQTT or WebSocket ──────────────────────────
-            use crate::config::RemoteTransport;
+            use css_edge::config::RemoteTransport;
             match app_config.remote_transport {
                 RemoteTransport::Mqtt => {
                     if app_config.remote_mqtt_config.is_none() {
@@ -333,7 +326,7 @@ async fn main() -> Result<()> {
                 }
                 RemoteTransport::Websocket => {
                     info!("Starting remote WebSocket connection...");
-                    let ws_client = crate::ws::WsClient::start(
+                    let ws_client = css_edge::ws::WsClient::start(
                         &remote_instance_url,
                         remote_auth_token.clone(),
                         edge_inbound.clone(),

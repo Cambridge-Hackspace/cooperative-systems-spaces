@@ -35,11 +35,6 @@ struct DeviceData {
     platform: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct NameUpdateMessage {
-    name: String,
-}
-
 /// MQTT Client Manager for edge apparatus
 pub struct EdgeMqttClient {
     client: mqtt::AsyncClient,
@@ -803,11 +798,4 @@ pub async fn run_local_mqtt_event_loop(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Tests can be added here for MQTT functionality
 }

@@ -1,5 +1,31 @@
+# Rust
 /target
+**/*.rs.bk
+
+# Node
 /frontend/node_modules
 /frontend/dist
 /frontend_edge/node_modules
 /frontend_edge/dist
+
+# Coverage and test output
+/frontend/coverage
+/frontend/test-results
+/frontend/playwright-report
+/frontend_edge/coverage
+
+# reaper collects run results here. It must never be committed: `reaper test`
+# clears it at the start of every loop and the backward sync never deletes, so
+# a tracked out/ would mix one run's artifacts with the next one's.
+/out/
+
+# Stack battery artifacts: stage logs, transcripts, screenshots, built binaries,
+# and the checksum-pinned Node bootstrap.
+/e2e/out/
+/e2e/artifacts/
+/e2e/.node/
+/e2e/.npm/
+
+# AppConfig::from_file rewrites config in place on a missing-field error and
+# leaves the original beside it as <path>.<unixtime>.backup.
+*.backup

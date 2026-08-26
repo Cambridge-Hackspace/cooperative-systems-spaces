@@ -18,7 +18,7 @@ use tokio::time::interval;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::edge_inbound::EdgeInbound;
 use crate::system_info::get_system_info;

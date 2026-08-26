@@ -121,16 +121,71 @@ mod tests {
         }
     }
 
+    /// Every value `get_platform` can return, and the `space_device_platform`
+    /// value the server will store it as.
+    ///
+    /// Deliberately written out here rather than imported: this is the *edge*
+    /// side's independent statement of a contract the *server* also states, and
+    /// a check derived from the thing it checks agrees with itself no matter
+    /// what. `checks/` asserts this list against the SQL enum in
+    /// `server/migrations/2025-12-04-015018-0000_add_devices/up.sql`.
+    const PLATFORM_CONTRACT: &[(&str, &str)] = &[
+        ("Linux", "linux"),
+        ("MacOs", "macos"),
+        ("Windows", "windows"),
+        ("Other", "other"),
+    ];
+
+    /// The contract `get_platform` actually has, which is not "one of the three
+    /// desktop operating systems".
+    ///
+    /// `POST /api/devices/register` lowercases this string and matches it
+    /// against `space_device_platform` — `('windows','linux','macos','other')` —
+    /// returning 400 for anything else (`server/src/api/devices.rs:192-198`).
+    /// So the real requirement is that the value always survives that match.
+    ///
+    /// The previous assertion required `Linux`/`MacOs`/`Windows` and therefore
+    /// failed on every host the `Other` arm exists to serve — FreeBSD, which is
+    /// what this project's own development workstation runs. Widening it to
+    /// admit `Other` would have been the weakening; asserting the round trip is
+    /// strictly stronger, because it also rejects a `get_platform` that returned
+    /// `"Other"` on Linux, which the old test happily allowed.
     #[test]
-    fn test_get_platform() {
+    fn get_platform_always_survives_the_server_side_match() {
         let platform = get_platform();
-        assert!(!platform.is_empty());
-        // Should be one of the known platforms
-        assert!(
-            platform.contains("Linux") ||
-            platform.contains("MacOs") ||
-            platform.contains("Windows")
+
+        let (_, stored) = PLATFORM_CONTRACT
+            .iter()
+            .find(|(returned, _)| *returned == platform)
+            .unwrap_or_else(|| {
+                panic!(
+                    "get_platform() returned {platform:?}, which POST /api/devices/register \
+                     would reject with 400. Adding a platform means adding it to \
+                     space_device_platform in a migration first."
+                )
+            });
+
+        assert_eq!(
+            platform.to_lowercase(),
+            *stored,
+            "the server lowercases this string before matching the SQL enum"
         );
+    }
+
+    /// And that it reports the *right* one, not merely a valid one.
+    ///
+    /// Only asserted for the three platforms the function names explicitly;
+    /// every other target is `Other` by construction, which is what this host
+    /// is and what the assertion below therefore checks here.
+    #[test]
+    fn get_platform_agrees_with_the_compilation_target() {
+        let expected = match std::env::consts::OS {
+            "linux" => "Linux",
+            "macos" => "MacOs",
+            "windows" => "Windows",
+            _ => "Other",
+        };
+        assert_eq!(get_platform(), expected, "built for {}", std::env::consts::OS);
     }
 
     #[test]

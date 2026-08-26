@@ -41,19 +41,49 @@ impl Default for MqttConfig {
     }
 }
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
 pub mod wire;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The namespace is a wire-visible constant: the server publishes to
+    /// `{namespace}/devices/...` and the edge subscribes to the same prefix, so
+    /// changing it is a protocol break rather than a rename. Pinned here so
+    /// that break cannot happen silently.
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn default_namespace_is_stable() {
+        assert_eq!(MQTT_DEFAULT_NAMESPACE, "cs/spaces");
+        assert_eq!(MqttConfig::default().mqtt_namespace, MQTT_DEFAULT_NAMESPACE);
+    }
+
+    #[test]
+    fn config_round_trips_through_json() {
+        let cfg = MqttConfig {
+            mqtt_instance_url: "mqtt://broker.example:1883".to_string(),
+            mqtt_client_id: "css-edge-1".to_string(),
+            mqtt_username: Some("u".to_string()),
+            mqtt_password: Some("p".to_string()),
+            mqtt_namespace: "cs/spaces".to_string(),
+        };
+        let back: MqttConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.mqtt_instance_url, cfg.mqtt_instance_url);
+        assert_eq!(back.mqtt_client_id, cfg.mqtt_client_id);
+        assert_eq!(back.mqtt_username, cfg.mqtt_username);
+        assert_eq!(back.mqtt_password, cfg.mqtt_password);
+        assert_eq!(back.mqtt_namespace, cfg.mqtt_namespace);
+    }
+
+    /// `Display` is used in operator-facing logs. It must never render the
+    /// password, which sits in the same struct one field away.
+    #[test]
+    fn display_does_not_leak_the_password() {
+        let cfg = MqttConfig {
+            mqtt_password: Some("hunter2".to_string()),
+            ..MqttConfig::default()
+        };
+        let shown = cfg.to_string();
+        assert!(!shown.contains("hunter2"), "Display leaked the password: {shown}");
+        assert!(shown.contains("mqtt://localhost:1883"));
     }
 }

@@ -3,7 +3,6 @@ use axum::{
     extract::{State, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
     http::StatusCode,
-    response::Html,
     routing::{get, post},
     Json, Router,
 };
@@ -15,9 +14,6 @@ use tracing::{info, error};
 use rust_embed::RustEmbed;
 #[cfg(not(debug_assertions))]
 use axum_embed::ServeEmbed;
-
-#[cfg(debug_assertions)]
-use tower_http::services::ServeDir;
 
 use crate::config::{Config, AuthStatus};
 use crate::registration::register_device;

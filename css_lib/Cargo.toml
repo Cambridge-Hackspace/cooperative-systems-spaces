@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-serde = {workspace = true, version = "1.0.228", features = ["derive"]}
+# `version` may not accompany `workspace = true` -- cargo ignores it and warns
+# `unused manifest key` on every single invocation across the whole workspace,
+# which is exactly the noise that hides a real warning once `-D warnings` is on.
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
