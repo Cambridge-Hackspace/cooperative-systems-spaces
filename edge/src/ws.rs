@@ -113,8 +113,7 @@ impl WsClient {
         // Send an initial heartbeat + device data so the server sees us.
         let _ = sink
             .send(Message::Text(
-                serde_json::to_string(&WireMessage::new(kinds::HEARTBEAT, json!(null)))?
-                    .into(),
+                serde_json::to_string(&WireMessage::new(kinds::HEARTBEAT, json!(null)))?.into(),
             ))
             .await;
         if let Ok(info) = get_system_info() {

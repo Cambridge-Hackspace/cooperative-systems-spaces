@@ -51,7 +51,10 @@ impl EdgeInbound {
                 Ok(snapshot) => {
                     let count = snapshot.doors.len();
                     self.doors_state.apply_snapshot(snapshot);
-                    info!("Doors state updated via inbound transport ({} door(s))", count);
+                    info!(
+                        "Doors state updated via inbound transport ({} door(s))",
+                        count
+                    );
                 }
                 Err(e) => warn!("Failed to parse doors/state payload: {}", e),
             },

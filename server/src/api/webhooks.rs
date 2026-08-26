@@ -121,7 +121,10 @@ pub struct DeliveryQuery {
 pub fn admin_webhook_routes() -> Router<AppState> {
     Router::new()
         // Auth headers (reusable write-only credentials)
-        .route("/auth-headers", post(create_auth_header).get(list_auth_headers))
+        .route(
+            "/auth-headers",
+            post(create_auth_header).get(list_auth_headers),
+        )
         .route(
             "/auth-headers/{id}",
             patch(update_auth_header).delete(delete_auth_header),
@@ -133,7 +136,9 @@ pub fn admin_webhook_routes() -> Router<AppState> {
         .route("/", post(create_webhook).get(list_webhooks))
         .route(
             "/{id}",
-            get(get_webhook).patch(update_webhook).delete(delete_webhook),
+            get(get_webhook)
+                .patch(update_webhook)
+                .delete(delete_webhook),
         )
         .route("/{id}/test", post(test_webhook))
 }
@@ -293,7 +298,9 @@ async fn update_auth_header(
         serde_json::json!({ "auth_header_id": id }),
     );
 
-    Ok(Json(ApiResponse::success(AuthHeaderResponse::from(updated))))
+    Ok(Json(ApiResponse::success(AuthHeaderResponse::from(
+        updated,
+    ))))
 }
 
 /// DELETE /api/admin/webhooks/auth-headers/{id}
@@ -334,9 +341,7 @@ async fn delete_auth_header(
 // ---------------------------------------------------------------------------
 
 /// GET /api/admin/webhooks/event-types
-async fn list_event_types(
-    _admin: AdminUser,
-) -> Result<impl IntoResponse, ApiError> {
+async fn list_event_types(_admin: AdminUser) -> Result<impl IntoResponse, ApiError> {
     let types: Vec<EventTypeInfo> = AuditEventType::all()
         .iter()
         .map(|e| EventTypeInfo {
@@ -509,6 +514,8 @@ async fn list_deliveries(
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
     let deliveries: Vec<WebhookDelivery> =
-        state.db.list_webhook_deliveries(q.webhook_id, limit, offset)?;
+        state
+            .db
+            .list_webhook_deliveries(q.webhook_id, limit, offset)?;
     Ok(Json(ApiResponse::success(deliveries)))
 }

@@ -1,11 +1,11 @@
+use crate::config::{AuthStatus, Config, DeviceInfo, MqttConfig};
+use crate::system_info::get_system_info;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{info, error};
 use std::path::Path;
+use tracing::{error, info};
 use uuid::Uuid;
-use crate::config::{Config, AuthStatus, DeviceInfo, MqttConfig};
-use crate::system_info::get_system_info;
 
 #[derive(Debug, Serialize)]
 struct RegisterDeviceRequest {
@@ -49,13 +49,19 @@ pub async fn register_device(
     config: &Config,
     config_path: &Path,
 ) -> Result<()> {
-    info!("Starting device registration with instance: {}", instance_url);
-    
+    info!(
+        "Starting device registration with instance: {}",
+        instance_url
+    );
+
     // Collect system information
     let system_info = get_system_info()?;
-    
+
     // Prepare registration request
-    let register_url = format!("{}/api/devices/register", instance_url.trim_end_matches('/'));
+    let register_url = format!(
+        "{}/api/devices/register",
+        instance_url.trim_end_matches('/')
+    );
     let request = RegisterDeviceRequest {
         device_code: device_code.to_string(),
         name: config.name.clone(),
@@ -66,9 +72,9 @@ pub async fn register_device(
         ipv6_address: system_info.ipv6_address,
         platform: system_info.platform,
     };
-    
+
     info!("Sending registration request...");
-    
+
     // Send registration request
     let client = Client::new();
     let response = client
@@ -77,32 +83,45 @@ pub async fn register_device(
         .send()
         .await
         .context("Failed to send registration request")?;
-    
+
     if !response.status().is_success() {
         let status = response.status();
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         error!("Registration failed with status {}: {}", status, error_text);
-        return Err(anyhow::anyhow!("Registration failed: {} - {}", status, error_text));
+        return Err(anyhow::anyhow!(
+            "Registration failed: {} - {}",
+            status,
+            error_text
+        ));
     }
-    
+
     // Parse the ApiResponse wrapper
     let api_response: ApiResponse<RegisterDeviceResponse> = response
         .json()
         .await
         .context("Failed to parse registration response")?;
-    
+
     // Check if the API call was successful
     if !api_response.success {
-        let error_msg = api_response.error.unwrap_or_else(|| "Unknown error".to_string());
+        let error_msg = api_response
+            .error
+            .unwrap_or_else(|| "Unknown error".to_string());
         error!("Registration failed: {}", error_msg);
         return Err(anyhow::anyhow!("Registration failed: {}", error_msg));
     }
-    
-    let registration_response = api_response.data
+
+    let registration_response = api_response
+        .data
         .ok_or_else(|| anyhow::anyhow!("No data in registration response"))?;
-    
-    info!("Registration successful! Device ID: {}", registration_response.device_id);
-    
+
+    info!(
+        "Registration successful! Device ID: {}",
+        registration_response.device_id
+    );
+
     // Update configuration with device credentials
     let mut new_config = config.clone();
     new_config.name = registration_response.device_name.clone();
@@ -112,13 +131,13 @@ pub async fn register_device(
         remote_auth_token: registration_response.auth_token.clone(),
         remote_instance_url: instance_url.trim_end_matches('/').to_string(),
     });
-    
+
     // Configure MQTT if provided by server
     if let Some(mqtt) = registration_response.mqtt_config {
         info!("Configuring MQTT connection...");
         info!("  MQTT URL: {}", mqtt.mqtt_instance_url);
         info!("  MQTT Namespace: {}", mqtt.mqtt_namespace);
-        
+
         new_config.remote_mqtt_config = Some(MqttConfig {
             mqtt_instance_url: mqtt.mqtt_instance_url,
             mqtt_client_id: registration_response.device_id.to_string(),
@@ -126,19 +145,23 @@ pub async fn register_device(
             mqtt_password: mqtt.mqtt_password,
             mqtt_namespace: mqtt.mqtt_namespace,
         });
-        
+
         info!("MQTT configuration applied successfully");
     } else {
         info!("No MQTT configuration provided by server");
     }
-    
+
     // Save updated configuration
-    new_config.to_file(config_path)
+    new_config
+        .to_file(config_path)
         .context("Failed to save updated configuration")?;
-    
+
     info!("Configuration updated and saved successfully");
-    info!("Device '{}' is now registered and ready to use", new_config.name);
-    
+    info!(
+        "Device '{}' is now registered and ready to use",
+        new_config.name
+    );
+
     Ok(())
 }
 
@@ -149,12 +172,18 @@ pub fn is_registered(config: &Config) -> bool {
 
 /// Get device ID if registered
 pub fn get_device_id(config: &Config) -> Option<String> {
-    config.remote_device_info.as_ref().map(|info| info.remote_id.clone())
+    config
+        .remote_device_info
+        .as_ref()
+        .map(|info| info.remote_id.clone())
 }
 
 /// Get auth token if registered
 pub fn get_auth_token(config: &Config) -> Option<String> {
-    config.remote_device_info.as_ref().map(|info| info.remote_auth_token.clone())
+    config
+        .remote_device_info
+        .as_ref()
+        .map(|info| info.remote_auth_token.clone())
 }
 
 #[cfg(test)]
@@ -165,14 +194,14 @@ mod tests {
     fn test_is_registered() {
         let mut config = Config::default();
         assert!(!is_registered(&config));
-        
+
         config.auth_status = AuthStatus::Approved;
         config.remote_device_info = Some(DeviceInfo {
             remote_id: "test-device".to_string(),
             remote_auth_token: "test-token".to_string(),
             remote_instance_url: "https://spaces.neiam.org".to_string(),
         });
-        
+
         assert!(is_registered(&config));
     }
 
@@ -180,13 +209,13 @@ mod tests {
     fn test_get_device_id() {
         let mut config = Config::default();
         assert_eq!(get_device_id(&config), None);
-        
+
         config.remote_device_info = Some(DeviceInfo {
             remote_id: "test-device".to_string(),
             remote_auth_token: "test-token".to_string(),
             remote_instance_url: "https://spaces.neiam.org".to_string(),
         });
-        
+
         assert_eq!(get_device_id(&config), Some("test-device".to_string()));
     }
 }

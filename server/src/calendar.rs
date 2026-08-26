@@ -118,7 +118,10 @@ impl CalendarService {
         }
 
         // Fetch fresh data
-        info!("Fetching calendar '{}' from {}", source.name, source.ical_link);
+        info!(
+            "Fetching calendar '{}' from {}",
+            source.name, source.ical_link
+        );
         let events = self.fetch_and_parse_ical(source).await?;
 
         // Update cache
@@ -176,13 +179,10 @@ impl CalendarService {
         for component in calendar.components {
             if let icalendar::CalendarComponent::Event(event) = component {
                 // Extract event details
-                let title = event
-                    .get_summary()
-                    .unwrap_or("Untitled Event")
-                    .to_string();
+                let title = event.get_summary().unwrap_or("Untitled Event").to_string();
 
                 let description = event.get_description().map(|d| d.to_string());
-                
+
                 // Get location from properties
                 let location = event.property_value("LOCATION").map(|s| s.to_string());
 
@@ -199,7 +199,10 @@ impl CalendarService {
                                     DateTime::from_naive_utc_and_offset(ndt, Utc)
                                 }
                                 icalendar::CalendarDateTime::Utc(dt) => dt,
-                                icalendar::CalendarDateTime::WithTimezone { date_time, tzid: _ } => {
+                                icalendar::CalendarDateTime::WithTimezone {
+                                    date_time,
+                                    tzid: _,
+                                } => {
                                     // For simplicity, treat as UTC
                                     DateTime::from_naive_utc_and_offset(date_time, Utc)
                                 }
@@ -219,9 +222,10 @@ impl CalendarService {
                                     DateTime::from_naive_utc_and_offset(ndt, Utc)
                                 }
                                 icalendar::CalendarDateTime::Utc(dt) => dt,
-                                icalendar::CalendarDateTime::WithTimezone { date_time, tzid: _ } => {
-                                    DateTime::from_naive_utc_and_offset(date_time, Utc)
-                                }
+                                icalendar::CalendarDateTime::WithTimezone {
+                                    date_time,
+                                    tzid: _,
+                                } => DateTime::from_naive_utc_and_offset(date_time, Utc),
                             };
                             Some(dt)
                         }
@@ -233,7 +237,7 @@ impl CalendarService {
 
                     // Check if this is a recurring event
                     let has_rrule = event.property_value("RRULE").is_some();
-                    
+
                     if has_rrule {
                         // For recurring events, try to expand them
                         let expanded = self.expand_recurring_event(
@@ -293,7 +297,7 @@ impl CalendarService {
         source: &CalendarSource,
     ) -> Vec<CalendarEvent> {
         let mut occurrences = Vec::new();
-        
+
         // Get the RRULE string
         let rrule_str = match event.property_value("RRULE") {
             Some(s) => s,
@@ -303,7 +307,7 @@ impl CalendarService {
         // Parse basic RRULE patterns
         // Format: FREQ=DAILY;INTERVAL=1;COUNT=10
         // or: FREQ=WEEKLY;BYDAY=MO,WE,FR;UNTIL=20251231T235959Z
-        
+
         let freq = if rrule_str.contains("FREQ=DAILY") {
             "DAILY"
         } else if rrule_str.contains("FREQ=WEEKLY") {
@@ -342,7 +346,7 @@ impl CalendarService {
             // Only include events that are after "now"
             if current_dt >= now {
                 let occurrence_end = duration.map(|d| current_dt + d);
-                
+
                 occurrences.push(CalendarEvent {
                     title: title.to_string(),
                     description: description.clone(),

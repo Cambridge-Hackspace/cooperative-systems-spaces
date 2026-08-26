@@ -18,12 +18,10 @@ use webauthn_rs::prelude::*;
 
 use crate::auth::{AuthService, AuthUser};
 use crate::mfa::{
-    self, generate_recovery_codes, generate_totp_secret_base32, hash_recovery_code,
-    methods, verify_recovery_code, LoginChallenge, WebauthnRegistration,
+    self, generate_recovery_codes, generate_totp_secret_base32, hash_recovery_code, methods,
+    verify_recovery_code, LoginChallenge, WebauthnRegistration,
 };
-use crate::models::{
-    AuditEventType, NewAuditLog, NewUserMfaWebauthn,
-};
+use crate::models::{AuditEventType, NewAuditLog, NewUserMfaWebauthn};
 use crate::AppState;
 
 use super::errors::ApiError;
@@ -174,8 +172,7 @@ async fn status(
     let recovery_remaining = state.db.count_unused_recovery_codes(user.0.id)?;
     let totp_enrolled = totp.as_ref().and_then(|t| t.confirmed_at).is_some();
     let webauthn_count = webauthn.len();
-    let must_enroll = cfg.is_required_for(&user.0.role)
-        && user.0.mfa_enrolled_at.is_none();
+    let must_enroll = cfg.is_required_for(&user.0.role) && user.0.mfa_enrolled_at.is_none();
     Ok(Json(ApiResponse::success(MfaStatusResponse {
         enabled: cfg.enabled,
         totp_enrolled,
@@ -194,9 +191,7 @@ async fn totp_setup(
         return Err(ApiError::Forbidden("TOTP disabled".to_string()));
     }
     let secret = generate_totp_secret_base32();
-    state
-        .db
-        .replace_user_totp_unconfirmed(user.0.id, &secret)?;
+    state.db.replace_user_totp_unconfirmed(user.0.id, &secret)?;
     let totp = state
         .mfa_service
         .totp(&secret, &user.0.email)
@@ -321,24 +316,25 @@ async fn webauthn_register_begin(
             user.0.id,
             &user.0.username,
             &user.0.full_name,
-            if exclude.is_empty() { None } else { Some(exclude) },
+            if exclude.is_empty() {
+                None
+            } else {
+                Some(exclude)
+            },
         )
         .map_err(|e| {
             tracing::error!("WebAuthn start_passkey_registration: {e}");
             ApiError::InternalServerError("WebAuthn ceremony failed".to_string())
         })?;
 
-    let token = state
-        .mfa_service
-        .put_registration(WebauthnRegistration {
-            user_id: user.0.id,
-            label: label.to_string(),
-            state: state_,
-        });
+    let token = state.mfa_service.put_registration(WebauthnRegistration {
+        user_id: user.0.id,
+        label: label.to_string(),
+        state: state_,
+    });
 
-    let options = serde_json::to_value(&ccr).map_err(|e| {
-        ApiError::InternalServerError(format!("Failed to serialize CCR: {e}"))
-    })?;
+    let options = serde_json::to_value(&ccr)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to serialize CCR: {e}")))?;
 
     Ok(Json(ApiResponse::success(WebauthnRegisterBeginResponse {
         challenge_token: token,
@@ -359,19 +355,15 @@ async fn webauthn_register_finish(
     let pending = state
         .mfa_service
         .take_registration(&req.challenge_token)
-        .ok_or_else(|| {
-            ApiError::BadRequest("Unknown or expired challenge_token".to_string())
-        })?;
+        .ok_or_else(|| ApiError::BadRequest("Unknown or expired challenge_token".to_string()))?;
     if pending.user_id != user.0.id {
         return Err(ApiError::Forbidden(
             "challenge_token does not belong to this user".to_string(),
         ));
     }
 
-    let credential: RegisterPublicKeyCredential =
-        serde_json::from_value(req.response).map_err(|e| {
-            ApiError::BadRequest(format!("Invalid WebAuthn response: {e}"))
-        })?;
+    let credential: RegisterPublicKeyCredential = serde_json::from_value(req.response)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid WebAuthn response: {e}")))?;
 
     let passkey = webauthn
         .finish_passkey_registration(&credential, &pending.state)
@@ -464,9 +456,7 @@ async fn verify_login(
     let challenge = state
         .mfa_service
         .take_login(&req.challenge_token)
-        .ok_or_else(|| {
-            ApiError::Unauthorized("Unknown or expired challenge_token".to_string())
-        })?;
+        .ok_or_else(|| ApiError::Unauthorized("Unknown or expired challenge_token".to_string()))?;
 
     let user = state
         .db
@@ -492,7 +482,10 @@ async fn verify_login(
             let resp = issue_token(&state, &user)?;
             Ok((
                 StatusCode::OK,
-                Json(ApiResponse::success_with_message(resp, "Login successful".to_string())),
+                Json(ApiResponse::success_with_message(
+                    resp,
+                    "Login successful".to_string(),
+                )),
             )
                 .into_response())
         }
@@ -595,9 +588,7 @@ fn verify_recovery_path(
             return Ok(());
         }
     }
-    Err(ApiError::Unauthorized(
-        "Invalid recovery code".to_string(),
-    ))
+    Err(ApiError::Unauthorized("Invalid recovery code".to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -634,16 +625,12 @@ pub fn build_login_challenge(
                 match webauthn.start_passkey_authentication(&passkeys) {
                     Ok((rcr, st)) => {
                         webauthn_options = Some(serde_json::to_value(&rcr).map_err(|e| {
-                            ApiError::InternalServerError(format!(
-                                "Failed to serialize RCR: {e}"
-                            ))
+                            ApiError::InternalServerError(format!("Failed to serialize RCR: {e}"))
                         })?);
                         webauthn_state = Some(st);
                         methods_v.push(methods::WEBAUTHN);
                     }
-                    Err(e) => tracing::warn!(
-                        "WebAuthn start_passkey_authentication failed: {e}"
-                    ),
+                    Err(e) => tracing::warn!("WebAuthn start_passkey_authentication failed: {e}"),
                 }
             }
         }
@@ -674,4 +661,3 @@ pub fn build_login_challenge(
         "webauthn_options": webauthn_options,
     }))
 }
-

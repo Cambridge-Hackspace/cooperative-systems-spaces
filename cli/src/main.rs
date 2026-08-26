@@ -76,9 +76,8 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let mut config = if let Some(config_path) = cli.config {
-        CliConfig::from_file(&config_path).with_context(|| {
-            format!("Failed to load config from {}", config_path.display())
-        })?
+        CliConfig::from_file(&config_path)
+            .with_context(|| format!("Failed to load config from {}", config_path.display()))?
     } else {
         CliConfig::load_default()?
     };
@@ -97,21 +96,13 @@ async fn main() -> Result<()> {
 
     // Execute command
     match cli.command {
-        Commands::Config { action } => {
-            config::handle_config_command(action, &config).await
-        }
-        Commands::Auth { action } => {
-            auth::handle_auth_command(action, &client, &mut config).await
-        }
+        Commands::Config { action } => config::handle_config_command(action, &config).await,
+        Commands::Auth { action } => auth::handle_auth_command(action, &client, &mut config).await,
         Commands::Users { action } => {
             commands::users::handle_user_command(action, &client, &config).await
         }
-        Commands::Health => {
-            commands::health::handle_health_command(&client, &config).await
-        }
-        Commands::Info => {
-            commands::info::handle_info_command(&client, &config).await
-        }
+        Commands::Health => commands::health::handle_health_command(&client, &config).await,
+        Commands::Info => commands::info::handle_info_command(&client, &config).await,
         Commands::Admin { action } => {
             commands::admin::handle_admin_command(action, &client, &config).await
         }

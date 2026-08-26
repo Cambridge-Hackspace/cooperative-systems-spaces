@@ -57,9 +57,9 @@ const AUTHORISERS: &[&str] = &["extract_device_auth", "authorize_toolguard"];
 /// three real defects and silently exonerated the third.
 fn handler_body<'a>(src: &'a str, name: &str) -> &'a str {
     let sig = format!("async fn {name}(");
-    let start = src
-        .find(&sig)
-        .unwrap_or_else(|| panic!("no handler `{name}` in api/toolguard.rs — has it been renamed?"));
+    let start = src.find(&sig).unwrap_or_else(|| {
+        panic!("no handler `{name}` in api/toolguard.rs — has it been renamed?")
+    });
     let rest = &src[start + sig.len()..];
 
     let end = rest
@@ -143,7 +143,10 @@ fn the_api_key_mechanism_is_actually_wired_in() {
     let definition = src.matches("async fn validate_api_key").count();
     let total = src.matches("validate_api_key").count();
 
-    assert_eq!(definition, 1, "validate_api_key should be defined exactly once");
+    assert_eq!(
+        definition, 1,
+        "validate_api_key should be defined exactly once"
+    );
     assert!(
         total > definition,
         "validate_api_key is defined but never called. Either wire it in, or delete it \

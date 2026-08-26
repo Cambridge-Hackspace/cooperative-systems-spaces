@@ -20,9 +20,7 @@ use uuid::Uuid;
 use crate::config::ConfigManager;
 use crate::database::{DatabaseError, DatabaseManager};
 use crate::devices_transport::DeviceTransport;
-use crate::models::{
-    Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User, UserRole,
-};
+use crate::models::{Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User, UserRole};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompiledDoor {
@@ -97,10 +95,7 @@ impl DoorService {
     /// Build the snapshot for one device by walking each of its doors'
     /// access rules and expanding them into flat card lists. Role rules are
     /// expanded by walking the active-user roster once.
-    pub fn compile_state_for(
-        &self,
-        device_id: Uuid,
-    ) -> Result<DoorStateSnapshot, DatabaseError> {
+    pub fn compile_state_for(&self, device_id: Uuid) -> Result<DoorStateSnapshot, DatabaseError> {
         let doors = self.db.list_doors_for_device(device_id)?;
         if doors.is_empty() {
             return Ok(DoorStateSnapshot {
@@ -375,7 +370,8 @@ impl DoorService {
                     {
                         info!(
                             "Schedule tick republished doors/state to {} ({} door(s))",
-                            id, snapshot.doors.len()
+                            id,
+                            snapshot.doors.len()
                         );
                         let mut map = self
                             .last_snapshot_hash

@@ -1,5 +1,5 @@
-use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 pub const MQTT_DEFAULT_NAMESPACE: &str = "cs/spaces";
 
@@ -24,7 +24,11 @@ pub struct MqttConfig {
 
 impl Display for MqttConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Ok(write!(f, "MQTT: {}:{}", self.mqtt_instance_url, self.mqtt_client_id)?)
+        Ok(write!(
+            f,
+            "MQTT: {}:{}",
+            self.mqtt_instance_url, self.mqtt_client_id
+        )?)
     }
 }
 
@@ -35,8 +39,7 @@ impl Default for MqttConfig {
             mqtt_client_id: "css-server".to_string(),
             mqtt_username: None,
             mqtt_password: None,
-            mqtt_namespace: MQTT_DEFAULT_NAMESPACE.to_string()
-
+            mqtt_namespace: MQTT_DEFAULT_NAMESPACE.to_string(),
         }
     }
 }
@@ -83,7 +86,10 @@ mod tests {
             ..MqttConfig::default()
         };
         let shown = cfg.to_string();
-        assert!(!shown.contains("hunter2"), "Display leaked the password: {shown}");
+        assert!(
+            !shown.contains("hunter2"),
+            "Display leaked the password: {shown}"
+        );
         assert!(shown.contains("mqtt://localhost:1883"));
     }
 }

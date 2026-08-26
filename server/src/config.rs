@@ -1,18 +1,18 @@
-use std::fmt::{Display, Formatter};
 use anyhow::{Context, Result};
+pub(crate) use css_lib::MqttConfig;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
-pub(crate) use css_lib::{MqttConfig};
 
 /// Merge two TOML values, with the first taking precedence
 /// This is used to merge existing config with defaults for missing fields
 fn merge_toml_values(existing: toml::Value, defaults: toml::Value) -> toml::Value {
     use toml::Value;
-    
+
     match (existing, defaults) {
         (Value::Table(mut existing_table), Value::Table(defaults_table)) => {
             // For tables, merge recursively
@@ -568,7 +568,6 @@ impl Default for ServerConfig {
             cors_origins: vec!["http://localhost:3000".to_string()],
         }
     }
-
 }
 
 /// Profile field configuration
@@ -607,7 +606,9 @@ pub enum ProfileFieldType {
     Number,
     Date,
     Boolean,
-    Select { options: Vec<String> },
+    Select {
+        options: Vec<String>,
+    },
 }
 
 impl Default for UserConfig {
@@ -641,7 +642,6 @@ impl Default for UserConfig {
     }
 }
 
-
 /// ToolGuard Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolGuardConfig {
@@ -658,7 +658,7 @@ impl Default for ToolGuardConfig {
         Self {
             enabled: true,
             profile_field: "card_id".to_string(),
-            global_api_key: None
+            global_api_key: None,
         }
     }
 }
@@ -697,11 +697,7 @@ impl PlaceConfig {
 
     /// `Ok(())` iff `child_type` is deeper than `parent_type`. Both types
     /// must appear in [`Self::types`].
-    pub fn validate_parent_child(
-        &self,
-        parent_type: &str,
-        child_type: &str,
-    ) -> Result<(), String> {
+    pub fn validate_parent_child(&self, parent_type: &str, child_type: &str) -> Result<(), String> {
         let parent_idx = self
             .index_of(parent_type)
             .ok_or_else(|| format!("Unknown parent place_type '{parent_type}'"))?;
@@ -772,14 +768,12 @@ impl Default for CalendarConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            calendars: vec![
-                CalendarSource {
-                    ical_link: "https://example.com/calendar.ics".to_string(),
-                    name: "Example Calendar".to_string(),
-                    color: "#3788d8".to_string(),
-                    enabled: false,
-                },
-            ],
+            calendars: vec![CalendarSource {
+                ical_link: "https://example.com/calendar.ics".to_string(),
+                name: "Example Calendar".to_string(),
+                color: "#3788d8".to_string(),
+                enabled: false,
+            }],
             cache_duration_minutes: 15,
             max_events_display: 10,
             lookahead_days: 30,
@@ -848,7 +842,7 @@ impl Default for PagesConfig {
             users_pages_enabled: false,
             user_profile_field: "user_page_repository".to_string(),
             user_period: 900,
-            user_readme: true
+            user_readme: true,
         }
     }
 }
@@ -856,7 +850,7 @@ impl Default for PagesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeConfig {
     pub edge_enabled: bool,
-    pub edge_mqtt_config: Option<MqttConfig>
+    pub edge_mqtt_config: Option<MqttConfig>,
 }
 
 impl Default for EdgeConfig {
@@ -1018,10 +1012,10 @@ impl AppConfig {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
-        
+
         // Try to parse the configuration
         let config_result: Result<AppConfig, toml::de::Error> = toml::from_str(&content);
-        
+
         let mut config = match config_result {
             Ok(cfg) => cfg,
             Err(e) => {
@@ -1030,42 +1024,53 @@ impl AppConfig {
                 if error_msg.contains("missing field") {
                     eprintln!("\n⚠️  Configuration file is missing required fields!");
                     eprintln!("Error: {}\n", e);
-                    
+
                     // Create a backup of the old config with unix timestamp
-                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
-                        .unwrap_or_default().as_secs();
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
                     let backup_path = format!("{}.{}.backup", path.as_ref().display(), timestamp);
                     fs::copy(&path, &backup_path)
                         .with_context(|| format!("Failed to create backup at: {}", backup_path))?;
                     eprintln!("📦 Backed up old config to: {}\n", backup_path);
-                    
+
                     // Generate updated config with defaults for missing fields
                     let default_config = AppConfig::default();
-                    
+
                     // Try to parse as a partial config to preserve existing values
                     // We'll use toml::Value to merge configs
                     let existing_value: toml::Value = toml::from_str(&content)
                         .unwrap_or(toml::Value::Table(toml::map::Map::new()));
                     let default_value: toml::Value = match toml::to_string(&default_config) {
-                        Ok(s) => toml::from_str(&s).unwrap_or(toml::Value::Table(toml::map::Map::new())),
+                        Ok(s) => {
+                            toml::from_str(&s).unwrap_or(toml::Value::Table(toml::map::Map::new()))
+                        }
                         Err(_) => toml::Value::Table(toml::map::Map::new()),
                     };
-                    
+
                     // Merge: existing values take precedence, defaults fill in missing fields
                     let merged_value = merge_toml_values(existing_value, default_value);
-                    
+
                     // Parse the merged config
-                    let merged_config: AppConfig = toml::from_str(&toml::to_string(&merged_value).unwrap())
-                        .with_context(|| "Failed to parse merged configuration")?;
-                    
+                    let merged_config: AppConfig =
+                        toml::from_str(&toml::to_string(&merged_value).unwrap())
+                            .with_context(|| "Failed to parse merged configuration")?;
+
                     // Write the updated config back to file
-                    merged_config.to_file(&path)
+                    merged_config
+                        .to_file(&path)
                         .with_context(|| "Failed to write updated configuration")?;
-                    
-                    eprintln!("✅ Updated configuration file with default values for missing fields.");
-                    eprintln!("📝 Please review the configuration at: {}", path.as_ref().display());
+
+                    eprintln!(
+                        "✅ Updated configuration file with default values for missing fields."
+                    );
+                    eprintln!(
+                        "📝 Please review the configuration at: {}",
+                        path.as_ref().display()
+                    );
                     eprintln!("\n🛑 Server will now exit. Please restart after reviewing the configuration.\n");
-                    
+
                     std::process::exit(0);
                 } else {
                     // Some other parsing error
@@ -1076,7 +1081,7 @@ impl AppConfig {
 
         // Apply environment variable overrides
         config.apply_env_overrides()?;
-        
+
         Ok(config)
     }
 
@@ -1104,16 +1109,17 @@ impl AppConfig {
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .with_context(|| "Failed to serialize configuration to TOML")?;
-        
+
         // Create parent directories if they don't exist
         if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
-        
+
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
-        
+
         Ok(())
     }
 
@@ -1146,13 +1152,15 @@ impl ConfigManager {
 
     /// Reload configuration from disk
     pub fn reload_config(&self) -> Result<()> {
-        let config_path = self.config_path.as_ref()
+        let config_path = self
+            .config_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No config path available for reloading"))?;
 
         info!("Reloading configuration from: {}", config_path.display());
 
-        let new_config = AppConfig::from_file(config_path)
-            .with_context(|| "Failed to reload configuration")?;
+        let new_config =
+            AppConfig::from_file(config_path).with_context(|| "Failed to reload configuration")?;
 
         // Validate the new configuration
         self.validate_config(&new_config)?;
@@ -1185,8 +1193,12 @@ impl ConfigManager {
         }
 
         // Validate initial setup admin email format
-        if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
-            return Err(anyhow::anyhow!("Initial setup admin email must be a valid email address"));
+        if config.initial_setup.setup_enabled
+            && !config.initial_setup.setup_admin_email.contains('@')
+        {
+            return Err(anyhow::anyhow!(
+                "Initial setup admin email must be a valid email address"
+            ));
         }
 
         Ok(())
@@ -1219,7 +1231,8 @@ impl ConfigManager {
         };
 
         if let Some(config_path) = &self.config_path {
-            updated.to_file(config_path)
+            updated
+                .to_file(config_path)
                 .with_context(|| "Failed to persist updated configuration")?;
         } else {
             warn!("No config path available; configuration change was not persisted to disk");
@@ -1232,18 +1245,22 @@ impl ConfigManager {
 /// Load configuration from file or create default configuration
 pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
     let path = config_path.as_ref();
-    
+
     if path.exists() {
         println!("Loading configuration from: {}", path.display());
         AppConfig::from_file(path)
     } else {
-        println!("Config file not found. Creating default configuration at: {}", path.display());
+        println!(
+            "Config file not found. Creating default configuration at: {}",
+            path.display()
+        );
         let default_config = AppConfig::default();
-        
+
         // Save default configuration to file
-        default_config.to_file(path)
+        default_config
+            .to_file(path)
             .with_context(|| "Failed to create default configuration file")?;
-        
+
         println!("Default configuration file created. Please review and modify as needed.");
         Ok(default_config)
     }
@@ -1252,11 +1269,15 @@ pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
 /// Generate a sample configuration file with comments
 pub fn generate_sample_config<P: AsRef<Path>>(path: P) -> Result<()> {
     let default_config = AppConfig::default();
-    
-    default_config.to_file(&path)
+
+    default_config
+        .to_file(&path)
         .with_context(|| "Failed to write sample configuration file")?;
-    
-    println!("Sample configuration file generated at: {}", path.as_ref().display());
+
+    println!(
+        "Sample configuration file generated at: {}",
+        path.as_ref().display()
+    );
     println!("Please review and modify the configuration as needed.");
     Ok(())
 }
@@ -1270,7 +1291,7 @@ mod tests {
     fn test_default_config_serialization() {
         let config = AppConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
-        
+
         // Verify we can deserialize it back
         let _: AppConfig = toml::from_str(&toml_str).unwrap();
     }
@@ -1279,13 +1300,13 @@ mod tests {
     fn test_config_file_roundtrip() {
         let temp_file = NamedTempFile::new().unwrap();
         let config = AppConfig::default();
-        
+
         // Save to file
         config.to_file(temp_file.path()).unwrap();
-        
+
         // Load from file
         let loaded_config = AppConfig::from_file(temp_file.path()).unwrap();
-        
+
         // Compare (using debug format since we don't implement PartialEq)
         assert_eq!(format!("{:?}", config), format!("{:?}", loaded_config));
     }
@@ -1294,13 +1315,13 @@ mod tests {
     fn test_load_config_creates_default_if_missing() {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
-        
+
         // Delete the file so it doesn't exist
         std::fs::remove_file(path).unwrap();
-        
+
         // load_config should create a default config
         let _config = load_config(path).unwrap();
-        
+
         // File should now exist
         assert!(path.exists());
     }

@@ -137,7 +137,9 @@ pub struct AddRuleRequest {
     #[serde(default)]
     pub schedule_id: Option<Uuid>,
 }
-fn default_effect() -> DoorRuleEffect { DoorRuleEffect::Allow }
+fn default_effect() -> DoorRuleEffect {
+    DoorRuleEffect::Allow
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct EventsQuery {
@@ -312,7 +314,10 @@ async fn door_checkin(
                 tracing::warn!("Failed to publish doors/unlock: {}", e);
             }
         } else {
-            tracing::warn!("Door {} has no edge_device_id; unlock is logged only", door.id);
+            tracing::warn!(
+                "Door {} has no edge_device_id; unlock is logged only",
+                door.id
+            );
         }
 
         audit(
@@ -497,9 +502,12 @@ async fn admin_unlock(
     let device_id = door
         .edge_device_id
         .ok_or_else(|| ApiError::BadRequest("Door has no edge device".to_string()))?;
-    state
-        .door_service
-        .publish_unlock(device_id, door.id, door.unlock_duration_ms, "admin_remote")?;
+    state.door_service.publish_unlock(
+        device_id,
+        door.id,
+        door.unlock_duration_ms,
+        "admin_remote",
+    )?;
 
     // Record an access event + audit so the action is visible.
     let _ = state.db.insert_door_access_event(&NewDoorAccessEvent {
@@ -518,7 +526,9 @@ async fn admin_unlock(
         Some(admin.0.id),
         serde_json::json!({ "door_id": door.id, "door_name": door.name }),
     );
-    Ok(Json(ApiResponse::success(serde_json::json!({ "unlocked": true }))))
+    Ok(Json(ApiResponse::success(
+        serde_json::json!({ "unlocked": true }),
+    )))
 }
 
 async fn admin_republish(
@@ -530,7 +540,9 @@ async fn admin_republish(
     if let Some(device_id) = door.edge_device_id {
         state.door_service.publish_state(device_id)?;
     }
-    Ok(Json(ApiResponse::success(serde_json::json!({ "republished": true }))))
+    Ok(Json(ApiResponse::success(
+        serde_json::json!({ "republished": true }),
+    )))
 }
 
 async fn get_qr_url(

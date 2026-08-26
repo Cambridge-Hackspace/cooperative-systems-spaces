@@ -14,7 +14,7 @@ const LOG_MAX: usize = 50;
 
 #[derive(Debug, Clone, PartialEq)]
 enum ToolStatus {
-    Unknown,      // Before any state arrives
+    Unknown, // Before any state arrives
     Idle,
     InUse,
     Maintenance,
@@ -26,49 +26,49 @@ enum ToolStatus {
 impl ToolStatus {
     fn from_str(s: &str) -> Self {
         match s {
-            "idle"        => Self::Idle,
-            "in_use"      => Self::InUse,
+            "idle" => Self::Idle,
+            "in_use" => Self::InUse,
             "maintenance" => Self::Maintenance,
-            "repair"      => Self::Repair,
-            "broken"      => Self::Broken,
-            "retired"     => Self::Retired,
-            _             => Self::Unknown,
+            "repair" => Self::Repair,
+            "broken" => Self::Broken,
+            "retired" => Self::Retired,
+            _ => Self::Unknown,
         }
     }
 
     fn label(&self) -> &str {
         match self {
-            Self::Unknown     => "Unknown",
-            Self::Idle        => "Idle",
-            Self::InUse       => "In Use",
+            Self::Unknown => "Unknown",
+            Self::Idle => "Idle",
+            Self::InUse => "In Use",
             Self::Maintenance => "Maintenance",
-            Self::Repair      => "Repair",
-            Self::Broken      => "Broken",
-            Self::Retired     => "Retired",
+            Self::Repair => "Repair",
+            Self::Broken => "Broken",
+            Self::Retired => "Retired",
         }
     }
 
     fn dot_color(&self) -> Color32 {
         match self {
-            Self::Unknown     => Color32::from_rgb(100, 100, 100),
-            Self::Idle        => Color32::from_rgb(50, 200, 80),
-            Self::InUse       => Color32::from_rgb(50, 150, 230),
+            Self::Unknown => Color32::from_rgb(100, 100, 100),
+            Self::Idle => Color32::from_rgb(50, 200, 80),
+            Self::InUse => Color32::from_rgb(50, 150, 230),
             Self::Maintenance => Color32::from_rgb(230, 190, 40),
-            Self::Repair      => Color32::from_rgb(230, 130, 40),
-            Self::Broken      => Color32::from_rgb(220, 60, 60),
-            Self::Retired     => Color32::from_rgb(120, 120, 120),
+            Self::Repair => Color32::from_rgb(230, 130, 40),
+            Self::Broken => Color32::from_rgb(220, 60, 60),
+            Self::Retired => Color32::from_rgb(120, 120, 120),
         }
     }
 
     fn frame_color(&self) -> Color32 {
         match self {
-            Self::Unknown     => Color32::from_rgb(45, 45, 45),
-            Self::Idle        => Color32::from_rgb(30, 60, 35),
-            Self::InUse       => Color32::from_rgb(25, 45, 75),
+            Self::Unknown => Color32::from_rgb(45, 45, 45),
+            Self::Idle => Color32::from_rgb(30, 60, 35),
+            Self::InUse => Color32::from_rgb(25, 45, 75),
             Self::Maintenance => Color32::from_rgb(65, 55, 15),
-            Self::Repair      => Color32::from_rgb(65, 40, 15),
-            Self::Broken      => Color32::from_rgb(70, 25, 25),
-            Self::Retired     => Color32::from_rgb(40, 40, 40),
+            Self::Repair => Color32::from_rgb(65, 40, 15),
+            Self::Broken => Color32::from_rgb(70, 25, 25),
+            Self::Retired => Color32::from_rgb(40, 40, 40),
         }
     }
 
@@ -116,7 +116,9 @@ impl App {
             vec![]
         } else {
             let first_card = config.cards[0].value.clone();
-            config.tools.iter()
+            config
+                .tools
+                .iter()
                 .map(|t| (first_card.clone(), t.id.clone()))
                 .collect()
         };
@@ -127,14 +129,18 @@ impl App {
             startup_tool_offs,
         );
 
-        let tools = config.tools.iter().map(|t| ToolStation {
-            name: t.name.clone(),
-            id: t.id.clone(),
-            status: ToolStatus::Unknown,
-            selected_card: 0,
-            last_response: None,
-            pending: false,
-        }).collect();
+        let tools = config
+            .tools
+            .iter()
+            .map(|t| ToolStation {
+                name: t.name.clone(),
+                id: t.id.clone(),
+                status: ToolStatus::Unknown,
+                selected_card: 0,
+                last_response: None,
+                pending: false,
+            })
+            .collect();
 
         Self {
             cards: config.cards,
@@ -167,7 +173,9 @@ impl App {
                     self.mqtt_connected = false;
                     self.push_log("MQTT disconnected");
                 }
-                MqttEvent::ToolOnResponse { authorized, reason, .. } => {
+                MqttEvent::ToolOnResponse {
+                    authorized, reason, ..
+                } => {
                     if let Some((tool_id, _)) = self.pending_scan.take() {
                         if let Some(station) = self.tools.iter_mut().find(|t| t.id == tool_id) {
                             station.pending = false;
@@ -176,9 +184,14 @@ impl App {
                                 station.last_response = Some("✓ Authorized".to_string());
                                 self.log.push_back(format!("{}: authorized", station.name));
                             } else {
-                                let msg = if reason.is_empty() { "Denied".to_string() } else { reason.clone() };
+                                let msg = if reason.is_empty() {
+                                    "Denied".to_string()
+                                } else {
+                                    reason.clone()
+                                };
                                 station.last_response = Some(format!("✗ {msg}"));
-                                self.log.push_back(format!("{}: denied — {msg}", station.name));
+                                self.log
+                                    .push_back(format!("{}: denied — {msg}", station.name));
                             }
                         }
                     }
@@ -193,18 +206,23 @@ impl App {
                             } else {
                                 station.last_response = Some("✗ Deactivate failed".to_string());
                             }
-                            self.log.push_back(format!("{}: deactivated (ok={})", station.name, ok));
+                            self.log
+                                .push_back(format!("{}: deactivated (ok={})", station.name, ok));
                         }
                     }
                 }
                 MqttEvent::StateUpdate(statuses) => {
                     for station in &mut self.tools {
-                        if let Some((_, status_str)) = statuses.iter().find(|(id, _)| id == &station.id) {
+                        if let Some((_, status_str)) =
+                            statuses.iter().find(|(id, _)| id == &station.id)
+                        {
                             let new_status = ToolStatus::from_str(status_str);
                             if new_status != station.status {
                                 self.log.push_back(format!(
                                     "{}: {} → {}",
-                                    station.name, station.status.label(), new_status.label()
+                                    station.name,
+                                    station.status.label(),
+                                    new_status.label()
                                 ));
                                 station.status = new_status;
                             }
@@ -223,8 +241,12 @@ impl App {
     }
 
     fn scan(&mut self, tool_idx: usize) {
-        let Some(station) = self.tools.get(tool_idx) else { return };
-        let Some(card) = self.cards.get(station.selected_card) else { return };
+        let Some(station) = self.tools.get(tool_idx) else {
+            return;
+        };
+        let Some(card) = self.cards.get(station.selected_card) else {
+            return;
+        };
 
         let is_inuse = station.status == ToolStatus::InUse;
         let tool_id = station.id.clone();
@@ -234,13 +256,21 @@ impl App {
 
         self.push_log(format!(
             "Scan: card='{}' → '{}' ({})",
-            card_name, tool_name, if is_inuse { "off" } else { "on" }
+            card_name,
+            tool_name,
+            if is_inuse { "off" } else { "on" }
         ));
 
         let cmd = if is_inuse {
-            MqttCommand::ToolOff { card: card_value, tool_id: tool_id.clone() }
+            MqttCommand::ToolOff {
+                card: card_value,
+                tool_id: tool_id.clone(),
+            }
         } else {
-            MqttCommand::ToolOn  { card: card_value, tool_id: tool_id.clone() }
+            MqttCommand::ToolOn {
+                card: card_value,
+                tool_id: tool_id.clone(),
+            }
         };
 
         let _ = self.cmd_tx.send(cmd);
@@ -339,36 +369,47 @@ impl eframe::App for App {
                                 if let Some(resp) = &station.last_response {
                                     ui.label(RichText::new(resp).small().weak());
                                 }
-                                ui.label(RichText::new(format!("id: {}", station.id)).small().weak());
+                                ui.label(
+                                    RichText::new(format!("id: {}", station.id)).small().weak(),
+                                );
                             });
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                // Scan button — only meaningful for Idle/InUse
-                                let btn_label = if station.status == ToolStatus::InUse {
-                                    "⏹  Stop"
-                                } else {
-                                    "▶  Start"
-                                };
-                                let enabled = !station.pending && station.status.can_scan();
-                                let btn = egui::Button::new(btn_label)
-                                    .min_size(Vec2::new(90.0, 36.0));
-                                if ui.add_enabled(enabled, btn).clicked() {
-                                    scan_idx = Some(i);
-                                }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // Scan button — only meaningful for Idle/InUse
+                                    let btn_label = if station.status == ToolStatus::InUse {
+                                        "⏹  Stop"
+                                    } else {
+                                        "▶  Start"
+                                    };
+                                    let enabled = !station.pending && station.status.can_scan();
+                                    let btn = egui::Button::new(btn_label)
+                                        .min_size(Vec2::new(90.0, 36.0));
+                                    if ui.add_enabled(enabled, btn).clicked() {
+                                        scan_idx = Some(i);
+                                    }
 
-                                ui.add_space(8.0);
+                                    ui.add_space(8.0);
 
-                                // Card selector
-                                egui::ComboBox::from_id_salt(format!("card_{i}"))
-                                    .selected_text(*card_names.get(station.selected_card).unwrap_or(&"—"))
-                                    .width(120.0)
-                                    .show_ui(ui, |ui| {
-                                        for (ci, name) in card_names.iter().enumerate() {
-                                            ui.selectable_value(&mut station.selected_card, ci, *name);
-                                        }
-                                    });
-                                ui.label("Card:");
-                            });
+                                    // Card selector
+                                    egui::ComboBox::from_id_salt(format!("card_{i}"))
+                                        .selected_text(
+                                            *card_names.get(station.selected_card).unwrap_or(&"—"),
+                                        )
+                                        .width(120.0)
+                                        .show_ui(ui, |ui| {
+                                            for (ci, name) in card_names.iter().enumerate() {
+                                                ui.selectable_value(
+                                                    &mut station.selected_card,
+                                                    ci,
+                                                    *name,
+                                                );
+                                            }
+                                        });
+                                    ui.label("Card:");
+                                },
+                            );
                         });
                     });
             }
@@ -386,7 +427,11 @@ fn status_dot(ui: &mut egui::Ui, color: Color32) {
     let size = Vec2::splat(16.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().circle_filled(rect.center(), 7.0, color);
-    ui.painter().circle_stroke(rect.center(), 7.0, egui::Stroke::new(1.0, Color32::from_black_alpha(80)));
+    ui.painter().circle_stroke(
+        rect.center(),
+        7.0,
+        egui::Stroke::new(1.0, Color32::from_black_alpha(80)),
+    );
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────

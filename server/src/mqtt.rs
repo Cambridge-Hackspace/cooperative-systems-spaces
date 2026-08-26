@@ -43,48 +43,57 @@ impl MqttService {
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>), Box<dyn std::error::Error>> {
         // Parse broker URL
         let broker_url = &config.mqtt_instance_url;
-        
+
         // Create MQTT options
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(broker_url)
             .client_id("css-server")
             .finalize();
-        
+
         // Create the client
         let cli = mqtt::AsyncClient::new(create_opts)?;
-        
+
         // Get the receiver before connecting
         let rx = cli.start_consuming();
-        
+
         // Build connection options
         let mut conn_opts_builder = mqtt::ConnectOptionsBuilder::new();
         conn_opts_builder
             .keep_alive_interval(Duration::from_secs(30))
             .clean_session(true)
             .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(30));
-        
+
         // Set credentials if provided
         if let (Some(username), Some(password)) = (&config.mqtt_username, &config.mqtt_password) {
             conn_opts_builder.user_name(username).password(password);
         }
-        
+
         let conn_opts = conn_opts_builder.finalize();
-        
+
         // Connect to the broker
         cli.connect(conn_opts).wait()?;
-        
-        info!("Connected to MQTT broker at {} with namespace: {}", broker_url, config.mqtt_namespace);
-        
-        Ok((Self {
-            client: cli,
-            db,
-            namespace: config.mqtt_namespace.clone(),
-            inbound,
-        }, rx))
+
+        info!(
+            "Connected to MQTT broker at {} with namespace: {}",
+            broker_url, config.mqtt_namespace
+        );
+
+        Ok((
+            Self {
+                client: cli,
+                db,
+                namespace: config.mqtt_namespace.clone(),
+                inbound,
+            },
+            rx,
+        ))
     }
 
     /// Start the MQTT service and listen for messages
-    pub async fn start(self, rx: mqtt::Receiver<Option<mqtt::Message>>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start(
+        self,
+        rx: mqtt::Receiver<Option<mqtt::Message>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting MQTT service with namespace: {}", self.namespace);
 
         // Subscribe to device topics with namespace prefix
@@ -153,9 +162,10 @@ impl MqttService {
 
         // Suffixes are identical to `WireMessage::kind` strings — let the
         // shared inbound dispatcher do the actual work.
-        self.inbound.dispatch(device_id, suffix, msg.payload()).await;
+        self.inbound
+            .dispatch(device_id, suffix, msg.payload())
+            .await;
     }
-
 
     /// Publish a message to a device topic
     pub fn publish_to_device(
@@ -179,11 +189,7 @@ impl MqttService {
         let payload = serde_json::json!({
             "name": new_name
         });
-        self.publish_to_device(
-            device_id,
-            "name",
-            payload.to_string().into_bytes(),
-        )
+        self.publish_to_device(device_id, "name", payload.to_string().into_bytes())
     }
 
     /// Publish a ToolGuard state update to a specific device

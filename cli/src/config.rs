@@ -48,8 +48,8 @@ impl CliConfig {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
 
-        let config: Self = toml::from_str(&content)
-            .with_context(|| "Failed to parse TOML configuration")?;
+        let config: Self =
+            toml::from_str(&content).with_context(|| "Failed to parse TOML configuration")?;
 
         Ok(config)
     }
@@ -61,8 +61,9 @@ impl CliConfig {
 
         // Create parent directories if they don't exist
         if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
 
         fs::write(&path, content)
@@ -107,11 +108,14 @@ pub async fn handle_config_command(command: ConfigCommand, config: &CliConfig) -
         ConfigCommand::Show => {
             println!("Current configuration:");
             println!("Server URL: {}", config.server_url);
-            println!("Auth token: {}", config.auth_token.as_deref().unwrap_or("<not set>"));
+            println!(
+                "Auth token: {}",
+                config.auth_token.as_deref().unwrap_or("<not set>")
+            );
             println!("Output format: {}", config.output_format);
             println!("Timeout: {} seconds", config.timeout_seconds);
             println!("Log requests: {}", config.log_requests);
-            
+
             let config_path = get_default_config_path()?;
             println!("Config file: {}", config_path.display());
         }
@@ -128,12 +132,11 @@ pub async fn handle_config_command(command: ConfigCommand, config: &CliConfig) -
                 "server_url" => config.server_url = value,
                 "output_format" => config.output_format = value,
                 "timeout_seconds" => {
-                    config.timeout_seconds = value.parse()
-                        .with_context(|| "Invalid timeout value")?;
+                    config.timeout_seconds =
+                        value.parse().with_context(|| "Invalid timeout value")?;
                 }
                 "log_requests" => {
-                    config.log_requests = value.parse()
-                        .with_context(|| "Invalid boolean value")?;
+                    config.log_requests = value.parse().with_context(|| "Invalid boolean value")?;
                 }
                 _ => anyhow::bail!("Unknown configuration key: {}", key),
             }
@@ -159,6 +162,6 @@ fn get_default_config_path() -> Result<PathBuf> {
     let config_dir = dirs::config_dir()
         .context("Failed to determine config directory")?
         .join("css");
-    
+
     Ok(config_dir.join("config.toml"))
 }

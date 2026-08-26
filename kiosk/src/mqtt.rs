@@ -51,7 +51,9 @@ fn run_subscriber(
     let client = match mqtt::Client::new(create_opts) {
         Ok(c) => c,
         Err(e) => {
-            let _ = tx.send(MqttEvent::Error(format!("Failed to create MQTT client: {e}")));
+            let _ = tx.send(MqttEvent::Error(format!(
+                "Failed to create MQTT client: {e}"
+            )));
             return;
         }
     };
@@ -83,7 +85,8 @@ fn run_subscriber(
                             let _ = tx.send(MqttEvent::ToolGuardState(payload));
                         }
                         Err(e) => {
-                            let _ = tx.send(MqttEvent::Error(format!("ToolGuard parse error: {e}")));
+                            let _ =
+                                tx.send(MqttEvent::Error(format!("ToolGuard parse error: {e}")));
                         }
                     }
                 } else if calendar_topic.as_deref() == Some(topic) {
@@ -104,7 +107,8 @@ fn run_subscriber(
                 } else {
                     let _ = tx.send(MqttEvent::Connected);
                     subscribe_all(&client, &toolguard_topic, calendar_topic.as_deref());
-                    let _ = client.publish(mqtt::Message::new(KIOSK_REFRESH_TOPIC, b"1".as_ref(), 0));
+                    let _ =
+                        client.publish(mqtt::Message::new(KIOSK_REFRESH_TOPIC, b"1".as_ref(), 0));
                 }
             }
             Err(e) if e.is_timeout() => continue,

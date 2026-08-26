@@ -1,10 +1,12 @@
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Training status enum matching the database enum
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = crate::schema::sql_types::TrainingStatus)]
 #[serde(rename_all = "snake_case")]
 pub enum TrainingStatus {
@@ -16,7 +18,9 @@ pub enum TrainingStatus {
 }
 
 /// Assessment type enum matching the database enum
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = crate::schema::sql_types::AssessmentType)]
 #[serde(rename_all = "snake_case")]
 pub enum AssessmentType {
@@ -66,8 +70,13 @@ impl AssessmentType {
 }
 
 // Diesel serialization implementations for TrainingStatus
-impl diesel::serialize::ToSql<crate::schema::sql_types::TrainingStatus, diesel::pg::Pg> for TrainingStatus {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+impl diesel::serialize::ToSql<crate::schema::sql_types::TrainingStatus, diesel::pg::Pg>
+    for TrainingStatus
+{
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         use std::io::Write;
         match self {
             TrainingStatus::NotStarted => out.write_all(b"not_started")?,
@@ -80,7 +89,9 @@ impl diesel::serialize::ToSql<crate::schema::sql_types::TrainingStatus, diesel::
     }
 }
 
-impl diesel::deserialize::FromSql<crate::schema::sql_types::TrainingStatus, diesel::pg::Pg> for TrainingStatus {
+impl diesel::deserialize::FromSql<crate::schema::sql_types::TrainingStatus, diesel::pg::Pg>
+    for TrainingStatus
+{
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
         match bytes.as_bytes() {
             b"not_started" => Ok(TrainingStatus::NotStarted),
@@ -94,8 +105,13 @@ impl diesel::deserialize::FromSql<crate::schema::sql_types::TrainingStatus, dies
 }
 
 // Diesel serialization implementations for AssessmentType
-impl diesel::serialize::ToSql<crate::schema::sql_types::AssessmentType, diesel::pg::Pg> for AssessmentType {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+impl diesel::serialize::ToSql<crate::schema::sql_types::AssessmentType, diesel::pg::Pg>
+    for AssessmentType
+{
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         use std::io::Write;
         match self {
             AssessmentType::Practical => out.write_all(b"practical")?,
@@ -107,7 +123,9 @@ impl diesel::serialize::ToSql<crate::schema::sql_types::AssessmentType, diesel::
     }
 }
 
-impl diesel::deserialize::FromSql<crate::schema::sql_types::AssessmentType, diesel::pg::Pg> for AssessmentType {
+impl diesel::deserialize::FromSql<crate::schema::sql_types::AssessmentType, diesel::pg::Pg>
+    for AssessmentType
+{
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
         match bytes.as_bytes() {
             b"practical" => Ok(AssessmentType::Practical),
@@ -263,7 +281,7 @@ pub struct TrainingStepWithProgress {
     pub step: TrainingStep,
     pub prerequisites: Vec<TrainingStep>,
     pub user_progress: Option<UserTrainingProgress>,
-    pub is_available: bool, // true if all prerequisites are completed
+    pub is_available: bool,        // true if all prerequisites are completed
     pub instructor_required: bool, // true if user needs instructor to proceed
 }
 
@@ -273,8 +291,8 @@ pub struct ToolTrainingOverview {
     pub tool_id: Uuid,
     pub tool_name: String,
     pub steps: Vec<TrainingStepWithProgress>,
-    pub overall_progress: f32, // 0.0 to 1.0 percentage complete
-    pub can_access_tool: bool, // true if all required training is complete
+    pub overall_progress: f32,           // 0.0 to 1.0 percentage complete
+    pub can_access_tool: bool,           // true if all required training is complete
     pub next_step: Option<TrainingStep>, // next available training step
 }
 
@@ -291,22 +309,24 @@ pub struct StartTrainingRequest {
 pub struct CompleteTrainingRequest {
     pub training_step_id: Uuid,
     pub assessment_score: Option<i32>, // 0-100 if assessment was graded
-    pub passed: bool, // true if training was successfully completed
+    pub passed: bool,                  // true if training was successfully completed
     pub notes: Option<String>,
 }
 
 impl TrainingStep {
     /// Calculate when this training would expire if completed now
     pub fn calculate_expiry_date(&self) -> Option<DateTime<Utc>> {
-        self.expires_after_days.map(|days| {
-            Utc::now() + chrono::Duration::days(days as i64)
-        })
+        self.expires_after_days
+            .map(|days| Utc::now() + chrono::Duration::days(days as i64))
     }
 
     /// Check if this training step requires an instructor
     pub fn requires_instructor(&self) -> bool {
-        self.requires_assessment && 
-        matches!(self.assessment_type, Some(AssessmentType::Practical) | Some(AssessmentType::Both))
+        self.requires_assessment
+            && matches!(
+                self.assessment_type,
+                Some(AssessmentType::Practical) | Some(AssessmentType::Both)
+            )
     }
 
     /// Get a human-readable duration
@@ -330,14 +350,14 @@ impl TrainingStep {
 impl UserTrainingProgress {
     /// Check if this training certification is currently valid
     pub fn is_valid(&self) -> bool {
-        self.status == TrainingStatus::Completed && 
-        self.expires_at.map_or(true, |expiry| expiry > Utc::now())
+        self.status == TrainingStatus::Completed
+            && self.expires_at.map_or(true, |expiry| expiry > Utc::now())
     }
 
     /// Check if this training has expired
     pub fn is_expired(&self) -> bool {
-        self.status == TrainingStatus::Completed &&
-        self.expires_at.map_or(false, |expiry| expiry <= Utc::now())
+        self.status == TrainingStatus::Completed
+            && self.expires_at.map_or(false, |expiry| expiry <= Utc::now())
     }
 
     /// Get the completion percentage (0.0 to 1.0)

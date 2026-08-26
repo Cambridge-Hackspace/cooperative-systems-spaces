@@ -17,7 +17,7 @@ impl SystemInfo {
         let mac_address = get_mac_address().unwrap_or_else(|_| "unknown".to_string());
         let platform = get_platform();
         let (ipv4_address, ipv6_address) = get_ip_addresses();
-        
+
         SystemInfo {
             mac_address,
             platform,
@@ -33,7 +33,7 @@ pub fn get_system_info() -> Result<SystemInfo> {
     let mac_address = get_mac_address()?;
     let platform = get_platform();
     let (ipv4_address, ipv6_address) = get_ip_addresses();
-    
+
     Ok(SystemInfo {
         mac_address,
         platform,
@@ -48,7 +48,7 @@ fn get_mac_address() -> Result<String> {
     let mac = mac_address::get_mac_address()
         .context("Failed to retrieve MAC address")?
         .ok_or_else(|| anyhow::anyhow!("No MAC address found"))?;
-    
+
     Ok(format!("{}", mac))
 }
 
@@ -56,10 +56,10 @@ fn get_mac_address() -> Result<String> {
 fn get_platform() -> String {
     #[cfg(all(target_os = "linux"))]
     return "Linux".to_string();
-    
+
     #[cfg(all(target_os = "macos"))]
     return "MacOs".to_string();
-    
+
     #[cfg(all(target_os = "windows"))]
     return "Windows".to_string();
 
@@ -75,14 +75,14 @@ fn get_platform() -> String {
 fn get_ip_addresses() -> (Option<String>, Option<String>) {
     let mut ipv4 = None;
     let mut ipv6 = None;
-    
+
     if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
         for iface in interfaces {
             // Skip loopback interfaces
             if iface.is_loopback() {
                 continue;
             }
-            
+
             match iface.addr.ip() {
                 IpAddr::V4(addr) => {
                     if ipv4.is_none() {
@@ -95,14 +95,14 @@ fn get_ip_addresses() -> (Option<String>, Option<String>) {
                     }
                 }
             }
-            
+
             // Break if we found both
             if ipv4.is_some() && ipv6.is_some() {
                 break;
             }
         }
     }
-    
+
     (ipv4, ipv6)
 }
 
@@ -185,14 +185,19 @@ mod tests {
             "windows" => "Windows",
             _ => "Other",
         };
-        assert_eq!(get_platform(), expected, "built for {}", std::env::consts::OS);
+        assert_eq!(
+            get_platform(),
+            expected,
+            "built for {}",
+            std::env::consts::OS
+        );
     }
 
     #[test]
     fn test_get_system_info() {
         let result = get_system_info();
         assert!(result.is_ok());
-        
+
         if let Ok(info) = result {
             assert!(!info.mac_address.is_empty());
             assert!(!info.platform.is_empty());

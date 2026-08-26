@@ -9,8 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, MqttConfig};
 use crate::doors::{
-    self, Decision, DoorsEvent, DoorsState, LocalScanRequest,
-    LocalUnlockResponse, UnlockCommand,
+    self, Decision, DoorsEvent, DoorsState, LocalScanRequest, LocalUnlockResponse, UnlockCommand,
 };
 use crate::edge_inbound::EdgeInbound;
 use crate::registration::{get_auth_token, get_device_id};
@@ -53,52 +52,57 @@ impl EdgeMqttClient {
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let device_id = get_device_id(config)
             .ok_or_else(|| anyhow::anyhow!("Device ID not found in config"))?;
-        
+
         let auth_token = get_auth_token(config)
             .ok_or_else(|| anyhow::anyhow!("Auth token not found in config"))?;
-        
+
         let mqtt_config = config
             .remote_mqtt_config
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Remote MQTT config not found"))?;
-        
+
         // Create MQTT client options
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
             .client_id(&mqtt_config.mqtt_client_id)
             .finalize();
-        
-        let client = mqtt::AsyncClient::new(create_opts)
-            .context("Failed to create MQTT client")?;
-        
+
+        let client = mqtt::AsyncClient::new(create_opts).context("Failed to create MQTT client")?;
+
         // Get the receiver before connecting
         let rx = client.start_consuming();
-        
+
         // Build connection options
         let mut conn_opts_builder = mqtt::ConnectOptionsBuilder::new();
         conn_opts_builder
             .keep_alive_interval(Duration::from_secs(60))
             .clean_session(true)
             .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(60));
-        
+
         // Set credentials if provided
         if let Some(username) = &mqtt_config.mqtt_username {
             let password = mqtt_config.mqtt_password.as_deref().unwrap_or("");
             conn_opts_builder.user_name(username).password(password);
         } else {
             // Use device auth token as username
-            conn_opts_builder.user_name(&device_id).password(&auth_token);
+            conn_opts_builder
+                .user_name(&device_id)
+                .password(&auth_token);
         }
-        
+
         let conn_opts = conn_opts_builder.finalize();
-        
+
         // Connect to the broker
-        client.connect(conn_opts).wait()
+        client
+            .connect(conn_opts)
+            .wait()
             .context("Failed to connect to MQTT broker")?;
-        
-        info!("Connected to MQTT broker at {} with namespace: {}", 
-              mqtt_config.mqtt_instance_url, mqtt_config.mqtt_namespace);
-        
+
+        info!(
+            "Connected to MQTT broker at {} with namespace: {}",
+            mqtt_config.mqtt_instance_url, mqtt_config.mqtt_namespace
+        );
+
         Ok((
             Self {
                 client,
@@ -114,9 +118,14 @@ impl EdgeMqttClient {
     /// Subscribe to device command topics
     pub fn subscribe_to_commands(&self) -> Result<()> {
         let name_topic = format!("{}/devices/{}/name", self.namespace, self.device_id);
-        let toolguard_topic = format!("{}/devices/{}/toolguard/state", self.namespace, self.device_id);
-        let doors_state_topic = format!("{}/devices/{}/doors/state", self.namespace, self.device_id);
-        let doors_unlock_topic = format!("{}/devices/{}/doors/unlock", self.namespace, self.device_id);
+        let toolguard_topic = format!(
+            "{}/devices/{}/toolguard/state",
+            self.namespace, self.device_id
+        );
+        let doors_state_topic =
+            format!("{}/devices/{}/doors/state", self.namespace, self.device_id);
+        let doors_unlock_topic =
+            format!("{}/devices/{}/doors/unlock", self.namespace, self.device_id);
 
         self.client
             .subscribe(&name_topic, 1)
@@ -138,7 +147,10 @@ impl EdgeMqttClient {
             .wait()
             .context("Failed to subscribe to doors/unlock topic")?;
 
-        info!("Subscribed to command topics with namespace: {}", self.namespace);
+        info!(
+            "Subscribed to command topics with namespace: {}",
+            self.namespace
+        );
         Ok(())
     }
 
@@ -146,35 +158,36 @@ impl EdgeMqttClient {
     /// Called by the bridge task when the local broker reports a scan.
     pub fn publish_doors_event(&self, event: &DoorsEvent) -> Result<()> {
         let topic = format!("{}/devices/{}/doors/event", self.namespace, self.device_id);
-        let payload = serde_json::to_vec(event)
-            .context("Failed to serialize DoorsEvent")?;
+        let payload = serde_json::to_vec(event).context("Failed to serialize DoorsEvent")?;
         let msg = mqtt::Message::new(topic, payload, 1);
-        self.client.publish(msg).wait()
+        self.client
+            .publish(msg)
+            .wait()
             .context("Failed to publish doors/event")?;
         Ok(())
     }
-    
+
     /// Publish heartbeat message
     pub fn publish_heartbeat(&self) -> Result<()> {
         let topic = format!("{}/devices/{}/heartbeat", self.namespace, self.device_id);
         let msg = mqtt::Message::new(topic, "ping", 1);
-        
+
         self.client
             .publish(msg)
             .wait()
             .context("Failed to publish heartbeat")?;
-        
+
         debug!("Published heartbeat");
         Ok(())
     }
-    
+
     /// Publish device data
     pub fn publish_device_data(&self) -> Result<()> {
         let topic = format!("{}/devices/{}/data", self.namespace, self.device_id);
-        
+
         // Update system info (IP addresses may change)
         let current_info = get_system_info()?;
-        
+
         let data = DeviceData {
             mac_address: current_info.mac_address,
             software_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -183,34 +196,33 @@ impl EdgeMqttClient {
             uptime: self.start_time.elapsed().as_secs(),
             platform: current_info.platform,
         };
-        
-        let payload = serde_json::to_string(&data)
-            .context("Failed to serialize device data")?;
-        
+
+        let payload = serde_json::to_string(&data).context("Failed to serialize device data")?;
+
         let msg = mqtt::Message::new(topic, payload, 1);
         self.client
             .publish(msg)
             .wait()
             .context("Failed to publish device data")?;
-        
+
         info!("Published device data");
         Ok(())
     }
-    
+
     /// Start heartbeat task (publishes every 15s)
     pub fn start_heartbeat_task(&self) {
         let mut heartbeat_interval = interval(Duration::from_secs(15)); // 3 minutes
         let client = self.client.clone();
         let device_id = self.device_id.clone();
         let namespace = self.namespace.clone();
-        
+
         tokio::spawn(async move {
             loop {
                 heartbeat_interval.tick().await;
-                
+
                 let topic = format!("{}/devices/{}/heartbeat", namespace, device_id);
                 let msg = mqtt::Message::new(topic, "ping", 1);
-                
+
                 if let Err(e) = client.publish(msg).wait() {
                     error!("Failed to publish heartbeat: {}", e);
                 } else {
@@ -218,10 +230,10 @@ impl EdgeMqttClient {
                 }
             }
         });
-        
+
         info!("Heartbeat task started (interval: 3 minutes)");
     }
-    
+
     /// Start device data publishing task (publishes every 7.5 minutes)
     pub fn start_data_publisher_task(&self) {
         let mut data_interval = interval(Duration::from_secs(450)); // 7.5 minutes
@@ -229,11 +241,11 @@ impl EdgeMqttClient {
         let device_id = self.device_id.clone();
         let namespace = self.namespace.clone();
         let start_time = self.start_time;
-        
+
         tokio::spawn(async move {
             loop {
                 data_interval.tick().await;
-                
+
                 // Collect current system info
                 match get_system_info() {
                     Ok(info) => {
@@ -245,12 +257,12 @@ impl EdgeMqttClient {
                             uptime: start_time.elapsed().as_secs(),
                             platform: info.platform,
                         };
-                        
+
                         match serde_json::to_string(&data) {
                             Ok(payload) => {
                                 let topic = format!("{}/devices/{}/data", namespace, device_id);
                                 let msg = mqtt::Message::new(topic, payload, 1);
-                                
+
                                 if let Err(e) = client.publish(msg).wait() {
                                     error!("Failed to publish device data: {}", e);
                                 } else {
@@ -268,10 +280,10 @@ impl EdgeMqttClient {
                 }
             }
         });
-        
+
         info!("Data publisher task started (interval: 15 minutes)");
     }
-    
+
     /// Handle incoming MQTT messages. The topic suffix is the same
     /// `WireMessage::kind` string the WebSocket transport uses, so we just
     /// extract it and delegate to the shared inbound dispatcher.
@@ -287,11 +299,13 @@ impl EdgeMqttClient {
         self.inbound.dispatch(suffix, payload).await;
         Ok(())
     }
-    
+
     /// Disconnect from MQTT broker gracefully
     pub fn disconnect(&self) -> Result<()> {
         info!("Disconnecting from MQTT broker...");
-        self.client.disconnect(None).wait()
+        self.client
+            .disconnect(None)
+            .wait()
             .context("Failed to disconnect from MQTT broker")?;
         info!("Disconnected from MQTT broker");
         Ok(())
@@ -304,7 +318,7 @@ pub async fn run_mqtt_event_loop(
     mqtt_client: std::sync::Arc<EdgeMqttClient>,
 ) -> Result<()> {
     info!("Starting MQTT event loop");
-    
+
     // Spawn the receiver task in a blocking thread so it doesn't block tokio runtime
     let mqtt_client_clone = mqtt_client.clone();
     let receiver_task = tokio::task::spawn_blocking(move || {
@@ -312,12 +326,12 @@ pub async fn run_mqtt_event_loop(
             match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 Ok(Some(msg)) => {
                     debug!("Received message on topic: {}", msg.topic());
-                    
+
                     // Handle the message by spawning a new async task
                     let mqtt_client = mqtt_client_clone.clone();
                     let topic = msg.topic().to_string();
                     let payload = msg.payload().to_vec();
-                    
+
                     tokio::spawn(async move {
                         if let Err(e) = mqtt_client.handle_message(&topic, &payload).await {
                             error!("Error handling message: {}", e);
@@ -341,7 +355,7 @@ pub async fn run_mqtt_event_loop(
             }
         }
     });
-    
+
     // Wait for the receiver task to complete
     match receiver_task.await {
         Ok(_) => {
@@ -351,7 +365,7 @@ pub async fn run_mqtt_event_loop(
             error!("MQTT receiver task panicked: {}", e);
         }
     }
-    
+
     Ok(())
 }
 
@@ -406,8 +420,8 @@ impl LocalMqttClient {
             .client_id(&mqtt_config.mqtt_client_id)
             .finalize();
 
-        let client = mqtt::AsyncClient::new(create_opts)
-            .context("Failed to create local MQTT client")?;
+        let client =
+            mqtt::AsyncClient::new(create_opts).context("Failed to create local MQTT client")?;
 
         let rx = client.start_consuming();
 
@@ -423,10 +437,15 @@ impl LocalMqttClient {
         }
 
         let conn_opts = conn_opts_builder.finalize();
-        client.connect(conn_opts).wait()
+        client
+            .connect(conn_opts)
+            .wait()
             .context("Failed to connect to local MQTT broker")?;
 
-        info!("Connected to local MQTT broker at {}", mqtt_config.mqtt_instance_url);
+        info!(
+            "Connected to local MQTT broker at {}",
+            mqtt_config.mqtt_instance_url
+        );
 
         Ok((
             Self {
@@ -444,15 +463,25 @@ impl LocalMqttClient {
     }
 
     pub fn subscribe_to_requests(&self) -> Result<()> {
-        self.client.subscribe(LOCAL_TOOL_ON_REQ, 1).wait()
+        self.client
+            .subscribe(LOCAL_TOOL_ON_REQ, 1)
+            .wait()
             .context("Failed to subscribe to tool-on requests")?;
-        self.client.subscribe(LOCAL_TOOL_OFF_REQ, 1).wait()
+        self.client
+            .subscribe(LOCAL_TOOL_OFF_REQ, 1)
+            .wait()
             .context("Failed to subscribe to tool-off requests")?;
-        self.client.subscribe(LOCAL_TOOL_LOG_REQ, 1).wait()
+        self.client
+            .subscribe(LOCAL_TOOL_LOG_REQ, 1)
+            .wait()
             .context("Failed to subscribe to tool-log requests")?;
-        self.client.subscribe(LOCAL_KIOSK_REFRESH, 0).wait()
+        self.client
+            .subscribe(LOCAL_KIOSK_REFRESH, 0)
+            .wait()
             .context("Failed to subscribe to kiosk refresh topic")?;
-        self.client.subscribe(LOCAL_DOOR_SCAN_REQ, 1).wait()
+        self.client
+            .subscribe(LOCAL_DOOR_SCAN_REQ, 1)
+            .wait()
             .context("Failed to subscribe to door scan requests")?;
         info!("Subscribed to local toolguard + door request topics");
         Ok(())
@@ -496,10 +525,11 @@ impl LocalMqttClient {
             }
         };
 
-        let (granted, duration_ms, reason) = match self.doors_state.decide(req.door_id, &req.card_id) {
-            Decision::Allow { duration_ms } => (true, duration_ms, None),
-            Decision::Deny(why) => (false, 0, Some(why.to_string())),
-        };
+        let (granted, duration_ms, reason) =
+            match self.doors_state.decide(req.door_id, &req.card_id) {
+                Decision::Allow { duration_ms } => (true, duration_ms, None),
+                Decision::Deny(why) => (false, 0, Some(why.to_string())),
+            };
 
         // Tell the local relay controller what to do.
         let response = LocalUnlockResponse {
@@ -561,7 +591,9 @@ impl LocalMqttClient {
             AccessResult::Authorized => (true, "authorized".to_string()),
             AccessResult::UnknownCard => (false, "Unknown card".to_string()),
             AccessResult::UserInactive => (false, "User is not active".to_string()),
-            AccessResult::ToolNotAuthorized => (false, "Tool not authorized for this user".to_string()),
+            AccessResult::ToolNotAuthorized => {
+                (false, "Tool not authorized for this user".to_string())
+            }
             AccessResult::ToolUnavailable(s) => (false, format!("Tool unavailable: {}", s)),
         };
 
@@ -577,7 +609,8 @@ impl LocalMqttClient {
             let http = self.http_client.clone();
             tokio::spawn(async move {
                 let params = [("card", card.as_str()), ("tool_id", tool_id.as_str())];
-                if let Err(e) = http.get(&url)
+                if let Err(e) = http
+                    .get(&url)
                     .bearer_auth(&token)
                     .query(&params)
                     .send()
@@ -600,7 +633,8 @@ impl LocalMqttClient {
         let http = self.http_client.clone();
         tokio::spawn(async move {
             let params = [("card", card.as_str()), ("tool_id", tool_id.as_str())];
-            if let Err(e) = http.get(&url)
+            if let Err(e) = http
+                .get(&url)
                 .bearer_auth(&token)
                 .query(&params)
                 .send()
@@ -631,7 +665,8 @@ impl LocalMqttClient {
             if let Some(t) = temperature {
                 params.push(("temperature", t.to_string()));
             }
-            if let Err(e) = http.get(&url)
+            if let Err(e) = http
+                .get(&url)
                 .bearer_auth(&token)
                 .query(&params)
                 .send()
@@ -666,11 +701,7 @@ impl LocalMqttClient {
     /// Start a task that periodically fetches calendar events from the remote
     /// server and publishes them as JSON to `calendar_topic` on the local broker.
     /// The first publish happens immediately on task start.
-    pub fn start_calendar_publisher_task(
-        &self,
-        calendar_topic: String,
-        interval_secs: u64,
-    ) {
+    pub fn start_calendar_publisher_task(&self, calendar_topic: String, interval_secs: u64) {
         let client = self.client.clone();
         let http_client = self.http_client.clone();
         let instance_url = self.remote_instance_url.clone();
@@ -686,12 +717,7 @@ impl LocalMqttClient {
                 }
 
                 let url = format!("{}/api/calendar/events", instance_url);
-                match http_client
-                    .get(&url)
-                    .bearer_auth(&auth_token)
-                    .send()
-                    .await
-                {
+                match http_client.get(&url).bearer_auth(&auth_token).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         match resp
                             .json::<Vec<crate::calendar::ServerCalendarEvent>>()
@@ -704,8 +730,7 @@ impl LocalMqttClient {
                                     .collect();
                                 match serde_json::to_vec(&cal_events) {
                                     Ok(bytes) => {
-                                        let msg =
-                                            mqtt::Message::new(&calendar_topic, bytes, 1);
+                                        let msg = mqtt::Message::new(&calendar_topic, bytes, 1);
                                         if let Err(e) = client.publish(msg).wait() {
                                             warn!(
                                                 "Failed to publish calendar events locally: {}",
@@ -740,7 +765,9 @@ impl LocalMqttClient {
     }
 
     pub fn disconnect(&self) -> Result<()> {
-        self.client.disconnect(None).wait()
+        self.client
+            .disconnect(None)
+            .wait()
             .context("Failed to disconnect local MQTT client")?;
         Ok(())
     }
@@ -763,7 +790,10 @@ pub async fn run_local_mqtt_event_loop(
             while let Ok(payload) = state_rx.try_recv() {
                 match serde_json::to_vec(&payload) {
                     Ok(bytes) => local_client.publish_state_bytes(bytes),
-                    Err(e) => warn!("Failed to serialize toolguard state for local publish: {}", e),
+                    Err(e) => warn!(
+                        "Failed to serialize toolguard state for local publish: {}",
+                        e
+                    ),
                 }
             }
 

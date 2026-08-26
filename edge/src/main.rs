@@ -101,7 +101,10 @@ async fn main() -> Result<()> {
     let web_port = 8080;
 
     if let Some(mqtt) = &app_config.local_mqtt_config {
-        info!("Local MQTT enabled - connecting to: {}", mqtt.mqtt_instance_url);
+        info!(
+            "Local MQTT enabled - connecting to: {}",
+            mqtt.mqtt_instance_url
+        );
     } else {
         info!("Local MQTT disabled");
     }
@@ -109,18 +112,41 @@ async fn main() -> Result<()> {
     match app_config.auth_status {
         AuthStatus::Unauthenticated => {
             info!("Edge client is unauthenticated");
-            info!("Web UI available at http://localhost:{} for registration", web_port);
+            info!(
+                "Web UI available at http://localhost:{} for registration",
+                web_port
+            );
             info!("Or use: edge register --instance-url <url> --code <code>");
-            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new()), args.frontend_path).await?;
+            start_web_server(
+                config_arc,
+                args.config,
+                web_port,
+                Arc::new(ToolGuardState::new()),
+                args.frontend_path,
+            )
+            .await?;
         }
         AuthStatus::Pending => {
             info!("Edge client authentication is pending on server, please wait");
-            info!("Web UI available at http://localhost:{} for status", web_port);
-            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new()), args.frontend_path).await?;
+            info!(
+                "Web UI available at http://localhost:{} for status",
+                web_port
+            );
+            start_web_server(
+                config_arc,
+                args.config,
+                web_port,
+                Arc::new(ToolGuardState::new()),
+                args.frontend_path,
+            )
+            .await?;
         }
         AuthStatus::Approved => {
             info!("Edge client is authenticated");
-            info!("Web UI available at http://localhost:{} for status", web_port);
+            info!(
+                "Web UI available at http://localhost:{} for status",
+                web_port
+            );
 
             // Shared toolguard state — notify_rx fires on every state change
             let (toolguard_state_inner, state_notify_rx) = ToolGuardState::new_with_notify();
@@ -136,7 +162,9 @@ async fn main() -> Result<()> {
                 tokio::sync::mpsc::unbounded_channel::<css_edge::doors::DoorsEvent>();
 
             // Extract device credentials once
-            let device_info = app_config.remote_device_info.clone()
+            let device_info = app_config
+                .remote_device_info
+                .clone()
                 .expect("Approved device must have remote_device_info");
             let remote_instance_url = device_info.remote_instance_url.clone();
             let remote_auth_token = device_info.remote_auth_token.clone();
@@ -152,7 +180,11 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(resp) if resp.status().is_success() => {
-                        info!("Boot-reset: server acknowledged ({} {})", resp.status().as_u16(), url);
+                        info!(
+                            "Boot-reset: server acknowledged ({} {})",
+                            resp.status().as_u16(),
+                            url
+                        );
                     }
                     Ok(resp) => {
                         warn!("Boot-reset returned HTTP {}", resp.status());
@@ -174,21 +206,16 @@ async fn main() -> Result<()> {
                     loop {
                         ticker.tick().await;
                         let url = format!("{}/api/toolguard/sync", instance_url);
-                        match client
-                            .get(&url)
-                            .bearer_auth(&auth_token)
-                            .send()
-                            .await
-                        {
-                            Ok(resp) if resp.status().is_success() => {
-                                match resp.bytes().await {
-                                    Ok(bytes) => match state.apply_sync_bytes(&bytes) {
-                                        Ok(()) => info!("ToolGuard state synced from remote"),
-                                        Err(e) => warn!("Failed to parse toolguard sync response: {}", e),
-                                    },
-                                    Err(e) => warn!("Failed to read toolguard sync body: {}", e),
-                                }
-                            }
+                        match client.get(&url).bearer_auth(&auth_token).send().await {
+                            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                                Ok(bytes) => match state.apply_sync_bytes(&bytes) {
+                                    Ok(()) => info!("ToolGuard state synced from remote"),
+                                    Err(e) => {
+                                        warn!("Failed to parse toolguard sync response: {}", e)
+                                    }
+                                },
+                                Err(e) => warn!("Failed to read toolguard sync body: {}", e),
+                            },
                             Ok(resp) => warn!("ToolGuard sync returned HTTP {}", resp.status()),
                             Err(e) => warn!("ToolGuard sync request failed: {}", e),
                         }
@@ -212,7 +239,9 @@ async fn main() -> Result<()> {
                     remote_auth_token.clone(),
                     Arc::clone(&doors_state),
                     doors_event_tx.clone(),
-                ).await {
+                )
+                .await
+                {
                     Ok((local_client, local_rx)) => {
                         let local_client = Arc::new(local_client);
                         if let Err(e) = local_client.subscribe_to_requests() {
@@ -263,7 +292,15 @@ async fn main() -> Result<()> {
             let frontend_path_for_web = args.frontend_path.clone();
             let tgs_for_web = Arc::clone(&toolguard_state);
             tokio::spawn(async move {
-                if let Err(e) = start_web_server(config_for_web, config_path_for_web, web_port, tgs_for_web, frontend_path_for_web).await {
+                if let Err(e) = start_web_server(
+                    config_for_web,
+                    config_path_for_web,
+                    web_port,
+                    tgs_for_web,
+                    frontend_path_for_web,
+                )
+                .await
+                {
                     error!("Web server error: {}", e);
                 }
             });
@@ -281,10 +318,8 @@ async fn main() -> Result<()> {
                     }
 
                     info!("Starting remote MQTT connection...");
-                    let (mqtt_client, rx) = EdgeMqttClient::new(
-                        &app_config,
-                        edge_inbound.clone(),
-                    ).await?;
+                    let (mqtt_client, rx) =
+                        EdgeMqttClient::new(&app_config, edge_inbound.clone()).await?;
                     let mqtt_client = Arc::new(mqtt_client);
 
                     mqtt_client.subscribe_to_commands()?;

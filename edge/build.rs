@@ -64,6 +64,9 @@ fn main() {
         </html>\n";
 
     if let Err(e) = fs::write(&index, placeholder) {
-        panic!("could not write the placeholder at {}: {e}", index.display());
+        panic!(
+            "could not write the placeholder at {}: {e}",
+            index.display()
+        );
     }
 }

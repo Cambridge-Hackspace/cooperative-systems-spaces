@@ -18,7 +18,9 @@ struct Config {
     mqtt_client_id: String,
 }
 
-fn default_client_id() -> String { "toolguard-status-ui".to_string() }
+fn default_client_id() -> String {
+    "toolguard-status-ui".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -39,7 +41,10 @@ impl Config {
                 }
             }
         } else {
-            let _ = std::fs::write(p, toml::to_string_pretty(&Config::default()).unwrap_or_default());
+            let _ = std::fs::write(
+                p,
+                toml::to_string_pretty(&Config::default()).unwrap_or_default(),
+            );
         }
         Config::default()
     }
@@ -93,39 +98,45 @@ fn tools_from_payload(payload: &SyncPayload) -> Vec<ToolDisplay> {
     for user in &payload.users {
         for tool in &payload.tools {
             if tool.status == ToolStatus::InUse && user.authorized_tool_ids.contains(&tool.id) {
-                inuse_by.entry(tool.id.clone()).or_insert_with(|| user.full_name.clone());
+                inuse_by
+                    .entry(tool.id.clone())
+                    .or_insert_with(|| user.full_name.clone());
             }
         }
     }
 
-    let mut tools: Vec<ToolDisplay> = payload.tools.iter().map(|t| ToolDisplay {
-        name: t.name.clone(),
-        status: t.status.clone(),
-        inuse_by: inuse_by.get(&t.id).cloned(),
-    }).collect();
+    let mut tools: Vec<ToolDisplay> = payload
+        .tools
+        .iter()
+        .map(|t| ToolDisplay {
+            name: t.name.clone(),
+            status: t.status.clone(),
+            inuse_by: inuse_by.get(&t.id).cloned(),
+        })
+        .collect();
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     tools
 }
 
 fn status_color(status: &ToolStatus) -> Color32 {
     match status {
-        ToolStatus::Idle        => Color32::from_rgb(50, 200, 80),
-        ToolStatus::InUse       => Color32::from_rgb(50, 150, 230),
+        ToolStatus::Idle => Color32::from_rgb(50, 200, 80),
+        ToolStatus::InUse => Color32::from_rgb(50, 150, 230),
         ToolStatus::Maintenance => Color32::from_rgb(230, 190, 40),
-        ToolStatus::Repair      => Color32::from_rgb(230, 130, 40),
-        ToolStatus::Broken      => Color32::from_rgb(220, 60, 60),
-        ToolStatus::Retired     => Color32::from_rgb(120, 120, 120),
+        ToolStatus::Repair => Color32::from_rgb(230, 130, 40),
+        ToolStatus::Broken => Color32::from_rgb(220, 60, 60),
+        ToolStatus::Retired => Color32::from_rgb(120, 120, 120),
     }
 }
 
 fn status_label(status: &ToolStatus) -> &str {
     match status {
-        ToolStatus::Idle        => "Idle",
-        ToolStatus::InUse       => "In Use",
+        ToolStatus::Idle => "Idle",
+        ToolStatus::InUse => "In Use",
         ToolStatus::Maintenance => "Maintenance",
-        ToolStatus::Repair      => "Repair",
-        ToolStatus::Broken      => "Broken",
-        ToolStatus::Retired     => "Retired",
+        ToolStatus::Repair => "Repair",
+        ToolStatus::Broken => "Broken",
+        ToolStatus::Retired => "Retired",
     }
 }
 
@@ -156,7 +167,9 @@ fn run_subscriber(broker_url: String, client_id: String, tx: Sender<MqttEvent>) 
     let client = match mqtt::Client::new(create_opts) {
         Ok(c) => c,
         Err(e) => {
-            let _ = tx.send(MqttEvent::Error(format!("Failed to create MQTT client: {e}")));
+            let _ = tx.send(MqttEvent::Error(format!(
+                "Failed to create MQTT client: {e}"
+            )));
             return;
         }
     };
@@ -215,17 +228,35 @@ struct App {
 
 impl App {
     fn new(config: Config) -> Self {
-        let rx = spawn_subscriber(config.mqtt_broker_url.clone(), config.mqtt_client_id.clone());
-        Self { tools: vec![], connected: false, last_error: None, rx }
+        let rx = spawn_subscriber(
+            config.mqtt_broker_url.clone(),
+            config.mqtt_client_id.clone(),
+        );
+        Self {
+            tools: vec![],
+            connected: false,
+            last_error: None,
+            rx,
+        }
     }
 
     fn poll(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                MqttEvent::Connected    => { self.connected = true; self.last_error = None; }
-                MqttEvent::Disconnected => { self.connected = false; }
-                MqttEvent::State(tools) => { self.tools = tools; self.last_error = None; }
-                MqttEvent::Error(e)     => { self.last_error = Some(e); }
+                MqttEvent::Connected => {
+                    self.connected = true;
+                    self.last_error = None;
+                }
+                MqttEvent::Disconnected => {
+                    self.connected = false;
+                }
+                MqttEvent::State(tools) => {
+                    self.tools = tools;
+                    self.last_error = None;
+                }
+                MqttEvent::Error(e) => {
+                    self.last_error = Some(e);
+                }
             }
         }
     }
@@ -303,7 +334,8 @@ fn dot(ui: &mut egui::Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(120.0), Sense::hover());
     ui.painter().circle_filled(rect.center(), 54.0, color);
     ui.painter().circle_stroke(
-        rect.center(), 54.0,
+        rect.center(),
+        54.0,
         egui::Stroke::new(2.0, Color32::from_black_alpha(80)),
     );
 }
@@ -312,7 +344,8 @@ fn small_dot(ui: &mut egui::Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
     ui.painter().circle_filled(rect.center(), 9.0, color);
     ui.painter().circle_stroke(
-        rect.center(), 9.0,
+        rect.center(),
+        9.0,
         egui::Stroke::new(1.0, Color32::from_black_alpha(80)),
     );
 }

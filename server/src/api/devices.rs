@@ -157,7 +157,11 @@ pub async fn register_device(
     State(state): State<AppState>,
     Json(req): Json<RegisterDeviceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    tracing::info!("register_device called for device: {} ({})", req.name, req.kind);
+    tracing::info!(
+        "register_device called for device: {} ({})",
+        req.name,
+        req.kind
+    );
 
     let conn = &mut state.db.pool().get().map_err(|e| {
         tracing::error!("Failed to get database connection: {}", e);
@@ -266,14 +270,18 @@ pub async fn register_device(
 
     // Get MQTT configuration from server config
     let config = state.config_manager.get_config();
-    
-    tracing::info!("Checking MQTT config availability: edge_enabled={}, edge_mqtt_config={:?}", 
+
+    tracing::info!(
+        "Checking MQTT config availability: edge_enabled={}, edge_mqtt_config={:?}",
         config.edge.edge_enabled,
         config.edge.edge_mqtt_config.is_some()
     );
-    
+
     let mqtt_config = config.edge.edge_mqtt_config.map(|mqtt| {
-        tracing::info!("Providing MQTT config to device: url={}", mqtt.mqtt_instance_url);
+        tracing::info!(
+            "Providing MQTT config to device: url={}",
+            mqtt.mqtt_instance_url
+        );
         EdgeMqttConfig {
             mqtt_instance_url: mqtt.mqtt_instance_url,
             mqtt_username: mqtt.mqtt_username,
@@ -281,7 +289,7 @@ pub async fn register_device(
             mqtt_namespace: mqtt.mqtt_namespace,
         }
     });
-    
+
     if mqtt_config.is_none() {
         tracing::warn!("No MQTT configuration found in server config for edge apparatuss");
     }
@@ -397,7 +405,9 @@ pub async fn expire_device_invite(
         .execute(conn)?;
 
     if updated == 0 {
-        return Err(ApiError::NotFound("Device invite not found or already used".to_string()));
+        return Err(ApiError::NotFound(
+            "Device invite not found or already used".to_string(),
+        ));
     }
 
     // Create audit log
@@ -672,7 +682,9 @@ pub async fn set_device_place(
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate the target place exists if provided.
     if let Some(place_id) = req.place_id {
-        let _ = state.db.get_place(place_id)
+        let _ = state
+            .db
+            .get_place(place_id)
             .map_err(|_| ApiError::NotFound("place_id does not exist".to_string()))?;
     }
     let rows = state.db.set_space_device_place(id, req.place_id)?;

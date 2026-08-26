@@ -7,7 +7,7 @@ use std::time::Duration;
 
 #[derive(Debug)]
 pub enum MqttCommand {
-    ToolOn  { card: String, tool_id: String },
+    ToolOn { card: String, tool_id: String },
     ToolOff { card: String, tool_id: String },
 }
 
@@ -17,8 +17,15 @@ pub enum MqttCommand {
 pub enum MqttEvent {
     Connected,
     Disconnected,
-    ToolOnResponse  { tool_id: String, authorized: bool, reason: String },
-    ToolOffResponse { tool_id: String, ok: bool },
+    ToolOnResponse {
+        tool_id: String,
+        authorized: bool,
+        reason: String,
+    },
+    ToolOffResponse {
+        tool_id: String,
+        ok: bool,
+    },
     /// Live status update from `toolguard/state`: (tool_id, status_str) pairs
     StateUpdate(Vec<(String, String)>),
     Error(String),
@@ -54,9 +61,9 @@ struct SyncPayload {
 
 // ── Response topics ───────────────────────────────────────────────────────────
 
-const TOOL_ON_RESP:  &str = "toolguard/response/tool-on";
+const TOOL_ON_RESP: &str = "toolguard/response/tool-on";
 const TOOL_OFF_RESP: &str = "toolguard/response/tool-off";
-const STATE_TOPIC:   &str = "toolguard/state";
+const STATE_TOPIC: &str = "toolguard/state";
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -93,7 +100,9 @@ fn run_loop(
     let client = match mqtt::Client::new(create_opts) {
         Ok(c) => c,
         Err(e) => {
-            let _ = evt_tx.send(MqttEvent::Error(format!("Failed to create MQTT client: {e}")));
+            let _ = evt_tx.send(MqttEvent::Error(format!(
+                "Failed to create MQTT client: {e}"
+            )));
             return;
         }
     };
@@ -112,9 +121,9 @@ fn run_loop(
     let _ = evt_tx.send(MqttEvent::Connected);
 
     // Subscribe to response topics and live state
-    let _ = client.subscribe(TOOL_ON_RESP,  1);
+    let _ = client.subscribe(TOOL_ON_RESP, 1);
     let _ = client.subscribe(TOOL_OFF_RESP, 1);
-    let _ = client.subscribe(STATE_TOPIC,   1);
+    let _ = client.subscribe(STATE_TOPIC, 1);
 
     // Startup: publish tool-off for all known tools
     for (card, tool_id) in startup_tool_offs {
@@ -147,8 +156,12 @@ fn run_loop(
         // Drain any UI commands (non-blocking)
         loop {
             match cmd_rx.try_recv() {
-                Ok(MqttCommand::ToolOn  { card, tool_id }) => publish_tool_on(&client, &card, &tool_id),
-                Ok(MqttCommand::ToolOff { card, tool_id }) => publish_tool_off(&client, &card, &tool_id),
+                Ok(MqttCommand::ToolOn { card, tool_id }) => {
+                    publish_tool_on(&client, &card, &tool_id)
+                }
+                Ok(MqttCommand::ToolOff { card, tool_id }) => {
+                    publish_tool_off(&client, &card, &tool_id)
+                }
                 Err(_) => break,
             }
         }

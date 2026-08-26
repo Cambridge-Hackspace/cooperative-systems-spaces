@@ -1,22 +1,25 @@
-use std::fmt::Display;
+use argon2::{
+    password_hash::{PasswordHasher, PasswordVerifier, SaltString},
+    Argon2, PasswordHash as ArgonPasswordHash,
+};
+use async_trait::async_trait;
 use axum::{
     extract::{FromRef, FromRequestParts},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
-use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use uuid::Uuid;
-use argon2::{
-    password_hash::{PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-    PasswordHash as ArgonPasswordHash,
-};
 
-use crate::{database::DatabaseManager, models::{User, UserRole}, AppState};
+use crate::{
+    database::DatabaseManager,
+    models::{User, UserRole},
+    AppState,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -100,12 +103,16 @@ impl IntoResponse for AuthError {
         let (status, error_message) = match self {
             AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Wrong credentials"),
             AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, "Missing credentials"),
-            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token"),
+            AuthError::TokenCreation => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token")
+            }
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
             AuthError::UserNotFound => (StatusCode::NOT_FOUND, "User not found"),
             AuthError::UserInactive => (StatusCode::FORBIDDEN, "User account is inactive"),
             AuthError::InvalidPassword(_) => (StatusCode::BAD_REQUEST, "Invalid password"),
-            AuthError::InternalError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            AuthError::InternalError => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+            }
         };
 
         let body = Json(serde_json::json!({
@@ -128,7 +135,8 @@ impl PasswordHashUtil {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
 
-        let password_hash = argon2.hash_password(password.as_bytes(), &salt)
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
             .map_err(|e| AuthError::InvalidPassword(e.to_string()))?;
 
         Ok(password_hash.to_string())
@@ -136,11 +144,13 @@ impl PasswordHashUtil {
 
     /// Verify a password against a hash
     pub fn verify(password: &str, hash: &str) -> Result<bool, AuthError> {
-        let parsed_hash = ArgonPasswordHash::new(hash)
-            .map_err(|e| AuthError::InvalidPassword(e.to_string()))?;
+        let parsed_hash =
+            ArgonPasswordHash::new(hash).map_err(|e| AuthError::InvalidPassword(e.to_string()))?;
 
         let argon2 = Argon2::default();
-        Ok(argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok())
+        Ok(argon2
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok())
     }
 }
 
@@ -155,12 +165,19 @@ impl<'a> AuthService<'a> {
         Self { db, jwt_secret }
     }
 
-    pub fn authenticate_user(&self, username_or_email: &str, password: &str) -> Result<User, AuthError> {
+    pub fn authenticate_user(
+        &self,
+        username_or_email: &str,
+        password: &str,
+    ) -> Result<User, AuthError> {
         // Try to find user by username first, then by email
-        let user = self.db.find_user_by_username(username_or_email)
+        let user = self
+            .db
+            .find_user_by_username(username_or_email)
             .map_err(|_| AuthError::InternalError)?
             .or_else(|| {
-                self.db.find_user_by_email(username_or_email)
+                self.db
+                    .find_user_by_email(username_or_email)
                     .map_err(|_| AuthError::InternalError)
                     .unwrap_or(None)
             })
@@ -187,7 +204,9 @@ impl<'a> AuthService<'a> {
 
     pub fn get_user_from_token(&self, token: &str) -> Result<User, AuthError> {
         let claims = self.verify_token(token)?;
-        let user = self.db.find_user_by_id(claims.user_id)
+        let user = self
+            .db
+            .find_user_by_id(claims.user_id)
             .map_err(|_| AuthError::InternalError)?
             .ok_or(AuthError::UserNotFound)?;
 
@@ -214,20 +233,20 @@ where
         let app_state: AppState = AppState::from_ref(state);
 
         // Extract the token from Authorization header
-        let auth_header = parts.headers.get("authorization")
+        let auth_header = parts
+            .headers
+            .get("authorization")
             .ok_or(AuthError::MissingCredentials)?
             .to_str()
             .map_err(|_| AuthError::InvalidToken)?;
 
-        let token = auth_header.strip_prefix("Bearer ")
+        let token = auth_header
+            .strip_prefix("Bearer ")
             .ok_or(AuthError::InvalidToken)?;
 
         // Create auth service
         let config = app_state.config_manager.get_config();
-        let auth_service = AuthService::new(
-            &app_state.db,
-            &config.auth.jwt_secret,
-        );
+        let auth_service = AuthService::new(&app_state.db, &config.auth.jwt_secret);
 
         // Verify token and get user
         let user = auth_service.get_user_from_token(token)?;
@@ -291,7 +310,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
-        
+
         if !user.role.can_access_admin() {
             return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
         }

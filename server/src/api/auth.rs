@@ -32,7 +32,9 @@ async fn register(
     // Check if registration is allowed
     let config = state.config_manager.get_config();
     if !config.auth.allow_registration {
-        return Err(ApiError::Forbidden("User registration is disabled".to_string()));
+        return Err(ApiError::Forbidden(
+            "User registration is disabled".to_string(),
+        ));
     }
 
     // Get client identifier for throttling (using email as identifier)
@@ -49,9 +51,10 @@ async fn register(
                 config.registration_challenge.throttle_attempts,
                 config.registration_challenge.throttle_seconds,
             ) {
-                return Err(ApiError::TooManyRequests(
-                    format!("Too many failed registration attempts. Try again in {} seconds", remaining_seconds)
-                ));
+                return Err(ApiError::TooManyRequests(format!(
+                    "Too many failed registration attempts. Try again in {} seconds",
+                    remaining_seconds
+                )));
             }
         }
 
@@ -65,14 +68,18 @@ async fn register(
                     config.registration_challenge.throttle_seconds,
                 );
             }
-            return Err(ApiError::BadRequest("Invalid registration phrase".to_string()));
+            return Err(ApiError::BadRequest(
+                "Invalid registration phrase".to_string(),
+            ));
         }
     }
 
     // Check terms of service acceptance if required
     if config.registration_challenge.terms_of_service_checkbox {
         if !payload.terms_of_service_accepted.unwrap_or(false) {
-            return Err(ApiError::BadRequest("You must accept the terms of service to register".to_string()));
+            return Err(ApiError::BadRequest(
+                "You must accept the terms of service to register".to_string(),
+            ));
         }
     }
 
@@ -81,11 +88,17 @@ async fn register(
         let recaptcha_token = payload.recaptcha_token.as_deref().unwrap_or("");
 
         if recaptcha_token.is_empty() {
-            return Err(ApiError::BadRequest("reCAPTCHA verification is required".to_string()));
+            return Err(ApiError::BadRequest(
+                "reCAPTCHA verification is required".to_string(),
+            ));
         }
 
         // Verify reCAPTCHA token
-        match state.recaptcha_service.verify_token(recaptcha_token, None).await {
+        match state
+            .recaptcha_service
+            .verify_token(recaptcha_token, None)
+            .await
+        {
             Ok(true) => {
                 tracing::debug!("reCAPTCHA verification successful for registration");
             }
@@ -99,24 +112,31 @@ async fn register(
                         config.registration_challenge.throttle_seconds,
                     );
                 }
-                return Err(ApiError::BadRequest("reCAPTCHA verification failed. Please try again.".to_string()));
+                return Err(ApiError::BadRequest(
+                    "reCAPTCHA verification failed. Please try again.".to_string(),
+                ));
             }
             Err(e) => {
                 tracing::error!("reCAPTCHA verification error: {}", e);
-                return Err(ApiError::InternalServerError("reCAPTCHA verification service unavailable".to_string()));
+                return Err(ApiError::InternalServerError(
+                    "reCAPTCHA verification service unavailable".to_string(),
+                ));
             }
         }
     }
 
     // Basic validation
     if payload.username.is_empty() || payload.email.is_empty() || payload.password.is_empty() {
-        return Err(ApiError::BadRequest("Username, email, and password are required".to_string()));
+        return Err(ApiError::BadRequest(
+            "Username, email, and password are required".to_string(),
+        ));
     }
 
     if payload.password.len() < config.auth.password_min_length {
-        return Err(ApiError::BadRequest(
-            format!("Password must be at least {} characters long", config.auth.password_min_length)
-        ));
+        return Err(ApiError::BadRequest(format!(
+            "Password must be at least {} characters long",
+            config.auth.password_min_length
+        )));
     }
 
     if !payload.email.contains('@') {
@@ -160,23 +180,28 @@ async fn register(
         )
     };
 
-    let created_user = state.db.create_user(&new_user)
-        .map_err(ApiError::from)?;
+    let created_user = state.db.create_user(&new_user).map_err(ApiError::from)?;
 
     // Clear throttle on successful registration
     if config.registration_challenge.enabled && config.registration_challenge.throttle_enabled {
-        state.throttle_service.record_successful_attempt(&throttle_identifier);
+        state
+            .throttle_service
+            .record_successful_attempt(&throttle_identifier);
     }
 
     // Log the registration event
-    if let Err(e) = state.audit_logger.log_user_registration(
-        created_user.id,
-        &created_user.username,
-        &created_user.email,
-        "Newbie", // Default role for new users
-        None, // No IP tracking for now
-        None, // No User-Agent tracking for now
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_user_registration(
+            created_user.id,
+            &created_user.username,
+            &created_user.email,
+            "Newbie", // Default role for new users
+            None,     // No IP tracking for now
+            None,     // No User-Agent tracking for now
+        )
+        .await
+    {
         tracing::warn!("Failed to log user registration: {}", e);
     }
 
@@ -200,14 +225,13 @@ async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     if payload.username_or_email.is_empty() || payload.password.is_empty() {
-        return Err(ApiError::BadRequest("Username/email and password are required".to_string()));
+        return Err(ApiError::BadRequest(
+            "Username/email and password are required".to_string(),
+        ));
     }
 
     let config = state.config_manager.get_config();
-    let auth_service = AuthService::new(
-        &state.db,
-        &config.auth.jwt_secret,
-    );
+    let auth_service = AuthService::new(&state.db, &config.auth.jwt_secret);
 
     let user = auth_service
         .authenticate_user(&payload.username_or_email, &payload.password)
@@ -223,14 +247,11 @@ async fn login(
         )));
     }
 
-    let token = auth_service
-        .create_token(&user)
-        .map_err(ApiError::from)?;
+    let token = auth_service.create_token(&user).map_err(ApiError::from)?;
 
     // Flag users whose role requires enrollment under the current policy so
     // the frontend can route them to the enrollment page on first sight.
-    let must_enroll = config.auth.mfa.is_required_for(&user.role)
-        && user.mfa_enrolled_at.is_none();
+    let must_enroll = config.auth.mfa.is_required_for(&user.role) && user.mfa_enrolled_at.is_none();
 
     let response = LoginResponse {
         token,
@@ -240,14 +261,18 @@ async fn login(
     };
 
     // Log the successful login
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::UserLogin,
-        Some(user.id),
-        None,
-        serde_json::json!({"username": user.username, "action": "User logged in successfully"}),
-        None,
-        None,
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserLogin,
+            Some(user.id),
+            None,
+            serde_json::json!({"username": user.username, "action": "User logged in successfully"}),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log user login: {}", e);
     }
 

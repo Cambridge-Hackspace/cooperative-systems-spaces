@@ -1,49 +1,49 @@
-use std::sync::Arc;
-use axum::extract::{State, FromRef};
-use axum::{Json, Router};
+use axum::extract::{FromRef, State};
 use axum::http::StatusCode;
 use axum::routing::get;
+use axum::{Json, Router};
+use clap::Parser;
 use dr_metrix_axum::{metrics_handler, PrometheusMetrics};
 use dr_metrix_core::collector::CollectorConfig;
 use dr_metrix_postgres::PostgresMetrics;
-use clap::Parser;
 use serde_json::json;
+use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod api;
+mod auth;
+mod calendar;
 mod config;
 mod database;
-mod models;
-mod schema;
-mod auth;
-mod api;
-mod profile;
-mod throttle;
-mod recaptcha;
-mod calendar;
-mod pages;
-mod mqtt;
-mod webhooks;
-mod mfa;
-mod doors;
-mod schedules;
 mod devices_inbound;
 mod devices_transport;
-use config::{ConfigManager, load_config};
-use database::{DatabaseManager, initialize_database};
-use profile::{ProfileValidator, AuditLogger};
-use throttle::RegistrationThrottleService;
-use recaptcha::RecaptchaService;
-use calendar::CalendarService;
-use crate::pages::PagesService;
-use crate::mqtt::MqttService;
-use crate::webhooks::WebhookDispatcher;
-use crate::mfa::MfaService;
-use crate::doors::DoorService;
+mod doors;
+mod mfa;
+mod models;
+mod mqtt;
+mod pages;
+mod profile;
+mod recaptcha;
+mod schedules;
+mod schema;
+mod throttle;
+mod webhooks;
 use crate::devices_inbound::DeviceInbound;
 use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
+use crate::doors::DoorService;
+use crate::mfa::MfaService;
+use crate::mqtt::MqttService;
+use crate::pages::PagesService;
+use crate::webhooks::WebhookDispatcher;
+use calendar::CalendarService;
+use config::{load_config, ConfigManager};
+use database::{initialize_database, DatabaseManager};
+use profile::{AuditLogger, ProfileValidator};
+use recaptcha::RecaptchaService;
+use throttle::RegistrationThrottleService;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -84,9 +84,7 @@ pub struct AppState {
 }
 
 // Main dashboard handler
-async fn root(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn root(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
     let config = state.config_manager.get_config();
     Ok(Json(json!({
         "status": "ok",
@@ -120,14 +118,20 @@ async fn main() -> Result<(), anyhow::Error> {
     // Load configuration
     let app_config = load_config(&args.config_path)?;
     info!("Configuration loaded from: {}", args.config_path);
-    info!("Site: {} running in {} mode",
-          app_config.site.site_name,
-          if app_config.site.debug { "debug" } else { "production" });
+    info!(
+        "Site: {} running in {} mode",
+        app_config.site.site_name,
+        if app_config.site.debug {
+            "debug"
+        } else {
+            "production"
+        }
+    );
 
     // Create configuration manager
     let config_manager = Arc::new(ConfigManager::new(
         app_config.clone(),
-        Some(std::path::PathBuf::from(&args.config_path))
+        Some(std::path::PathBuf::from(&args.config_path)),
     ));
 
     // Initialize database
@@ -147,7 +151,10 @@ async fn main() -> Result<(), anyhow::Error> {
         Some(latest) => {
             let fields: Vec<config::ProfileField> = serde_json::from_value(latest.profile_fields)?;
             config_manager.set_profile_fields(fields);
-            info!("Loaded profile field schema from database (version {})", latest.version);
+            info!(
+                "Loaded profile field schema from database (version {})",
+                latest.version
+            );
         }
         None => {
             let seed = serde_json::to_value(&app_config.user.profile_fields)?;
@@ -162,7 +169,10 @@ async fn main() -> Result<(), anyhow::Error> {
             .with_process_collector()
             .build()?,
     );
-    let pg_config = CollectorConfig { namespace: "css".into(), ..Default::default() };
+    let pg_config = CollectorConfig {
+        namespace: "css".into(),
+        ..Default::default()
+    };
     let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
     prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
@@ -170,20 +180,23 @@ async fn main() -> Result<(), anyhow::Error> {
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
     let recaptcha_service = Arc::new(RecaptchaService::new(
-        app_config.registration_challenge.recaptcha_secret_key.clone()
+        app_config
+            .registration_challenge
+            .recaptcha_secret_key
+            .clone(),
     ));
-    
+
     // Initialize calendar service
     info!("Initializing calendar service...");
-    let calendar_service = Arc::new(tokio::sync::RwLock::new(
-        CalendarService::new(app_config.calendar.clone())
-    ));
+    let calendar_service = Arc::new(tokio::sync::RwLock::new(CalendarService::new(
+        app_config.calendar.clone(),
+    )));
     info!("Calendar service initialized");
 
     // Initialize pages service
     info!("Initializing pages service...");
     let pages_service = Arc::new(tokio::sync::RwLock::new(
-        PagesService::new(app_config.pages.clone()).await?
+        PagesService::new(app_config.pages.clone()).await?,
     ));
     info!("Pages service initialized");
 
@@ -199,25 +212,22 @@ async fn main() -> Result<(), anyhow::Error> {
     let mqtt_service_arc = if app_config.edge.edge_enabled {
         if let Some(mqtt_config) = &app_config.edge.edge_mqtt_config {
             info!("Initializing MQTT service...");
-            let (mqtt_service, rx) = MqttService::new(
-                mqtt_config,
-                db_manager.clone(),
-                device_inbound.clone(),
-            )
-                .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
+            let (mqtt_service, rx) =
+                MqttService::new(mqtt_config, db_manager.clone(), device_inbound.clone())
+                    .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
 
             let mqtt_service_arc = Arc::new(mqtt_service);
             let mqtt_service_for_task = mqtt_service_arc.as_ref().clone();
-            
+
             info!("MQTT service initialized, starting event loop...");
-            
+
             // Spawn MQTT service in background
             tokio::spawn(async move {
                 if let Err(e) = mqtt_service_for_task.start(rx).await {
                     error!("MQTT service error: {}", e);
                 }
             });
-            
+
             info!("MQTT service started");
             Some(mqtt_service_arc)
         } else {
@@ -263,7 +273,10 @@ async fn main() -> Result<(), anyhow::Error> {
     if app_config.door.enabled {
         door_service.republish_all();
     }
-    info!("Door access service initialized (enabled={})", app_config.door.enabled);
+    info!(
+        "Door access service initialized (enabled={})",
+        app_config.door.enabled
+    );
 
     // Schedule ticker: re-evaluate every rule's schedule each minute and
     // republish any device whose compiled snapshot changed. Quiet during
@@ -282,7 +295,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let app_state = AppState {
-        config_manager: config_manager,
+        config_manager,
         db: db_manager,
         profile_validator,
         audit_logger,
@@ -304,13 +317,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let serve_dir = ServeDir::new(&frontend_path)
         .not_found_service(ServeFile::new(format!("{}/index.html", frontend_path)));
 
-    let general_route = Router::new()
-        .route("/status", get(root));
-        // .route("/profile", get(handlers::show_profile))
-        // .layer(axum::middleware::from_fn_with_state(
-        //     app_state.db.clone(),
-        //     web_auth_middleware
-        // ));
+    let general_route = Router::new().route("/status", get(root));
+    // .route("/profile", get(handlers::show_profile))
+    // .layer(axum::middleware::from_fn_with_state(
+    //     app_state.db.clone(),
+    //     web_auth_middleware
+    // ));
 
     let app = Router::new()
         .route("/metrics", get(metrics_handler).with_state(prom.clone()))
@@ -329,8 +341,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
 /// Test basic database operations
 async fn test_database_operations(db_manager: &DatabaseManager) -> Result<(), anyhow::Error> {
-    use models::NewUser;
     use auth::PasswordHashUtil;
+    use models::NewUser;
 
     // Test database health check
     db_manager.health_check()?;
@@ -361,7 +373,10 @@ async fn test_database_operations(db_manager: &DatabaseManager) -> Result<(), an
     info!("Test user found by ID");
 
     let found_user_by_username = db_manager.find_user_by_username("test_user")?;
-    assert!(found_user_by_username.is_some(), "User should be found by username");
+    assert!(
+        found_user_by_username.is_some(),
+        "User should be found by username"
+    );
     info!("Test user found by username");
 
     // Test user count

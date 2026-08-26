@@ -1,11 +1,11 @@
-use std::convert::Infallible;
-use std::task::{Context, Poll};
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use include_dir::Dir;
 use mime_guess::from_path;
+use std::convert::Infallible;
+use std::task::{Context, Poll};
 use tower::Service;
 use tracing::warn;
 

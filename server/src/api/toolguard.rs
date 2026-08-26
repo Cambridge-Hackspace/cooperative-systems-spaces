@@ -25,15 +25,30 @@ pub struct ToolGuardResponse {
 
 impl ToolGuardResponse {
     fn ok() -> Self {
-        Self { status: "ok".to_string(), message: None, tool_on: None, tool_off: None }
+        Self {
+            status: "ok".to_string(),
+            message: None,
+            tool_on: None,
+            tool_off: None,
+        }
     }
 
     fn ok_with_message(message: impl Into<String>) -> Self {
-        Self { status: "ok".to_string(), message: Some(message.into()), tool_on: None, tool_off: None }
+        Self {
+            status: "ok".to_string(),
+            message: Some(message.into()),
+            tool_on: None,
+            tool_off: None,
+        }
     }
 
     fn error(message: impl Into<String>) -> Self {
-        Self { status: "error".to_string(), message: Some(message.into()), tool_on: None, tool_off: None }
+        Self {
+            status: "error".to_string(),
+            message: Some(message.into()),
+            tool_on: None,
+            tool_off: None,
+        }
     }
 
     fn tool_authorized() -> Self {
@@ -152,13 +167,18 @@ async fn boot_reset(
 
     tracing::info!("Boot-reset requested by device {}", device_id);
 
-    let inuse_tools = state.db.get_inuse_tools()
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to query InUse tools: {}", e)))?;
+    let inuse_tools = state.db.get_inuse_tools().map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to query InUse tools: {}", e))
+    })?;
 
     let count = inuse_tools.len();
     for tool in inuse_tools {
-        state.db.update_tool_status(tool.id, &crate::models::ToolStatus::Idle)
-            .map_err(|e| ApiError::InternalServerError(format!("Failed to reset tool {}: {}", tool.id, e)))?;
+        state
+            .db
+            .update_tool_status(tool.id, &crate::models::ToolStatus::Idle)
+            .map_err(|e| {
+                ApiError::InternalServerError(format!("Failed to reset tool {}: {}", tool.id, e))
+            })?;
 
         use crate::models::NewToolEvent;
         let event = NewToolEvent {
@@ -171,12 +191,17 @@ async fn boot_reset(
             notes: Some(format!("Reset to idle at edge boot (device {})", device_id)),
             scan_data: Some(serde_json::json!({ "device_id": device_id, "reason": "boot-reset" })),
         };
-        state.db.create_tool_event(&event)
-            .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
+        state.db.create_tool_event(&event).map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
+        })?;
     }
 
     if count > 0 {
-        tracing::info!("Boot-reset: {} tool(s) reset to idle by device {}", count, device_id);
+        tracing::info!(
+            "Boot-reset: {} tool(s) reset to idle by device {}",
+            count,
+            device_id
+        );
 
         let audit_logger = state.audit_logger.clone();
         let details = serde_json::json!({
@@ -185,16 +210,25 @@ async fn boot_reset(
             "reason": "boot-reset",
         });
         tokio::spawn(async move {
-            let _ = audit_logger.log_event(
-                crate::models::AuditEventType::ToolDeactivated,
-                None, None, details, None, None,
-            ).await;
+            let _ = audit_logger
+                .log_event(
+                    crate::models::AuditEventType::ToolDeactivated,
+                    None,
+                    None,
+                    details,
+                    None,
+                    None,
+                )
+                .await;
         });
 
         broadcast_toolguard_state(&state).await;
     }
 
-    Ok(Json(ToolGuardResponse::ok_with_message(format!("{} tool(s) reset to idle", count))))
+    Ok(Json(ToolGuardResponse::ok_with_message(format!(
+        "{} tool(s) reset to idle",
+        count
+    ))))
 }
 
 /// GET /api/toolguard/tool-on
@@ -205,7 +239,11 @@ async fn tool_on(
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
 
-    tracing::info!("Tool on request: card={}, tool_id={}", req.card, req.tool_id);
+    tracing::info!(
+        "Tool on request: card={}, tool_id={}",
+        req.card,
+        req.tool_id
+    );
 
     let user = match find_user_by_card(&state, &req.card).await? {
         Some(u) => u,
@@ -231,12 +269,23 @@ async fn tool_on(
     match tool.status {
         crate::models::ToolStatus::Idle => {}
         crate::models::ToolStatus::InUse => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Tool is already in use")));
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use")
+                .await?;
+            return Ok(Json(ToolGuardResponse::tool_denied(
+                "Tool is already in use",
+            )));
         }
         crate::models::ToolStatus::Maintenance => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is under maintenance").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Tool is under maintenance")));
+            log_tool_access_denied(
+                &state,
+                Some(&user),
+                &req.tool_id,
+                "Tool is under maintenance",
+            )
+            .await?;
+            return Ok(Json(ToolGuardResponse::tool_denied(
+                "Tool is under maintenance",
+            )));
         }
         crate::models::ToolStatus::Broken => {
             log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is broken").await?;
@@ -252,20 +301,29 @@ async fn tool_on(
         }
     }
 
-    let has_training_steps = state.db.tool_has_training_steps(tool.id)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to check training steps: {}", e)))?;
+    let has_training_steps = state.db.tool_has_training_steps(tool.id).map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to check training steps: {}", e))
+    })?;
 
     if has_training_steps {
-        let has_completed = state.db.user_has_completed_all_training_steps(user.id, tool.id)
-            .map_err(|e| ApiError::InternalServerError(format!("Failed to check training completion: {}", e)))?;
+        let has_completed = state
+            .db
+            .user_has_completed_all_training_steps(user.id, tool.id)
+            .map_err(|e| {
+                ApiError::InternalServerError(format!("Failed to check training completion: {}", e))
+            })?;
         if !has_completed {
             log_tool_access_denied(&state, Some(&user), &req.tool_id, "Training required").await?;
             return Ok(Json(ToolGuardResponse::tool_denied("Training required")));
         }
     }
 
-    state.db.update_tool_status(tool.id, &crate::models::ToolStatus::InUse)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to update tool status: {}", e)))?;
+    state
+        .db
+        .update_tool_status(tool.id, &crate::models::ToolStatus::InUse)
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to update tool status: {}", e))
+        })?;
 
     use crate::models::NewToolEvent;
     let event = NewToolEvent {
@@ -275,14 +333,18 @@ async fn tool_on(
         new_status: Some(crate::models::ToolStatus::InUse),
         user_id: Some(user.id),
         actor_id: Some(user.id),
-        notes: Some(format!("Activated via ToolGuard (tool_id: {})", req.tool_id)),
+        notes: Some(format!(
+            "Activated via ToolGuard (tool_id: {})",
+            req.tool_id
+        )),
         scan_data: Some(serde_json::json!({
             "toolguard_id": req.tool_id,
             "card": req.card,
         })),
     };
-    state.db.create_tool_event(&event)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
+    state.db.create_tool_event(&event).map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
+    })?;
 
     log_tool_activated(&state, &user, tool.id, &req.tool_id).await?;
 
@@ -300,7 +362,11 @@ async fn tool_off(
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
 
-    tracing::info!("Tool off request: card={}, tool_id={}", req.card, req.tool_id);
+    tracing::info!(
+        "Tool off request: card={}, tool_id={}",
+        req.card,
+        req.tool_id
+    );
 
     let user = match find_user_by_card(&state, &req.card).await? {
         Some(u) => u,
@@ -312,8 +378,12 @@ async fn tool_off(
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
     };
 
-    state.db.update_tool_status(tool.id, &crate::models::ToolStatus::Idle)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to update tool status: {}", e)))?;
+    state
+        .db
+        .update_tool_status(tool.id, &crate::models::ToolStatus::Idle)
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to update tool status: {}", e))
+        })?;
 
     use crate::models::NewToolEvent;
     let event = NewToolEvent {
@@ -323,14 +393,18 @@ async fn tool_off(
         new_status: Some(crate::models::ToolStatus::Idle),
         user_id: Some(user.id),
         actor_id: Some(user.id),
-        notes: Some(format!("Deactivated via ToolGuard (tool_id: {})", req.tool_id)),
+        notes: Some(format!(
+            "Deactivated via ToolGuard (tool_id: {})",
+            req.tool_id
+        )),
         scan_data: Some(serde_json::json!({
             "toolguard_id": req.tool_id,
             "card": req.card,
         })),
     };
-    state.db.create_tool_event(&event)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
+    state.db.create_tool_event(&event).map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
+    })?;
 
     log_tool_deactivated(&state, &user, tool.id, &req.tool_id).await?;
 
@@ -349,7 +423,10 @@ async fn tool_log(
 
     tracing::info!(
         "Tool log request: card={}, tool_id={}, seconds={}, temp={:?}",
-        req.card, req.tool_id, req.seconds, req.temperature
+        req.card,
+        req.tool_id,
+        req.seconds,
+        req.temperature
     );
 
     let user = match find_user_by_card(&state, &req.card).await? {
@@ -378,10 +455,19 @@ async fn tool_log(
             "temperature": req.temperature,
         })),
     };
-    state.db.create_tool_event(&event)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to create tool event: {}", e)))?;
+    state.db.create_tool_event(&event).map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
+    })?;
 
-    log_tool_usage(&state, &user, tool.id, &req.tool_id, req.seconds, req.temperature).await?;
+    log_tool_usage(
+        &state,
+        &user,
+        tool.id,
+        &req.tool_id,
+        req.seconds,
+        req.temperature,
+    )
+    .await?;
 
     Ok(Json(ToolGuardResponse::ok_with_message("Usage logged")))
 }
@@ -403,7 +489,9 @@ pub async fn extract_device_auth(
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::Unauthorized("Invalid Authorization format".to_string()))?;
 
-    let (device_id, _) = state.db.find_device_by_auth_token(token)
+    let (device_id, _) = state
+        .db
+        .find_device_by_auth_token(token)
         .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::Unauthorized("Invalid device token".to_string()))?;
 
@@ -416,7 +504,9 @@ pub async fn build_sync_payload(
     device_id: Uuid,
     profile_field: &str,
 ) -> Result<ToolGuardSyncPayload, ApiError> {
-    let (mut users, mut tools) = state.db.get_toolguard_sync_data(profile_field)
+    let (mut users, mut tools) = state
+        .db
+        .get_toolguard_sync_data(profile_field)
         .map_err(|e| ApiError::InternalServerError(format!("Failed to build sync data: {}", e)))?;
 
     // Apply schedule gating: any tool whose attached schedule is closed
@@ -425,7 +515,8 @@ pub async fn build_sync_payload(
     let closed_tool_ids = closed_tool_ids_now(state)?;
     if !closed_tool_ids.is_empty() {
         for u in users.iter_mut() {
-            u.authorized_tool_ids.retain(|tid| !closed_tool_ids.contains(tid));
+            u.authorized_tool_ids
+                .retain(|tid| !closed_tool_ids.contains(tid));
         }
         tools.retain(|t| !closed_tool_ids.contains(&t.id));
     }
@@ -440,9 +531,7 @@ pub async fn build_sync_payload(
 
 /// Tools whose attached schedule isn't currently open. Empty when no tools
 /// have a schedule (typical case) or when no schedules exist.
-fn closed_tool_ids_now(
-    state: &AppState,
-) -> Result<std::collections::HashSet<Uuid>, ApiError> {
+fn closed_tool_ids_now(state: &AppState) -> Result<std::collections::HashSet<Uuid>, ApiError> {
     use std::collections::HashSet;
     let cfg = state.config_manager.get_config();
     let tz = crate::schedules::resolve_tz(&cfg.site.timezone);
@@ -513,17 +602,23 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
 
     for device_id in devices {
         match build_sync_payload(state, device_id, &profile_field).await {
-            Ok(payload) => {
-                match serde_json::to_vec(&payload) {
-                    Ok(bytes) => {
-                        if let Err(e) = mqtt_service.publish_toolguard_state(device_id, bytes) {
-                            tracing::warn!("Failed to publish toolguard state to device {}: {}", device_id, e);
-                        }
+            Ok(payload) => match serde_json::to_vec(&payload) {
+                Ok(bytes) => {
+                    if let Err(e) = mqtt_service.publish_toolguard_state(device_id, bytes) {
+                        tracing::warn!(
+                            "Failed to publish toolguard state to device {}: {}",
+                            device_id,
+                            e
+                        );
                     }
-                    Err(e) => tracing::warn!("Failed to serialize toolguard payload: {}", e),
                 }
-            }
-            Err(e) => tracing::warn!("Failed to build sync payload for device {}: {}", device_id, e),
+                Err(e) => tracing::warn!("Failed to serialize toolguard payload: {}", e),
+            },
+            Err(e) => tracing::warn!(
+                "Failed to build sync payload for device {}: {}",
+                device_id,
+                e
+            ),
         }
     }
 }
@@ -578,7 +673,11 @@ async fn authorize_toolguard(
     ))
 }
 
-async fn validate_api_key(state: &AppState, api_key: &str, tool: Option<&crate::models::Tool>) -> Result<bool, ApiError> {
+async fn validate_api_key(
+    state: &AppState,
+    api_key: &str,
+    tool: Option<&crate::models::Tool>,
+) -> Result<bool, ApiError> {
     let config = state.config_manager.get_config();
     if api_key.is_empty() {
         return Ok(false);
@@ -598,14 +697,24 @@ async fn validate_api_key(state: &AppState, api_key: &str, tool: Option<&crate::
     Ok(false)
 }
 
-async fn find_user_by_card(state: &AppState, card: &str) -> Result<Option<crate::models::User>, ApiError> {
+async fn find_user_by_card(
+    state: &AppState,
+    card: &str,
+) -> Result<Option<crate::models::User>, ApiError> {
     let config = state.config_manager.get_config();
     let profile_field = &config.toolguard.profile_field;
-    state.db.find_user_by_profile_field(profile_field, card)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to query user by profile field: {}", e)))
+    state
+        .db
+        .find_user_by_profile_field(profile_field, card)
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to query user by profile field: {}", e))
+        })
 }
 
-async fn find_tool_by_toolguard_id(state: &AppState, toolguard_id: &str) -> Result<Option<crate::models::Tool>, ApiError> {
+async fn find_tool_by_toolguard_id(
+    state: &AppState,
+    toolguard_id: &str,
+) -> Result<Option<crate::models::Tool>, ApiError> {
     // Try external_id first
     if let Ok(Some(tool)) = state.db.get_tool_by_external_id(toolguard_id) {
         return Ok(Some(tool));
@@ -633,10 +742,16 @@ async fn log_tool_access_denied(
     let audit_logger = state.audit_logger.clone();
     let user_id = user.map(|u| u.id);
     tokio::spawn(async move {
-        let _ = audit_logger.log_event(
-            crate::models::AuditEventType::ToolAccessDenied,
-            user_id, user_id, details, None, None,
-        ).await;
+        let _ = audit_logger
+            .log_event(
+                crate::models::AuditEventType::ToolAccessDenied,
+                user_id,
+                user_id,
+                details,
+                None,
+                None,
+            )
+            .await;
     });
     Ok(())
 }
@@ -655,10 +770,16 @@ async fn log_tool_activated(
     let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
     tokio::spawn(async move {
-        let _ = audit_logger.log_event(
-            crate::models::AuditEventType::ToolActivated,
-            Some(user_id), Some(user_id), details, None, None,
-        ).await;
+        let _ = audit_logger
+            .log_event(
+                crate::models::AuditEventType::ToolActivated,
+                Some(user_id),
+                Some(user_id),
+                details,
+                None,
+                None,
+            )
+            .await;
     });
     Ok(())
 }
@@ -677,10 +798,16 @@ async fn log_tool_deactivated(
     let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
     tokio::spawn(async move {
-        let _ = audit_logger.log_event(
-            crate::models::AuditEventType::ToolDeactivated,
-            Some(user_id), Some(user_id), details, None, None,
-        ).await;
+        let _ = audit_logger
+            .log_event(
+                crate::models::AuditEventType::ToolDeactivated,
+                Some(user_id),
+                Some(user_id),
+                details,
+                None,
+                None,
+            )
+            .await;
     });
     Ok(())
 }
@@ -703,10 +830,16 @@ async fn log_tool_usage(
     let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
     tokio::spawn(async move {
-        let _ = audit_logger.log_event(
-            crate::models::AuditEventType::ToolUsageLogged,
-            Some(user_id), Some(user_id), details, None, None,
-        ).await;
+        let _ = audit_logger
+            .log_event(
+                crate::models::AuditEventType::ToolUsageLogged,
+                Some(user_id),
+                Some(user_id),
+                details,
+                None,
+                None,
+            )
+            .await;
     });
     Ok(())
 }

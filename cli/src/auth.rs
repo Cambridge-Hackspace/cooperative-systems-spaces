@@ -3,7 +3,9 @@ use clap::Subcommand;
 use console::style;
 use dialoguer::{Input, Password};
 
-use crate::client::{ApiClient, ApiResponse, LoginRequest, LoginResponse, RegisterRequest, UserResponse};
+use crate::client::{
+    ApiClient, ApiResponse, LoginRequest, LoginResponse, RegisterRequest, UserResponse,
+};
 use crate::config::CliConfig;
 use crate::output;
 
@@ -105,10 +107,15 @@ async fn handle_login(
 
     // Store the token
     config.auth_token = Some(login_data.token);
-    config.save_default().context("Failed to save configuration")?;
+    config
+        .save_default()
+        .context("Failed to save configuration")?;
 
     println!("{}", style("Login successful!").green());
-    println!("Logged in as: {} ({})", login_data.user.full_name, login_data.user.username);
+    println!(
+        "Logged in as: {} ({})",
+        login_data.user.full_name, login_data.user.username
+    );
     println!("Role: {}", login_data.user.role);
     println!("Token expires in: {} seconds", login_data.expires_in);
 
@@ -117,8 +124,10 @@ async fn handle_login(
 
 async fn handle_logout(config: &mut CliConfig) -> Result<()> {
     config.auth_token = None;
-    config.save_default().context("Failed to save configuration")?;
-    
+    config
+        .save_default()
+        .context("Failed to save configuration")?;
+
     println!("{}", style("Logged out successfully").green());
     Ok(())
 }
@@ -161,7 +170,7 @@ async fn handle_register(
                 .with_prompt("Password")
                 .interact()
                 .context("Failed to read password")?;
-            
+
             let pass2 = Password::new()
                 .with_prompt("Confirm password")
                 .interact()
@@ -201,7 +210,10 @@ async fn handle_register(
     let user_data = response.data.context("No user data in response")?;
 
     println!("{}", style("Registration successful!").green());
-    println!("Account created for: {} ({})", user_data.full_name, user_data.username);
+    println!(
+        "Account created for: {} ({})",
+        user_data.full_name, user_data.username
+    );
     println!("Role: {}", user_data.role);
     println!("\nYou can now login with: css auth login");
 
@@ -248,7 +260,10 @@ async fn handle_check(client: &ApiClient, config: &CliConfig) -> Result<()> {
         return Ok(());
     }
 
-    match client.get::<ApiResponse<UserResponse>>("/api/auth/me").await {
+    match client
+        .get::<ApiResponse<UserResponse>>("/api/auth/me")
+        .await
+    {
         Ok(response) if response.success => {
             println!("{}", style("Token is valid").green());
             if let Some(user) = response.data {

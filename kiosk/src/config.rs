@@ -10,16 +10,13 @@ fn config_search_paths() -> Vec<std::path::PathBuf> {
     // $XDG_CONFIG_HOME/css-kiosk/kiosk.toml  (default: ~/.config)
     let xdg_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
-        });
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")));
     if let Some(home) = xdg_home {
         paths.push(home.join(CONFIG_FILENAME));
     }
 
     // $XDG_CONFIG_DIRS/css-kiosk/kiosk.toml  (default: /etc/xdg)
-    let xdg_dirs = std::env::var("XDG_CONFIG_DIRS")
-        .unwrap_or_else(|_| "/etc/xdg".to_string());
+    let xdg_dirs = std::env::var("XDG_CONFIG_DIRS").unwrap_or_else(|_| "/etc/xdg".to_string());
     for dir in xdg_dirs.split(':').filter(|s| !s.is_empty()) {
         paths.push(std::path::PathBuf::from(dir).join(CONFIG_FILENAME));
     }

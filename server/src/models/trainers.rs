@@ -1,10 +1,9 @@
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, NaiveDate, Utc};
 use diesel::prelude::*;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc, NaiveDate};
 
 use crate::schema::tool_trainers;
-
 
 // ==================== TOOL TRAINERS ====================
 
@@ -123,7 +122,7 @@ impl TrainingCompletionStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Completed => "completed",
-            Self::Partial => "partial", 
+            Self::Partial => "partial",
             Self::Failed => "failed",
         }
     }

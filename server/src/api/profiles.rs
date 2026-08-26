@@ -9,14 +9,11 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    api::{
-        errors::ApiError,
-        responses::ApiResponse,
-    },
-    auth::{AuthUser, AdminUser},
-    profile::{ProfileValidator, AuditLogger},
+    api::{errors::ApiError, responses::ApiResponse},
+    auth::{AdminUser, AuthUser},
     config::ProfileField,
     models::{AuditEventType, ProfileConfigVersion},
+    profile::{AuditLogger, ProfileValidator},
     AppState,
 };
 
@@ -88,11 +85,15 @@ async fn get_user_profile(
 ) -> Result<Json<ApiResponse<ProfileResponse>>, ApiError> {
     // Users can view their own profile, or staff/admin users can view any profile
     if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("You can only view your own profile".to_string()));
+        return Err(ApiError::Forbidden(
+            "You can only view your own profile".to_string(),
+        ));
     }
 
     // Get user from database
-    let user = state.db.find_user_by_id(user_id)
+    let user = state
+        .db
+        .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -113,36 +114,50 @@ async fn update_user_profile(
 ) -> Result<Json<ApiResponse<ProfileResponse>>, ApiError> {
     // Users can only update their own profile, unless they're staff/admin
     if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("You can only update your own profile".to_string()));
+        return Err(ApiError::Forbidden(
+            "You can only update your own profile".to_string(),
+        ));
     }
 
     // Check if profiles are enabled
     let config_guard = state.config_manager.get_config();
     if !config_guard.user.profiles_enabled {
-        return Err(ApiError::BadRequest("User profiles are currently disabled".to_string()));
+        return Err(ApiError::BadRequest(
+            "User profiles are currently disabled".to_string(),
+        ));
     }
 
     // Check if user exists
-    let existing_user = state.db.find_user_by_id(user_id)
+    let existing_user = state
+        .db
+        .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
     // Validate the profile data
     let profile_validator = ProfileValidator::new(&config_guard.user);
-    profile_validator.validate_profile(&payload.profile)
+    profile_validator
+        .validate_profile(&payload.profile)
         .map_err(|e| ApiError::BadRequest(format!("Profile validation failed: {}", e)))?;
 
     // Drop the config guard before database operations
     drop(config_guard);
 
     // Update the profile
-    let updated_user = state.db.update_user_profile(user_id, &payload.profile)
+    let updated_user = state
+        .db
+        .update_user_profile(user_id, &payload.profile)
         .map_err(ApiError::from)?;
 
     // If the door-relevant profile field changed (it's reused by the door
     // module via `toolguard.profile_field`), republish state to every edge
     // device serving doors so allow-lists pick up the new card(s).
-    let card_field = state.config_manager.get_config().toolguard.profile_field.clone();
+    let card_field = state
+        .config_manager
+        .get_config()
+        .toolguard
+        .profile_field
+        .clone();
     let old_card = existing_user.profile.get(&card_field).cloned();
     let new_card = payload.profile.get(&card_field).cloned();
     if old_card != new_card {
@@ -151,14 +166,21 @@ async fn update_user_profile(
 
     // Log the profile update
     let audit_logger = AuditLogger::new(state.db.clone());
-    if let Err(e) = audit_logger.log_profile_update(
-        user_id,
-        if auth_user.0.id != user_id { Some(auth_user.0.id) } else { None },
-        &existing_user.profile,
-        &payload.profile,
-        None, // We'll add IP address extraction later
-        None, // We'll add user agent extraction later
-    ).await {
+    if let Err(e) = audit_logger
+        .log_profile_update(
+            user_id,
+            if auth_user.0.id != user_id {
+                Some(auth_user.0.id)
+            } else {
+                None
+            },
+            &existing_user.profile,
+            &payload.profile,
+            None, // We'll add IP address extraction later
+            None, // We'll add user agent extraction later
+        )
+        .await
+    {
         tracing::warn!("Failed to log profile update: {}", e);
     }
 
@@ -202,36 +224,46 @@ async fn update_profile_config(
     validate_profile_fields(&payload.profile_fields)?;
 
     // Persist a new, immutable version of the field schema...
-    let fields_json = serde_json::to_value(&payload.profile_fields)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to serialize profile fields: {}", e)))?;
-    let new_version = state.db
+    let fields_json = serde_json::to_value(&payload.profile_fields).map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to serialize profile fields: {}", e))
+    })?;
+    let new_version = state
+        .db
         .insert_profile_config_version(fields_json, Some(admin_user.0.id))
         .map_err(ApiError::from)?;
 
     // ...and keep the in-process config cache (used by validation) and the
     // file-backed profiles_enabled toggle up to date.
-    state.config_manager.set_profile_fields(payload.profile_fields.clone());
+    state
+        .config_manager
+        .set_profile_fields(payload.profile_fields.clone());
     let profiles_enabled = payload.profiles_enabled;
-    state.config_manager.update_config(|config| {
-        config.user.profiles_enabled = profiles_enabled;
-    }).map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+    state
+        .config_manager
+        .update_config(|config| {
+            config.user.profiles_enabled = profiles_enabled;
+        })
+        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
 
     // Log the configuration change
     let audit_logger = AuditLogger::new(state.db.clone());
-    if let Err(e) = audit_logger.log_event(
-        AuditEventType::AdminConfigReload,
-        Some(admin_user.0.id),
-        Some(admin_user.0.id),
-        serde_json::json!({
-            "section": "user_profiles",
-            "profile_config_version": new_version.version,
-            "profile_fields_count": payload.profile_fields.len(),
-            "profiles_enabled": payload.profiles_enabled,
-            "action": "Profile configuration updated by admin"
-        }),
-        None,
-        None,
-    ).await {
+    if let Err(e) = audit_logger
+        .log_event(
+            AuditEventType::AdminConfigReload,
+            Some(admin_user.0.id),
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "section": "user_profiles",
+                "profile_config_version": new_version.version,
+                "profile_fields_count": payload.profile_fields.len(),
+                "profiles_enabled": payload.profiles_enabled,
+                "action": "Profile configuration updated by admin"
+            }),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log config update: {}", e);
     }
 
@@ -255,12 +287,16 @@ async fn list_profile_config_versions(
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let offset = q.offset.unwrap_or(0).max(0);
 
-    let versions = state.db.list_profile_config_versions(limit, offset)
+    let versions = state
+        .db
+        .list_profile_config_versions(limit, offset)
         .map_err(ApiError::from)?
         .into_iter()
         .map(ProfileConfigVersionResponse::try_from)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e))
+        })?;
 
     Ok(Json(ApiResponse::success(versions)))
 }
@@ -273,33 +309,45 @@ async fn rollback_profile_config(
     State(state): State<AppState>,
     Path(target_version): Path<i64>,
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
-    let target = state.db.get_profile_config_version(target_version)
+    let target = state
+        .db
+        .get_profile_config_version(target_version)
         .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::NotFound(format!("No profile config version {}", target_version)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("No profile config version {}", target_version))
+        })?;
 
     let profile_fields: Vec<ProfileField> = serde_json::from_value(target.profile_fields.clone())
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
+        .map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e))
+    })?;
 
-    let new_version = state.db
+    let new_version = state
+        .db
         .insert_profile_config_version(target.profile_fields, Some(admin_user.0.id))
         .map_err(ApiError::from)?;
 
-    state.config_manager.set_profile_fields(profile_fields.clone());
+    state
+        .config_manager
+        .set_profile_fields(profile_fields.clone());
 
     let audit_logger = AuditLogger::new(state.db.clone());
-    if let Err(e) = audit_logger.log_event(
-        AuditEventType::AdminConfigReload,
-        Some(admin_user.0.id),
-        Some(admin_user.0.id),
-        serde_json::json!({
-            "section": "user_profiles",
-            "profile_config_version": new_version.version,
-            "rolled_back_to": target_version,
-            "action": "Profile configuration rolled back by admin"
-        }),
-        None,
-        None,
-    ).await {
+    if let Err(e) = audit_logger
+        .log_event(
+            AuditEventType::AdminConfigReload,
+            Some(admin_user.0.id),
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "section": "user_profiles",
+                "profile_config_version": new_version.version,
+                "rolled_back_to": target_version,
+                "action": "Profile configuration rolled back by admin"
+            }),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log config rollback: {}", e);
     }
 
@@ -311,7 +359,10 @@ async fn rollback_profile_config(
 
     Ok(Json(ApiResponse::success_with_message(
         response,
-        format!("Rolled back to profile configuration version {}", target_version),
+        format!(
+            "Rolled back to profile configuration version {}",
+            target_version
+        ),
     )))
 }
 
@@ -320,17 +371,24 @@ async fn rollback_profile_config(
 fn validate_profile_fields(fields: &[ProfileField]) -> Result<(), ApiError> {
     for field in fields {
         if field.key.is_empty() {
-            return Err(ApiError::BadRequest("Profile field key cannot be empty".to_string()));
+            return Err(ApiError::BadRequest(
+                "Profile field key cannot be empty".to_string(),
+            ));
         }
         if field.label.is_empty() {
-            return Err(ApiError::BadRequest("Profile field label cannot be empty".to_string()));
+            return Err(ApiError::BadRequest(
+                "Profile field label cannot be empty".to_string(),
+            ));
         }
     }
 
     let mut keys = std::collections::HashSet::new();
     for field in fields {
         if !keys.insert(&field.key) {
-            return Err(ApiError::BadRequest(format!("Duplicate field key: {}", field.key)));
+            return Err(ApiError::BadRequest(format!(
+                "Duplicate field key: {}",
+                field.key
+            )));
         }
     }
 
@@ -342,9 +400,19 @@ fn validate_profile_fields(fields: &[ProfileField]) -> Result<(), ApiError> {
 /// if no version has ever been saved (shouldn't happen once main.rs's
 /// startup bootstrap has run, but keeps this handler standalone).
 async fn current_profile_fields(state: &AppState) -> Result<Vec<ProfileField>, ApiError> {
-    match state.db.get_latest_profile_config_version().map_err(ApiError::from)? {
-        Some(latest) => serde_json::from_value(latest.profile_fields)
-            .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e))),
-        None => Ok(state.config_manager.get_config().user.profile_fields.clone()),
+    match state
+        .db
+        .get_latest_profile_config_version()
+        .map_err(ApiError::from)?
+    {
+        Some(latest) => serde_json::from_value(latest.profile_fields).map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e))
+        }),
+        None => Ok(state
+            .config_manager
+            .get_config()
+            .user
+            .profile_fields
+            .clone()),
     }
 }

@@ -42,9 +42,16 @@ fn body_of<'a>(src: &'a str, name: &str) -> Option<&'a str> {
         .match_indices('\n')
         .find(|(i, _)| {
             let line = body[i + 1..].split('\n').next().unwrap_or("");
-            ["fn ", "pub fn ", "async fn ", "pub async fn ", "impl ", "struct "]
-                .iter()
-                .any(|kw| line.starts_with(kw))
+            [
+                "fn ",
+                "pub fn ",
+                "async fn ",
+                "pub async fn ",
+                "impl ",
+                "struct ",
+            ]
+            .iter()
+            .any(|kw| line.starts_with(kw))
         })
         .map(|(i, _)| i)
         .unwrap_or(body.len());
@@ -61,8 +68,13 @@ fn next_literal(text: &str, from: usize) -> Option<String> {
 }
 
 fn parse_builder(src: &str, name: &str) -> Builder {
-    let mut out = Builder { routes: Vec::new(), nests: Vec::new() };
-    let Some(body) = body_of(src, name) else { return out };
+    let mut out = Builder {
+        routes: Vec::new(),
+        nests: Vec::new(),
+    };
+    let Some(body) = body_of(src, name) else {
+        return out;
+    };
 
     // Strip line comments so documentation cannot satisfy the scan.
     let body: String = body
@@ -78,10 +90,14 @@ fn parse_builder(src: &str, name: &str) -> Builder {
     }
 
     for (i, _) in body.match_indices(".nest(") {
-        let Some(prefix) = next_literal(&body, i) else { continue };
+        let Some(prefix) = next_literal(&body, i) else {
+            continue;
+        };
         // `.nest("/mfa", crate::api::mfa::mfa_routes())` -> ("mfa", "mfa_routes")
         let after = &body[i..];
-        let Some(comma) = after.find(',') else { continue };
+        let Some(comma) = after.find(',') else {
+            continue;
+        };
         // trim_start first: the text is `, auth::auth_routes())`, and
         // take_while on the leading space yields the empty string -- which
         // produced an empty route set for the entire server.
@@ -90,7 +106,11 @@ fn parse_builder(src: &str, name: &str) -> Builder {
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
             .collect();
-        let parts: Vec<&str> = target.trim().split("::").filter(|p| !p.is_empty()).collect();
+        let parts: Vec<&str> = target
+            .trim()
+            .split("::")
+            .filter(|p| !p.is_empty())
+            .collect();
         if parts.len() >= 2 {
             let builder = parts[parts.len() - 1].to_string();
             let module = parts[parts.len() - 2].to_string();
@@ -112,30 +132,49 @@ fn server_routes() -> BTreeSet<String> {
     let mut sources = std::collections::BTreeMap::new();
     for entry in WalkDir::new(&api_dir).into_iter().filter_map(Result::ok) {
         if entry.path().extension().is_some_and(|e| e == "rs") {
-            let stem = entry.path().file_stem().unwrap().to_string_lossy().to_string();
+            let stem = entry
+                .path()
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
             sources.insert(stem, std::fs::read_to_string(entry.path()).unwrap());
         }
     }
 
     let mut out = BTreeSet::new();
     // (prefix, module, builder)
-    let mut queue = vec![("/api".to_string(), "mod".to_string(), "api_routes".to_string())];
+    let mut queue = vec![(
+        "/api".to_string(),
+        "mod".to_string(),
+        "api_routes".to_string(),
+    )];
     let mut seen = BTreeSet::new();
 
     while let Some((prefix, module, builder)) = queue.pop() {
         if !seen.insert((prefix.clone(), module.clone(), builder.clone())) {
             continue;
         }
-        let Some(src) = sources.get(&module) else { continue };
+        let Some(src) = sources.get(&module) else {
+            continue;
+        };
         let parsed = parse_builder(src, &builder);
 
         for path in parsed.routes {
-            let full = if path == "/" { prefix.clone() } else { format!("{prefix}{path}") };
+            let full = if path == "/" {
+                prefix.clone()
+            } else {
+                format!("{prefix}{path}")
+            };
             out.insert(normalise(&full));
         }
         for (sub_prefix, target) in parsed.nests {
             if let Some((m, b)) = target.split_once("::") {
-                queue.push((format!("{prefix}{sub_prefix}"), m.to_string(), b.to_string()));
+                queue.push((
+                    format!("{prefix}{sub_prefix}"),
+                    m.to_string(),
+                    b.to_string(),
+                ));
             }
         }
     }
@@ -242,7 +281,11 @@ fn client_paths(dir: &str, exts: &[&str], prefix: Prefix) -> BTreeSet<String> {
                     _ => continue,
                 };
                 // Only the path is routed; drop any query string.
-                let path = candidate.split('?').next().unwrap_or(&candidate).to_string();
+                let path = candidate
+                    .split('?')
+                    .next()
+                    .unwrap_or(&candidate)
+                    .to_string();
                 out.insert(normalise(&path));
             }
         }
@@ -287,10 +330,7 @@ const UNRESOLVED: &[(&str, &str)] = &[
          exists anywhere in this workspace and no add-user endpoint exists under \
          /api/toolguard either. The feature was never built server-side.",
     ),
-    (
-        "/api/toolpass/v1/remove-user",
-        "As above, for remove-user.",
-    ),
+    ("/api/toolpass/v1/remove-user", "As above, for remove-user."),
     (
         "/api",
         "cli health probes GET /api/ purely for reachability and treats 404 as \
@@ -351,7 +391,10 @@ fn the_scrapers_found_something_to_compare() {
         "/api/admin/roster",
         "/api/toolguard/tool-on",
     ] {
-        assert!(server.contains(expected), "server scraper missed {expected}");
+        assert!(
+            server.contains(expected),
+            "server scraper missed {expected}"
+        );
     }
 
     let ts = client_paths("frontend/src", &["ts", "vue"], Prefix::AxiosBaseUrl);
@@ -381,11 +424,12 @@ fn every_cli_path_resolves_to_a_server_route() {
 #[test]
 fn every_frontend_path_resolves_to_a_server_route() {
     let server = server_routes();
-    let unresolved: Vec<String> = client_paths("frontend/src", &["ts", "vue"], Prefix::AxiosBaseUrl)
-        .into_iter()
-        .filter(|p| !server.contains(p))
-        .filter(|p| !UNRESOLVED.iter().any(|(known, _)| known == p))
-        .collect();
+    let unresolved: Vec<String> =
+        client_paths("frontend/src", &["ts", "vue"], Prefix::AxiosBaseUrl)
+            .into_iter()
+            .filter(|p| !server.contains(p))
+            .filter(|p| !UNRESOLVED.iter().any(|(known, _)| known == p))
+            .collect();
 
     assert!(
         unresolved.is_empty(),
@@ -406,4 +450,3 @@ fn the_unresolved_list_has_no_stale_entries() {
         );
     }
 }
-

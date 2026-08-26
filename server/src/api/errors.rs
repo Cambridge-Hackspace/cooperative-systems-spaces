@@ -1,5 +1,5 @@
-use axum::{response::IntoResponse, Json};
 use axum::http::StatusCode;
+use axum::{response::IntoResponse, Json};
 use serde_json::json;
 use std::fmt::Display;
 
@@ -11,15 +11,15 @@ pub enum ApiError {
     // Authentication errors
     Unauthorized(String),
     Forbidden(String),
-    
+
     // Validation errors
     ValidationError(String),
     BadRequest(String),
-    
+
     // Resource errors
     NotFound(String),
     Conflict(String),
-    
+
     // Rate limiting errors
     TooManyRequests(String),
 
@@ -77,14 +77,26 @@ impl IntoResponse for ApiError {
 impl From<AuthError> for ApiError {
     fn from(auth_error: AuthError) -> Self {
         match auth_error {
-            AuthError::WrongCredentials => ApiError::Unauthorized("Invalid credentials".to_string()),
-            AuthError::MissingCredentials => ApiError::Unauthorized("Missing authentication credentials".to_string()),
-            AuthError::TokenCreation => ApiError::InternalServerError("Failed to create authentication token".to_string()),
-            AuthError::InvalidToken => ApiError::Unauthorized("Invalid authentication token".to_string()),
+            AuthError::WrongCredentials => {
+                ApiError::Unauthorized("Invalid credentials".to_string())
+            }
+            AuthError::MissingCredentials => {
+                ApiError::Unauthorized("Missing authentication credentials".to_string())
+            }
+            AuthError::TokenCreation => {
+                ApiError::InternalServerError("Failed to create authentication token".to_string())
+            }
+            AuthError::InvalidToken => {
+                ApiError::Unauthorized("Invalid authentication token".to_string())
+            }
             AuthError::UserNotFound => ApiError::NotFound("User not found".to_string()),
             AuthError::UserInactive => ApiError::Forbidden("User account is inactive".to_string()),
-            AuthError::InvalidPassword(_) => ApiError::BadRequest("Invalid password format".to_string()),
-            AuthError::InternalError => ApiError::InternalServerError("Authentication service error".to_string()),
+            AuthError::InvalidPassword(_) => {
+                ApiError::BadRequest("Invalid password format".to_string())
+            }
+            AuthError::InternalError => {
+                ApiError::InternalServerError("Authentication service error".to_string())
+            }
         }
     }
 }
@@ -93,16 +105,24 @@ impl From<AuthError> for ApiError {
 impl From<DatabaseError> for ApiError {
     fn from(err: DatabaseError) -> Self {
         match err {
-            DatabaseError::Pool(_) => ApiError::InternalServerError("Database connection error".to_string()),
-            DatabaseError::Diesel(diesel_err) => {
-                match diesel_err {
-                    diesel::result::Error::NotFound => ApiError::NotFound("Resource not found".to_string()),
-                    _ => ApiError::InternalServerError("Database error".to_string()),
-                }
+            DatabaseError::Pool(_) => {
+                ApiError::InternalServerError("Database connection error".to_string())
             }
-            DatabaseError::Migration(_) => ApiError::InternalServerError("Database migration error".to_string()),
-            DatabaseError::ConnectionTimeout => ApiError::InternalServerError("Database connection timeout".to_string()),
-            DatabaseError::Other(msg) => ApiError::InternalServerError(format!("Database error: {}", msg)),
+            DatabaseError::Diesel(diesel_err) => match diesel_err {
+                diesel::result::Error::NotFound => {
+                    ApiError::NotFound("Resource not found".to_string())
+                }
+                _ => ApiError::InternalServerError("Database error".to_string()),
+            },
+            DatabaseError::Migration(_) => {
+                ApiError::InternalServerError("Database migration error".to_string())
+            }
+            DatabaseError::ConnectionTimeout => {
+                ApiError::InternalServerError("Database connection timeout".to_string())
+            }
+            DatabaseError::Other(msg) => {
+                ApiError::InternalServerError(format!("Database error: {}", msg))
+            }
         }
     }
 }

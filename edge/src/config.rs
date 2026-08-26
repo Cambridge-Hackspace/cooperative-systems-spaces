@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
+pub(crate) use css_lib::MqttConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
-pub(crate) use css_lib::MqttConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AuthStatus {
@@ -108,10 +108,10 @@ impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
-        
-        let config: Config = toml::from_str(&content)
-            .with_context(|| "Failed to parse TOML configuration")?;
-        
+
+        let config: Config =
+            toml::from_str(&content).with_context(|| "Failed to parse TOML configuration")?;
+
         Ok(config)
     }
 
@@ -119,16 +119,17 @@ impl Config {
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .with_context(|| "Failed to serialize configuration to TOML")?;
-        
+
         // Create parent directories if they don't exist
         if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
-        
+
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
-        
+
         Ok(())
     }
 }
@@ -155,13 +156,15 @@ impl ConfigManager {
 
     /// Reload configuration from disk
     pub fn reload_config(&self) -> Result<()> {
-        let config_path = self.config_path.as_ref()
+        let config_path = self
+            .config_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No config path available for reloading"))?;
 
         info!("Reloading configuration from: {}", config_path.display());
 
-        let new_config = Config::from_file(config_path)
-            .with_context(|| "Failed to reload configuration")?;
+        let new_config =
+            Config::from_file(config_path).with_context(|| "Failed to reload configuration")?;
 
         // Validate the new configuration
         self.validate_config(&new_config)?;
@@ -181,7 +184,9 @@ impl ConfigManager {
         // Validate MQTT configuration if present
         if let Some(mqtt) = &config.local_mqtt_config {
             if mqtt.mqtt_password == Some("change-me-in-production".to_string()) {
-                warn!("MQTT password is still set to default value - this is insecure for production");
+                warn!(
+                    "MQTT password is still set to default value - this is insecure for production"
+                );
             }
 
             if mqtt.mqtt_client_id.is_empty() {
@@ -191,13 +196,14 @@ impl ConfigManager {
             if mqtt.mqtt_instance_url.is_empty() {
                 return Err(anyhow::anyhow!("MQTT instance URL cannot be empty"));
             }
-
         }
 
         // Validate MQTT configuration if present
         if let Some(mqtt) = &config.remote_mqtt_config {
             if mqtt.mqtt_password == Some("change-me-in-production".to_string()) {
-                warn!("MQTT password is still set to default value - this is insecure for production");
+                warn!(
+                    "MQTT password is still set to default value - this is insecure for production"
+                );
             }
 
             if mqtt.mqtt_client_id.is_empty() {
@@ -221,18 +227,22 @@ impl ConfigManager {
 /// Load configuration from file or create default configuration
 pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<Config> {
     let path = config_path.as_ref();
-    
+
     if path.exists() {
         info!("Loading configuration from: {}", path.display());
         Config::from_file(path)
     } else {
-        info!("Config file not found. Creating default configuration at: {}", path.display());
+        info!(
+            "Config file not found. Creating default configuration at: {}",
+            path.display()
+        );
         let default_config = Config::default();
-        
+
         // Save default configuration to file
-        default_config.to_file(path)
+        default_config
+            .to_file(path)
             .with_context(|| "Failed to create default configuration file")?;
-        
+
         info!("Default configuration file created. Please review and modify as needed.");
         Ok(default_config)
     }
@@ -241,11 +251,15 @@ pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<Config> {
 /// Generate a sample configuration file with comments
 pub fn generate_sample_config<P: AsRef<Path>>(path: P) -> Result<()> {
     let default_config = Config::default();
-    
-    default_config.to_file(&path)
+
+    default_config
+        .to_file(&path)
         .with_context(|| "Failed to write sample configuration file")?;
-    
-    info!("Sample configuration file generated at: {}", path.as_ref().display());
+
+    info!(
+        "Sample configuration file generated at: {}",
+        path.as_ref().display()
+    );
     info!("Please review and modify the configuration as needed.");
     Ok(())
 }
@@ -262,10 +276,38 @@ fn generate_name() -> String {
     ];
 
     let colors = [
-        "red", "blue", "green", "yellow", "purple", "orange", "pink", "teal", "amber", "coral",
-        "crimson", "azure", "olive", "jade", "ruby", "gold", "silver", "bronze", "cyan", "magenta",
-        "violet", "indigo", "turquoise", "scarlet", "emerald", "sapphire", "pearl", "ivory",
-        "ebony", "cobalt", "lavender", "maroon",
+        "red",
+        "blue",
+        "green",
+        "yellow",
+        "purple",
+        "orange",
+        "pink",
+        "teal",
+        "amber",
+        "coral",
+        "crimson",
+        "azure",
+        "olive",
+        "jade",
+        "ruby",
+        "gold",
+        "silver",
+        "bronze",
+        "cyan",
+        "magenta",
+        "violet",
+        "indigo",
+        "turquoise",
+        "scarlet",
+        "emerald",
+        "sapphire",
+        "pearl",
+        "ivory",
+        "ebony",
+        "cobalt",
+        "lavender",
+        "maroon",
     ];
 
     let animals = [
@@ -293,7 +335,7 @@ mod tests {
     fn test_default_config_serialization() {
         let config = Config::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
-        
+
         // Verify we can deserialize it back
         let _: Config = toml::from_str(&toml_str).unwrap();
     }
@@ -302,13 +344,13 @@ mod tests {
     fn test_config_file_roundtrip() {
         let temp_file = NamedTempFile::new().unwrap();
         let config = Config::default();
-        
+
         // Save to file
         config.to_file(temp_file.path()).unwrap();
-        
+
         // Load from file
         let loaded_config = Config::from_file(temp_file.path()).unwrap();
-        
+
         // Compare (using debug format since we don't implement PartialEq)
         assert_eq!(format!("{:?}", config), format!("{:?}", loaded_config));
     }
@@ -317,13 +359,13 @@ mod tests {
     fn test_load_config_creates_default_if_missing() {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
-        
+
         // Delete the file so it doesn't exist
         std::fs::remove_file(path).unwrap();
-        
+
         // load_config should create a default config
         let _config = load_config(path).unwrap();
-        
+
         // File should now exist
         assert!(path.exists());
     }
@@ -332,10 +374,10 @@ mod tests {
     fn test_generate_name_format() {
         let name = generate_name();
         let parts: Vec<&str> = name.split('-').collect();
-        
+
         // Should have three parts
         assert_eq!(parts.len(), 3);
-        
+
         // Each part should not be empty
         assert!(!parts[0].is_empty());
         assert!(!parts[1].is_empty());

@@ -91,7 +91,7 @@ async fn get_wiki_page(
     Path(slug): Path<String>,
 ) -> Result<Json<PageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let pages_service = state.pages_service.read().await;
-    
+
     // Strip leading slash if present (from catch-all route)
     let slug = slug.trim_start_matches('/');
 
@@ -99,8 +99,12 @@ async fn get_wiki_page(
         Some(page) => {
             let repo_url = pages_service.get_wiki_repo_url();
             let default_branch = pages_service.get_wiki_default_branch();
-            Ok(Json(PageResponse::from_page(page.clone(), repo_url, default_branch)))
-        },
+            Ok(Json(PageResponse::from_page(
+                page.clone(),
+                repo_url,
+                default_branch,
+            )))
+        }
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -141,8 +145,12 @@ async fn get_site_index(
         Some(page) => {
             let repo_url = pages_service.get_site_repo_url();
             let default_branch = pages_service.get_site_default_branch();
-            Ok(Json(PageResponse::from_page(page.clone(), repo_url, default_branch)))
-        },
+            Ok(Json(PageResponse::from_page(
+                page.clone(),
+                repo_url,
+                default_branch,
+            )))
+        }
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -158,7 +166,7 @@ async fn get_site_page(
     Path(slug): Path<String>,
 ) -> Result<Json<PageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let pages_service = state.pages_service.read().await;
-    
+
     // Strip leading slash if present (from catch-all route)
     let slug = slug.trim_start_matches('/');
 
@@ -166,8 +174,12 @@ async fn get_site_page(
         Some(page) => {
             let repo_url = pages_service.get_site_repo_url();
             let default_branch = pages_service.get_site_default_branch();
-            Ok(Json(PageResponse::from_page(page.clone(), repo_url, default_branch)))
-        },
+            Ok(Json(PageResponse::from_page(
+                page.clone(),
+                repo_url,
+                default_branch,
+            )))
+        }
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({

@@ -111,9 +111,7 @@ pub async fn handle_user_command(
             full_name,
             password,
             role,
-        } => {
-            handle_create_user(client, username, email, full_name, password, role).await
-        }
+        } => handle_create_user(client, username, email, full_name, password, role).await,
         UserCommand::Update {
             user_id,
             username,
@@ -128,9 +126,7 @@ pub async fn handle_user_command(
             )
             .await
         }
-        UserCommand::Delete { user_id, yes } => {
-            handle_delete_user(client, &user_id, yes).await
-        }
+        UserCommand::Delete { user_id, yes } => handle_delete_user(client, &user_id, yes).await,
         UserCommand::Promote { user_id } => handle_promote_user(client, &user_id).await,
         UserCommand::Demote { user_id } => handle_demote_user(client, &user_id).await,
     }
@@ -143,10 +139,8 @@ async fn handle_list_users(
     per_page: u32,
 ) -> Result<()> {
     let path = format!("/api/users?page={}&per_page={}", page, per_page);
-    let response: ApiResponse<PaginatedResponse<UserResponse>> = client
-        .get(&path)
-        .await
-        .context("Failed to list users")?;
+    let response: ApiResponse<PaginatedResponse<UserResponse>> =
+        client.get(&path).await.context("Failed to list users")?;
 
     if !response.success {
         let error = response.error.unwrap_or("Unknown error".to_string());
@@ -175,11 +169,7 @@ async fn handle_list_users(
     Ok(())
 }
 
-async fn handle_show_user(
-    client: &ApiClient,
-    config: &CliConfig,
-    user_id: &str,
-) -> Result<()> {
+async fn handle_show_user(client: &ApiClient, config: &CliConfig, user_id: &str) -> Result<()> {
     let path = if user_id.contains('-') {
         // Assume it's a UUID
         format!("/api/users/{}", user_id)
@@ -199,10 +189,8 @@ async fn handle_show_user(
         }
     };
 
-    let response: ApiResponse<UserResponse> = client
-        .get(&path)
-        .await
-        .context("Failed to get user")?;
+    let response: ApiResponse<UserResponse> =
+        client.get(&path).await.context("Failed to get user")?;
 
     if !response.success {
         let error = response.error.unwrap_or("Unknown error".to_string());
@@ -236,7 +224,10 @@ async fn handle_create_user(
 ) -> Result<()> {
     // For now, direct user creation by admin is not implemented
     // Users should register through the registration endpoint
-    println!("{}", style("User creation through CLI not yet implemented").yellow());
+    println!(
+        "{}",
+        style("User creation through CLI not yet implemented").yellow()
+    );
     println!("Users should register using: css auth register");
     Ok(())
 }
@@ -292,7 +283,10 @@ async fn handle_delete_user(client: &ApiClient, user_id: &str, yes: bool) -> Res
 
     if !yes {
         let confirm = dialoguer::Confirm::new()
-            .with_prompt(&format!("Are you sure you want to delete user {}?", user_id))
+            .with_prompt(&format!(
+                "Are you sure you want to delete user {}?",
+                user_id
+            ))
             .default(false)
             .interact()
             .context("Failed to get confirmation")?;
@@ -320,7 +314,7 @@ async fn handle_delete_user(client: &ApiClient, user_id: &str, yes: bool) -> Res
 
 async fn handle_promote_user(client: &ApiClient, user_id: &str) -> Result<()> {
     let user_uuid = resolve_user_id(client, user_id).await?;
-    
+
     // Get current user info
     let path = format!("/api/users/{}", user_uuid);
     let response: ApiResponse<UserResponse> = client.get(&path).await?;
@@ -347,7 +341,7 @@ async fn handle_promote_user(client: &ApiClient, user_id: &str) -> Result<()> {
     };
 
     let response: ApiResponse<UserResponse> = client.put(&path, &update_request).await?;
-    
+
     if !response.success {
         let error = response.error.unwrap_or("Unknown error".to_string());
         anyhow::bail!("Failed to promote user: {}", error);
@@ -364,7 +358,7 @@ async fn handle_promote_user(client: &ApiClient, user_id: &str) -> Result<()> {
 
 async fn handle_demote_user(client: &ApiClient, user_id: &str) -> Result<()> {
     let user_uuid = resolve_user_id(client, user_id).await?;
-    
+
     // Get current user info
     let path = format!("/api/users/{}", user_uuid);
     let response: ApiResponse<UserResponse> = client.get(&path).await?;
@@ -391,7 +385,7 @@ async fn handle_demote_user(client: &ApiClient, user_id: &str) -> Result<()> {
     };
 
     let response: ApiResponse<UserResponse> = client.put(&path, &update_request).await?;
-    
+
     if !response.success {
         let error = response.error.unwrap_or("Unknown error".to_string());
         anyhow::bail!("Failed to demote user: {}", error);
@@ -433,7 +427,10 @@ fn parse_role(role_str: &str) -> Result<UserRole> {
         "member" => Ok(UserRole::Member),
         "staff" => Ok(UserRole::Staff),
         "admin" => Ok(UserRole::Admin),
-        _ => anyhow::bail!("Invalid role: {}. Valid roles: unknown, newbie, member, staff, admin", role_str),
+        _ => anyhow::bail!(
+            "Invalid role: {}. Valid roles: unknown, newbie, member, staff, admin",
+            role_str
+        ),
     }
 }
 #[cfg(test)]
@@ -457,7 +454,10 @@ mod tests {
     fn parse_role_rejects_anything_else_and_says_what_is_valid() {
         let err = parse_role("superuser").unwrap_err().to_string();
         assert!(err.contains("superuser"), "{err}");
-        assert!(err.contains("unknown, newbie, member, staff, admin"), "{err}");
+        assert!(
+            err.contains("unknown, newbie, member, staff, admin"),
+            "{err}"
+        );
     }
 
     /// The empty string is the shape a missing `--role` argument takes if one

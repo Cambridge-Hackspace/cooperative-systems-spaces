@@ -1,9 +1,4 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde_json::json;
 use tracing::error;
 
@@ -43,7 +38,7 @@ async fn refresh_calendar_events(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CalendarEvent>>, (StatusCode, Json<serde_json::Value>)> {
     let calendar_service = state.calendar_service.read().await;
-    
+
     // Clear all cache
     calendar_service.clear_all_cache().await;
 

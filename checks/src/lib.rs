@@ -31,6 +31,5 @@ pub fn repo_root() -> PathBuf {
 /// passes when the thing it guards is deleted.
 pub fn read(rel: &str) -> String {
     let path = repo_root().join(rel);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }

@@ -131,7 +131,8 @@ impl ApiClient {
             tracing::info!("{} {}", request.method(), request.url());
         }
 
-        let response = self.client
+        let response = self
+            .client
             .execute(request)
             .await
             .context("Failed to send request")?;
@@ -155,7 +156,7 @@ impl ApiClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            
+
             return Err(anyhow::anyhow!(
                 "Request failed with status {}: {} (URL: {})",
                 status,

@@ -1,27 +1,27 @@
+pub mod admin;
 pub mod auth;
 pub mod calendar;
 pub mod config;
-pub mod pages;
-pub mod errors;
-pub mod responses;
-pub mod users;
-pub mod admin;
-pub mod profiles;
-pub mod tools;
-pub mod training;
-pub mod trainers;
-pub mod toolguard;
 pub mod devices;
-pub mod webhooks;
-pub mod mfa;
 pub mod doors;
-pub mod places;
-pub mod schedules;
+pub mod errors;
 pub mod home_links;
 pub mod instance;
+pub mod mfa;
+pub mod pages;
+pub mod places;
+pub mod profiles;
+pub mod responses;
+pub mod schedules;
+pub mod toolguard;
+pub mod tools;
+pub mod trainers;
+pub mod training;
+pub mod users;
+pub mod webhooks;
 
-use axum::Router;
 use crate::AppState;
+use axum::Router;
 
 pub fn api_routes() -> Router<AppState> {
     Router::new()

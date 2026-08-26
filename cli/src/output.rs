@@ -11,8 +11,14 @@ pub fn print_user_info(user: &UserResponse) {
     println!("Full Name: {}", user.full_name);
     println!("Role: {}", format_role(&user.role));
     println!("Active: {}", format_bool(user.is_active));
-    println!("Created: {}", user.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
-    println!("Updated: {}", user.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "Created: {}",
+        user.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
+    println!(
+        "Updated: {}",
+        user.updated_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
 }
 
 pub fn print_users_table(users: &[UserResponse]) {
