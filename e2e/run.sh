@@ -38,8 +38,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,health,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,health,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -348,8 +348,14 @@ stage_up() {
   if [[ -s "${ROOT}/frontend/dist/index.html" ]]; then
     record_case "up/frontend-bundle" ok
   else
+    # A hard stop, not a recorded failure. Without the bundle the server's
+    # bind mount does not resolve, the container never starts, and every stage
+    # after this one reports a connection refused -- twenty failures all
+    # describing one missing directory, with the actual cause four screens up.
     record_case "up/frontend-bundle" fail \
       "frontend/dist/index.html is missing or empty -- run e2e/build.sh"
+    emit_junit up
+    return 1
   fi
 
   write_stack_config
@@ -560,6 +566,63 @@ stage_contract() {
 
   collect_server_log
   emit_junit contract "driver=contract.mjs"
+}
+
+# ===========================================================================
+# fuzz -- Tier 7, seeded, against the live stack
+# ===========================================================================
+# The cheapest defect-per-line in this suite. Three oracles that need no model
+# of any endpoint -- no 5xx, well-formed envelope, still alive -- applied to
+# all 164 of them. The driver carries the reasoning and the replay caveat.
+stage_fuzz() {
+  cases_begin fuzz
+  stack_paths
+
+  if ! server_ready; then
+    record_case "fuzz/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit fuzz
+    return 1
+  fi
+  record_case "fuzz/stack-is-up" ok
+
+  run_node fuzz.mjs >"${OUT}/logs/fuzz.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  # The seed lands in the JUnit properties as well as in a case, because CI
+  # renders properties beside the failures and a finding whose seed is three
+  # screens away in a log is a finding nobody replays.
+  local seed
+  seed="$(awk '/^fuzz seed:/ {print $3; exit}' "${OUT}/logs/fuzz.log" 2>/dev/null || true)"
+  echo "${seed}" >"${STACK_DIR}/fuzz-seed.txt"
+
+  collect_server_log
+  emit_junit fuzz "seed=${seed:-unknown}" \
+    "iterations=${CSS_FUZZ_ITERATIONS:-400}"
+}
+
+# ===========================================================================
+# concurrency -- Tier 8
+# ===========================================================================
+# Two races this codebase is known to have, each asserted on the resource
+# rather than on the response tally, and each paired with a sequential sibling
+# so that a failure to reproduce is distinguishable from a broken setup.
+stage_concurrency() {
+  cases_begin concurrency
+  stack_paths
+
+  if ! server_ready; then
+    record_case "concurrency/stack-is-up" fail "css-server is not answering"
+    emit_junit concurrency
+    return 1
+  fi
+  record_case "concurrency/stack-is-up" ok
+
+  run_node concurrency.mjs >"${OUT}/logs/concurrency.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit concurrency \
+    "fanout=${CSS_RACE_FANOUT:-8}" "rounds=${CSS_RACE_ROUNDS:-3}"
 }
 # ===========================================================================
 # They are outside `api_routes()`, so the Tier 4 matrix cannot see them at all:

@@ -34,6 +34,91 @@ if ! command -v cmake >/dev/null 2>&1 || [ ! -e /usr/include/postgresql/libpq-fe
     libpq-dev cmake build-essential libasound2-dev libudev-dev
 fi
 
+# curl and xz are used by the Node bootstrap below. Both are in the Rust image;
+# checked rather than assumed, because the failure otherwise is a 127 in the
+# middle of a download and reads like a network fault.
+for tool in curl tar sha256sum xz; do
+  command -v "${tool}" >/dev/null 2>&1 || {
+    echo "${tool} is not on PATH in the build image" >&2
+    exit 1
+  }
+done
+
+# ---------------------------------------------------------------------------
+# Node
+# ---------------------------------------------------------------------------
+# The build verb runs in `rust:1.97-bookworm`, which has no Node, and there is
+# no canonical Rust+Node image. Inventing one nobody has built would be worse
+# than this: the tenant contract names checksum-pinning as the sanctioned third
+# option next to a digest and a tag, and that is what this is. The tarball is
+# fetched once per session into $REAPER_CACHE_NODE and verified before it is
+# unpacked -- an unverified download in a build that then compiles a binary and
+# ships it is the supply-chain shape this whole exercise is meant to avoid.
+NODE_VERSION="v24.20.0"
+NODE_SHA256="2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2"
+NODE_TARBALL="node-${NODE_VERSION}-linux-x64.tar.xz"
+
+NODE_ROOT="${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}"
+NODE_HOME="${NODE_ROOT}/node-${NODE_VERSION}-linux-x64"
+
+if [ ! -x "${NODE_HOME}/bin/node" ]; then
+  log "bootstrapping Node ${NODE_VERSION}"
+  mkdir -p "${NODE_ROOT}"
+  curl -fsSL -o "${NODE_ROOT}/${NODE_TARBALL}" \
+    "https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
+  # The verification is the point of pinning, so it is a hard failure and the
+  # downloaded file is removed -- a corrupt tarball left in a session cache
+  # would fail identically on every later run with no clue why.
+  if ! printf '%s  %s\n' "${NODE_SHA256}" "${NODE_TARBALL}" \
+    | (cd "${NODE_ROOT}" && sha256sum -c -); then
+    rm -f "${NODE_ROOT}/${NODE_TARBALL}"
+    echo "node tarball checksum mismatch; refusing to unpack it" >&2
+    exit 1
+  fi
+  tar -xJf "${NODE_ROOT}/${NODE_TARBALL}" -C "${NODE_ROOT}"
+  rm -f "${NODE_ROOT}/${NODE_TARBALL}"
+fi
+
+export PATH="${NODE_HOME}/bin:${PATH}"
+export npm_config_cache="${REAPER_CACHE_NPM:-${ROOT}/e2e/.npm}"
+
+log "node toolchain"
+node --version
+npm --version
+
+# ---------------------------------------------------------------------------
+# The two frontends
+# ---------------------------------------------------------------------------
+# frontend_edge FIRST, and not as a preference: `edge/src/lib.rs` embeds
+# frontend_edge/dist with include_dir!, which is evaluated when the crate is
+# compiled. Building it after cargo would produce a css-edge carrying
+# build.rs's placeholder -- a binary that compiles cleanly and serves a "UI not
+# built" page as its own interface, which is exactly the failure the CI
+# `mkdir -p /builds/...` line was papering over.
+build_frontend() { # build_frontend <dir>
+  local dir="$1"
+  log "building ${dir}"
+  (
+    cd "${dir}"
+    if [ -f package-lock.json ]; then
+      npm ci --no-audit --no-fund
+    else
+      npm install --no-audit --no-fund
+    fi
+    npm run build
+  )
+  # An empty bundle compiles and serves 404 for the whole UI, so "the command
+  # exited zero" is not the assertion worth making here.
+  if [ ! -s "${dir}/dist/index.html" ]; then
+    echo "${dir}/dist/index.html is missing or empty after a successful build" >&2
+    exit 1
+  fi
+  echo "  ${dir}/dist/index.html: $(wc -c <"${dir}/dist/index.html") bytes"
+}
+
+build_frontend frontend_edge
+build_frontend frontend
+
 # ---------------------------------------------------------------------------
 # Cargo
 # ---------------------------------------------------------------------------

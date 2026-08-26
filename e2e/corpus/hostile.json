@@ -1,0 +1,66 @@
+{
+  "_comment": "One corpus, read by the fuzz tier, the concurrency drivers and the browser tiers. JSON precisely so both languages read the same bytes: a value that breaks the server through the API and a value that breaks it through the UI should be the same value, and keeping two lists is how they stop being. Every invisible character is written as a \\u escape rather than pasted in -- a reviewer has to be able to see what is in the corpus, and a zero-width space pasted literally is indistinguishable from a typo.",
+
+  "strings": [
+    { "why": "empty", "v": "" },
+    { "why": "one space", "v": " " },
+    { "why": "leading and trailing whitespace, which trim() would hide", "v": "  padded  " },
+    { "why": "a NUL, which Postgres refuses in text outright", "v": "nul\u0000inside" },
+    { "why": "a newline, which breaks line-oriented log parsing", "v": "line\nbreak" },
+    { "why": "a CR/LF pair, the header-injection shape", "v": "header\r\ninjection" },
+    { "why": "a tab, which the suite's own TSV plumbing would eat", "v": "tab\there" },
+    { "why": "a DEL byte", "v": "del\u007fhere" },
+    { "why": "astral plane; a LATIN1 cluster refuses it at the server with 22P05", "v": "emoji 🚧 here" },
+    { "why": "a combining sequence, longer decomposed than composed", "v": "é́́́" },
+    { "why": "right-to-left override, which reverses how a name displays", "v": "safe\u202egnp.exe" },
+    { "why": "a zero-width space, invisible in every UI that renders it", "v": "zero\u200bwidth" },
+    { "why": "a byte-order mark at the front", "v": "\ufeffbom" },
+    { "why": "SQL metacharacters; parameterised queries should make this dull", "v": "'; DROP TABLE users; --" },
+    { "why": "a script tag, for anything rendered with v-html", "v": "<script>alert(1)</script>" },
+    { "why": "an img onerror, which survives naive tag stripping", "v": "<img src=x onerror=alert(1)>" },
+    { "why": "a template expression, for anything compiled as a Vue template", "v": "{{constructor.constructor('alert(1)')()}}" },
+    { "why": "path traversal, for anything that becomes a filename", "v": "../../etc/passwd" },
+    { "why": "an absolute path", "v": "/etc/passwd" },
+    { "why": "a format string, for anything reaching a printf-alike", "v": "%s%s%s%n" },
+    { "why": "a shell substitution, for anything reaching a shell", "v": "$(id)" },
+    { "why": "a JSON document as a string value", "v": "{\"nested\":\"json\"}" },
+    { "why": "255 characters -- a common column width, exactly at the edge", "v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    { "why": "256 characters -- one past it", "v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    { "why": "a UUID that is well-formed and matches nothing", "v": "00000000-0000-4000-8000-000000000001" },
+    { "why": "a UUID missing a character", "v": "0000000-0000-4000-8000-000000000001" },
+    { "why": "the nil UUID, which some code treats as absent", "v": "00000000-0000-0000-0000-000000000000" },
+    { "why": "a number in a string, for anything that parses leniently", "v": "0" },
+    { "why": "a value JavaScript and Rust disagree about", "v": "NaN" },
+    { "why": "a link-local URL, for anything that fetches what it is handed", "v": "http://169.254.169.254/latest/meta-data/" }
+  ],
+
+  "scalars": [
+    { "why": "null where a value is expected", "v": null },
+    { "why": "false where a string is expected", "v": false },
+    { "why": "true where a string is expected", "v": true },
+    { "why": "zero", "v": 0 },
+    { "why": "negative", "v": -1 },
+    { "why": "i32 max", "v": 2147483647 },
+    { "why": "i32 max plus one", "v": 2147483648 },
+    { "why": "i64 max, past what a double represents exactly", "v": 9223372036854775807 },
+    { "why": "a float where an integer is expected", "v": 1.5 },
+    { "why": "an empty array", "v": [] },
+    { "why": "an empty object", "v": {} },
+    { "why": "an array where a scalar is expected", "v": ["a", "b"] },
+    { "why": "an object where a scalar is expected", "v": { "a": 1 } }
+  ],
+
+  "timestamps": [
+    { "why": "the epoch", "v": "1970-01-01T00:00:00Z" },
+    { "why": "no timezone at all", "v": "2026-01-01T00:00:00" },
+    { "why": "an offset that is not UTC", "v": "2026-01-01T00:00:00-06:00" },
+    { "why": "a leap day in a leap year", "v": "2024-02-29T12:00:00Z" },
+    { "why": "a leap day in a year that has none", "v": "2025-02-29T12:00:00Z" },
+    { "why": "the DST spring-forward gap in America/Chicago -- this time does not exist", "v": "2026-03-08T02:30:00" },
+    { "why": "the autumn fall-back hour, which happens twice", "v": "2026-11-01T01:30:00" },
+    { "why": "the 32-bit time_t rollover", "v": "2038-01-19T03:14:08Z" },
+    { "why": "a year past what a date column holds", "v": "999999-01-01T00:00:00Z" },
+    { "why": "a plausible date that is not a date", "v": "2026-13-45T99:99:99Z" },
+    { "why": "not a date at all", "v": "yesterday" }
+  ]
+}

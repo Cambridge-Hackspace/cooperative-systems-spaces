@@ -95,6 +95,54 @@ else
   printf '\n=== drivers ===\nnode not installed; refusing to report a clean tree\n'
   failed="${failed} drivers-missing-node"
 fi
+
+# ---------------------------------------------------------------------------
+# The fuzz tier's work list matches the route table
+# ---------------------------------------------------------------------------
+# e2e/corpus/endpoints.json is generated from server/tests/common/mod.rs, which
+# is itself asserted equal to the router by checks/tests/route_table_matches.rs.
+# Generating it at run time instead would mean a route deleted by accident
+# vanished from the fuzz list too, silently -- so it is committed, and this
+# regenerates and diffs.
+#
+# Adding a route therefore fails here until somebody runs
+# `node e2e/gen-endpoints.mjs --write`, which is a deliberate act meaning "yes,
+# this endpoint should be fuzzed", and the result is reviewable in the diff
+# rather than materialising invisibly inside a test run.
+check_endpoint_inventory() {
+  local tmp
+  tmp="$(mktemp)"
+  node e2e/gen-endpoints.mjs >"${tmp}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  if diff -u e2e/corpus/endpoints.json "${tmp}"; then
+    rm -f "${tmp}"
+    echo "endpoints.json is in step with the route table"
+    return 0
+  fi
+  rm -f "${tmp}"
+  echo "endpoints.json has drifted; run: node e2e/gen-endpoints.mjs --write"
+  return 1
+}
+if command -v node >/dev/null 2>&1; then
+  run "endpoint-inventory" check_endpoint_inventory
+fi
+
+# ---------------------------------------------------------------------------
+# The corpus parses
+# ---------------------------------------------------------------------------
+check_corpus() {
+  node -e '
+    const c = require("./e2e/corpus/hostile.json")
+    const n = c.strings.length + c.scalars.length + c.timestamps.length
+    if (n < 40) { console.error("corpus has only " + n + " entries"); process.exit(1) }
+    console.log("corpus: " + c.strings.length + " strings, " + c.scalars.length + " scalars, " + c.timestamps.length + " timestamps")
+  '
+}
+if command -v node >/dev/null 2>&1; then
+  run "corpus" check_corpus
+fi
 printf '\n'
 if [[ -n ${failed} ]]; then
   echo "FAILED:${failed}"
