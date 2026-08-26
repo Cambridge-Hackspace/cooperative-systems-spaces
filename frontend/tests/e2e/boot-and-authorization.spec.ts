@@ -23,7 +23,15 @@ test.beforeEach(async ({ request }) => {
 test.describe('the boot sequence', () => {
   test('renders the application when both requests succeed', async ({ page }) => {
     await page.goto('/')
-    await expect(page.getByText('Fake Space')).toBeVisible()
+
+    // The navigation, not the site name. `site_name` is served by
+    // `/config/public` and the header renders a hardcoded "CSS" -- so asserting
+    // on the configured name here would assert something the application does
+    // not do, and would fail for a reason that has nothing to do with booting.
+    // (That the configured name is not in the header is recorded in
+    // TESTING.md; it is a product gap, not a boot failure.)
+    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
+    await expect(page.getByText(/Initialization Error/i)).toHaveCount(0)
   })
 
   test('surfaces a failed config load rather than rendering an empty shell', async ({

@@ -20,9 +20,24 @@
 
         <!-- ===== Password step ===== -->
         <form v-if="!authStore.pendingMfa" @submit.prevent="handleLogin">
+          <!--
+            `for` / `id`, not a bare label beside an input.
+            A <label> with no `for` whose input is a *sibling* rather than a
+            child is not associated with anything: a screen reader announces an
+            unlabelled text field, and clicking the label does not focus it.
+            Both fields on the only form every user must complete were like
+            this.
+            Found because the browser tier addresses these fields by their
+            label, which is the same thing assistive technology does -- so the
+            spec's selector is the accessibility assertion rather than a
+            separate one somebody has to remember to write.
+          -->
           <div class="form-control">
-            <label class="label"><span class="label-text">Username or Email</span></label>
+            <label class="label" for="login-username">
+              <span class="label-text">Username or Email</span>
+            </label>
             <input
+              id="login-username"
               v-model="credentials.username_or_email"
               type="text"
               placeholder="Enter username or email"
@@ -33,8 +48,11 @@
           </div>
 
           <div class="form-control">
-            <label class="label"><span class="label-text">Password</span></label>
+            <label class="label" for="login-password">
+              <span class="label-text">Password</span>
+            </label>
             <input
+              id="login-password"
               v-model="credentials.password"
               type="password"
               placeholder="Enter password"

@@ -480,6 +480,19 @@ says which feature is missing.)*
 
 ### Smaller things, recorded where they live
 
+* The configured `site_name` is not in the page header. `/config/public` serves
+  it and `App.vue` renders a hardcoded `CSS`; only `HomeView` and `AdminView`
+  read the configured value. A space that sets its own name sees it in two
+  places out of three.
+* **Neither field on the login form was labelled.** A `<label>` with no `for`
+  whose input is a sibling rather than a child is associated with nothing: a
+  screen reader announces an unlabelled text field, and clicking the label does
+  not focus it. Both fields on the one form every user must complete were like
+  that. **Fixed** — found because the browser tier addresses fields by their
+  label, which is what assistive technology does, so the spec's selector *is*
+  the accessibility assertion rather than a separate one somebody has to
+  remember to write. The rest of the application's forms have not been audited.
+
 * `api/toolguard.rs` hand-rolls device auth from a bare `HeaderMap` beside the
   `DeviceAuth` extractor that exists for the purpose. Two implementations of one
   check. *(`checks/tests/toolguard_auth.rs`)*
