@@ -1,27 +1,27 @@
 <template>
   <div class="training-view">
     <div class="training-header">
-      <h2>Training Management</h2>
+      <h2 class="text-base-content">Training Management</h2>
       <div class="training-controls">
         <div class="filters">
-          <select v-model="selectedTool" @change="loadTrainingSteps">
+          <select v-model="selectedTool" @change="loadTrainingSteps" class="select select-bordered select-sm">
             <option value="">All Tools</option>
             <option v-for="tool in tools" :key="tool.id" :value="tool.id">
               {{ tool.name }}
             </option>
           </select>
-          
-          <input 
-            v-model="searchQuery" 
+
+          <input
+            v-model="searchQuery"
             @input="loadTrainingSteps"
-            type="text" 
-            placeholder="Search training steps..." 
-            class="search-input"
+            type="text"
+            placeholder="Search training steps..."
+            class="input input-bordered input-sm search-input"
           />
         </div>
-        
-        <button 
-          v-if="canManageTraining" 
+
+        <button
+          v-if="canManageTraining"
           @click="showCreateModal = true"
           class="btn btn-primary"
         >
@@ -30,38 +30,38 @@
       </div>
     </div>
 
-    <div class="loading" v-if="loading">Loading training steps...</div>
-    
-    <div class="error" v-else-if="error">
+    <div class="loading text-base-content/70" v-if="loading">Loading training steps...</div>
+
+    <div class="error alert alert-error" v-else-if="error">
       {{ error }}
     </div>
 
     <div class="training-content" v-else>
       <div class="training-steps-list" v-if="trainingSteps.length">
-        <div 
-          v-for="step in trainingSteps" 
+        <div
+          v-for="step in trainingSteps"
           :key="step.id"
-          class="step-card"
+          class="step-card card bg-base-200 shadow-sm text-base-content"
         >
           <div class="step-header">
-            <h3>{{ step.step_name }}</h3>
+            <h3 class="text-base-content">{{ step.step_name }}</h3>
             <div class="step-meta">
-              <span class="tool-name">{{ getToolName(step.tool_id) }}</span>
-              <span class="step-number">Step {{ step.step_number }}</span>
+              <span class="tool-name text-primary">{{ getToolName(step.tool_id) }}</span>
+              <span class="step-number text-base-content/60">Step {{ step.step_number }}</span>
             </div>
           </div>
 
           <div class="step-body">
-            <p>{{ step.description }}</p>
-            <div class="step-details">
-              <span class="assessment-type">{{ formatAssessmentType(step.assessment_type) }}</span>
-              <span v-if="step.passing_score" class="passing-score">
+            <p class="text-base-content/70">{{ step.description }}</p>
+            <div class="step-details text-base-content/70">
+              <span class="badge badge-info badge-sm">{{ formatAssessmentType(step.assessment_type) }}</span>
+              <span v-if="step.passing_score" class="badge badge-warning badge-sm">
                 Passing Score: {{ step.passing_score }}%
               </span>
-              <span v-if="step.expiry_days" class="expiry">
+              <span v-if="step.expiry_days" class="badge badge-secondary badge-sm">
                 Expires: {{ step.expiry_days }} days
               </span>
-              <span :class="step.is_active ? 'status-active' : 'status-inactive'">
+              <span class="badge badge-sm" :class="step.is_active ? 'badge-success' : 'badge-ghost'">
                 {{ step.is_active ? 'Active' : 'Inactive' }}
               </span>
             </div>
@@ -77,9 +77,9 @@
             <button @click="viewProgress(step)" class="btn btn-sm btn-primary">
               View Progress
             </button>
-            <button 
-              @click="deleteStep(step)" 
-              class="btn btn-sm btn-danger"
+            <button
+              @click="deleteStep(step)"
+              class="btn btn-sm btn-error"
             >
               Delete
             </button>
@@ -87,7 +87,7 @@
         </div>
       </div>
 
-      <div class="no-training" v-else>
+      <div class="no-training text-base-content/70" v-else>
         <p>No training steps found.</p>
         <button 
           v-if="canManageTraining" 
@@ -302,7 +302,8 @@ onMounted(async () => {
 
 .training-header h2 {
   margin: 0;
-  color: #2c3e50;
+  font-size: 1.5rem;
+  font-weight: 600;
 }
 
 .training-controls {
@@ -318,83 +319,14 @@ onMounted(async () => {
   align-items: center;
 }
 
-.filters select, .search-input {
-  padding: 0.5rem;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 0.9rem;
-}
-
 .search-input {
   min-width: 200px;
-}
-
-.btn {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  transition: background-color 0.2s;
-}
-
-.btn-sm {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.8rem;
-}
-
-.btn-primary {
-  background-color: #3498db;
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: #2980b9;
-}
-
-.btn-secondary {
-  background-color: #95a5a6;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #7f8c8d;
-}
-
-.btn-info {
-  background-color: #3498db;
-  color: white;
-}
-
-.btn-info:hover {
-  background-color: #2980b9;
-}
-
-.btn-danger {
-  background-color: #e74c3c;
-  color: white;
-}
-
-.btn-danger:hover:not(:disabled) {
-  background-color: #c0392b;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .loading, .error {
   text-align: center;
   padding: 2rem;
   font-size: 1.1rem;
-}
-
-.error {
-  color: #e74c3c;
-  background-color: #fdf2f2;
-  border: 1px solid #fbb6b6;
-  border-radius: 4px;
 }
 
 .training-steps-list {
@@ -404,15 +336,7 @@ onMounted(async () => {
 }
 
 .step-card {
-  background: white;
-  border: 1px solid #e1e5e9;
-  border-radius: 8px;
   padding: 1.5rem;
-  transition: border-color 0.2s;
-}
-
-.step-card:hover {
-  border-color: #3498db;
 }
 
 .step-header {
@@ -424,7 +348,8 @@ onMounted(async () => {
 
 .step-header h3 {
   margin: 0;
-  color: #2c3e50;
+  font-size: 1.1rem;
+  font-weight: 600;
 }
 
 .step-meta {
@@ -436,12 +361,7 @@ onMounted(async () => {
 }
 
 .tool-name {
-  color: #3498db;
   font-weight: 500;
-}
-
-.step-number {
-  color: #6c757d;
 }
 
 .step-body {
@@ -450,56 +370,15 @@ onMounted(async () => {
 
 .step-body p {
   margin: 0 0 1rem 0;
-  color: #6c757d;
   line-height: 1.5;
 }
 
 .step-details {
   display: flex;
-  gap: 1rem;
+  gap: 0.5rem;
+  align-items: center;
   flex-wrap: wrap;
   font-size: 0.9rem;
-  color: #6c757d;
-}
-
-.assessment-type {
-  background: #e3f2fd;
-  color: #1565c0;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.8rem;
-}
-
-.passing-score {
-  background: #fff3e0;
-  color: #e65100;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.8rem;
-}
-
-.expiry {
-  background: #f3e5f5;
-  color: #7b1fa2;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.8rem;
-}
-
-.status-active {
-  background: #e8f5e8;
-  color: #2e7d32;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.8rem;
-}
-
-.status-inactive {
-  background: #fafafa;
-  color: #757575;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.8rem;
 }
 
 .step-actions {
@@ -511,7 +390,6 @@ onMounted(async () => {
 .no-training {
   text-align: center;
   padding: 3rem;
-  color: #6c757d;
 }
 
 .no-training p {
