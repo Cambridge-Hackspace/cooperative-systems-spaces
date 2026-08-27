@@ -280,6 +280,31 @@ main(async () => {
     (await DELETE(`/api/trainers/tools/${ghostTool}/trainers/${ghostUser}`,
       { token: admin.token })).status)
 
+  // The same defect on a different route, found by a different fuzz seed one
+  // run after the trainer one was fixed.
+  //
+  // POST to a training step that does not exist reached the database, which
+  // rejected it on training_prerequisites_training_step_id_fkey, and the
+  // handler's blanket `InternalServerError("Failed to add prerequisite")`
+  // turned the caller's mistake into "the server broke". `From` already
+  // classifies a foreign-key violation as a conflict; the handler was
+  // discarding that and substituting a 500.
+  //
+  // Asserted as "not a server error" as well as on the exact status. The exact
+  // status is the contract, but 5xx is the property that matters and the one
+  // the fuzz tier enforces across every route -- saying both here means this
+  // case still means something if the classification is ever revisited.
+  const ghostStep = '00000000-0000-4000-8000-0000000000cc'
+  const prereq = await POST(`/api/training/steps/${ghostStep}/prerequisites`, {
+    token: admin.token,
+    body: '00000000-0000-4000-8000-0000000000dd',
+  })
+  ok('contract/a-prerequisite-on-a-missing-step-is-not-a-server-error',
+    prereq.status < 500,
+    `expected a 4xx, got ${prereq.status}: a foreign-key violation is the ` +
+    'caller naming something that does not exist, not the server failing')
+  assertEq('contract/a-prerequisite-on-a-missing-step-is-a-409', 409, prereq.status)
+
   // Logging out and reusing the token. JWTs are stateless here, so this
   // records the actual behaviour rather than asserting a property the design
   // does not have.

@@ -489,8 +489,13 @@ async fn add_prerequisite(
         .db
         .add_training_prerequisite(&new_prereq)
         .map_err(|e| {
-            tracing::error!("Failed to add prerequisite: {}", e);
-            ApiError::InternalServerError("Failed to add prerequisite".to_string())
+            // Was a blanket 500. Naming a training step that does not exist is
+            // the caller's mistake: Postgres rejects it on
+            // training_prerequisites_training_step_id_fkey, and answering 500
+            // told the caller the server had broken. `From` classifies a
+            // foreign-key violation as a conflict, which is the truth.
+            tracing::warn!("add_training_prerequisite({step_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(prerequisite)))
