@@ -300,21 +300,35 @@ impl PagesService {
             if !output.status.success() {
                 warn!("Git pull failed: {}", String::from_utf8_lossy(&output.stderr));
                 // Try to reset and pull again
-                Command::new("git")
+                let reset_output = Command::new("git")
                     .arg("-C")
                     .arg(repo_path)
                     .arg("reset")
                     .arg("--hard")
                     .arg("HEAD")
                     .output()
-                    .context("Failed to reset repository")?;
+                    .context("Failed to execute git reset")?;
 
-                Command::new("git")
+                if !reset_output.status.success() {
+                    return Err(anyhow::anyhow!(
+                        "Git reset failed: {}",
+                        String::from_utf8_lossy(&reset_output.stderr)
+                    ));
+                }
+
+                let retry_output = Command::new("git")
                     .arg("-C")
                     .arg(repo_path)
                     .arg("pull")
                     .output()
-                    .context("Failed to pull after reset")?;
+                    .context("Failed to execute git pull after reset")?;
+
+                if !retry_output.status.success() {
+                    return Err(anyhow::anyhow!(
+                        "Git pull failed even after reset: {}",
+                        String::from_utf8_lossy(&retry_output.stderr)
+                    ));
+                }
             }
         } else {
             // Repository doesn't exist, clone it
