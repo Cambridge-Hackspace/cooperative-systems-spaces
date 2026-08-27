@@ -16,6 +16,46 @@ const router = createRouter({
       component: () => import('@/views/AboutView.vue')
     },
     {
+      path: '/contact',
+      name: 'contact',
+      component: () => import('@/views/ContactView.vue')
+    },
+    {
+      path: '/platform',
+      name: 'platform',
+      component: () => import('@/views/PlatformView.vue')
+    },
+    {
+      path: '/join',
+      name: 'join',
+      component: () => import('@/views/JoinView.vue')
+    },
+    {
+      path: '/events',
+      name: 'events',
+      component: () => import('@/views/EventsView.vue')
+    },
+    {
+      path: '/directions',
+      name: 'directions',
+      component: () => import('@/views/DirectionsView.vue')
+    },
+    {
+      path: '/terms',
+      name: 'terms',
+      component: () => import('@/views/TermsView.vue')
+    },
+    {
+      path: '/privacy',
+      name: 'privacy',
+      component: () => import('@/views/PrivacyView.vue')
+    },
+    {
+      path: '/501c3',
+      name: 'nonprofit',
+      component: () => import('@/views/NonProfitView.vue')
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
@@ -35,6 +75,14 @@ const router = createRouter({
       path: '/profile/mfa',
       name: 'profile-mfa',
       component: () => import('@/components/MfaSettings.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/profile/password',
+      name: 'profile-password',
+      component: () => import('@/views/PasswordChangeView.vue'),
       meta: {
         requiresAuth: true,
       },
