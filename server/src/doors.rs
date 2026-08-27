@@ -289,7 +289,12 @@ impl DoorService {
             if !schedule_is_active_now(rule.schedule_id, &schedules, tz) {
                 continue;
             }
-            let effect = DoorRuleEffect::parse(&rule.effect).unwrap_or(DoorRuleEffect::Allow);
+            // Fail closed: an unparseable effect is ignored, same as an
+            // unparseable kind below — never treated as an implicit Allow.
+            let effect = match DoorRuleEffect::parse(&rule.effect) {
+                Some(e) => e,
+                None => continue,
+            };
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
                 None => continue,
