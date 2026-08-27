@@ -522,6 +522,33 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_INCLUDE_DIR=$incDir"
           Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$root_used"
 
+      # Diagnostic, not a check. It always succeeds.
+      #
+      # `paho-mqtt-sys` builds the Paho C library through the `cmake` crate,
+      # which asks the `cc` crate which Visual Studio is installed and turns the
+      # answer into a CMake generator string. When `cc` does not recognise the
+      # installation, the failure is `couldn't determine visual studio
+      # generator` with nothing said about what was actually there.
+      #
+      # The fix attempted alongside this is the upgrade -- cc 1.2.40 -> 1.4.4
+      # and cmake 0.1.54 -> 0.1.58, both of which were stale -- on the theory
+      # that the runner image ships a Visual Studio newer than the pinned `cc`
+      # knew about. If that theory is wrong, this step is what says so, because
+      # there is no Windows machine here and every guess otherwise costs a full
+      # CI run to disprove.
+      - name: Report the Visual Studio the runner has (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            & $vswhere -latest -products * -format value `
+              -property installationVersion,displayName,installationPath
+          } else {
+            Write-Host "vswhere not present at $vswhere"
+          }
+          Write-Host "CMAKE_GENERATOR=$env:CMAKE_GENERATOR (empty means cc/cmake decide)"
+
       - name: Install PostgreSQL client library (macOS)
         if: runner.os == 'macOS'
         run: |
