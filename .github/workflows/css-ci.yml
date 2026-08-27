@@ -441,6 +441,41 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=${prefix}\lib;${env:LIB}"
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=${prefix}\include;${env:INCLUDE}"
 
+      # openssl-sys reaches this leg by three independent routes, two of which
+      # build here: css-cli and css-edge both pull reqwest -> native-tls, and
+      # css-edge additionally pulls paho-mqtt -> paho-mqtt-sys, which compiles
+      # the Paho C library and locates OpenSSL through CMake rather than through
+      # openssl-sys. So pointing only OPENSSL_DIR at an installation fixes the
+      # Rust half and leaves the C half looking somewhere else; OPENSSL_ROOT_DIR
+      # is what CMake reads.
+      #
+      # Swapping the TLS stack would not avoid this. rustls would take reqwest
+      # out of the picture and paho-mqtt-sys would still need OpenSSL, so the
+      # dependency change would be large, would alter what the shipped binaries
+      # negotiate, and would not remove the requirement.
+      #
+      # This is the same shape as the PostgreSQL step above: a system library
+      # the build needs and a Windows runner does not ship.
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install openssl --yes --no-progress
+          $candidates = @(
+            'C:\Program Files\OpenSSL-Win64',
+            'C:\Program Files\OpenSSL',
+            'C:\Program Files\FireDaemon OpenSSL 3'
+          )
+          $ssl = $candidates | Where-Object { Test-Path (Join-Path $_ 'include\openssl\ssl.h') } |
+                 Select-Object -First 1
+          if (-not $ssl) {
+            Write-Error "OpenSSL headers not found after install; looked in: $($candidates -join ', ')"
+            exit 1
+          }
+          Write-Host "OpenSSL at $ssl"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_DIR=$ssl"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$ssl"
+
       - name: Install PostgreSQL client library (macOS)
         if: runner.os == 'macOS'
         run: |
