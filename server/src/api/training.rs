@@ -135,7 +135,7 @@ pub fn training_router() -> Router<AppState> {
         .route("/tools/{tool_id}/overview/me", get(get_my_tool_training_overview))
         .route("/tools/{tool_id}/overview/{user_id}", get(get_user_tool_training_overview))
         .route("/tools/{tool_id}/steps", get(get_tool_training_steps))
-        
+
         // User Training Progress (All authenticated users for self, staff for others)
         .route("/progress", get(get_user_training_progress))
         .route("/progress/{user_id}", get(get_user_training_progress_by_user))
