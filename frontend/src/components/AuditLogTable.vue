@@ -20,6 +20,8 @@
           <option value="user_deactivation">User Deactivation</option>
           <option value="user_profile_update">Profile Update</option>
           <option value="admin_config_reload">Config Reload</option>
+          <option value="profile_config_updated">Profile Config Updated</option>
+          <option value="profile_config_rolled_back">Profile Config Rolled Back</option>
           <option value="failed_login_attempt">Failed Login</option>
         </select>
       </div>
@@ -374,6 +376,8 @@ const getEventBadgeClass = (eventType: string): string => {
     'user_deactivation': 'badge-error',
     'user_profile_update': 'badge-info',
     'admin_config_reload': 'badge-secondary',
+    'profile_config_updated': 'badge-secondary',
+    'profile_config_rolled_back': 'badge-warning',
     'failed_login_attempt': 'badge-error'
   }
   return typeMap[eventType] || 'badge-ghost'

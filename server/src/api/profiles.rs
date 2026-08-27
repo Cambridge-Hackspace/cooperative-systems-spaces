@@ -216,7 +216,7 @@ async fn update_profile_config(
     // Log the configuration change
     let audit_logger = AuditLogger::new(state.db.clone());
     if let Err(e) = audit_logger.log_event(
-        AuditEventType::AdminConfigReload,
+        AuditEventType::ProfileConfigUpdated,
         Some(admin_user.0.id),
         Some(admin_user.0.id),
         serde_json::json!({
@@ -286,7 +286,7 @@ async fn rollback_profile_config(
 
     let audit_logger = AuditLogger::new(state.db.clone());
     if let Err(e) = audit_logger.log_event(
-        AuditEventType::AdminConfigReload,
+        AuditEventType::ProfileConfigRolledBack,
         Some(admin_user.0.id),
         Some(admin_user.0.id),
         serde_json::json!({
