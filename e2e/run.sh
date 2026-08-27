@@ -109,6 +109,21 @@ done
 [[ ${STAGES} == "all" ]] && STAGES="${STAGES_ALL}"
 [[ ${STAGES} == "default" ]] && STAGES="${STAGES_DEFAULT}"
 
+# Every stage named has to exist, and the check belongs here rather than at
+# dispatch. Stages are dispatched as `"stage_${stage}"`, so a name with no
+# function behind it becomes a command-not-found that is recorded as though the
+# stage ran and failed -- which reads as a broken tier rather than as a typo.
+#
+# `.reaper.toml`'s [profiles.hunt] named `journeys`, a stage that does not
+# exist, and would have reported exactly that.
+for _stage in ${STAGES//,/ }; do
+  case ",${STAGES_ALL}," in
+    *",${_stage},"*) ;;
+    *) die "no such stage: ${_stage}. Valid: ${STAGES_ALL}" ;;
+  esac
+done
+unset _stage
+
 case "${PROVISION}" in
   podman) ENGINE="${ENGINE:-podman}" ;;
   docker) ENGINE="${ENGINE:-docker}" ;;

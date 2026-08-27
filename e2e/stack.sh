@@ -417,7 +417,29 @@ run_node() {
       CSS_DB_ENCODING="${PG_ENCODING}" \
       node "${ROOT}/e2e/drivers/${script}" "$@"
   else
+    # Configuration the drivers read, forwarded explicitly.
+    #
+    # The host branch above gets these for free: it runs node in this shell, so
+    # anything exported into the run reaches it. A container inherits nothing,
+    # and every one of these silently took its default instead -- so under
+    # podman the fuzzer always ran 400 iterations however it was configured, the
+    # concurrency tier always used its default rounds and fanout, and
+    # CSS_FUZZ_SEED did nothing at all. SUMMARY.md printed a replay command
+    # built around that seed, which could not have worked.
+    #
+    # Forwarded only when set, rather than as `-e VAR=${VAR:-}`: an empty value
+    # is not the same as an absent one. `Number(process.env.CSS_FUZZ_ITERATIONS
+    # ?? 400)` reads an empty string as 0, so passing a blank would run the
+    # fuzzer zero times and report success.
+    local -a passthrough=()
+    local v
+    for v in CSS_FUZZ_ITERATIONS CSS_FUZZ_SEED CSS_FUZZ_BATCH \
+      CSS_RACE_ROUNDS CSS_RACE_FANOUT CSS_RUN_TAG; do
+      [[ -n ${!v:-} ]] && passthrough+=(-e "${v}=${!v}")
+    done
+
     pm run --rm --network host \
+      ${passthrough[@]+"${passthrough[@]}"} \
       -e CASES_OUT=/stack/driver-cases.tsv \
       -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       -e CSS_STACK_DIR=/stack \

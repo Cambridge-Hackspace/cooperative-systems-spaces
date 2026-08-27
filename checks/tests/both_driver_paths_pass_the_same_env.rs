@@ -208,3 +208,117 @@ fn both_provisioning_paths_pass_the_same_environment() {
         failures.join("\n")
     );
 }
+
+/// Does `haystack` mention `name` as a whole identifier?
+fn mentions(haystack: &str, name: &str) -> bool {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(at) = haystack[from..].find(name) {
+        let start = from + at;
+        let end = start + name.len();
+        let before_ok = start == 0 || !ident(bytes[start - 1] as char);
+        let after_ok = end >= bytes.len() || !ident(bytes[end] as char);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
+/// Every variable a driver reads must be something `run_node` can convey.
+///
+/// The sibling test above asserts the two branches agree with each other. They
+/// did agree, and were both wrong: neither conveyed `CSS_FUZZ_ITERATIONS`,
+/// `CSS_FUZZ_SEED`, `CSS_FUZZ_BATCH`, `CSS_RACE_ROUNDS`, `CSS_RACE_FANOUT` or
+/// `CSS_RUN_TAG`. That limitation is written into that test's own doc comment,
+/// and it went on to cost exactly what it warned about.
+///
+/// The asymmetry is easy to miss and impossible to see from either side alone.
+/// The host branch runs node in the same shell, so it inherits anything
+/// exported into the run and needs no help -- which is why `--provision=external`
+/// honoured every one of these and CI ran the fuzzer at its configured 600. A
+/// container inherits nothing, so under podman all six silently took their
+/// defaults: the fuzzer ran 400 iterations whatever the profile said, the
+/// concurrency tier used default rounds and fanout, and `CSS_FUZZ_SEED` did
+/// nothing whatsoever -- while `SUMMARY.md` printed a replay command built
+/// around that seed on every single run.
+///
+/// A documented procedure that cannot work is worse than a missing one. Somebody
+/// reproducing a finding would have got a different path and concluded the
+/// finding was flaky.
+#[test]
+fn run_node_can_convey_everything_the_drivers_read() {
+    let root = repo_root();
+    let stack = std::fs::read_to_string(root.join("e2e/stack.sh"))
+        .expect("e2e/stack.sh must be readable from the repo root");
+
+    let body = {
+        let start = stack
+            .find("run_node() {")
+            .expect("e2e/stack.sh must define run_node()");
+        let rest = &stack[start..];
+        let end = rest.find("\n}\n").map(|e| e + start).unwrap_or(stack.len());
+        stack[start..end].to_string()
+    };
+
+    // What the drivers ask for.
+    let mut wanted: Vec<String> = Vec::new();
+    let drivers = root.join("e2e/drivers");
+    let entries = std::fs::read_dir(&drivers).expect("e2e/drivers must exist");
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "mjs") {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut from = 0;
+        while let Some(at) = src[from..].find("process.env.") {
+            let start = from + at + "process.env.".len();
+            let name: String = src[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                .collect();
+            if !name.is_empty() && !wanted.contains(&name) {
+                wanted.push(name);
+            }
+            from = start;
+        }
+    }
+    wanted.sort();
+
+    assert!(
+        wanted.len() >= 6,
+        "found only {} `process.env.*` reads across e2e/drivers, which is too few \
+         to be right -- this check reads them by text, so a refactor turns it into \
+         a permanent silent pass: {wanted:?}",
+        wanted.len()
+    );
+
+    // Comments stripped first. The block that forwards these variables is
+    // introduced by a comment naming several of them, and matching against that
+    // prose reported them as conveyed when the code conveying them had been
+    // deleted -- so the check would have passed on the exact bug it exists for,
+    // reporting four of six. The mutation check caught it; reading the code did
+    // not.
+    let code: String = body
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let missing: Vec<&String> = wanted.iter().filter(|n| !mentions(&code, n)).collect();
+
+    assert!(
+        missing.is_empty(),
+        "a driver reads configuration that `run_node` never conveys, so under \
+         --provision=podman it silently takes its default and the run reports \
+         success at the wrong settings.\n\n  {missing:?}\n\nThe host branch \
+         inherits the environment and hides this; only the container path is \
+         affected, which is the path the workstation and every reaper session \
+         use."
+    );
+}

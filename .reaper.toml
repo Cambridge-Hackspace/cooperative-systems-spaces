@@ -173,4 +173,13 @@ env = { CSS_E2E_STAGES = "all", CSS_FUZZ_ITERATIONS = "4000", JOURNEY_ITERATIONS
 # Long seeded hunting runs. Opt-in, because cost has to stay known by default.
 ttl        = "8h"
 warm_cache = true
-env = { CSS_E2E_STAGES = "up,journeys", JOURNEY_ITERATIONS = "20000", JOURNEY_SEEDS = "hunt" }
+# `up,fuzz`, not `up,journeys`. This profile named a stage that does not exist:
+# the Tier 9 journey driver was never written, so `--only up,journeys` would
+# have died on "no such stage" -- and before run.sh learned to validate stage
+# names, it would have reported `journeys` as a stage that ran and failed.
+#
+# Pointed at the tier that does exist and is worth hunting with, which is the
+# seeded fuzz search. JOURNEY_* are kept as the recorded intent for when the
+# driver lands; checks/tests/configured_env_is_read.rs exempts them by name and
+# fails if either ever becomes read without the exemption being removed.
+env = { CSS_E2E_STAGES = "up,fuzz", CSS_FUZZ_ITERATIONS = "20000", JOURNEY_ITERATIONS = "20000", JOURNEY_SEEDS = "hunt" }
