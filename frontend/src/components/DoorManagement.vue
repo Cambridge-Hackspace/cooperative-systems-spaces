@@ -425,6 +425,7 @@ async function loadDoors() {
   const r = await doorsApi.list()
   loading.value = false
   if (r.success && r.data) doors.value = r.data
+  else notify(r.error || 'Failed to load doors', false)
 }
 
 async function loadDevices() {
@@ -573,6 +574,7 @@ async function switchToEvents() {
   detailTab.value = 'events'
   const r = await doorsApi.events(detail.value.id, { limit: 100 })
   if (r.success && r.data) events.value = r.data
+  else notify(r.error || 'Failed to load events', false)
 }
 
 async function switchToQr() {
@@ -586,22 +588,18 @@ async function switchToQr() {
     } catch (e: any) {
       notify('Failed to render QR: ' + (e?.message || ''), false)
     }
-  }
+  } else notify(r.error || 'Failed to load QR code', false)
 }
 
 async function addRule() {
   if (!detail.value || !newRule.value.value.trim()) return
-  try {
-    const r = await doorsApi.addRule(detail.value.id, { ...newRule.value })
-    if (r.success) {
-      notify('Rule added')
-      newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''
-      newRule.value.schedule_id = null
-      await openDetail(detail.value)
-    } else notify(r.error || 'Failed', false)
-  } catch (e: any) {
-    notify(e?.response?.data?.error || 'Failed to add rule', false)
-  }
+  const r = await doorsApi.addRule(detail.value.id, { ...newRule.value })
+  if (r.success) {
+    notify('Rule added')
+    newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''
+    newRule.value.schedule_id = null
+    await openDetail(detail.value)
+  } else notify(r.error || 'Failed to add rule', false)
 }
 
 async function loadSchedules() {
@@ -616,13 +614,9 @@ async function loadSchedules() {
 async function removeRule(rule: DoorAccessRule) {
   if (!detail.value) return
   if (!confirm('Remove this rule?')) return
-  try {
-    const r = await doorsApi.removeRule(detail.value.id, rule.id)
-    if (r.success) { notify('Rule removed'); await openDetail(detail.value) }
-    else notify(r.error || 'Failed', false)
-  } catch (e: any) {
-    notify(e?.response?.data?.error || 'Failed to remove rule', false)
-  }
+  const r = await doorsApi.removeRule(detail.value.id, rule.id)
+  if (r.success) { notify('Rule removed'); await openDetail(detail.value) }
+  else notify(r.error || 'Failed to remove rule', false)
 }
 
 onMounted(async () => {

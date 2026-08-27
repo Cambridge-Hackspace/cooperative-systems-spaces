@@ -78,15 +78,10 @@ const canUnlock = computed(() => !!info.value?.enabled && !!info.value?.you_are_
 async function load() {
   loading.value = true
   error.value = null
-  try {
-    const r = await doorsApi.info(doorId.value)
-    if (r.success && r.data) info.value = r.data
-    else error.value = r.error || 'Failed to load door'
-  } catch (e: any) {
-    error.value = e?.response?.data?.error || 'Failed to load door'
-  } finally {
-    loading.value = false
-  }
+  const r = await doorsApi.info(doorId.value)
+  if (r.success && r.data) info.value = r.data
+  else error.value = r.error || 'Failed to load door'
+  loading.value = false
 }
 
 async function checkin() {
@@ -99,18 +94,13 @@ async function checkin() {
   lastAttempt.value = now
   busy.value = true
   result.value = null
-  try {
-    const r = await doorsApi.checkin(doorId.value)
-    if (r.success && r.data) {
-      result.value = r.data
-    } else {
-      result.value = { unlocked: false, reason: r.error || 'Check-in failed' }
-    }
-  } catch (e: any) {
-    result.value = { unlocked: false, reason: e?.response?.data?.error || 'Check-in failed' }
-  } finally {
-    busy.value = false
+  const r = await doorsApi.checkin(doorId.value)
+  if (r.success && r.data) {
+    result.value = r.data
+  } else {
+    result.value = { unlocked: false, reason: r.error || 'Check-in failed' }
   }
+  busy.value = false
 }
 
 onMounted(load)

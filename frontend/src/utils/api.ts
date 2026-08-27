@@ -363,8 +363,33 @@ export const placesApi = {
   },
 }
 
+// Wraps every method on an API object so a rejected request (network
+// failure, or any non-2xx response, since apiClient/axios reject on
+// those) resolves to the same ApiResponse<T> failure shape a handled
+// API-level error already does, instead of throwing. Callers can then
+// always just check `.success`/`.error` — no per-call-site try/catch
+// needed, and no risk of a forgotten one leaving a loading/saving flag
+// stuck or a failure passing with no user-facing feedback.
+function withErrorGuard<T extends Record<string, (...args: any[]) => Promise<ApiResponse<any>>>>(
+  api: T,
+  fallbackMessage: string
+): T {
+  const guarded = {} as T
+  for (const key of Object.keys(api) as (keyof T)[]) {
+    const fn = api[key]
+    guarded[key] = (async (...args: any[]) => {
+      try {
+        return await fn(...args)
+      } catch (e: any) {
+        return { success: false, error: e?.response?.data?.error || fallbackMessage }
+      }
+    }) as T[keyof T]
+  }
+  return guarded
+}
+
 // Doors API
-export const doorsApi = {
+export const doorsApi = withErrorGuard({
   // Member-facing
   info(doorId: string) {
     return apiClient.get<import('@/types').DoorInfo>(`/doors/${doorId}/info`)
@@ -410,7 +435,7 @@ export const doorsApi = {
   removeRule(doorId: string, ruleId: string) {
     return apiClient.delete<void>(`/admin/doors/${doorId}/rules/${ruleId}`)
   },
-}
+}, 'Door request failed')
 
 // MFA API functions
 export const mfaApi = {
