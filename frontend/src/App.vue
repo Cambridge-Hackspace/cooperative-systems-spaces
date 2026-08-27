@@ -217,6 +217,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import type { Notification } from '@/types'
 import { UserRole as UserRoleEnum } from '@/types'
+import { resolveTheme, onSystemThemeChange } from '@/utils/theme'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -275,21 +276,22 @@ function removeNotification(id: string) {
   }
 }
 
-// Apply theme from user meta
+// Apply theme from user meta — resolveTheme treats a missing preference
+// (anonymous visitors, or a user who hasn't picked one) the same as an
+// explicit "system" choice, following the OS/browser's light/dark setting.
 function applyTheme() {
-  const user = authStore.user
-  if (user?.meta?.theme) {
-    document.documentElement.setAttribute('data-theme', user.meta.theme)
-  } else {
-    // Default theme
-    document.documentElement.setAttribute('data-theme', 'css-light')
-  }
+  document.documentElement.setAttribute('data-theme', resolveTheme(authStore.user?.meta?.theme))
 }
 
 // Watch for user changes to apply theme
 watch(() => authStore.user, () => {
   applyTheme()
 }, { deep: true })
+
+// Keep following the OS setting live whenever the effective choice is
+// "system" (applyTheme re-reads the stored preference each time, so this is
+// a no-op for users with a fixed theme selected).
+onSystemThemeChange(applyTheme)
 
 // Lifecycle
 onMounted(async () => {

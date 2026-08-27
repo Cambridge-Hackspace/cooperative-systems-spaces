@@ -294,8 +294,10 @@ async fn update_user_theme(
         return Err(ApiError::Forbidden("You can only update your own theme".to_string()));
     }
 
-    // Validate theme value (must match themes in tailwind.config.js)
-    let valid_themes = ["css-light", "css-dark", "afterdark", "her",
+    // Validate theme value (must match themes in tailwind.config.js, plus
+    // "system" which the frontend resolves to css-light/css-dark based on
+    // the browser's prefers-color-scheme rather than a fixed daisyUI theme).
+    let valid_themes = ["system", "css-light", "css-dark", "afterdark", "her",
                         "forest", "sky", "clays", "stones",
                         "lofi", "black", "light", "dark", "cupcake", "corporate"];
     
