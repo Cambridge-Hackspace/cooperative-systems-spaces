@@ -90,14 +90,14 @@ async function inviteRedemption(admin) {
     // classification, the code alphabet, and the cluster encoding.
     assertEq(
       'findings/device-invite-codes-require-a-utf8-database',
-      400,
+      500,
       probe.status,
       `PINNED FINDING, not a passing behaviour: on a ${ENCODING} cluster a device ` +
         'invite cannot be created at all, because the code is eight emoji. ' +
         'Device registration is therefore impossible, and nothing says the ' +
-        'application requires a UTF-8 database. The 400 is the corrected ' +
-        'classification of an unchanged defect -- the caller supplied no text, ' +
-        'the server generated it. See TESTING.md, "Known defects".',
+        'application requires a UTF-8 database. 500 is correct here rather ' +
+        'than unfixed: the server generated the code, so this is its failure ' +
+        'and not the caller. See TESTING.md, "Known defects".',
     )
     record('race/invite/not-run-on-this-cluster', 'skip',
       `the invite race needs an invite, and this cluster (${ENCODING}) cannot ` +

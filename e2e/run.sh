@@ -1006,9 +1006,15 @@ stage_logs() {
   # permanent skips. An exemption nobody has to justify again is an exemption
   # that outlives its reason.
   local expected=(
-    # The pinned encoding finding: a device invite code is eight emoji and this
-    # suite's cluster is LATIN1, so the row cannot be written at all.
-    # TESTING.md, "Known defects".
+    # A device invite code is eight emoji and this suite's cluster is LATIN1, so
+    # the row cannot be written at all. TESTING.md, "Known defects".
+    #
+    # ERROR is the right level and consistent with the rule `from_db` applies
+    # elsewhere, because this route answers 500. It answers 500 because the
+    # server generated the value that could not be stored -- the caller supplied
+    # nothing -- so it is genuinely the server's failure. The operator whose
+    # deployment cannot register any device is the person who needs to see it,
+    # and they are the only one who can fix it, by changing the encoding.
     'Failed to insert device invite: character with byte sequence'
   )
 

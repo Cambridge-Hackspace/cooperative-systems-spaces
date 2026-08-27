@@ -123,8 +123,31 @@ pub async fn create_device_invite(
         .values(&new_invite)
         .get_result(conn)
         .map_err(|e| {
+            // The one place the generic classification is wrong, and it is
+            // wrong in a way worth stating rather than living with.
+            //
+            // `ApiError::from` classifies text the database cannot represent as
+            // a 400, which is right nearly everywhere: the caller sent
+            // something unstorable and only they can change it. Here the caller
+            // sent nothing at all -- `new_device_code()` generated the value,
+            // eight characters drawn from a 242-entry emoji alphabet of which
+            // LATIN1 can store exactly none. Answering 400 tells an
+            // administrator their input was bad when they supplied no input,
+            // which is a worse answer than the vague 500 it replaced, because
+            // it is confidently wrong instead of merely unhelpful.
+            //
+            // So this route overrides the default: it is the server that cannot
+            // do the job, and the fix is a database encoding no API caller can
+            // reach. 500 with a message naming the actual cause.
             tracing::error!("Failed to insert device invite: {}", e);
-            ApiError::from(e)
+            match ApiError::from(e) {
+                ApiError::BadRequest(_) => ApiError::InternalServerError(
+                    "This deployment's database cannot store device invite codes. \
+                     Device codes are emoji and require a UTF-8 database."
+                        .to_string(),
+                ),
+                other => other,
+            }
         })?;
 
     // Create audit log

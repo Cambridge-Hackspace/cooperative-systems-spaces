@@ -180,13 +180,29 @@ function fillPath(template) {
 // anything.
 const KNOWN = [
   {
+    // Removed when unrepresentable text became a 400, then restored when this
+    // route was given back its 500 -- and the round trip is the reason to keep
+    // this comment rather than tidy it away.
+    //
+    // Every other route answering 500 for unstorable text was answering for
+    // text the CALLER sent, and 400 is right for those. This one generates its
+    // own value: a device code is eight characters from a 242-entry emoji
+    // alphabet, of which LATIN1 can store none. A 400 would tell an
+    // administrator their input was bad when they supplied no input.
+    //
+    // So the 500 here is correct rather than unfixed, and this exemption is
+    // narrower than it looks: it says "a server that genuinely cannot do the
+    // job may say so", not "this route is allowed to fail". The finding it
+    // rests on -- device registration is impossible without a UTF-8 database --
+    // is pinned by the concurrency tier and recorded in TESTING.md.
     method: 'POST',
     template: '/api/admin/devices/invite',
     status: 500,
     only: (enc) => enc !== 'UTF8',
     why:
-      'a device invite code is eight emoji, and this cluster cannot store one. ' +
-      'The finding is pinned by the concurrency tier. TESTING.md, "Known defects".',
+      'a device invite code is eight emoji and this cluster can store none of ' +
+      'them. The server generated the value, so this is genuinely the ' +
+      "server's failure and 500 is the honest answer. TESTING.md, \"Known defects\".",
   },
   // The four registered-but-unimplemented routes. A 501 is honest rather than
   // broken -- but each is a route the frontend can call and that can never

@@ -514,7 +514,23 @@ production database, and had done since the routes existed. A fragile match is a
 poor trade for a LATIN1-only defect and a good one for a live bug on every
 deployment.
 
-`is_unrepresentable_text` now classifies both as 400. Two things make the
+`is_unrepresentable_text` now classifies both as 400 — with one deliberate
+exception, which is the more interesting half.
+
+Classification happens by error *type*, and the database's complaint is
+identical whether the unstorable text came from the caller or from the server:
+it just says it cannot store it. Only the handler that made the request knows
+which. `create_device_invite` generates its own value — eight emoji — so a 400
+there would tell an administrator their input was bad when they supplied no
+input at all, and point them at a fix that does not exist. That route overrides
+the default and answers 500 naming the real cause: the deployment's database
+cannot store device codes and a UTF-8 database is required. The blanket-500
+budget for `devices.rs` goes from 0 to 1 to record it, which is exactly the
+escape hatch that check's failure message offers.
+
+So the rule is: the default lives in `errors.rs`, and a route that supplies its
+own text overrides it. Pushing the special case down into `errors.rs` would mean
+asking it to decide something it cannot see. Two things make the
 fragility survivable, and both are enforced rather than asserted: a message that
 does not match falls through to the same 500 as before, so a localised server is
 no worse off; and the two phrases are pinned by tests taken from real captured

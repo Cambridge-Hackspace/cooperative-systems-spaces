@@ -38,7 +38,12 @@ const BUDGET: &[(&str, usize)] = &[
     ("auth.rs", 3),
     ("calendar.rs", 0),
     ("config.rs", 0),
-    ("devices.rs", 0),
+    // 1, and it is the deliberate kind this check's own message describes.
+    // `create_device_invite` generates its own value -- eight emoji -- so when
+    // the database cannot store it, the caller supplied nothing and 500 is the
+    // honest answer. Every other route answering 500 for unstorable text was
+    // answering for text the caller sent, and those are 400s now.
+    ("devices.rs", 1),
     ("doors.rs", 0),
     ("errors.rs", 10),
     ("home_links.rs", 0),
