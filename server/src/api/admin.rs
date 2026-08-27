@@ -79,9 +79,9 @@ async fn reload_config(
             )))
         }
         Err(e) => {
-            tracing::error!("Failed to reload configuration: {}", e);
+            tracing::error!("Failed to reload configuration: {:#}", e);
             Err(ApiError::InternalServerError(
-                format!("Failed to reload configuration: {}", e)
+                format!("Failed to reload configuration: {:#}", e)
             ))
         }
     }

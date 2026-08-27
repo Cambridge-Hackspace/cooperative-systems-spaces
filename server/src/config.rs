@@ -1039,23 +1039,41 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Load configuration from a TOML file
+    /// Load configuration from a TOML file at boot. If the file is missing
+    /// fields added since it was written, self-heals by merging in
+    /// defaults, backing up the old file, and exiting the process so the
+    /// operator restarts against the corrected file — safe here because
+    /// nothing is serving traffic yet.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::from_file_impl(path, true)
+    }
+
+    /// Load configuration from a TOML file for a live reload. Never exits
+    /// the process: an admin editing config.toml on a running server and
+    /// triggering a reload with a mistake in it (e.g. a section copied in
+    /// without every required field) must get an error back, not have the
+    /// self-heal-and-restart behavior above take down the whole server for
+    /// every connected user.
+    pub fn from_file_for_reload<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::from_file_impl(path, false)
+    }
+
+    fn from_file_impl<P: AsRef<Path>>(path: P, allow_recovery: bool) -> Result<Self> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
-        
+
         // Try to parse the configuration
         let config_result: Result<AppConfig, toml::de::Error> = toml::from_str(&content);
-        
+
         let mut config = match config_result {
             Ok(cfg) => cfg,
             Err(e) => {
                 // Check if error is about missing fields
                 let error_msg = e.to_string();
-                if error_msg.contains("missing field") {
+                if error_msg.contains("missing field") && allow_recovery {
                     eprintln!("\n⚠️  Configuration file is missing required fields!");
                     eprintln!("Error: {}\n", e);
-                    
+
                     // Create a backup of the old config with unix timestamp
                     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
                         .unwrap_or_default().as_secs();
@@ -1063,10 +1081,10 @@ impl AppConfig {
                     fs::copy(&path, &backup_path)
                         .with_context(|| format!("Failed to create backup at: {}", backup_path))?;
                     eprintln!("📦 Backed up old config to: {}\n", backup_path);
-                    
+
                     // Generate updated config with defaults for missing fields
                     let default_config = AppConfig::default();
-                    
+
                     // Try to parse as a partial config to preserve existing values
                     // We'll use toml::Value to merge configs
                     let existing_value: toml::Value = toml::from_str(&content)
@@ -1075,23 +1093,30 @@ impl AppConfig {
                         Ok(s) => toml::from_str(&s).unwrap_or(toml::Value::Table(toml::map::Map::new())),
                         Err(_) => toml::Value::Table(toml::map::Map::new()),
                     };
-                    
+
                     // Merge: existing values take precedence, defaults fill in missing fields
                     let merged_value = merge_toml_values(existing_value, default_value);
-                    
+
                     // Parse the merged config
                     let merged_config: AppConfig = toml::from_str(&toml::to_string(&merged_value).unwrap())
                         .with_context(|| "Failed to parse merged configuration")?;
-                    
+
                     // Write the updated config back to file
                     merged_config.to_file(&path)
                         .with_context(|| "Failed to write updated configuration")?;
-                    
+
                     eprintln!("✅ Updated configuration file with default values for missing fields.");
                     eprintln!("📝 Please review the configuration at: {}", path.as_ref().display());
                     eprintln!("\n🛑 Server will now exit. Please restart after reviewing the configuration.\n");
-                    
+
                     std::process::exit(0);
+                } else if error_msg.contains("missing field") {
+                    return Err(e).with_context(|| {
+                        "Config reload failed: file is missing required fields. \
+                         The running server keeps its current configuration; fix \
+                         the file and reload again (or restart the process, which \
+                         can self-heal missing fields at boot)"
+                    });
                 } else {
                     // Some other parsing error
                     return Err(e).with_context(|| "Failed to parse TOML configuration");
@@ -1101,7 +1126,7 @@ impl AppConfig {
 
         // Apply environment variable overrides
         config.apply_env_overrides()?;
-        
+
         Ok(config)
     }
 
@@ -1176,8 +1201,7 @@ impl ConfigManager {
 
         info!("Reloading configuration from: {}", config_path.display());
 
-        let new_config = AppConfig::from_file(config_path)
-            .with_context(|| "Failed to reload configuration")?;
+        let new_config = AppConfig::from_file_for_reload(config_path)?;
 
         // Validate the new configuration
         validate_config(&new_config)?;
