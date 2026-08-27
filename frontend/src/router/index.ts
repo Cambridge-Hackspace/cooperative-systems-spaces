@@ -80,6 +80,14 @@ const router = createRouter({
       },
     },
     {
+      path: '/profile/card',
+      name: 'profile-card',
+      component: () => import('@/views/CardSetupView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/profile/password',
       name: 'profile-password',
       component: () => import('@/views/PasswordChangeView.vue'),

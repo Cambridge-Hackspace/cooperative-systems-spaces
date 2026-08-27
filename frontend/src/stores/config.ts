@@ -46,6 +46,8 @@ export interface PublicCalendarConfig {
 
 export interface PublicToolGuardConfig {
   enabled: boolean
+  // Name of the profile field that holds the user's RFID/NFC card id.
+  profile_field: string
 }
 
 export interface PublicConfig {
@@ -153,6 +155,12 @@ export const useConfigStore = defineStore('config', () => {
     return !!config.value?.toolguard?.enabled
   }
 
+  // Name of the profile field that holds the user's RFID/NFC card id, if
+  // the server has one configured. Shared between ToolGuard and door access.
+  function cardIdField(): string | null {
+    return config.value?.toolguard?.profile_field || null
+  }
+
   return {
     config,
     loading,
@@ -164,6 +172,7 @@ export const useConfigStore = defineStore('config', () => {
     shouldShowSiteOnHomePage,
     doorsEnabled,
     calendarEnabled,
-    toolguardEnabled
+    toolguardEnabled,
+    cardIdField
   }
 })
