@@ -3,3 +3,5 @@
 /frontend/dist
 /frontend_edge/node_modules
 /frontend_edge/dist
+/server/config.toml
+*.backup
