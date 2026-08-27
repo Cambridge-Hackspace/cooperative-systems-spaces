@@ -739,16 +739,6 @@ export const trainingApi = {
 
   // === Tool Training Overview ===
 
-  // Get tool training steps with progress for a specific user
-  getToolTrainingSteps(toolId: string, userId?: string): Promise<ApiResponse<any[]>> {
-    const url = userId ? `/training/tools/${toolId}/steps/${userId}` : `/training/tools/${toolId}/steps`
-    return apiClient.get<any[]>(url)
-      .catch(error => {
-        console.error('Error fetching tool training steps:', error)
-        return { success: false, error: error.message || 'Failed to fetch tool training steps', data: [] }
-      })
-  },
-
   // Get tool training overview for user
   getToolTrainingOverview(toolId: string, userId?: string): Promise<ApiResponse<ToolTrainingOverview>> {
     const url = userId ? `/training/tools/${toolId}/overview/${userId}` : `/training/tools/${toolId}/overview/me`
@@ -761,7 +751,7 @@ export const trainingApi = {
 
   // Check if user can access tool
   canAccessTool(toolId: string, userId?: string): Promise<ApiResponse<boolean>> {
-    const url = userId ? `/training/tools/${toolId}/can-access/${userId}` : `/training/tools/${toolId}/can-access/me`
+    const url = userId ? `/training/access/${toolId}/${userId}` : `/training/access/${toolId}`
     return apiClient.get<boolean>(url)
       .catch(error => {
         console.error('Error checking tool access:', error)
