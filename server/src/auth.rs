@@ -76,6 +76,12 @@ pub enum AuthError {
     UserInactive,
     InvalidPassword(String),
     InternalError,
+    /// A valid, authenticated token whose user's role doesn't meet the
+    /// endpoint's minimum — distinct from InvalidToken (a malformed,
+    /// expired, or forged token). Reusing InvalidToken here would tell a
+    /// legitimately-logged-in user their token is broken when the real
+    /// issue is a permissions gate.
+    Forbidden(String),
 }
 
 impl Display for AuthError {
@@ -89,6 +95,7 @@ impl Display for AuthError {
             AuthError::UserInactive => write!(f, "User account is inactive"),
             AuthError::InvalidPassword(msg) => write!(f, "Invalid password: {}", msg),
             AuthError::InternalError => write!(f, "Internal server error"),
+            AuthError::Forbidden(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -106,6 +113,7 @@ impl IntoResponse for AuthError {
             AuthError::UserInactive => (StatusCode::FORBIDDEN, "User account is inactive"),
             AuthError::InvalidPassword(_) => (StatusCode::BAD_REQUEST, "Invalid password"),
             AuthError::InternalError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            AuthError::Forbidden(ref msg) => (StatusCode::FORBIDDEN, msg.as_str()),
         };
 
         let body = Json(serde_json::json!({
@@ -293,7 +301,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
         
         if !user.role.can_access_admin() {
-            return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
+            return Err(AuthError::Forbidden("Admin access required".to_string()));
         }
 
         Ok(AdminUser(user))
@@ -315,7 +323,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !user.role.can_access_staff() {
-            return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
+            return Err(AuthError::Forbidden("Staff access required".to_string()));
         }
 
         Ok(StaffUser(user))
@@ -337,7 +345,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !user.role.can_access_member() {
-            return Err(AuthError::InvalidToken); // Could create a specific "Forbidden" error
+            return Err(AuthError::Forbidden("Member access required".to_string()));
         }
 
         Ok(MemberUser(user))

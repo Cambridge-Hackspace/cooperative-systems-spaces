@@ -85,6 +85,7 @@ impl From<AuthError> for ApiError {
             AuthError::UserInactive => ApiError::Forbidden("User account is inactive".to_string()),
             AuthError::InvalidPassword(_) => ApiError::BadRequest("Invalid password format".to_string()),
             AuthError::InternalError => ApiError::InternalServerError("Authentication service error".to_string()),
+            AuthError::Forbidden(msg) => ApiError::Forbidden(msg),
         }
     }
 }
