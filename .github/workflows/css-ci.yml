@@ -25,6 +25,26 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Which machine the Linux jobs run on.
+#
+# Unset -- the default -- means GitHub-hosted `ubuntu-latest`. An undefined
+# repository variable evaluates to the empty string, which is falsy in a GitHub
+# expression, so the fallback applies with nothing configured anywhere. Set the
+# repository or organisation variable `CI_RUNNER` to a self-hosted label (this
+# project's upstream uses `arc-runner-set`) to send them elsewhere.
+#
+# It is a variable because it was a hardcoded `arc-runner-set` for two and a
+# half months, and that made the workflow unrunnable anywhere except the one
+# organisation those runners are registered to. Forks do not inherit a parent's
+# self-hosted runners -- deliberately, since inheriting them would let any fork
+# execute arbitrary code on the parent's infrastructure. So on a fork every job
+# here sat `queued` against a runner that could never claim it, until GitHub
+# cancelled it at the twenty-four hour mark. Nothing failed, nothing reported,
+# and the repository's Actions tab stayed empty through a merge to master.
+#
+# The expression is repeated at each job rather than defined once because the
+# `env` context is not available in `runs-on`. `vars` is.
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -40,7 +60,7 @@ jobs:
   # guarantees the directory exists at all; this guarantees it has something in it.
   # ---------------------------------------------------------------------------
   assets:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -73,7 +93,7 @@ jobs:
 
   # --- Tiers 1 and 2, plus lint/format/type ----------------------------------
   frontend:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -109,7 +129,7 @@ jobs:
           if-no-files-found: error
 
   frontend-edge:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -126,7 +146,7 @@ jobs:
   # validates does not run on every PR -- which is exactly why the thing that
   # decides whether that tier means anything should.
   shell:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
@@ -137,7 +157,7 @@ jobs:
 
   # --- Tiers 1, 1b, 3 and 4, Rust side ---------------------------------------
   rust:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     needs: assets
     steps:
       - uses: actions/checkout@v4
@@ -182,7 +202,7 @@ jobs:
   # this job needs the frontend and nothing else. It is also the only job in
   # this workflow that runs a browser at all.
   browser-fake:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     container:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
     steps:
@@ -216,7 +236,7 @@ jobs:
   # No continue-on-error and no `if:` guard. If this cannot run, that is a
   # runner defect to fix, not a suite to skip.
   stack:
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     # Deliberately NOT `needs: assets`. This job runs e2e/build.sh, which is the
     # same script the reaper session runs, and that script builds both frontends
     # itself. Downloading the bundle instead would leave build.sh -- the thing
@@ -297,7 +317,7 @@ jobs:
   # --- packaging --------------------------------------------------------------
   docker-server:
     needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
@@ -323,7 +343,7 @@ jobs:
 
   docker-edge:
     needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
-    runs-on: arc-runner-set
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
@@ -356,7 +376,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: arc-runner-set
+          - os: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
             artifact_name: linux
             server_bin: css-server
             cli_bin: css-cli

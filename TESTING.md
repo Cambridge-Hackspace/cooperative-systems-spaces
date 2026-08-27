@@ -53,7 +53,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
 | 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 52 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 53 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 32 tests across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
@@ -157,6 +157,29 @@ depends on reaper existing. The `stack` job gets its Postgres from a
 its endpoints from the environment rather than starting anything itself. That
 `--provision` flag exists precisely so that reaper is an accelerator and never a
 dependency.
+
+**Which machine.** The Linux jobs run on `${{ vars.CI_RUNNER || 'ubuntu-latest' }}`.
+Unset means GitHub-hosted, which is what a fork or a clone gets with no
+configuration at all. Set the repository or organisation variable `CI_RUNNER` to
+a self-hosted label to send them elsewhere; this project's upstream uses
+`arc-runner-set`.
+
+**What that variable is worth knowing about.** It was a hardcoded
+`arc-runner-set` until this branch, and self-hosted runners do not cross a fork
+boundary -- a fork cannot claim its parent's runners, because that would let
+anyone who forked the repository run code on the parent's infrastructure. So on
+this fork every job queued against a runner that could never take it and was
+cancelled silently twenty-four hours later. The Actions tab stayed empty through
+a merge to `master`. A workflow that cannot be claimed does not fail; it simply
+never reports, which is the failure mode hardest to notice and the reason this
+is a variable now rather than a label.
+
+**Status, stated plainly.** At the time of writing this file, the workflow has
+never completed a run in this repository. Every claim in section 2 about a tier
+is a claim about that tier under reaper or on the workstation. The `stack` job's
+`--provision=external` path in particular -- GitHub's Postgres service, a host
+mosquitto, no container engine -- is genuinely different code from the path
+reaper exercises, and it is unproven until a run goes green here.
 
 ---
 
