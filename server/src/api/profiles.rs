@@ -116,9 +116,12 @@ async fn update_user_profile(
         return Err(ApiError::Forbidden("You can only update your own profile".to_string()));
     }
 
-    // Check if profiles are enabled
-    let config_guard = state.config_manager.get_config();
-    if !config_guard.user.profiles_enabled {
+    // profile_fields and profiles_enabled are read fresh from the database
+    // (not the per-instance config cache) so that what's enforced here
+    // always matches what GET /api/profiles/config just showed the user,
+    // regardless of which instance served either request.
+    let (profile_fields, profiles_enabled) = current_profile_config(&state).await?;
+    if !profiles_enabled {
         return Err(ApiError::BadRequest("User profiles are currently disabled".to_string()));
     }
 
@@ -128,12 +131,9 @@ async fn update_user_profile(
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
     // Validate the profile data
-    let profile_validator = ProfileValidator::new(&config_guard.user);
+    let profile_validator = ProfileValidator::new(&profile_fields);
     profile_validator.validate_profile(&payload.profile)
         .map_err(|e| ApiError::BadRequest(format!("Profile validation failed: {}", e)))?;
-
-    // Drop the config guard before database operations
-    drop(config_guard);
 
     // Update the profile
     let updated_user = state.db.update_user_profile(user_id, &payload.profile)
@@ -182,8 +182,7 @@ async fn get_profile_config(
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
     // profile_fields and profiles_enabled are versioned together in the
     // database, which is authoritative across instances.
-    let profile_fields = current_profile_fields(&state).await?;
-    let profiles_enabled = state.config_manager.get_config().user.profiles_enabled;
+    let (profile_fields, profiles_enabled) = current_profile_config(&state).await?;
 
     let response = ProfileConfigResponse {
         profile_fields,
@@ -199,7 +198,8 @@ async fn update_profile_config(
     State(state): State<AppState>,
     Json(payload): Json<UpdateProfileConfigRequest>,
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
-    validate_profile_fields(&payload.profile_fields)?;
+    crate::profile_fields::validate_profile_fields(&payload.profile_fields)
+        .map_err(ApiError::BadRequest)?;
 
     // Persist a new, immutable version of the field schema and enabled
     // toggle together...
@@ -301,10 +301,9 @@ async fn rollback_profile_config(
         tracing::warn!("Failed to log config rollback: {}", e);
     }
 
-    let profiles_enabled = state.config_manager.get_config().user.profiles_enabled;
     let response = ProfileConfigResponse {
         profile_fields,
-        profiles_enabled,
+        profiles_enabled: target.profiles_enabled,
     };
 
     Ok(Json(ApiResponse::success_with_message(
@@ -313,36 +312,24 @@ async fn rollback_profile_config(
     )))
 }
 
-/// Validate a submitted set of profile field definitions: no empty keys or
-/// labels, and no duplicate keys.
-fn validate_profile_fields(fields: &[ProfileField]) -> Result<(), ApiError> {
-    for field in fields {
-        if field.key.is_empty() {
-            return Err(ApiError::BadRequest("Profile field key cannot be empty".to_string()));
-        }
-        if field.label.is_empty() {
-            return Err(ApiError::BadRequest("Profile field label cannot be empty".to_string()));
-        }
-    }
-
-    let mut keys = std::collections::HashSet::new();
-    for field in fields {
-        if !keys.insert(&field.key) {
-            return Err(ApiError::BadRequest(format!("Duplicate field key: {}", field.key)));
-        }
-    }
-
-    Ok(())
-}
-
-/// The current profile field schema, read from the database (authoritative
-/// across instances) and falling back to the in-process config cache only
-/// if no version has ever been saved (shouldn't happen once main.rs's
-/// startup bootstrap has run, but keeps this handler standalone).
-async fn current_profile_fields(state: &AppState) -> Result<Vec<ProfileField>, ApiError> {
+/// The current profile field schema and enabled toggle, read from the
+/// database (authoritative across every instance) and falling back to the
+/// in-process config cache only if no version has ever been saved
+/// (shouldn't happen once main.rs's startup bootstrap has run, but keeps
+/// callers standalone). Callers that enforce validation against this
+/// schema (not just display it) must use this instead of the config
+/// cache, since the cache is only refreshed on whichever instance last
+/// handled an admin write.
+async fn current_profile_config(state: &AppState) -> Result<(Vec<ProfileField>, bool), ApiError> {
     match state.db.get_latest_profile_config_version().map_err(ApiError::from)? {
-        Some(latest) => serde_json::from_value(latest.profile_fields)
-            .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e))),
-        None => Ok(state.config_manager.get_config().user.profile_fields.clone()),
+        Some(latest) => {
+            let fields = serde_json::from_value(latest.profile_fields)
+                .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
+            Ok((fields, latest.profiles_enabled))
+        }
+        None => {
+            let cached = state.config_manager.get_config();
+            Ok((cached.user.profile_fields_seed.clone(), cached.user.profiles_enabled_seed))
+        }
     }
 }

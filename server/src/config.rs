@@ -609,10 +609,15 @@ pub struct ProfileField {
 /// User profile field configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
-    /// Profile field definitions
-    pub profile_fields: Vec<ProfileField>,
-    /// Enable user profile functionality
-    pub profiles_enabled: bool,
+    /// Initial profile field definitions, used only to seed the database's
+    /// versioned `profile_config_versions` table on first boot. Once any
+    /// version exists there, the database is authoritative and this value
+    /// is ignored — editing it in config.toml after first boot has no
+    /// effect. See `api::profiles::current_profile_config`.
+    pub profile_fields_seed: Vec<ProfileField>,
+    /// Initial profiles-enabled toggle, used only to seed the database on
+    /// first boot. Same caveat as `profile_fields_seed`.
+    pub profiles_enabled_seed: bool,
 }
 
 /// Profile field type specification
@@ -633,7 +638,7 @@ pub enum ProfileFieldType {
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
-            profile_fields: vec![
+            profile_fields_seed: vec![
                 ProfileField {
                     key: "bio".to_string(),
                     label: "Bio".to_string(),
@@ -656,7 +661,7 @@ impl Default for UserConfig {
                     help_text: Some("Emergency contact information".to_string()),
                 },
             ],
-            profiles_enabled: true,
+            profiles_enabled_seed: true,
         }
     }
 }
@@ -1194,19 +1199,19 @@ impl ConfigManager {
 
     /// Overwrite the in-memory profile field schema without touching the
     /// config file. The version-history table in the database is the
-    /// source of truth for `profile_fields`; this just keeps the shared
-    /// `AppConfig` (read by validation and the config-file `GET`) in sync
-    /// with the latest DB version.
+    /// source of truth; this only keeps the seed slot in sync as a
+    /// fallback for the (post-bootstrap, shouldn't normally happen) case
+    /// where nothing has read a DB version yet.
     pub fn set_profile_fields(&self, profile_fields: Vec<ProfileField>) {
-        self.config.write().unwrap().user.profile_fields = profile_fields;
+        self.config.write().unwrap().user.profile_fields_seed = profile_fields;
     }
 
-    /// Overwrite the in-memory `profiles_enabled` toggle without touching
-    /// the config file. The `profile_config_versions` table in the
-    /// database is the source of truth (versioned alongside
-    /// `profile_fields`); this just keeps the shared `AppConfig` in sync.
+    /// Overwrite the in-memory `profiles_enabled` seed without touching
+    /// the config file. Same caveat as `set_profile_fields`: the
+    /// `profile_config_versions` table is authoritative, this is just the
+    /// fallback slot.
     pub fn set_profiles_enabled(&self, enabled: bool) {
-        self.config.write().unwrap().user.profiles_enabled = enabled;
+        self.config.write().unwrap().user.profiles_enabled_seed = enabled;
     }
 }
 

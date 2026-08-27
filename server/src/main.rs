@@ -20,6 +20,7 @@ mod schema;
 mod auth;
 mod api;
 mod profile;
+mod profile_fields;
 mod throttle;
 mod recaptcha;
 mod calendar;
@@ -151,8 +152,10 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("Loaded profile field schema from database (version {})", latest.version);
         }
         None => {
-            let seed = serde_json::to_value(&app_config.user.profile_fields)?;
-            db_manager.insert_profile_config_version(seed, app_config.user.profiles_enabled, None)?;
+            profile_fields::validate_profile_fields(&app_config.user.profile_fields_seed)
+                .map_err(|e| anyhow::anyhow!("Invalid profile_fields_seed in config file: {}", e))?;
+            let seed = serde_json::to_value(&app_config.user.profile_fields_seed)?;
+            db_manager.insert_profile_config_version(seed, app_config.user.profiles_enabled_seed, None)?;
             info!("Seeded profile field schema version 1 from config file");
         }
     }
@@ -167,7 +170,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
     prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
-    let profile_validator = ProfileValidator::new(&app_config.user);
+    let profile_validator = ProfileValidator::new(&app_config.user.profile_fields_seed);
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
     let recaptcha_service = Arc::new(RecaptchaService::new(
