@@ -59,7 +59,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
-| 9 Simulated users | What breaks only after history accumulates? | **Oracle only.** Six invariants over the accumulated world, and a 20-case self-test that feeds each of them what a broken server would send and requires it to fire — written first, deliberately, because an invariant that never fires is indistinguishable from a passing suite. It runs in `e2e/lint.sh` with no stack at all. The journey driver that uses them is not written. |
+| 9 Simulated users | What breaks only after history accumulates? | **Running.** A seeded driver takes 200 weighted actions through the shipping API — registrations, role changes, deactivations, deletions, door rules, profile-config writes, and three nemesis classes in the same pool — maintaining a shadow model and checking all six invariants every 20 actions. A recent run: 29 users, 24 door rules, 10 checks, no violation. Two of the six invariants cannot currently mean what they were written to mean, and say so rather than passing quietly: `deactivations-held` is vacuous because deactivated users are not listed at all, and `invites-are-single-use` can only check its count half because nothing links a device to its invite. Both are §8 findings, not test debt. |
 | 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Not started.** |
 | 11 Human evidence | Does this make sense to a newcomer? | **Half started.** The contrast audit exists: WCAG relative luminance over all fourteen themes, with OKLCH converted for daisyUI's built-ins and the reference implementation checked against three known answers. It found **36 semantic/base pairings below AA**, pinned as a ratchet. The prose-transcript half needs Tier 9's journey driver and does not exist. |
 
@@ -395,7 +395,13 @@ those specs at the *real* stack over a world somebody else built, with a
 watchdog failing any test that observes a 5xx. That is written down in the
 design and not written in code.
 
-**Tier 9 has an oracle and no journeys.** The invariant self-test was written
+**Tier 9's driver is written; two of its six invariants are unreachable.** The
+driver runs and finds things — it produced the deactivated-roster finding below.
+But `deactivations-held` judges an empty set, and `invites-are-single-use` can
+only count. Both need a product change to become meaningful, so they are listed
+in §8 rather than here.
+
+** The invariant self-test was written
 first, as the design demands: six invariants, 20 cases, each fed what a broken
 server would send and required to fire. It runs with no stack at all, on every
 push, and it passes. What does not exist is the driver that accumulates a real
@@ -633,6 +639,45 @@ agreed with each other, and they did: both were equally incomplete. That
 limitation was written into its own doc comment and went on to cost exactly what
 it warned about. It now also asserts that every `process.env.*` a driver reads
 is something `run_node` can convey.
+
+### Deactivating a member removes them from the admin roster entirely
+
+`DatabaseManager::list_users` filters `is_active.eq(true)`, and
+`PaginationParams` carries only `page` and `per_page`. So a deactivated member
+is not shown as inactive — they are absent, and **there is no way to list them
+through the API at all**.
+
+An administrator who deactivates somebody by mistake cannot find them again to
+undo it. In a space where membership lapses and resumes, that is the difference
+between "set them inactive until they renew" and "they are gone, create them
+again".
+
+Found by Tier 9, which is exactly the shape that tier exists for: no single
+response is wrong, and the world after a deactivation is.
+
+Pinned by `findings/deactivated-users-vanish-from-the-admin-roster`, which
+asserts they are absent, so the assertion fails the day the roster includes
+them. The journey driver withholds deactivated users from the `roster-matches`
+comparison for the same reason and points at that pin; when it goes, so does the
+adjustment.
+
+It also makes `deactivations-held` vacuous. That invariant asks whether anything
+the driver deactivated is reported active, and a deactivated user is not
+reported at all — so one of Tier 9's six invariants judges an empty set until
+this is fixed.
+
+### Nothing links a device back to the invite that created it
+
+`space_device_auth_requests` carries the `device_code`; `space_devices` has no
+invite or auth-request column. So "which invite produced this device" is a
+question the audit trail cannot answer, for a system that decides who opens a
+door.
+
+The consequence for the suite is that `invites-are-single-use` can only check
+its weaker half — that the server lists at least as many devices as the driver
+registered. Its stronger half, "invite X produced two devices", is not
+observable through the API, and the journey driver records that as a skip rather
+than mapping a field that does not exist and counting nothing forever.
 
 ### A failed audit write is logged and discarded
 

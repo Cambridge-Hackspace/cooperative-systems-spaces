@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,browser,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,health,devices,browser,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -706,6 +706,37 @@ stage_concurrency() {
 # They are outside `api_routes()`, so the Tier 4 matrix cannot see them at all:
 # it builds its router from `api::api_routes()` and would report full coverage
 # of a surface that is missing both. This is the only tier that reaches them.
+# Tier 9: simulated users.
+#
+# The oracle for this tier -- six invariants over the accumulated world, with a
+# 20-case self-test that feeds each of them what a broken server would send --
+# was written first and had nothing to judge until now. This stage is what gives
+# it a world.
+#
+# It runs after `concurrency` and before `health` on purpose: it leaves a large
+# accumulated history behind, and `health` asserting the server still serves
+# every basic route afterwards is worth more than it asserting so against a
+# nearly-empty database.
+stage_journeys() {
+  cases_begin journeys
+  stack_paths
+
+  if ! tcp_open "${SERVER_PORT}"; then
+    record_case "journeys/stack-is-up" fail "css-server is not answering"
+    emit_junit journeys
+    return 1
+  fi
+  record_case "journeys/stack-is-up" ok
+
+  if run_node journeys.mjs; then :; else
+    log "journeys driver exited non-zero; its cases are recorded below"
+  fi
+  absorb_driver_cases
+
+  emit_junit journeys "seed=${CSS_JOURNEY_SEED:-random}" \
+    "iterations=${CSS_JOURNEY_ITERATIONS:-200}"
+}
+
 stage_health() {
   cases_begin health
   stack_paths

@@ -214,6 +214,21 @@ user_profile_field = "user_page_repository"
 user_period = 900
 user_readme = false
 
+# Enabled, because the suite tests doors and a door requires two places.
+#
+# PlaceConfig::default() has `enabled = false`, and this file previously had no
+# [place] section at all -- so every POST /api/admin/places answered 403 and the
+# Tier 9 door-rule invariant had nothing to judge. A suite whose configuration
+# switches off a module it then tests reports a pass for a tier that ran
+# nothing.
+#
+# The type list is the default one, stated here rather than inherited, so a
+# change to the default is a change to this file rather than a silent change to
+# what the suite exercises.
+[place]
+enabled = true
+types = ["Room", "Spot"]
+
 [edge]
 edge_enabled = true
 

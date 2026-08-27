@@ -434,7 +434,9 @@ run_node() {
     local -a passthrough=()
     local v
     for v in CSS_FUZZ_ITERATIONS CSS_FUZZ_SEED CSS_FUZZ_BATCH \
-      CSS_RACE_ROUNDS CSS_RACE_FANOUT CSS_RUN_TAG; do
+      CSS_RACE_ROUNDS CSS_RACE_FANOUT CSS_RUN_TAG \
+      CSS_JOURNEY_ITERATIONS CSS_JOURNEY_SEED CSS_JOURNEY_CHECK_EVERY \
+      REAPER_CONTROL; do
       [[ -n ${!v:-} ]] && passthrough+=(-e "${v}=${!v}")
     done
 
