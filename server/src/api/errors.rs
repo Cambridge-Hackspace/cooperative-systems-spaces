@@ -94,12 +94,13 @@ impl From<DatabaseError> for ApiError {
     fn from(err: DatabaseError) -> Self {
         match err {
             DatabaseError::Pool(_) => ApiError::InternalServerError("Database connection error".to_string()),
-            DatabaseError::Diesel(diesel_err) => {
-                match diesel_err {
-                    diesel::result::Error::NotFound => ApiError::NotFound("Resource not found".to_string()),
-                    _ => ApiError::InternalServerError("Database error".to_string()),
-                }
-            }
+            // Delegate to the Diesel conversion below so callers going
+            // through DatabaseError (the common case) get the same
+            // NotFound/Conflict handling as callers with a raw Diesel
+            // error, instead of every non-NotFound error flattening into
+            // a generic 500 (e.g. a unique-constraint race becoming an
+            // opaque failure instead of a clear 409).
+            DatabaseError::Diesel(diesel_err) => ApiError::from(diesel_err),
             DatabaseError::Migration(_) => ApiError::InternalServerError("Database migration error".to_string()),
             DatabaseError::ConnectionTimeout => ApiError::InternalServerError("Database connection timeout".to_string()),
             DatabaseError::Other(msg) => ApiError::InternalServerError(format!("Database error: {}", msg)),
