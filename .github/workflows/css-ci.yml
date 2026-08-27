@@ -456,71 +456,93 @@ jobs:
       #
       # This is the same shape as the PostgreSQL step above: a system library
       # the build needs and a Windows runner does not ship.
+      # openssl-sys reaches this leg by two routes that both build here:
+      # css-cli and css-edge pull reqwest -> native-tls, and css-edge also pulls
+      # paho-mqtt -> paho-mqtt-sys, which compiles the Paho C library and finds
+      # OpenSSL through CMake's OPENSSL_ROOT_DIR rather than openssl-sys's
+      # OPENSSL_DIR. Both are set. Swapping to rustls would not avoid this:
+      # paho-mqtt-sys would still need OpenSSL.
       - name: Install OpenSSL (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install openssl --yes --no-progress
-
-          # Located rather than assumed. The first attempt set OPENSSL_DIR from
-          # wherever the headers were and let openssl-sys infer `lib` beside
-          # them; the import libraries are not there, and the build failed with
-          # "libdir does not contain the required files". Windows OpenSSL
-          # distributions disagree about layout -- some ship lib\VC\x64\MD,
-          # some a flat lib -- and this runs on whatever choco resolves to
-          # today, so the layout is not a thing to hardcode.
-          #
-          # openssl-sys accepts OPENSSL_LIB_DIR + OPENSSL_INCLUDE_DIR in place
-          # of OPENSSL_DIR, which is what makes searching viable.
-          # paho-mqtt-sys locates OpenSSL through CMake instead, and CMake reads
-          # OPENSSL_ROOT_DIR, so that is set as well.
           $ErrorActionPreference = 'Stop'
 
-          $roots = Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)' -Directory -ErrorAction SilentlyContinue |
-                   Where-Object { $_.Name -match 'OpenSSL' }
-          if (-not $roots) { Write-Error "no OpenSSL directory found after choco install"; exit 1 }
-
-          # A usable lib dir has both halves. Matching only on ssl would happily
-          # select a directory with no crypto library and fail later at link
-          # time, which is a worse place to find out.
-          $libDir = $null
-          foreach ($root in $roots) {
-            $cands = Get-ChildItem $root.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
-                     Group-Object DirectoryName
-            foreach ($g in $cands) {
-              $names = $g.Group.Name
-              $hasSsl    = $names | Where-Object { $_ -in @('libssl.lib','ssl.lib') }
-              $hasCrypto = $names | Where-Object { $_ -in @('libcrypto.lib','crypto.lib') }
-              if ($hasSsl -and $hasCrypto) { $libDir = $g.Name; break }
+          # Look before installing.
+          #
+          # This ran `choco install openssl` unconditionally, and that package
+          # fetches its installer from slproweb.com. On 2026-08-27 the download
+          # hung for ten minutes and died with "Received an unexpected EOF or 0
+          # bytes from the transport stream", failing the job -- while the next
+          # lines of the same step found a perfectly good OpenSSL at
+          # C:\Program Files\OpenSSL, because the runner image already ships one.
+          #
+          # The install was never needed in the common case, and putting it on
+          # the critical path made a third-party CDN a dependency of this gate.
+          # It stays as a fallback for an image without OpenSSL; the step fails
+          # only if the search still comes up empty afterwards.
+          #
+          # A usable directory holds BOTH halves. Matching on ssl alone would
+          # select one with no crypto library and fail later at link time, which
+          # is a worse place to find out. Layouts differ between distributions --
+          # some ship lib\VC\x64\MD, some a flat lib -- so this searches rather
+          # than hardcoding one.
+          function Find-OpenSSL {
+            $roots = Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)' -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -match 'OpenSSL' }
+            foreach ($root in $roots) {
+              $groups = Get-ChildItem $root.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+                        Group-Object DirectoryName
+              foreach ($g in $groups) {
+                $names = $g.Group.Name
+                if (($names | Where-Object { $_ -in @('libssl.lib','ssl.lib') }) -and
+                    ($names | Where-Object { $_ -in @('libcrypto.lib','crypto.lib') })) {
+                  return [pscustomobject]@{ Root = $root.FullName; Lib = $g.Name }
+                }
+              }
             }
-            if ($libDir) { $root_used = $root.FullName; break }
+            return $null
           }
 
-          if (-not $libDir) {
-            Write-Host "=== no directory held both an ssl and a crypto import library ==="
-            foreach ($root in $roots) {
-              Write-Host "--- $($root.FullName) ---"
-              Get-ChildItem $root.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
-                ForEach-Object { Write-Host "  $($_.FullName)" }
+          $found = Find-OpenSSL
+          if ($found) {
+            Write-Host "OpenSSL already on this image; not installing"
+          } else {
+            Write-Host "no usable OpenSSL found; falling back to choco"
+            choco install openssl --yes --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "choco exited $LASTEXITCODE -- checking anyway, since the files may still be usable"
             }
-            Write-Error "OpenSSL import libraries not found; the listing above is what was installed"
+            $found = Find-OpenSSL
+          }
+
+          if (-not $found) {
+            Write-Host "=== no directory held both an ssl and a crypto import library ==="
+            Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)' -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match 'OpenSSL' } |
+              ForEach-Object {
+                Write-Host "--- $($_.FullName) ---"
+                Get-ChildItem $_.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+                  ForEach-Object { Write-Host "  $($_.FullName)" }
+              }
+            Write-Error "OpenSSL import libraries not found; the listing above is what was on disk"
             exit 1
           }
 
-          $incDir = Join-Path $root_used 'include'
+          $incDir = Join-Path $found.Root 'include'
           if (-not (Test-Path (Join-Path $incDir 'openssl\ssl.h'))) {
-            $found = Get-ChildItem $root_used -Recurse -Filter 'ssl.h' -ErrorAction SilentlyContinue |
-                     Select-Object -First 1
-            if (-not $found) { Write-Error "OpenSSL headers not found under $root_used"; exit 1 }
-            $incDir = Split-Path (Split-Path $found.FullName -Parent) -Parent
+            $hdr = Get-ChildItem $found.Root -Recurse -Filter 'ssl.h' -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if (-not $hdr) { Write-Error "OpenSSL headers not found under $($found.Root)"; exit 1 }
+            $incDir = Split-Path (Split-Path $hdr.FullName -Parent) -Parent
           }
 
-          Write-Host "OpenSSL root:    $root_used"
-          Write-Host "OpenSSL libs:    $libDir"
+          Write-Host "OpenSSL root:    $($found.Root)"
+          Write-Host "OpenSSL libs:    $($found.Lib)"
           Write-Host "OpenSSL headers: $incDir"
-          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_LIB_DIR=$libDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_LIB_DIR=$($found.Lib)"
           Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_INCLUDE_DIR=$incDir"
-          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$root_used"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$($found.Root)"
 
       # Diagnostic, not a check. It always succeeds.
       #
