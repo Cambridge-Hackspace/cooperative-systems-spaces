@@ -53,7 +53,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
 | 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 54 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 55 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 32 tests across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
@@ -209,10 +209,47 @@ them real:
 independent confirmation that the Rust tiers and the Playwright tier hold up on
 a machine nobody here configured.
 
-The honest caveat that remains: the `stack` tier has still never completed under
-`--provision=external`. It is a genuinely different path from the one reaper
-exercises, and until a run goes green the tier claims in section 2 rest on
-reaper and the workstation.
+**The second run** fixed the first two and got the stack much further:
+`preflight`, `up`, `schema`, `restart`, `contract`, `health`, `devices`, `logs`
+and `down` all passed under `--provision=external` for the first time. `fuzz`
+and `concurrency` failed, both on the same cause, and it was a defect in this
+harness rather than in the application.
+
+`run_node` builds the driver's environment separately in each branch -- a
+command prefix on the host, `-e` flags into the container -- and the container
+branch passed `CSS_DB_ENCODING` while the host branch did not. So in CI the
+drivers read their own `UTF8` default and believed a LATIN1 cluster could store
+anything. Both of them handle a non-UTF-8 database correctly: `fuzz.mjs` drops
+the astral-plane corpus entries because they reproduce a known 500 on every
+route that writes text, and `concurrency.mjs` records a pinned finding and skips
+the invite race for the same reason. Neither ran. CI fired U+1F434 and U+1F967
+at a LATIN1 cluster, got SQLSTATE 22P05 both times, and reported a defect
+already documented in section 8 as a fresh fuzz finding.
+
+The cost of that is not the red build. It is that every genuinely new finding
+would have sat behind noise reproducing on every route that writes text.
+
+Fixed by passing the variable on both paths, and by
+`checks/tests/both_driver_paths_pass_the_same_env.rs`, which derives every
+function in `e2e/stack.sh` that branches on the provisioning mode and asserts
+the two sides hand the process the same environment. Deriving the list rather
+than writing it down is the point: a fourth such function cannot be added
+without the check seeing it, and a function that becomes unreadable to the check
+fails rather than being skipped.
+
+Two things that check found on the way, both recorded because neither was the
+bug being chased. `start_edge` set `CONFIG_PATH` on the host path only --
+harmless, because `edge/src/main.rs:98` sets that variable itself from
+`--config`, which both paths pass; removed as dead rather than exempted. And
+`sql_ro` was *reported* as diverging on `PGOPTIONS` by the first version of the
+check, which was wrong: it writes two assignments on one line and the parser
+took only the first. The suite's read-only database guarantee was never absent.
+A check that had shipped in that state would have made a false claim about a
+safety property, which is worse than the bug it was written for.
+
+The caveat that remains: `fuzz` and `concurrency` have still never completed
+under `--provision=external`, and the `release` job has never run at all -- it
+`needs: stack`, so it has been skipped by both runs.
 
 ---
 

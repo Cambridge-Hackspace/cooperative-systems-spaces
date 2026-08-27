@@ -414,6 +414,7 @@ run_node() {
     CASES_OUT="${cases_out}" \
       CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       CSS_STACK_DIR="${STACK_DIR}" \
+      CSS_DB_ENCODING="${PG_ENCODING}" \
       node "${ROOT}/e2e/drivers/${script}" "$@"
   else
     pm run --rm --network host \
@@ -462,8 +463,7 @@ C_EDGE="css-e2e-edge"
 start_edge() {
   local binary="$1" frontend="$2"
   if [[ ${PROVISION} == "external" ]]; then
-    CONFIG_PATH="${STACK_DIR}/edge.config.toml" \
-      RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
+    RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       TZ="${STACK_TZ}" \
       "${ROOT}/e2e/artifacts/${binary}" \
       --config "${STACK_DIR}/edge.config.toml" \
