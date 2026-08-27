@@ -4,8 +4,11 @@
 
 # JWT Authentication Configuration
 [auth]
-# Secret key for JWT token signing (CHANGE THIS IN PRODUCTION!)
-jwt_secret = "your-super-secret-jwt-key-change-this-in-production"
+# Secret key for JWT token signing. Deliberately omitted here: the server
+# refuses to start with a known placeholder value, so leave this unset and
+# it will generate a random one on first boot and persist it to disk. Set
+# it explicitly only if you need a stable secret across a config rebuild
+# (e.g. so existing sessions survive re-seeding config.toml).
 # Token expiration time in hours
 jwt_expiration_hours = 24
 # Enable user registration
