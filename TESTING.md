@@ -60,7 +60,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Running.** A seeded driver takes 200 weighted actions through the shipping API — registrations, role changes, deactivations, deletions, door rules, profile-config writes, and three nemesis classes in the same pool — maintaining a shadow model and checking all six invariants every 20 actions. A recent run: 29 users, 24 door rules, 10 checks, no violation. Two of the six invariants cannot currently mean what they were written to mean, and say so rather than passing quietly: `deactivations-held` is vacuous because deactivated users are not listed at all, and `invites-are-single-use` can only check its count half because nothing links a device to its invite. Both are §8 findings, not test debt. |
-| 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Not started.** |
+| 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Running.** 14 tests across desktop and phone viewports, against the real server over everything the earlier stages created. Injects nothing — that is Tier 5's job and doing it here would produce findings belonging to whichever stage noticed first. The oracle is a watchdog: every test records what the browser actually received and fails on any 5xx or uncaught page error, so a server error on a page that still looks fine is caught. The watchdog self-tests, because every other assertion in the file passes by it staying silent. |
 | 11 Human evidence | Does this make sense to a newcomer? | **Half started.** The contrast audit exists: WCAG relative luminance over all fourteen themes, with OKLCH converted for daisyUI's built-ins and the reference implementation checked against three known answers. It found **36 semantic/base pairings below AA**, pinned as a ratchet. The prose-transcript half needs Tier 9's journey driver and does not exist. |
 
 **Formatting and linting are complete and gating.** `rustfmt`, `prettier`,
@@ -388,7 +388,7 @@ limit rather than assert correctness; they say so in their own comments.
 
 Being specific, because "not covered" without a reason is just a gap.
 
-**Tier 10 has no live browser audit.** Tier 5 now runs — 32 tests, two
+** Tier 5 now runs — 32 tests, two
 viewports, green on the workstation, in a reaper session and in GitHub Actions —
 so the thing that blocked this is gone. What is missing is the tier that points
 those specs at the *real* stack over a world somebody else built, with a

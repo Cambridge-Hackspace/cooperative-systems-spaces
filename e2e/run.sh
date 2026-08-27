@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -1000,6 +1000,75 @@ stage_browser() {
 #
 # What this does NOT do: judge WARN. The toolguard rejections are warnings and
 # they are the suite deliberately sending bad credentials.
+# Tier 10: the live browser audit.
+#
+# Runs the real application against the real server, over the world every stage
+# before it has built. Separate from `browser` (Tier 5) because the tiers ask
+# opposite questions: Tier 5 injects faults into a fake it controls and asserts
+# the application copes; this injects nothing and asserts the server does not
+# misbehave on its own data while the UI survives what it really returns.
+#
+# Placed after `browser` and before `logs` deliberately. It is the last thing to
+# touch the server, so the ERROR lines `logs` reads include anything this
+# provoked -- a 5xx the browser saw and the server logged is one finding
+# reported twice rather than two half-findings.
+stage_audit() {
+  cases_begin audit
+  stack_paths
+
+  if [[ ${PROVISION} == "external" ]]; then
+    record_case "audit/runs-elsewhere" skip \
+      "--provision=external has no browsers; CI runs Tier 5 in its own Playwright job and this tier needs the full stack, which that job does not have"
+    emit_junit audit
+    return 0
+  fi
+
+  if ! tcp_open "${SERVER_PORT}"; then
+    record_case "audit/stack-is-up" fail "css-server is not answering"
+    emit_junit audit
+    return 1
+  fi
+  record_case "audit/stack-is-up" ok
+
+  if [[ ! -d "${ROOT}/frontend/node_modules/@playwright/test" ]]; then
+    record_case "audit/playwright-installed" fail \
+      "frontend/node_modules/@playwright/test is missing -- run e2e/build.sh"
+    emit_junit audit
+    return 1
+  fi
+  record_case "audit/playwright-installed" ok
+
+  log "running the live browser audit"
+  local rc=0
+  pm run --rm --network host \
+    -v "${ROOT}/frontend:/app" \
+    -w /app \
+    -e CI=1 \
+    -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
+    "${IMG_PLAYWRIGHT}" \
+    npx playwright test --config playwright.live.config.ts \
+    >"${OUT}/logs/audit.log" 2>&1 || rc=$?
+
+  if [[ ${rc} -eq 0 ]]; then
+    record_case "audit/playwright" ok
+  else
+    local failed
+    failed="$(grep -oE '[0-9]+ failed' "${OUT}/logs/audit.log" | head -1)"
+    record_case "audit/playwright" fail \
+      "${failed:-the audit run exited ${rc}}; see logs/audit.log"
+  fi
+
+  if [[ -f "${ROOT}/frontend/test-results/playwright-live-junit.xml" ]]; then
+    cp "${ROOT}/frontend/test-results/playwright-live-junit.xml" "${OUT}/junit/audit-playwright.xml"
+    record_case "audit/results-collected" ok
+  else
+    record_case "audit/results-collected" fail "playwright wrote no junit output"
+  fi
+
+  emit_junit audit
+}
+
 stage_logs() {
   cases_begin logs
   stack_paths
