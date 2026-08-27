@@ -198,7 +198,7 @@ const completeTraining = async () => {
 }
 
 .modal-content {
-  background: white;
+  background: var(--fallback-b1,oklch(var(--b1)/1));
   border-radius: 8px;
   max-width: 600px;
   width: 90%;
@@ -211,12 +211,12 @@ const completeTraining = async () => {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
 }
 
 .modal-header h3 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .close-btn {
@@ -234,7 +234,7 @@ const completeTraining = async () => {
 }
 
 .close-btn:hover {
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .modal-body {
@@ -242,7 +242,7 @@ const completeTraining = async () => {
 }
 
 .step-info {
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   padding: 1rem;
   border-radius: 6px;
   margin-bottom: 1.5rem;
@@ -250,7 +250,7 @@ const completeTraining = async () => {
 
 .step-info h4 {
   margin: 0 0 0.5rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .step-info p {
@@ -270,7 +270,7 @@ const completeTraining = async () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   font-weight: 500;
 }
 
@@ -288,13 +288,13 @@ const completeTraining = async () => {
 }
 
 .checkbox-text {
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .form-control {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 4px;
   font-size: 0.9rem;
 }

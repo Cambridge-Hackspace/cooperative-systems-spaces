@@ -306,7 +306,7 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
+  background: var(--fallback-b1,oklch(var(--b1)/1));
   border-radius: 8px;
   max-width: 1000px;
   width: 90%;
@@ -319,12 +319,12 @@ onMounted(() => {
   justify-content: space-between;
   align-items: flex-start;
   padding: 1.5rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
 }
 
 .modal-header h3 {
   margin: 0 0 0.25rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .subtitle {
@@ -349,7 +349,7 @@ onMounted(() => {
 }
 
 .close-btn:hover {
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .modal-body {
@@ -370,17 +370,17 @@ onMounted(() => {
 }
 
 .stat-card {
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   padding: 1rem;
   border-radius: 6px;
   text-align: center;
-  border: 1px solid #e1e5e9;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
 }
 
 .stat-number {
   font-size: 1.5rem;
   font-weight: bold;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   margin-bottom: 0.25rem;
 }
 
@@ -390,7 +390,7 @@ onMounted(() => {
 }
 
 .progress-section h4 {
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   margin-bottom: 1rem;
 }
 
@@ -403,7 +403,7 @@ onMounted(() => {
 
 .filter-select, .search-input {
   padding: 0.5rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 4px;
   font-size: 0.9rem;
 }
@@ -417,7 +417,7 @@ onMounted(() => {
   text-align: center;
   padding: 2rem;
   color: #6c757d;
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   border-radius: 4px;
 }
 
@@ -428,7 +428,7 @@ onMounted(() => {
 }
 
 .progress-item {
-  border: 1px solid #e1e5e9;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 6px;
   padding: 1rem;
   transition: border-color 0.2s;
@@ -464,7 +464,7 @@ onMounted(() => {
 
 .user-name {
   font-weight: 500;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   margin-bottom: 0.25rem;
 }
 
@@ -545,7 +545,7 @@ onMounted(() => {
 
 .score {
   font-weight: 500;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .passing-indicator {
@@ -573,7 +573,7 @@ onMounted(() => {
 .notes {
   font-size: 0.9rem;
   color: #495057;
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   padding: 0.5rem;
   border-radius: 4px;
 }
@@ -585,7 +585,7 @@ onMounted(() => {
   gap: 1rem;
   margin-top: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
 }
 
 .page-info {
@@ -598,7 +598,7 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   margin-top: 1rem;
 }
 

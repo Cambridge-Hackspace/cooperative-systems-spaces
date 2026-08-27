@@ -461,7 +461,7 @@ onMounted(() => {
   justify-content: space-between;
   align-items: flex-start;
   padding: 2rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 12px 12px 0 0;
 }
 
@@ -506,7 +506,7 @@ onMounted(() => {
   justify-content: flex-end;
   align-items: center;
   padding: 1.5rem 2rem;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 0 0 12px 12px;
 }
 
@@ -544,7 +544,7 @@ onMounted(() => {
 
 .form-control {
   padding: 0.75rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 4px;
   font-size: 1rem;
   transition: border-color 0.2s;
@@ -597,7 +597,7 @@ onMounted(() => {
   text-align: center;
   padding: 2rem;
   color: #6c757d;
-  background: #fff;
+  background: var(--fallback-b1,oklch(var(--b1)/1));
   border-radius: 4px;
   margin-bottom: 1rem;
 }
@@ -616,14 +616,14 @@ textarea.form-control {
 }
 
 .trainer-management {
-  border: 1px solid #e1e5e9;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 8px;
   overflow: hidden;
 }
 
 .trainer-header {
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -631,7 +631,7 @@ textarea.form-control {
 
 .trainer-header h3 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .trainer-list {
@@ -652,12 +652,12 @@ textarea.form-control {
 }
 
 .trainer-item:hover {
-  background-color: #f8f9fa;
+  background-color: var(--fallback-b2,oklch(var(--b2)/1));
 }
 
 .trainer-item.inactive {
   opacity: 0.6;
-  background-color: #f8f8f8;
+  background-color: var(--fallback-b2,oklch(var(--b2)/1));
 }
 
 .trainer-info {
@@ -666,7 +666,7 @@ textarea.form-control {
 
 .trainer-name h4 {
   margin: 0 0 0.25rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   font-size: 1.1rem;
 }
 

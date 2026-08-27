@@ -1116,7 +1116,7 @@ watch(() => props.tool.id, () => {
 
 
 .modal-content {
-  background: white;
+  background: var(--fallback-b1,oklch(var(--b1)/1));
   border-radius: 12px;
   max-width: 800px;
   width: 90%;
@@ -1132,7 +1132,7 @@ watch(() => props.tool.id, () => {
   justify-content: space-between;
   align-items: flex-start;
   padding: 2rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   color: white;
   border-radius: 12px 12px 0 0;
 }
@@ -1333,7 +1333,7 @@ watch(() => props.tool.id, () => {
 .progress-bar {
   width: 100%;
   height: 12px;
-  background: #e9ecef;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   border-radius: 6px;
   overflow: hidden;
 }
@@ -1413,7 +1413,7 @@ watch(() => props.tool.id, () => {
   align-items: flex-start;
   gap: 1rem;
   padding: 1.5rem;
-  border: 1px solid #e1e5e9;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 8px;
   transition: all 0.2s;
 }
@@ -1529,7 +1529,7 @@ watch(() => props.tool.id, () => {
 
 .step-header h5 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   font-size: 1.1rem;
 }
 
@@ -1606,7 +1606,7 @@ watch(() => props.tool.id, () => {
 
 
 .step-meta > span {
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   color: #495057;
@@ -1615,7 +1615,7 @@ watch(() => props.tool.id, () => {
 
 
 .progress-details {
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   padding: 1rem;
   border-radius: 6px;
   margin-top: 1rem;
@@ -1672,7 +1672,7 @@ watch(() => props.tool.id, () => {
 
 
 .admin-section {
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   padding-top: 2rem;
 }
 
@@ -1693,7 +1693,7 @@ watch(() => props.tool.id, () => {
 
 
 .trainer-section {
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   padding-top: 2rem;
   margin-top: 2rem;
 }
@@ -1744,7 +1744,7 @@ watch(() => props.tool.id, () => {
 
 .record-training-form h4 {
   margin: 0 0 1.5rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   font-size: 1.1rem;
 }
 
@@ -1782,7 +1782,7 @@ watch(() => props.tool.id, () => {
 
 .form-control {
   padding: 0.75rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 4px;
   font-size: 1rem;
   transition: border-color 0.2s;
@@ -1884,7 +1884,7 @@ textarea.form-control {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem 2rem;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 0 0 12px 12px;
 }
 

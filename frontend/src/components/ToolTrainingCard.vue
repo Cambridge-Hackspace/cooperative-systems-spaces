@@ -362,16 +362,16 @@ onMounted(() => {
 
 <style scoped>
 .training-card {
-  background: white;
-  border: 1px solid #e1e5e9;
+  background: var(--fallback-b1,oklch(var(--b1)/1));
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 8px;
   overflow: hidden;
 }
 
 .card-header {
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -379,7 +379,7 @@ onMounted(() => {
 
 .card-header h3 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .training-status {
@@ -409,7 +409,7 @@ onMounted(() => {
 .progress-bar {
   flex: 1;
   height: 8px;
-  background: #e9ecef;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   border-radius: 4px;
   overflow: hidden;
 }
@@ -450,7 +450,7 @@ onMounted(() => {
 
 .training-steps h4 {
   margin: 0 0 1rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .steps-list {
@@ -464,7 +464,7 @@ onMounted(() => {
   align-items: flex-start;
   gap: 1rem;
   padding: 1rem;
-  border: 1px solid #e1e5e9;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 6px;
   transition: border-color 0.2s;
 }
@@ -544,7 +544,7 @@ onMounted(() => {
 
 .step-content h5 {
   margin: 0 0 0.5rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .step-content p {

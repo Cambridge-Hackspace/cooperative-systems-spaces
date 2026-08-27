@@ -205,7 +205,7 @@ onMounted(() => {
   text-align: center;
   padding: 2rem;
   color: #6c757d;
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   border-radius: 4px;
   margin-bottom: 1rem;
 }
@@ -229,7 +229,7 @@ onMounted(() => {
 }
 
 .modal {
-  background: white;
+  background: var(--fallback-b1,oklch(var(--b1)/1));
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   width: 90%;
@@ -242,16 +242,16 @@ onMounted(() => {
 
 .modal-header {
   padding: 1.5rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #f8f9fa;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
 }
 
 .modal-header h3 {
   margin: 0;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
   font-size: 1.25rem;
 }
 
@@ -272,7 +272,7 @@ onMounted(() => {
 }
 
 .close-btn:hover {
-  background: #e9ecef;
+  background: var(--fallback-b2,oklch(var(--b2)/1));
   color: #495057;
 }
 
@@ -293,13 +293,13 @@ label {
   display: block;
   margin-bottom: 0.5rem;
   font-weight: 500;
-  color: #2c3e50;
+  color: var(--fallback-bc,oklch(var(--bc)/1));
 }
 
 .form-control {
   width: 100%;
   padding: 0.75rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
   border-radius: 4px;
   font-size: 1rem;
   transition: border-color 0.2s;
@@ -332,7 +332,7 @@ label {
   justify-content: flex-end;
   margin-top: 1.5rem;
   padding-top: 1rem;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
 }
 
 .btn {
