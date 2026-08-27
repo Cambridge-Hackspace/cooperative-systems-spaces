@@ -142,8 +142,8 @@ pub fn training_router() -> Router<AppState> {
         .route("/progress/{user_id}/{step_id}", get(get_specific_progress).put(update_training_progress))
         
         // Training Session Management
-        .route("/sessions/start", post(start_training_session))
-        .route("/sessions/complete", post(complete_training_session))
+        .route("/progress/{user_id}/start", post(start_training_session))
+        .route("/progress/{user_id}/complete", post(complete_training_session))
         
         // Instructor Certification (Staff only)
         .route("/instructors", post(certify_instructor).get(get_instructors))
@@ -648,12 +648,19 @@ async fn update_training_progress(
 async fn start_training_session(
     State(state): State<AppState>,
     user: AuthUser,
+    Path(target_user_id): Path<Uuid>,
     Json(payload): Json<StartTrainingRequest>,
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
+    // Users can start their own training; staff can start it for someone
+    // else (instructor-led sessions).
+    if user.0.id != target_user_id && !user.0.role.can_access_staff() {
+        return Err(ApiError::Forbidden("Cannot start training for another user".to_string()));
+    }
+
     // Prerequisites removed - all training steps are available by default
     // Users can start any training step without prerequisite validation
-    
-    let progress = state.db.start_training_session(user.0.id, &payload)
+
+    let progress = state.db.start_training_session(target_user_id, &payload)
         .map_err(|e| {
             tracing::error!("Failed to start training session: {}", e);
             ApiError::InternalServerError("Failed to start training session".to_string())
@@ -662,7 +669,7 @@ async fn start_training_session(
     // Log the training session start to audit logs
     if let Err(e) = state.audit_logger.log_event(
         crate::models::AuditEventType::TrainingSessionStarted,
-        Some(user.0.id),
+        Some(target_user_id),
         Some(user.0.id),
         serde_json::json!({
             "training_step_id": payload.training_step_id,
@@ -682,6 +689,7 @@ async fn start_training_session(
 async fn complete_training_session(
     State(state): State<AppState>,
     user: AuthUser,
+    Path(target_user_id): Path<Uuid>,
     Json(payload): Json<CompleteTrainingRequest>,
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
     // Validate that user can complete this training
@@ -696,7 +704,7 @@ async fn complete_training_session(
         return Err(ApiError::Forbidden("Cannot complete training session".to_string()));
     }
 
-    let progress = state.db.complete_training_session(user.0.id, &payload)
+    let progress = state.db.complete_training_session(target_user_id, &payload)
         .map_err(|e| {
             tracing::error!("Failed to complete training session: {}", e);
             ApiError::InternalServerError("Failed to complete training session".to_string())
@@ -705,7 +713,7 @@ async fn complete_training_session(
     // Log the training session completion to audit logs
     if let Err(e) = state.audit_logger.log_event(
         crate::models::AuditEventType::TrainingSessionCompleted,
-        None, // No specific user_id for this event type
+        Some(target_user_id),
         Some(user.0.id),
         serde_json::json!({
             "training_step_id": payload.training_step_id,
