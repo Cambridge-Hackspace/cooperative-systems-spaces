@@ -151,7 +151,17 @@ impl DoorService {
             if !schedule_is_active_now(rule.schedule_id, schedules, tz) {
                 continue;
             }
-            let effect = DoorRuleEffect::parse(&rule.effect).unwrap_or(DoorRuleEffect::Allow);
+            // Fail closed: an unparseable effect is skipped, same as an
+            // unparseable kind below — never treated as an implicit Allow.
+            // (This mirrors evaluate()'s handling of the same fields; that
+            // fix originally missed this sibling function.)
+            let effect = match DoorRuleEffect::parse(&rule.effect) {
+                Some(e) => e,
+                None => {
+                    warn!("Skipping door rule with unknown effect '{}'", rule.effect);
+                    continue;
+                }
+            };
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
                 None => {
