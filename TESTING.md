@@ -158,6 +158,24 @@ its endpoints from the environment rather than starting anything itself. That
 `--provision` flag exists precisely so that reaper is an accelerator and never a
 dependency.
 
+**Which tiers actually run here.** Not all of them, and the differences are
+deliberate rather than incidental:
+
+- **Tier 9 (`journeys`) runs.** It needs no browser, so `--provision=external`
+  exercises it in full — 15 cases on the last run.
+- **Tier 11 (`evidence`) runs.** The reader is zero-dependency and takes the
+  journey transcript as a file, so it works wherever node does. CI reaches it
+  through `actions/setup-node` rather than the checksum-pinned bootstrap, which
+  is a different path through `ensure_node` and worth knowing is exercised.
+- **Tier 10 (`audit`) does NOT run here**, and records a skip saying so. It
+  needs a browser *and* the full stack. The `browser-fake` job has a browser and
+  no stack; the `stack` job has a stack and no browser. Tier 10 is therefore
+  reaper-and-workstation only, and a green CI is not evidence about it.
+
+That last one is the asymmetry to remember when reading a green pipeline: CI
+covers eleven of the twelve tiers, and the twelfth says so out loud rather than
+passing quietly.
+
 **Which machine.** The Linux jobs run on `${{ vars.CI_RUNNER || 'ubuntu-latest' }}`.
 Unset means GitHub-hosted, which is what a fork or a clone gets with no
 configuration at all. Set the repository or organisation variable `CI_RUNNER` to
