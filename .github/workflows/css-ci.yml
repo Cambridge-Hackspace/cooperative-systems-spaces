@@ -542,8 +542,17 @@ jobs:
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           if (Test-Path $vswhere) {
-            & $vswhere -latest -products * -format value `
-              -property installationVersion,displayName,installationPath
+            # -format json, not -format value: `value` accepts a single
+            # property, and asking it for three printed nothing at all -- a
+            # diagnostic that silently produces no output is worse than no
+            # diagnostic, because the empty space reads as "nothing to report".
+            & $vswhere -latest -products * -format json |
+              ConvertFrom-Json |
+              ForEach-Object {
+                Write-Host "Visual Studio: $($_.displayName)"
+                Write-Host "  version:     $($_.installationVersion)"
+                Write-Host "  path:        $($_.installationPath)"
+              }
           } else {
             Write-Host "vswhere not present at $vswhere"
           }

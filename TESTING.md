@@ -247,9 +247,36 @@ took only the first. The suite's read-only database guarantee was never absent.
 A check that had shipped in that state would have made a false claim about a
 safety property, which is worse than the bug it was written for.
 
-The caveat that remains: `fuzz` and `concurrency` have still never completed
-under `--provision=external`, and the `release` job has never run at all -- it
-`needs: stack`, so it has been skipped by both runs.
+**The pipeline is green.** Every job, on run 33042472647: assets, frontend,
+frontend-edge, shell, rust, stack, browser-fake, and all three release legs
+including Windows. `docker-server` and `docker-edge` correctly report as skipped
+rather than running to authenticate and do nothing. This is the first fully
+green run in the repository's history, and it took seven attempts to get there.
+
+Four of those seven found something real:
+
+1. A hardcoded self-hosted runner label that no fork could claim, which is why
+   the workflow had never executed at all.
+2. `frontend_edge` calling an npm script it did not have, because that directory
+   had never been given the tooling `frontend` got.
+3. `run_node` passing `CSS_DB_ENCODING` on one provisioning path and not the
+   other, so the drivers believed a LATIN1 cluster could store anything.
+4. A trainer removal that removed nothing, answered 200, and then wrote an audit
+   record for a user that does not exist -- section 8.
+
+The Windows release leg took four of the seven on its own, each failing one
+layer deeper than the last: no OpenSSL, then the wrong OpenSSL version, then the
+right version in an unexpected directory layout, then a Visual Studio the pinned
+`cc` could not recognise. Three of those four were fixed by upgrading a
+dependency the lockfile had pinned for reproducibility rather than for any
+reason anybody chose -- `openssl-sys` 0.9.109 to 0.9.117, `cc` 1.2.40 to 1.4.4,
+`cmake` 0.1.54 to 0.1.58. The fourth was fixed by searching for the import
+libraries instead of assuming their layout.
+
+None of that was findable from here. The workstation is FreeBSD, there is no
+Windows machine, and every hypothesis cost a full CI run to test -- which is why
+the OpenSSL step prints what it found and fails with a directory listing when it
+cannot, and why a `vswhere` step reports the toolchain on every Windows run.
 
 ---
 
