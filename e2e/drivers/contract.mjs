@@ -183,26 +183,34 @@ main(async () => {
 
   const emoji = await register(`e2e_emoji_${RUN_TAG}_\u{1F6A7}`, `emoji_${RUN_TAG}@e2e.invalid`)
   assertEq(
-    'findings/astral-text-is-a-500-not-a-4xx',
-    500,
+    'contract/text-the-database-cannot-store-is-a-4xx',
+    400,
     emoji.status,
-    'PINNED FINDING, not a passing behaviour: text a LATIN1 database cannot ' +
-      'store is refused with SQLSTATE 22P05 and the application returns 500, ' +
-      'telling the user the site is broken about an input only they can change. ' +
-      'If this assertion fails, the defect was fixed -- delete it. ' +
-      'See TESTING.md, "Known defects".',
-    // Pinned, not left red. A suite that stays red teaches people to ignore
-    // red; an assertion that pins a defect in place fails the day somebody
-    // fixes it, which is exactly when it should be read and deleted.
-    //
-    // The finding: text a LATIN1 database cannot store is refused by Postgres
-    // with SQLSTATE 22P05, and the application turns that into a 500 -- so the
-    // user is told the site is broken about an input only they can change.
-    // Classifying it needs the SQLSTATE, which diesel's
-    // DatabaseErrorInformation does not expose, so the only way to recognise it
-    // today is matching English prose that changes with the server's
-    // lc_messages. See TESTING.md, "Known defects".
+    'text a LATIN1 cluster cannot represent must be refused as the caller\'s ' +
+      'input, not as the server breaking. This was pinned at 500 as ' +
+      'findings/astral-text-is-a-500-not-a-4xx and is now fixed.'
   )
+
+  // The same defect on a cluster that has nothing to do with LATIN1, and the
+  // reason the fix was worth the fragility it costs.
+  //
+  // A NUL byte cannot appear in a Postgres text value in ANY encoding --
+  // `invalid byte sequence for encoding "UTF8": 0x00` -- so before this was
+  // classified, a request carrying %00 answered 500 on an ordinary UTF-8
+  // production database. That is not a hostile-cluster curiosity; it is every
+  // deployment, and it is what changed the calculus.
+  //
+  // The earlier judgement, written into the pin this replaces, was that
+  // matching Postgres's English prose was too fragile to accept, because
+  // diesel's DatabaseErrorInformation exposes no SQLSTATE. That reasoning was
+  // sound for a LATIN1-only defect. It does not hold for one that fires on
+  // UTF-8, and the failure mode of a bad match is a 500 -- exactly the
+  // behaviour being replaced -- so a localised server is no worse off than
+  // before.
+  const nul = await register(`e2e_nul_${RUN_TAG}\u0000x`, `nul_${RUN_TAG}@e2e.invalid`)
+  ok('contract/a-nul-byte-is-not-a-server-error', nul.status < 500,
+    `expected a 4xx, got ${nul.status}: a NUL in text is refused by every ` +
+    'Postgres encoding, so this fires on UTF-8 deployments too')
 
   // What the same request does on a UTF-8 cluster, for contrast: it succeeds.
   // Recorded so a reader knows the finding is about the encoding and not about

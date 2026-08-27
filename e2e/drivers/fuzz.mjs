@@ -80,26 +80,25 @@ const ALL_SCALARS = CORPUS.scalars.map((s) => s.v)
 const ALL_TIMES = CORPUS.timestamps.map((s) => s.v)
 
 /**
- * A NARROWING, scoped to exactly one corpus entry on exactly one kind of
- * cluster.
+ * The whole corpus, on every cluster. There is no longer a narrowing here.
  *
- * On a non-UTF-8 database, astral-plane text cannot be stored at all, so any
- * route that writes it answers 500. That is a real finding and it is already
- * pinned by the contract stage -- `findings/astral-text-is-a-500-not-a-4xx` --
- * with the reasoning and the reason it was not fixed.
+ * There was one, and this is the record of why it went. Text a cluster cannot
+ * represent used to answer 500, so firing it at every route that writes text
+ * reproduced one known defect over and over and buried anything new. The
+ * entries were filtered out on non-UTF-8 clusters to keep the tier readable.
  *
- * Reproducing it on every text-writing route the fuzzer happens to reach adds
- * no information and buries the findings that are new. The alternative
- * considered and rejected: exempting 500 for those routes in KNOWN, which would
- * switch the no-5xx oracle off for them entirely.
+ * That defect is fixed: `is_unrepresentable_text` classifies both Postgres
+ * messages -- the NUL byte and the out-of-encoding character -- as 400, so
+ * these inputs now exercise a correct rejection path instead of tripping the
+ * no-5xx oracle. Nothing is buried, so nothing needs excluding, and the full
+ * corpus runs everywhere.
  *
- * The full corpus runs on a UTF-8 cluster, which is what
- * `CSS_E2E_DB_ENCODING=UTF8` and the nightly are for.
+ * Worth stating plainly, because removing a narrowing usually deserves more
+ * suspicion than adding one: this is not the exemption being widened until the
+ * noise stops. The noise stopped because the thing making it was repaired, and
+ * the tier now covers strictly more than it did.
  */
-const STORABLE_STRINGS =
-  ENCODING === 'UTF8'
-    ? ALL_STRINGS
-    : ALL_STRINGS.filter((v) => typeof v !== 'string' || [...v].every((c) => c.codePointAt(0) < 0x10000))
+const STORABLE_STRINGS = ALL_STRINGS
 
 /** A value from somewhere in the corpus, weighted towards text. */
 function hostileValue() {
@@ -260,14 +259,14 @@ main(async () => {
   console.log(`fuzz seed: ${SEED}`)
   console.log(`iterations: ${ITERATIONS}, endpoints: ${INVENTORY.count}, tag: ${TAG}`)
   console.log(`cluster encoding: ${ENCODING}`)
-  if (STORABLE_STRINGS.length !== ALL_STRINGS.length) {
-    record('fuzz/corpus-narrowed-for-this-cluster', 'skip',
-      `${ALL_STRINGS.length - STORABLE_STRINGS.length} astral-plane corpus ` +
-      `entr(y|ies) omitted: a ${ENCODING} database cannot store them, so they ` +
-      'reproduce findings/astral-text-is-a-500-not-a-4xx on every route that ' +
-      'writes text and bury anything new. Run with CSS_E2E_DB_ENCODING=UTF8 ' +
-      'for the full corpus.')
-  }
+  // Asserted rather than assumed. This tier ran a reduced corpus on non-UTF-8
+  // clusters for as long as unrepresentable text answered 500; now that it
+  // answers 400, the whole corpus runs everywhere. Stating it as a case means a
+  // future narrowing has to remove this line, which is harder to do by accident
+  // than adding a filter.
+  ok('fuzz/whole-corpus-on-every-cluster', STORABLE_STRINGS.length === ALL_STRINGS.length,
+    `${ALL_STRINGS.length - STORABLE_STRINGS.length} of ${ALL_STRINGS.length} ` +
+    `corpus strings were withheld on a ${ENCODING} cluster`)
 
   // The inventory has to be complete or this tier is a sampling exercise
   // wearing a fuzzer's name. e2e/lint.sh keeps endpoints.json in step with the

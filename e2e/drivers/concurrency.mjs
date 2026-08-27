@@ -73,16 +73,31 @@ async function inviteRedemption(admin) {
       token: admin.token,
       body: { expires_in_hours: 1 },
     })
+    // Still a pinned finding, and still the same finding. Only the status
+    // changed: 500 became 400 when text the database cannot represent started
+    // being classified as the caller's input rather than the server breaking.
+    //
+    // What has NOT changed, and is the point of this assertion: on a non-UTF-8
+    // cluster a device invite cannot be created at all, because the code is
+    // eight emoji drawn from a ~250-character alphabet that is almost entirely
+    // astral-plane. Device registration is therefore impossible, and nothing in
+    // the application or its sample configuration says a UTF-8 database is
+    // required. A 400 is a better answer than a 500 and is still an answer
+    // nobody can act on: the caller supplied no text at all -- the server
+    // generated it.
+    //
+    // If this fails again, check three things in order: the status
+    // classification, the code alphabet, and the cluster encoding.
     assertEq(
       'findings/device-invite-codes-require-a-utf8-database',
-      500,
+      400,
       probe.status,
       `PINNED FINDING, not a passing behaviour: on a ${ENCODING} cluster a device ` +
         'invite cannot be created at all, because the code is eight emoji. ' +
         'Device registration is therefore impossible, and nothing says the ' +
-        'application requires a UTF-8 database. If this assertion fails, either ' +
-        'the code alphabet changed or the cluster did -- check which. ' +
-        'See TESTING.md, "Known defects".',
+        'application requires a UTF-8 database. The 400 is the corrected ' +
+        'classification of an unchanged defect -- the caller supplied no text, ' +
+        'the server generated it. See TESTING.md, "Known defects".',
     )
     record('race/invite/not-run-on-this-cluster', 'skip',
       `the invite race needs an invite, and this cluster (${ENCODING}) cannot ` +

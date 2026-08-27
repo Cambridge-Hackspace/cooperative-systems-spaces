@@ -53,7 +53,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
 | 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 56 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 58 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 32 tests across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
@@ -496,21 +496,31 @@ separate accounts with two separate profiles.
 already collide. That is a product change, not a status-code correction.
 *(`findings/login-is-case-sensitive`, contract stage)*
 
-### Text a non-UTF-8 database cannot store answers 500
+### Text the database cannot store answered 500 — fixed
 
-Postgres refuses it at the server with SQLSTATE 22P05, and the application turns
-that into a 500 — telling the user the site is broken about an input only they
-can change.
+Postgres refuses text it cannot represent, and the application turned that into
+a 500: the user was told the site was broken about an input only they could
+change.
 
-*Why not fixed:* diesel classifies error kinds structurally, and
-`DatabaseErrorInformation` exposes message, details, hint, table, column,
-constraint and statement position — and no SQLSTATE. Recognising 22P05 today
-means matching English prose that changes with the server's `lc_messages`, which
-is a worse failure than the one it fixes: it would work in testing and stop
-working in a deployment whose locale differs, silently, in the direction of
-calling a 4xx a 500. The real fix is encoding-aware validation at the input
-boundary, using the encoding the server reports at boot.
-*(`findings/astral-text-is-a-500-not-a-4xx`, contract stage)*
+This was recorded here as unfixable. Diesel's `DatabaseErrorInformation` exposes
+no SQLSTATE, so 22P05 and 22021 are not reachable as codes and the only
+available signal is Postgres's English prose, which moves with `lc_messages`.
+That was the right call for what it looked like: a hostile-cluster curiosity.
+
+It was not that. The same arm catches `invalid byte sequence for encoding
+"UTF8": 0x00` — a NUL byte, which **no Postgres text column accepts in any
+encoding** — so a request carrying `%00` answered 500 on an ordinary UTF-8
+production database, and had done since the routes existed. A fragile match is a
+poor trade for a LATIN1-only defect and a good one for a live bug on every
+deployment.
+
+`is_unrepresentable_text` now classifies both as 400. Two things make the
+fragility survivable, and both are enforced rather than asserted: a message that
+does not match falls through to the same 500 as before, so a localised server is
+no worse off; and the two phrases are pinned by tests taken from real captured
+server output, alongside a counter-test that `deadlock detected`, `out of shared
+memory` and `could not connect to server` are **not** swallowed — a substring
+match on prose is exactly the shape that grows to catch what it should not.
 
 ### The profile-config write is not atomic
 
@@ -578,6 +588,35 @@ than the response tally, and each paired with a sequential sibling so that a
 failure to reproduce is distinguishable from a broken setup. A round that finds
 nothing means this scheduling did not lose — not that the window is closed.
 *(`e2e/drivers/concurrency.mjs`)*
+
+### The suite's own configuration did not reach its drivers — fixed
+
+Recorded because it invalidated results rather than produced wrong ones, which
+is the harder kind to notice.
+
+`run_node` builds the driver environment separately per provisioning path. The
+host path runs node in the same shell and inherits whatever the run exported;
+the container path inherits nothing and forwarded four wiring variables. Six
+settings the drivers read were never conveyed under `--provision=podman`:
+`CSS_FUZZ_ITERATIONS`, `CSS_FUZZ_SEED`, `CSS_FUZZ_BATCH`, `CSS_RACE_ROUNDS`,
+`CSS_RACE_FANOUT`, `CSS_RUN_TAG`.
+
+So on the workstation and in every reaper session the fuzzer ran 400 iterations
+whatever any profile said, the concurrency tier used default rounds and fanout,
+and **`CSS_FUZZ_SEED` did nothing at all** — while `SUMMARY.md` printed a replay
+command built around that seed on every run. A documented reproduction procedure
+that silently does not work is worse than none: anyone replaying a finding would
+have taken a different path and concluded it was flaky.
+
+CI was unaffected, because `--provision=external` runs the driver on the host.
+That is the asymmetry that hid it, and it means reaper's fuzz tier was *weaker*
+than CI's — 400 against 600 — for the whole of this work.
+
+`checks/tests/both_driver_paths_pass_the_same_env.rs` asserted the two paths
+agreed with each other, and they did: both were equally incomplete. That
+limitation was written into its own doc comment and went on to cost exactly what
+it warned about. It now also asserts that every `process.env.*` a driver reads
+is something `run_node` can convey.
 
 ### A failed audit write is logged and discarded
 
@@ -755,11 +794,11 @@ Every one of these is scoped to exactly what it covers.
 | eslint pinned to an unsupported major | both frontends | 9.39.5 is the last 9.x and is out of support; 10.x is current. `frontend_edge` was set up on 9 **to match `frontend`**, not because 9 is right: one repository with two flat-config dialects is worse than one a major behind in step. Moving both is its own unit of work. This narrowing covers the version only — every rule is on. |
 | `frontend_edge` linted without a ratchet | not a narrowing, recorded for contrast | `frontend`'s `no-unsafe-*` family is off except on a growing include list, because 24k lines were written under `"strict": false`. `frontend_edge` is 565 lines whose base tsconfig is already `"strict": true`, so every rule is on everywhere and there is no list. A narrowing appearing here later is a regression to argue about. |
 | clippy not yet in CI | the `rust` job | The build is warning-free now, so `-D warnings` is finally possible. Turning clippy on is its own unit of work: `clippy::pedantic` on 19.6k never-linted lines produces a commit carrying forty `#[allow]`s, which is the weakening this methodology forbids wearing the costume of progress. |
-| A blanket-500 budget rather than a fix | 109 sites under `server/src/api` | **The stated reason below no longer holds, and this needs a decision.** It was written when nothing asserted these statuses. The Tier 7 no-5xx oracle now does, across all 164 routes, and it is finding them one seed at a time: two runs in a row went red on two different routes (`trainers.rs`, `training.rs`), both the same shape -- a handler naming an entity that does not exist, Postgres rejecting it on a foreign key, and a blanket `InternalServerError` reporting the caller's mistake as the server breaking. Each fix is three lines and mechanical, because `From<diesel::result::Error>` already classifies these correctly and the handler is discarding that. Left alone this makes CI intermittently red forever, and the intermittency is the fuzz seed, not flakiness. |
+| A blanket-500 budget rather than a fix | 52 sites, of which 10 are `errors.rs` itself | **The stated reason below no longer holds, and this needs a decision.** It was written when nothing asserted these statuses. The Tier 7 no-5xx oracle now does, across all 164 routes, and it is finding them one seed at a time: two runs in a row went red on two different routes (`trainers.rs`, `training.rs`), both the same shape -- a handler naming an entity that does not exist, Postgres rejecting it on a foreign key, and a blanket `InternalServerError` reporting the caller's mistake as the server breaking. Each fix is three lines and mechanical, because `From<diesel::result::Error>` already classifies these correctly and the handler is discarding that. Left alone this makes CI intermittently red forever, and the intermittency is the fuzz seed, not flakiness. |
 | *(the original reason, kept)* | |  Converting them all at once is a large diff touching every handler, reviewed by nobody, for status codes nothing yet asserts. `checks/tests/database_errors_keep_their_meaning.rs` pins the count **per file** so a fix in one and a regression in another cannot cancel out — and it fails when a file *improves* without the budget coming down, because a ratchet that does not tighten gives back the ground it won. |
 | The invite-redemption race is not exercised on a non-UTF-8 cluster | that one scenario | A device invite code is eight emoji, so the row cannot be written at all. The finding is asserted instead, and the profile-config race runs either way. `CSS_E2E_DB_ENCODING=UTF8` exercises the race itself. |
 | Two ERROR messages exempted in the `logs` stage | those two strings | Both are correct 404s logged at the wrong level. Each exemption is itself checked for staleness — as a *skip*, not a failure, because those lines come from the fuzz tier reaching for things that do not exist and a short run legitimately may not reach them. Making it a failure would couple the logs stage's result to the fuzz iteration count. |
-| The astral-plane corpus entry, on a non-UTF-8 cluster | one corpus entry, one kind of cluster | A non-UTF-8 database cannot store it, so every route that writes text answers 500 — reproducing `findings/astral-text-is-a-500-not-a-4xx` on each of them and burying anything new. The alternative considered and rejected was exempting 500 for those routes, which switches the oracle off for them entirely. `CSS_E2E_DB_ENCODING=UTF8` runs the full corpus, and the fuzz stage reports the omission as a skip on every run that makes it. |
+| *(removed)* The astral-plane corpus entry | — | **This narrowing no longer exists.** It withheld corpus entries a non-UTF-8 cluster could not store, because every route that wrote them answered 500 and buried anything new. Classifying unrepresentable text as 400 retired the reason, so the full corpus now runs on every cluster and `fuzz/whole-corpus-on-every-cluster` asserts that nothing is withheld — a future narrowing has to delete a passing assertion rather than quietly add a filter. Recorded here rather than deleted, because a narrowing that disappears without explanation is indistinguishable from one nobody noticed. |
 | Two `(method, template, status)` triples exempted in the fuzz tier | those two triples | Narrower than a route exemption, which would cover the next real 500 on that route, and much narrower than a status exemption, which would switch the oracle off. A stale entry here **is** a failure: the fuzzer's coverage narrowing is itself the news. |
 | `findings/...` assertions pin defects rather than failing | the eight listed in §8 | A suite that stays red teaches people to ignore red. Each of these fails the day the defect is fixed, with a message saying that failing is the good outcome and the assertion should be deleted. |
 | `expect_used` allowed | workspace | An `expect` carries a message and documents an invariant; an `unwrap` documents nothing. |
