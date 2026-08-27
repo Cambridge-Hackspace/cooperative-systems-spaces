@@ -22,6 +22,26 @@ run() { # run <label> <command...>
 
 mapfile -t scripts < <(git ls-files '*.sh')
 
+# The versions, printed rather than assumed.
+#
+# Neither linter is pinned in either environment: a workstation has whatever it
+# installed and CI has whatever its runner image ships, and the two disagree.
+# (This paragraph does not begin with the linter's name because a comment that
+# starts with it is parsed as a directive, not as prose -- SC1072.)
+# That is not hypothetical -- `[ ! -z "$x" ]` in server/test_auth.sh passed this
+# gate on shellcheck 0.11.0 at --severity=style and was rejected by the version
+# on ubuntu-latest, so the first anybody heard of it was a red CI job on a tree
+# that linted clean locally.
+#
+# Printing both versions in both logs makes that difference a line you can read
+# instead of a contradiction you have to reproduce. It does not resolve it:
+# pinning the linter is a real decision with a real cost -- a pin stops new
+# checks arriving as well as stopping surprises -- and it is not one to take
+# silently in the middle of something else.
+printf '\n=== tool versions ===\n'
+printf 'shellcheck: %s\n' "$(shellcheck --version 2>/dev/null | awk '/^version:/{print $2}' || echo 'not installed')"
+printf 'shfmt:      %s\n' "$(shfmt --version 2>/dev/null || echo 'not installed')"
+
 # -x so that `source e2e/lib.sh` and `source e2e/images.env` are actually
 # followed. Without it shellcheck reports SC1091 and, more importantly, cannot
 # see the variables those files define -- so it would miss a genuine typo.

@@ -138,6 +138,12 @@ jobs:
         run: npm ci --no-audit --no-fund
       - working-directory: frontend_edge
         run: npm run type-check
+      # Stricter than frontend's equivalent and deliberately not a ratchet:
+      # this directory is 565 lines and its base tsconfig is already
+      # `"strict": true`, so noUncheckedIndexedAccess and noImplicitOverride
+      # apply to all of it rather than to a growing list.
+      - working-directory: frontend_edge
+        run: npm run type-check:strict
       - working-directory: frontend_edge
         run: npm run build
 
@@ -317,6 +323,11 @@ jobs:
   # --- packaging --------------------------------------------------------------
   docker-server:
     needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
+    # Publishing only. There is nothing for this job to do on a branch it will
+    # not push from, and without this guard it still checks out, authenticates
+    # to the registry and exits -- a job that reports success for having done
+    # nothing, on every feature branch forever.
+    if: github.ref_name == 'master' || github.ref_name == 'dev'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions: { contents: read, packages: write }
     steps:
@@ -343,6 +354,7 @@ jobs:
 
   docker-edge:
     needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
+    if: github.ref_name == 'master' || github.ref_name == 'dev'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions: { contents: read, packages: write }
     steps:
@@ -371,6 +383,17 @@ jobs:
 
   release:
     needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
+    # Three operating systems building three binaries each. Worth paying for at
+    # the gate and not on every push to every branch.
+    #
+    # Pull requests are included deliberately: the Windows and macOS legs are
+    # the only cross-platform coverage this project has, they break
+    # independently of the Linux build, and upstream's pipeline is red right now
+    # for exactly that reason. Catching it after the merge is catching it late.
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_name == 'master' || github.ref_name == 'dev'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

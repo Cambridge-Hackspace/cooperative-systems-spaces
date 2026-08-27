@@ -9,7 +9,12 @@
 #
 #   --provision=podman     start the stack with podman   (the reaper path)
 #   --provision=docker     start the stack with docker   (the CI-with-DinD path)
-#   --provision=external   use CSS_TEST_DATABASE_URL / CSS_TEST_MQTT_URL as given
+#   --provision=external   no container engine. Postgres is the caller's, named by
+#                          CSS_TEST_DATABASE_URL; the MQTT broker is started here as
+#                          a host process, because a service container cannot be
+#                          pointed at a mosquitto config. CSS_TEST_MQTT_URL is NOT
+#                          read by anything -- it was named here and never
+#                          implemented, which is how CI ran with no broker at all.
 #
 # Pipes are safe in this file because of `set -Eeuo pipefail` below. They are
 # NOT safe in .reaper.toml's run.cmd, which is handed to dash -- see e2e/lib.sh.
@@ -157,6 +162,19 @@ stage_preflight() {
       record_case "env/CSS_TEST_DATABASE_URL" fail \
         "--provision=external requires it; there is nothing to connect to"
     fi
+
+    # The broker is this suite's to start even here, so the binary has to be
+    # present. Asserted at preflight rather than left to start_mosquitto,
+    # because a missing broker does not degrade the run: css-server refuses to
+    # boot without one, so the symptom is a 120-second timeout in `up` and
+    # fifteen connection-refused cases across six later stages, none of which
+    # says the word "mosquitto" anywhere.
+    if command -v mosquitto >/dev/null 2>&1; then
+      record_case "tool/mosquitto" ok
+    else
+      record_case "tool/mosquitto" fail \
+        "--provision=external starts the broker itself: apt-get install -y mosquitto"
+    fi
   else
     if command -v "${ENGINE}" >/dev/null 2>&1; then
       record_case "engine/${ENGINE}" ok
@@ -280,7 +298,8 @@ stage_up() {
     # CI supplies the services. What it cannot supply is the assurance that
     # they are the ones this suite expects, so the checks below still run --
     # against whatever is there.
-    record_case "up/provisioned-externally" skip "the caller supplied postgres and mqtt"
+    record_case "up/provisioned-externally" skip \
+      "the caller supplied postgres; the broker is started below, here"
     [[ -n ${CSS_TEST_DATABASE_URL:-} ]] \
       || {
         record_case "up/database-url" fail "CSS_TEST_DATABASE_URL is unset"
@@ -301,15 +320,32 @@ stage_up() {
       return 1
     fi
 
-    start_mosquitto
-    if wait_for "mosquitto" 30 tcp_open "${MQTT_PORT}"; then
-      record_case "up/mosquitto" ok
-    else
-      record_case "up/mosquitto" fail "never accepted a connection on ${MQTT_PORT}"
-      collect_stack_logs
-      emit_junit up
-      return 1
-    fi
+  fi
+
+  # The broker, and it is started in BOTH provisioning modes.
+  #
+  # This block lived inside the `else` above until CI ran for the first time,
+  # so --provision=external started no broker at all -- while `up` recorded
+  # "the caller supplied postgres and mqtt", a claim nothing checked. A missing
+  # broker is not a degraded stack, it is no stack: MqttService::new connects
+  # during boot and main.rs propagates the failure, so css-server exits before
+  # it binds. The suite then waited 120 seconds for a process that was already
+  # gone, and six stages produced fifteen "connection refused" cases against a
+  # port nothing was ever going to listen on.
+  #
+  # `start_mosquitto` always had the host-process path this needs; only the call
+  # site was missing. "External" means no container engine, not no services:
+  # postgres arrives as a service container and the broker cannot, because
+  # mosquitto 2 binds to loopback inside its own namespace and a GitHub service
+  # container takes no command with which to point one at a config file.
+  start_mosquitto
+  if wait_for "mosquitto" 30 tcp_open "${MQTT_PORT}"; then
+    record_case "up/mosquitto" ok
+  else
+    record_case "up/mosquitto" fail "never accepted a connection on ${MQTT_PORT}"
+    collect_stack_logs
+    emit_junit up
+    return 1
   fi
 
   # The snapshot is taken here -- after the cluster exists and *before*

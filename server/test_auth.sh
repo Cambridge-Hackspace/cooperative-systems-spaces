@@ -38,7 +38,7 @@ TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
 echo "Extracted token: $TOKEN"
 echo
 
-if [ ! -z "$TOKEN" ]; then
+if [ -n "$TOKEN" ]; then
   # Test 3: Access protected route with token
   echo "3. Accessing user profile with valid token..."
   PROFILE_RESPONSE=$(curl -s -X GET "${API_BASE}/users/profile" \

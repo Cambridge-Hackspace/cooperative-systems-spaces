@@ -53,7 +53,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
 | 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 53 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 54 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 32 tests across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
@@ -174,12 +174,34 @@ a merge to `master`. A workflow that cannot be claimed does not fail; it simply
 never reports, which is the failure mode hardest to notice and the reason this
 is a variable now rather than a label.
 
-**Status, stated plainly.** At the time of writing this file, the workflow has
-never completed a run in this repository. Every claim in section 2 about a tier
-is a claim about that tier under reaper or on the workstation. The `stack` job's
-`--provision=external` path in particular -- GitHub's Postgres service, a host
-mosquitto, no container engine -- is genuinely different code from the path
-reaper exercises, and it is unproven until a run goes green here.
+**Status.** It has now run. The first execution in this repository's history
+was a `workflow_dispatch` on 2026-08-27, and it failed in three places, all of
+them real:
+
+- `frontend-edge` called `npm run type-check` in a directory that had no such
+  script. See section 7 -- the second frontend had none of the tooling the first
+  one got, and the job was written as though it did.
+- `shell` failed `shellcheck` on `server/test_auth.sh` (SC2236, `! -z` for
+  `-n`). The same script passes on the workstation, because neither linter is
+  pinned and 0.11.0 does not raise it at `--severity=style` while the runner
+  image's version does. `e2e/lint.sh` now prints both tool versions so the
+  difference is legible in both logs rather than a contradiction to reproduce.
+- `stack` never got a broker. `--provision=external` started no mosquitto at
+  all, while `up` recorded "the caller supplied postgres and mqtt" -- a claim
+  nothing verified. `MqttService::new` connects during boot and `main.rs`
+  propagates, so css-server exited before binding and six stages produced
+  fifteen connection-refused cases against a port nothing would ever listen on.
+  `start_mosquitto` had the host-process path for this all along; only the call
+  site was inside the wrong branch.
+
+`assets`, `frontend`, `rust` and `browser-fake` passed, which is the first
+independent confirmation that the Rust tiers and the Playwright tier hold up on
+a machine nobody here configured.
+
+The honest caveat that remains: the `stack` tier has still never completed under
+`--provision=external`. It is a genuinely different path from the one reaper
+exercises, and until a run goes green the tier claims in section 2 rest on
+reaper and the workstation.
 
 ---
 
@@ -291,18 +313,36 @@ limit rather than assert correctness; they say so in their own comments.
 
 Being specific, because "not covered" without a reason is just a gap.
 
-**Tier 5 has no browser tier at all.** The question it answers — what the app
-does when a request *fails* — is partly answered at Tier 2 for two components,
-by injecting rejections with and without a `response`. That is narrower than
-Tier 5 and is not a substitute: it covers the components somebody wrote a spec
-for, not the ones nobody thought about. The Playwright fake-API plan is in the
-approved design and unwritten. **No browser runs anywhere in this suite yet**,
-which also means Tiers 10 and 11 cannot exist.
+**Tier 10 has no live browser audit.** Tier 5 now runs — 32 tests, two
+viewports, green on the workstation, in a reaper session and in GitHub Actions —
+so the thing that blocked this is gone. What is missing is the tier that points
+those specs at the *real* stack over a world somebody else built, with a
+watchdog failing any test that observes a 5xx. That is written down in the
+design and not written in code.
 
-**Tier 9 has no journeys and no oracle.** The design calls for the invariant
-self-test to be written *first*, fed with what a broken server would send, and
-run with no stack at all — an invariant that never fires is indistinguishable
-from a passing suite. Neither exists.
+**Tier 9 has an oracle and no journeys.** The invariant self-test was written
+first, as the design demands: six invariants, 20 cases, each fed what a broken
+server would send and required to fire. It runs with no stack at all, on every
+push, and it passes. What does not exist is the driver that accumulates a real
+world for those invariants to judge — so the oracle is currently a very
+well-tested judge of nothing.
+
+**`frontend_edge` has no linter and no formatter.** It has type-checking as of
+now — `type-check` and `type-check:strict`, both green, and unlike `frontend` it
+needs no ratchet: 565 lines across 8 files, with `"strict": true` already in its
+base tsconfig, so `noUncheckedIndexedAccess` and `noImplicitOverride` apply to
+all of it. But eslint and prettier are configured for `frontend` only. The
+instruction covering this work was to lint and format *everything*, and one of
+the two frontends was not done.
+
+The remaining half is blocked rather than deferred: npm on the workstation is
+broken — `Cannot find module 'imurmurhash'`, missing from npm's own bundled
+`node_modules` under `/usr/local/lib/node_modules/npm` — so no dependency can be
+installed here at all. `npm run` still works, which is why the type-check half
+could be added and verified. Adding eslint config without the packages to run it
+would repeat precisely the mistake that produced this entry: a CI step calling a
+script that does not exist. Repairing npm is a system-level change and is the
+machine owner's call.
 
 **Thirty-five of forty components have no Tier 2 spec.** Five do: the ones
 carrying the fixes the acceptance test reverts, plus the roster. The rest are

@@ -1,0 +1,21 @@
+{
+  // Stricter than tsconfig.json, and -- unlike frontend/ -- not a ratchet.
+  //
+  // frontend/tsconfig.strict.json exists because 24,000 lines were written
+  // under `"strict": false` and flipping it produces hundreds of errors at
+  // once, so strictness there is applied to a list that grows. This directory
+  // is 565 lines across 8 files and its base config already sets
+  // `"strict": true`, so there is nothing to phase in: the two flags below
+  // apply to everything the base config includes, and are expected to stay
+  // that way.
+  //
+  // If this ever needs an `include` list, that is a regression to argue about
+  // rather than a step to take quietly.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitOverride": true,
+    // Makes `obj[key]` yield `T | undefined`, so an index that might miss has
+    // to say what happens when it does.
+    "noUncheckedIndexedAccess": true
+  }
+}

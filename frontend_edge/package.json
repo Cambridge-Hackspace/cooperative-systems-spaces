@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit",
+    "type-check:strict": "vue-tsc --noEmit -p tsconfig.strict.json"
   },
   "dependencies": {
     "vue": "^3.4.0",
