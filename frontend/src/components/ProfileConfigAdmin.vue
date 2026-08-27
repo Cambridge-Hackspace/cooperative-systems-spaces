@@ -448,22 +448,26 @@ function validateConfiguration() {
   validationErrors.value = errors
 }
 
-function startEditing() {
-  isEditing.value = true
-  // Deep copy current configuration
+// Deep-copies the fetched configuration into the edit buffer that the
+// (read-only when !isEditing) form is bound to. Called after a fetch so
+// the form shows real data grayed-out before editing starts, not just
+// when editing begins.
+function syncEditConfigFromProfile() {
   editConfig.value = {
     profiles_enabled: profileConfig.value?.profiles_enabled || false,
     profile_fields: JSON.parse(JSON.stringify(profileConfig.value?.profile_fields || []))
   }
+}
+
+function startEditing() {
+  isEditing.value = true
+  syncEditConfigFromProfile()
   validationErrors.value = []
 }
 
 function cancelEditing() {
   isEditing.value = false
-  editConfig.value = {
-    profiles_enabled: false,
-    profile_fields: []
-  }
+  syncEditConfigFromProfile()
   validationErrors.value = []
   profileStore.clearError()
 }
@@ -478,6 +482,7 @@ async function saveConfiguration() {
   try {
     await profileStore.updateProfileConfig(editConfig.value)
     isEditing.value = false
+    syncEditConfigFromProfile()
     validationErrors.value = []
   } catch (err) {
     // Error is already handled by the store
@@ -487,6 +492,7 @@ async function saveConfiguration() {
 async function loadConfiguration() {
   try {
     await profileStore.fetchProfileConfig()
+    syncEditConfigFromProfile()
   } catch (err) {
     // Error is already handled by the store
   }
