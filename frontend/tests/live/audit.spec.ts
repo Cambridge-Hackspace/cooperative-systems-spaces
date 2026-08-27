@@ -53,7 +53,9 @@ function watch(page: Page) {
   return s
 }
 
-test.afterEach(async ({ page }) => {
+// Not async: every assertion in here is synchronous, and `require-await`
+// correctly objects to a function that promises to wait and never does.
+test.afterEach(({ page }) => {
   const s = seen.get(page)
   if (!s) return
   expect(
@@ -86,9 +88,18 @@ async function registerMember(request: APIRequestContext, suffix: string) {
 
 async function signIn(page: Page, username: string) {
   await page.goto('/login')
-  await page.getByLabel(/username|email/i).first().fill(username)
-  await page.getByLabel(/password/i).first().fill(PASSWORD)
-  await page.getByRole('button', { name: /sign in|log ?in/i }).first().click()
+  await page
+    .getByLabel(/username|email/i)
+    .first()
+    .fill(username)
+  await page
+    .getByLabel(/password/i)
+    .first()
+    .fill(PASSWORD)
+  await page
+    .getByRole('button', { name: /sign in|log ?in/i })
+    .first()
+    .click()
   await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 20_000 })
 }
 
@@ -141,9 +152,7 @@ test.describe('the watchdog itself', () => {
         throw new Error('watchdog self-test')
       }, 0)
     })
-    await expect
-      .poll(() => s.pageErrors.length, { timeout: 5_000 })
-      .toBeGreaterThan(0)
+    await expect.poll(() => s.pageErrors.length, { timeout: 5_000 }).toBeGreaterThan(0)
     s.pageErrors.length = 0
   })
 })
@@ -163,8 +172,10 @@ test.describe('the real application, over an accumulated world', () => {
     // status to 404 on every deep link -- the app worked if you clicked into it
     // and did not exist if you pasted the URL.
     const res = await page.goto('/admin/roster')
-    expect(res?.status(), 'a deep link must be served with 200 and let the router decide')
-      .toBeLessThan(400)
+    expect(
+      res?.status(),
+      'a deep link must be served with 200 and let the router decide'
+    ).toBeLessThan(400)
     await settled(page, '/admin/roster')
   })
 
