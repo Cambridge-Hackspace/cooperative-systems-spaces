@@ -376,7 +376,7 @@ impl Default for RegistrationChallengeConfig {
             throttle_attempts: 5,
             throttle_seconds: 300,
             terms_of_service_checkbox: true,
-            terms_of_service_md: "By registering, you agree to the [terms of service](https://example.com/terms-of-service)".to_string(),
+            terms_of_service_md: "By registering, you agree to the <a href=\"/terms\" target=\"_blank\" class=\"link link-primary\">terms of service</a>".to_string(),
             recaptcha_enabled: false,
             recaptcha_site_key: String::new(),
             recaptcha_secret_key: String::new(),
