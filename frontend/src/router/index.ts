@@ -171,6 +171,15 @@ const router = createRouter({
       }
     },
     {
+      path: '/admin/nfc-provisioning',
+      name: 'admin-nfc-provisioning',
+      component: () => import('@/components/NfcDeviceProvisioning.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin
+      }
+    },
+    {
       path: '/admin/home-links',
       name: 'admin-home-links',
       component: () => import('@/components/HomeLinkManagement.vue'),
