@@ -277,6 +277,22 @@ async fn rollback_profile_config(
     let profile_fields: Vec<ProfileField> = serde_json::from_value(target.profile_fields.clone())
         .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
 
+    // Rolling back to the version that's already current would insert a
+    // byte-identical version and log a rollback event for a no-op change.
+    // Short-circuit instead of padding the (immutable, audit-relevant)
+    // history with an entry that doesn't represent an actual change.
+    let latest = state.db.get_latest_profile_config_version().map_err(ApiError::from)?;
+    if latest.as_ref().map(|l| l.version) == Some(target.version) {
+        let response = ProfileConfigResponse {
+            profile_fields,
+            profiles_enabled: target.profiles_enabled,
+        };
+        return Ok(Json(ApiResponse::success_with_message(
+            response,
+            format!("Version {} is already the current configuration", target_version),
+        )));
+    }
+
     let new_version = state.db
         .insert_profile_config_version(target.profile_fields, target.profiles_enabled, Some(admin_user.0.id))
         .map_err(ApiError::from)?;
