@@ -552,6 +552,39 @@ failure to reproduce is distinguishable from a broken setup. A round that finds
 nothing means this scheduling did not lose — not that the window is closed.
 *(`e2e/drivers/concurrency.mjs`)*
 
+### A failed audit write is logged and discarded
+
+`AuditLogger::log_event` ends:
+
+```rust
+if let Err(e) = self.db.create_audit_log(&audit_log) {
+    tracing::error!("Failed to save audit log to database: {}", e);
+}
+Ok(())
+```
+
+The write fails, the caller is told the event was logged, and the only
+surviving trace is one ERROR line in a log nobody reads. For a system that
+decides who can open a door and who can operate a machine, an audit trail that
+silently drops entries is worth more attention than the operations it records.
+
+Found because it fired: a fuzz run reached the trainer-removal route with a
+synthetic user id, the audit insert violated `audit_logs_user_id_fkey`, and
+`logs/no-audit-write-was-swallowed` was the only oracle that noticed. That
+particular trigger is fixed at its cause -- the handler now answers 404 for a
+removal that removes nothing, so it never reaches the logger -- but **the
+swallowing is untouched**, and any other route whose audit write fails will
+fail the same silent way.
+
+Not fixed here because the alternatives are a design decision rather than a
+correction. Propagating the error turns a transient database problem into a
+failed request for an operation that already succeeded; queueing the write
+needs somewhere durable to queue it. Both are the owner's call.
+
+`logs/no-audit-write-was-swallowed` is the standing detector: it fails the
+stack battery on any run where an audit write is discarded, which is how this
+would be found again rather than accumulating quietly.
+
 ### The audit log records the wrong role for the first administrator
 
 `auth::register` writes `"role": "Newbie"` into the audit event unconditionally,

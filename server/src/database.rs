@@ -1512,15 +1512,25 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::update(
+        // The row count is the answer, not a detail to discard. `.map(|_| ())`
+        // reported success for deactivating an assignment that was never there,
+        // so the handler returned 200 and then wrote an audit record for a
+        // removal that did not happen -- which is how a foreign-key violation
+        // on audit_logs.user_id reached the server log.
+        let affected = diesel::update(
             tool_trainers
                 .filter(tool_id.eq(tool_id_param))
                 .filter(user_id.eq(user_id_param)),
         )
         .set((is_active.eq(false), updated_at.eq(chrono::Utc::now())))
         .execute(&mut conn)
-        .map(|_| ())
-        .map_err(DatabaseError::Diesel)
+        .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+
+        Ok(())
     }
 
     /// Get training history for a specific tool with detailed information

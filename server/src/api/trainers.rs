@@ -226,8 +226,12 @@ async fn remove_tool_trainer(
         .db
         .remove_tool_trainer(tool_id, user_id)
         .map_err(|e| {
-            tracing::error!("Failed to remove trainer: {}", e);
-            ApiError::InternalServerError("Failed to remove trainer".to_string())
+            // Was a blanket 500. A removal naming a tool or a user that does not
+            // exist is the caller's mistake, and answering 500 tells them the
+            // server broke -- while the audit write below then fired for a
+            // removal that never happened.
+            tracing::warn!("remove_tool_trainer({tool_id}, {user_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     // Log the trainer removal to audit logs

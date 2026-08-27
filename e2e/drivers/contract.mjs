@@ -258,6 +258,28 @@ main(async () => {
   assertEq('contract/an-admin-only-route-refuses-a-newbie', 403,
     (await GET('/api/users', { token: newbie.token })).status)
 
+  // A removal that removed nothing has to say so.
+  //
+  // `DatabaseManager::remove_tool_trainer` deactivated by row filter and threw
+  // the row count away with `.map(|_| ())`, so a DELETE naming a tool or a user
+  // that does not exist answered 200. The handler then wrote a
+  // `trainer_removed` audit record for a removal that never happened, and on a
+  // LATIN1 stack run whose fuzz seed reached this route with a synthetic user
+  // id, that insert violated audit_logs_user_id_fkey. The audit write is
+  // swallowed -- `if let Err(e) = ... { tracing::error!(...) }` and then
+  // `Ok(())` -- so the only trace was one ERROR line, which is how the logs
+  // oracle caught it and nothing else would have.
+  //
+  // The status carries two claims. It tells the caller the truth, and it is
+  // also what stops the audit write from happening at all: 404 returns before
+  // the logger is reached. Asserting the status therefore covers the audit
+  // defect without depending on log scraping to notice it.
+  const ghostTool = '00000000-0000-4000-8000-0000000000aa'
+  const ghostUser = '00000000-0000-4000-8000-0000000000bb'
+  assertEq('contract/removing-a-trainer-that-is-not-there-is-a-404', 404,
+    (await DELETE(`/api/trainers/tools/${ghostTool}/trainers/${ghostUser}`,
+      { token: admin.token })).status)
+
   // Logging out and reusing the token. JWTs are stateless here, so this
   // records the actual behaviour rather than asserting a property the design
   // does not have.
