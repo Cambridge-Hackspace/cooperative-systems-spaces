@@ -39,7 +39,7 @@
     <div class="tool-actions" v-if="canManage">
       <div class="status-controls">
         <select
-          :value="tool.status"
+          :value="selectedStatus ?? tool.status"
           @change="onStatusChange"
           class="status-select select select-primary"
         >
