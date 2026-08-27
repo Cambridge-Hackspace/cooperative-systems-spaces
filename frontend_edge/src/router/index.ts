@@ -8,14 +8,14 @@ const router = createRouter({
     {
       path: '/',
       name: 'status',
-      component: StatusView
+      component: StatusView,
     },
     {
       path: '/toolguard',
       name: 'toolguard',
-      component: ToolGuardView
-    }
-  ]
+      component: ToolGuardView,
+    },
+  ],
 })
 
 export default router

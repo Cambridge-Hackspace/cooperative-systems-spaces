@@ -179,8 +179,19 @@ was a `workflow_dispatch` on 2026-08-27, and it failed in three places, all of
 them real:
 
 - `frontend-edge` called `npm run type-check` in a directory that had no such
-  script. See section 7 -- the second frontend had none of the tooling the first
-  one got, and the job was written as though it did.
+  script. The second frontend had none of the tooling the first one got, and the
+  job was written as though it did. It now has all of it: prettier, eslint with
+  type-aware rules, `type-check` and `type-check:strict`, every one of them run
+  by CI. Adding the linter immediately found three floating promises in
+  `StatusView.vue` -- `loadStatus()` unawaited in `onMounted`, in a
+  `setInterval` and in a `setTimeout`. None is a live bug, because `loadStatus`
+  handles its own rejections, and all three are now explicit `void`.
+
+  A note on the workstation, because it shaped this: npm here is broken --
+  `Cannot find module 'imurmurhash'`, absent from npm's own bundled
+  `node_modules` under `/usr/local/lib/node_modules/npm` -- so no dependency can
+  be installed with it. `corepack npm@11.6.2` fetches a working npm into a user
+  cache and was used instead. The system npm is still broken and worth repairing.
 - `shell` failed `shellcheck` on `server/test_auth.sh` (SC2236, `! -z` for
   `-n`). The same script passes on the workstation, because neither linter is
   pinned and 0.11.0 does not raise it at `--severity=style` while the runner
@@ -326,23 +337,6 @@ server would send and required to fire. It runs with no stack at all, on every
 push, and it passes. What does not exist is the driver that accumulates a real
 world for those invariants to judge — so the oracle is currently a very
 well-tested judge of nothing.
-
-**`frontend_edge` has no linter and no formatter.** It has type-checking as of
-now — `type-check` and `type-check:strict`, both green, and unlike `frontend` it
-needs no ratchet: 565 lines across 8 files, with `"strict": true` already in its
-base tsconfig, so `noUncheckedIndexedAccess` and `noImplicitOverride` apply to
-all of it. But eslint and prettier are configured for `frontend` only. The
-instruction covering this work was to lint and format *everything*, and one of
-the two frontends was not done.
-
-The remaining half is blocked rather than deferred: npm on the workstation is
-broken — `Cannot find module 'imurmurhash'`, missing from npm's own bundled
-`node_modules` under `/usr/local/lib/node_modules/npm` — so no dependency can be
-installed here at all. `npm run` still works, which is why the type-check half
-could be added and verified. Adding eslint config without the packages to run it
-would repeat precisely the mistake that produced this entry: a CI step calling a
-script that does not exist. Repairing npm is a system-level change and is the
-machine owner's call.
 
 **Thirty-five of forty components have no Tier 2 spec.** Five do: the ones
 carrying the fixes the acceptance test reverts, plus the roster. The rest are
@@ -660,6 +654,8 @@ Every one of these is scoped to exactly what it covers.
 | `vue/multi-word-component-names` off | `src/App.vue` only | The framework's own convention; the file cannot be renamed. |
 | `no-require-imports` off | the four CommonJS config files at `frontend/` root | tailwind and postcss load them through their own resolvers; converting them to ESM is a build change, not a lint fix. |
 | `vue/no-v-html` disabled per element | 3 elements | Two render markdown already escaped server-side by comrak with `Options::default()` (`render.unsafe_` is false); one renders config text only an administrator can set. The fourth — an external iCal feed — was **not** exempted; it is now interpolated. |
+| eslint pinned to an unsupported major | both frontends | 9.39.5 is the last 9.x and is out of support; 10.x is current. `frontend_edge` was set up on 9 **to match `frontend`**, not because 9 is right: one repository with two flat-config dialects is worse than one a major behind in step. Moving both is its own unit of work. This narrowing covers the version only — every rule is on. |
+| `frontend_edge` linted without a ratchet | not a narrowing, recorded for contrast | `frontend`'s `no-unsafe-*` family is off except on a growing include list, because 24k lines were written under `"strict": false`. `frontend_edge` is 565 lines whose base tsconfig is already `"strict": true`, so every rule is on everywhere and there is no list. A narrowing appearing here later is a regression to argue about. |
 | clippy not yet in CI | the `rust` job | The build is warning-free now, so `-D warnings` is finally possible. Turning clippy on is its own unit of work: `clippy::pedantic` on 19.6k never-linted lines produces a commit carrying forty `#[allow]`s, which is the weakening this methodology forbids wearing the costume of progress. |
 | A blanket-500 budget rather than a fix | 121 sites under `server/src/api` | Converting them all at once is a large diff touching every handler, reviewed by nobody, for status codes nothing yet asserts. `checks/tests/database_errors_keep_their_meaning.rs` pins the count **per file** so a fix in one and a regression in another cannot cancel out — and it fails when a file *improves* without the budget coming down, because a ratchet that does not tighten gives back the ground it won. |
 | The invite-redemption race is not exercised on a non-UTF-8 cluster | that one scenario | A device invite code is eight emoji, so the row cannot be written at all. The finding is asserted instead, and the profile-config race runs either way. `CSS_E2E_DB_ENCODING=UTF8` exercises the race itself. |

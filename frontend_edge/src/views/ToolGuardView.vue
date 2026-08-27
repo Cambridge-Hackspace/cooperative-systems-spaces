@@ -7,50 +7,52 @@
           class="inline-block w-2 h-2 rounded-full"
           :class="connected ? 'bg-green-500' : 'bg-red-400'"
         ></span>
-        <span>{{ lastUpdated ? `Updated ${lastUpdated}` : (connected ? 'Waiting…' : 'Reconnecting…') }}</span>
+        <span>{{
+          lastUpdated ? `Updated ${lastUpdated}` : connected ? 'Waiting…' : 'Reconnecting…'
+        }}</span>
       </div>
     </div>
 
-      <!-- Loading -->
-      <div v-if="loading" class="flex flex-col items-center py-16">
-        <span class="loading loading-spinner loading-lg text-primary"></span>
-        <p class="mt-4 text-gray-500">Loading tool state...</p>
-      </div>
+    <!-- Loading -->
+    <div v-if="loading" class="flex flex-col items-center py-16">
+      <span class="loading loading-spinner loading-lg text-primary"></span>
+      <p class="mt-4 text-gray-500">Loading tool state...</p>
+    </div>
 
-      <!-- Error / no state -->
-      <div v-else-if="error" class="alert alert-warning">
-        <span>{{ error }}</span>
-      </div>
+    <!-- Error / no state -->
+    <div v-else-if="error" class="alert alert-warning">
+      <span>{{ error }}</span>
+    </div>
 
-      <!-- Tool list -->
-      <div v-else class="flex flex-col gap-3">
-        <div
-          v-for="tool in tools"
-          :key="tool.id"
-          class="card bg-base-100 shadow"
-          :class="frameClass(tool.status)"
-        >
-          <div class="card-body py-4 px-5 flex-row items-center gap-4">
-            <div
-              class="rounded-full shrink-0"
-              :class="dotClass(tool.status)"
-              style="width: 18px; height: 18px;"
-            ></div>
-            <div class="flex-1 min-w-0">
-              <p class="font-semibold text-base truncate">{{ tool.name }}</p>
-              <p class="text-sm" :class="textClass(tool.status)">{{ statusLabel(tool.status) }}</p>
-              <p v-if="tool.inuse_by" class="text-xs text-gray-400 truncate">{{ tool.inuse_by }}</p>
-            </div>
-            <div class="text-xs text-gray-400 shrink-0">
-              {{ tool.external_id ?? tool.id.slice(0, 8) }}
-            </div>
+    <!-- Tool list -->
+    <div v-else class="flex flex-col gap-3">
+      <div
+        v-for="tool in tools"
+        :key="tool.id"
+        class="card bg-base-100 shadow"
+        :class="frameClass(tool.status)"
+      >
+        <div class="card-body py-4 px-5 flex-row items-center gap-4">
+          <div
+            class="rounded-full shrink-0"
+            :class="dotClass(tool.status)"
+            style="width: 18px; height: 18px"
+          ></div>
+          <div class="flex-1 min-w-0">
+            <p class="font-semibold text-base truncate">{{ tool.name }}</p>
+            <p class="text-sm" :class="textClass(tool.status)">{{ statusLabel(tool.status) }}</p>
+            <p v-if="tool.inuse_by" class="text-xs text-gray-400 truncate">{{ tool.inuse_by }}</p>
+          </div>
+          <div class="text-xs text-gray-400 shrink-0">
+            {{ tool.external_id ?? tool.id.slice(0, 8) }}
           </div>
         </div>
-
-        <div v-if="tools.length === 0" class="text-center text-gray-500 py-10">
-          No tools found in state.
-        </div>
       </div>
+
+      <div v-if="tools.length === 0" class="text-center text-gray-500 py-10">
+        No tools found in state.
+      </div>
+    </div>
   </div>
 </template>
 
@@ -76,7 +78,7 @@ function applyPayload(payload: SyncPayload) {
   const inuseBy = new Map<string, string>()
   for (const user of payload.users) {
     for (const toolId of user.authorized_tool_ids) {
-      const tool = payload.tools.find(t => t.id === toolId)
+      const tool = payload.tools.find((t) => t.id === toolId)
       if (tool?.status === 'in_use' && !inuseBy.has(toolId)) {
         inuseBy.set(toolId, user.full_name)
       }
@@ -85,7 +87,7 @@ function applyPayload(payload: SyncPayload) {
 
   tools.value = [...payload.tools]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map(t => ({ ...t, inuse_by: inuseBy.get(t.id) }))
+    .map((t) => ({ ...t, inuse_by: inuseBy.get(t.id) }))
 
   error.value = null
   lastUpdated.value = new Date().toLocaleTimeString()
@@ -99,11 +101,21 @@ function connect() {
   ws.onopen = () => {
     connected.value = true
     error.value = null
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
   }
 
-  ws.onmessage = (evt) => {
+  ws.onmessage = (evt: MessageEvent<unknown>) => {
     try {
+      // A WebSocket delivers `any`: a text frame gives a string, a binary one
+      // gives a Blob or an ArrayBuffer. Only the first can be parsed, and
+      // handing JSON.parse the other two threw inside this same try -- so the
+      // check states what was already true rather than changing behaviour.
+      if (typeof evt.data !== 'string') {
+        throw new TypeError('toolguard state arrived as a non-text frame')
+      }
       applyPayload(JSON.parse(evt.data) as SyncPayload)
     } catch {
       console.error('Failed to parse toolguard state:', evt.data)
@@ -123,33 +135,48 @@ function connect() {
 
 function statusLabel(status: ToolStatus): string {
   const labels: Record<ToolStatus, string> = {
-    idle: 'Idle', in_use: 'In Use', maintenance: 'Maintenance',
-    repair: 'Repair', broken: 'Broken', retired: 'Retired',
+    idle: 'Idle',
+    in_use: 'In Use',
+    maintenance: 'Maintenance',
+    repair: 'Repair',
+    broken: 'Broken',
+    retired: 'Retired',
   }
   return labels[status] ?? status
 }
 
 function dotClass(status: ToolStatus): string {
   const map: Record<ToolStatus, string> = {
-    idle: 'bg-green-500', in_use: 'bg-blue-500', maintenance: 'bg-yellow-400',
-    repair: 'bg-orange-400', broken: 'bg-red-500', retired: 'bg-gray-400',
+    idle: 'bg-green-500',
+    in_use: 'bg-blue-500',
+    maintenance: 'bg-yellow-400',
+    repair: 'bg-orange-400',
+    broken: 'bg-red-500',
+    retired: 'bg-gray-400',
   }
   return map[status] ?? 'bg-gray-400'
 }
 
 function textClass(status: ToolStatus): string {
   const map: Record<ToolStatus, string> = {
-    idle: 'text-green-500', in_use: 'text-blue-400', maintenance: 'text-yellow-400',
-    repair: 'text-orange-400', broken: 'text-red-400', retired: 'text-gray-400',
+    idle: 'text-green-500',
+    in_use: 'text-blue-400',
+    maintenance: 'text-yellow-400',
+    repair: 'text-orange-400',
+    broken: 'text-red-400',
+    retired: 'text-gray-400',
   }
   return map[status] ?? 'text-gray-400'
 }
 
 function frameClass(status: ToolStatus): string {
   const map: Record<ToolStatus, string> = {
-    idle: 'border-l-4 border-green-500', in_use: 'border-l-4 border-blue-500',
-    maintenance: 'border-l-4 border-yellow-400', repair: 'border-l-4 border-orange-400',
-    broken: 'border-l-4 border-red-500', retired: 'border-l-4 border-gray-400',
+    idle: 'border-l-4 border-green-500',
+    in_use: 'border-l-4 border-blue-500',
+    maintenance: 'border-l-4 border-yellow-400',
+    repair: 'border-l-4 border-orange-400',
+    broken: 'border-l-4 border-red-500',
+    retired: 'border-l-4 border-gray-400',
   }
   return map[status] ?? ''
 }

@@ -137,6 +137,10 @@ jobs:
       - working-directory: frontend_edge
         run: npm ci --no-audit --no-fund
       - working-directory: frontend_edge
+        run: npm run format:check
+      - working-directory: frontend_edge
+        run: npm run lint
+      - working-directory: frontend_edge
         run: npm run type-check
       # Stricter than frontend's equivalent and deliberately not a ratchet:
       # this directory is 565 lines and its base tsconfig is already
