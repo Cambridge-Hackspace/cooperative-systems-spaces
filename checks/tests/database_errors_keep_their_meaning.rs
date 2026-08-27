@@ -34,7 +34,7 @@ use css_checks::repo_root;
 /// and a regression in another cannot cancel out — which is the failure mode
 /// of every ratchet expressed as a single number.
 const BUDGET: &[(&str, usize)] = &[
-    ("admin.rs", 11),
+    ("admin.rs", 3),
     ("auth.rs", 3),
     ("calendar.rs", 0),
     ("config.rs", 0),
@@ -51,9 +51,9 @@ const BUDGET: &[(&str, usize)] = &[
     ("responses.rs", 0),
     ("schedules.rs", 3),
     ("toolguard.rs", 17),
-    ("tools.rs", 13),
-    ("trainers.rs", 11),
-    ("training.rs", 26),
+    ("tools.rs", 0),
+    ("trainers.rs", 1),
+    ("training.rs", 0),
     ("users.rs", 2),
     ("webhooks.rs", 0),
 ];

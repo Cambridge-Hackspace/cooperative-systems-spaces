@@ -93,10 +93,10 @@ async fn get_roster(
     _admin_user: AdminUser, // Ensures only admin users can access
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<RosterUser>>>, ApiError> {
-    let users = state.db.get_all_users().map_err(|e| {
-        tracing::error!("Failed to query users: {}", e);
-        ApiError::InternalServerError("Failed to fetch users".to_string())
-    })?;
+    let users = state
+        .db
+        .get_all_users()
+        .map_err(|e| ApiError::from_db("Failed to query users", e))?;
 
     let roster_users: Vec<RosterUser> = users
         .into_iter()
@@ -123,10 +123,10 @@ async fn update_user_role(
     Json(payload): Json<UpdateUserRoleRequest>,
 ) -> Result<Json<ApiResponse<RosterUser>>, ApiError> {
     // First check if user exists
-    let user = state.db.find_user_by_id(user_id).map_err(|e| {
-        tracing::error!("Failed to check if user exists: {}", e);
-        ApiError::InternalServerError("Database query failed".to_string())
-    })?;
+    let user = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
     let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -143,10 +143,10 @@ async fn update_user_role(
         meta: None,
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data).map_err(|e| {
-        tracing::error!("Failed to update user role: {}", e);
-        ApiError::InternalServerError("Failed to update user role".to_string())
-    })?;
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
+        .map_err(|e| ApiError::from_db("Failed to update user role", e))?;
 
     let roster_user = RosterUser {
         id: updated_user.id,
@@ -195,10 +195,10 @@ async fn activate_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<RosterUser>>, ApiError> {
-    let user = state.db.find_user_by_id(user_id).map_err(|e| {
-        tracing::error!("Failed to check if user exists: {}", e);
-        ApiError::InternalServerError("Database query failed".to_string())
-    })?;
+    let user = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
     let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -215,10 +215,10 @@ async fn activate_user(
         meta: None,
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data).map_err(|e| {
-        tracing::error!("Failed to activate user: {}", e);
-        ApiError::InternalServerError("Failed to activate user".to_string())
-    })?;
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
+        .map_err(|e| ApiError::from_db("Failed to activate user", e))?;
 
     let roster_user = RosterUser {
         id: updated_user.id,
@@ -265,10 +265,10 @@ async fn deactivate_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<RosterUser>>, ApiError> {
-    let user = state.db.find_user_by_id(user_id).map_err(|e| {
-        tracing::error!("Failed to check if user exists: {}", e);
-        ApiError::InternalServerError("Database query failed".to_string())
-    })?;
+    let user = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
     let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -285,10 +285,10 @@ async fn deactivate_user(
         meta: None,
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data).map_err(|e| {
-        tracing::error!("Failed to deactivate user: {}", e);
-        ApiError::InternalServerError("Failed to deactivate user".to_string())
-    })?;
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
+        .map_err(|e| ApiError::from_db("Failed to deactivate user", e))?;
 
     let roster_user = RosterUser {
         id: updated_user.id,
@@ -349,10 +349,7 @@ async fn get_audit_logs(
     let logs = state
         .db
         .get_audit_logs(offset as i64, per_page as i64, query.event_type.clone())
-        .map_err(|e| {
-            tracing::error!("Failed to query audit logs: {}", e);
-            ApiError::InternalServerError("Failed to fetch audit logs".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to query audit logs", e))?;
 
     Ok(Json(ApiResponse::success(logs)))
 }

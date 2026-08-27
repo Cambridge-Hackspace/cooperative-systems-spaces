@@ -323,8 +323,15 @@ async fn webauthn_register_begin(
             },
         )
         .map_err(|e| {
-            tracing::error!("WebAuthn start_passkey_registration: {e}");
-            ApiError::InternalServerError("WebAuthn ceremony failed".to_string())
+            // Not part of the blanket-500 class, and reverted to a 500
+            // deliberately. `WebauthnError` has no `From<_> for ApiError`, so
+            // there is nothing to classify it with, and inventing a mapping
+            // while sweeping a different problem is how an unrelated status
+            // silently changes. A ceremony that will not start is the server's
+            // problem until somebody decides otherwise, so ERROR is right and
+            // the `logs` oracle should see it.
+            tracing::error!("WebAuthn start_passkey_registration failed: {e}");
+            ApiError::InternalServerError("Could not start passkey registration".to_string())
         })?;
 
     let token = state.mfa_service.put_registration(WebauthnRegistration {

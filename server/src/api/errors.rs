@@ -46,6 +46,67 @@ impl Display for ApiError {
     }
 }
 
+impl ApiError {
+    /// Does this map onto a 5xx?
+    ///
+    /// Kept beside the status table in `into_response` on purpose: if a variant
+    /// is added there and not here, the two disagree about what counts as the
+    /// server's fault, and `from_db` logs at the wrong level.
+    pub fn is_server_error(&self) -> bool {
+        matches!(
+            self,
+            Self::InternalServerError(_) | Self::DatabaseError(_) | Self::NotImplemented(_)
+        )
+    }
+
+    /// Classify a database error, and log it at the level its status deserves.
+    ///
+    /// This exists because the handlers did two things wrong at once, and
+    /// fixing either alone does not work.
+    ///
+    /// They answered 500 for everything -- `map_err(|e| { tracing::error!(..);
+    /// ApiError::InternalServerError("Failed to X") })` -- so a caller naming a
+    /// row that does not exist was told the server had broken. `From` already
+    /// classified these correctly and the handler was discarding it.
+    ///
+    /// And they logged at ERROR unconditionally. The stack battery's `logs`
+    /// stage treats server ERROR output as an oracle, so correcting only the
+    /// status would leave a correct 404 accompanied by an ERROR line and the
+    /// tier would still fail. Downgrading everything to WARN instead would stop
+    /// that oracle seeing genuine server faults, which is worse: it trades a
+    /// noisy detector for a blind one.
+    ///
+    /// So the level follows the status. A 4xx is the caller's mistake and logs
+    /// at WARN; a 5xx is ours and stays at ERROR, where the oracle can see it.
+    ///
+    /// `context` should name the operation -- ideally the database call -- so a
+    /// log line still says where it came from now that the prose message is
+    /// gone.
+    /// Generic over the error type rather than taking `DatabaseError`, because
+    /// the handlers do not all hold one. Most call `state.db.*` and get a
+    /// `DatabaseError`; a few hold a bare `diesel::result::Error` or a
+    /// `PoolError`. `ApiError` has a `From` for each, and every one of them
+    /// classifies -- so the bound is "something ApiError already knows how to
+    /// classify", which is exactly the set this should accept and no wider. An
+    /// error with no `From` impl, such as `WebauthnError`, will not compile
+    /// here, which is the correct answer: it is not part of this class and
+    /// wants deciding on its own terms.
+    pub fn from_db<E>(context: &str, err: E) -> Self
+    where
+        E: Display,
+        Self: From<E>,
+    {
+        let detail = err.to_string();
+        let api = Self::from(err);
+        if api.is_server_error() {
+            tracing::error!("{context}: {detail}");
+        } else {
+            tracing::warn!("{context}: {detail}");
+        }
+        api
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let (status, error_message) = match &self {
@@ -163,6 +224,15 @@ impl From<DatabaseError> for ApiError {
 // So untranslatable text still becomes a 500. That is a real finding, it is
 // recorded in TESTING.md rather than papered over here, and the stack battery
 // reports it on every hostile-encoding run.
+/// Does this Postgres message mean "the bytes you sent cannot be stored"?
+///
+/// Kept as a named function rather than inlined so the two phrases have one
+/// home and the tests can reach them.
+fn is_unrepresentable_text(message: &str) -> bool {
+    message.contains("invalid byte sequence for encoding")
+        || message.contains("has no equivalent in encoding")
+}
+
 impl From<diesel::result::Error> for ApiError {
     fn from(diesel_error: diesel::result::Error) -> Self {
         use diesel::result::DatabaseErrorKind as Kind;
@@ -196,6 +266,36 @@ impl From<diesel::result::Error> for ApiError {
                 ApiError::BadRequest("A value was not one this field accepts".to_string())
             }
 
+            // Text the database cannot represent.
+            //
+            // Two distinct Postgres errors, one meaning: the bytes the caller
+            // sent cannot be stored. `invalid byte sequence for encoding` is a
+            // NUL inside a string, which no Postgres text column accepts in any
+            // encoding; `has no equivalent in encoding` is a character outside
+            // the cluster's own encoding, which is how emoji behave on LATIN1.
+            //
+            // Both were 500s. The first is a live defect on any deployment --
+            // a request carrying %00 answered "the server broke" on a perfectly
+            // ordinary UTF-8 database. The second is the defect TESTING.md
+            // recorded as `astral-text-is-a-500-not-a-4xx`.
+            //
+            // Matched on the message text, which is not where anybody wants to
+            // match. Diesel's `DatabaseErrorInformation` exposes no SQLSTATE, so
+            // 22P05 and 22021 are not reachable as codes, and the alternative is
+            // leaving both as 500. The strings are Postgres's own and stable in
+            // English; a server whose messages are localised would fall through
+            // to the arm below and answer 500, which is the previous behaviour
+            // rather than a new failure. `errors.rs`'s own tests pin both
+            // phrases so a silent change of wording is caught here rather than
+            // in production.
+            E::DatabaseError(Kind::Unknown, ref info)
+                if is_unrepresentable_text(info.message()) =>
+            {
+                ApiError::BadRequest(
+                    "Text contained characters this database cannot store".to_string(),
+                )
+            }
+
             // Postgres could not serialise concurrent transactions. Retrying
             // genuinely may work, which is exactly what 409 tells a caller and
             // 500 does not.
@@ -224,6 +324,54 @@ impl From<diesel::r2d2::PoolError> for ApiError {
 
 #[cfg(test)]
 mod tests {
+    use super::is_unrepresentable_text;
+
+    /// The two Postgres messages this classification depends on, verbatim.
+    ///
+    /// The comment on the matching arm claims these are pinned; this is that
+    /// claim being kept. If Postgres rewords either, or somebody "tidies" the
+    /// predicate, this fails here rather than silently returning 500s in
+    /// production again.
+    ///
+    /// Copied from real server output captured on a LATIN1 cluster and on a
+    /// UTF-8 one, not written from memory.
+    #[test]
+    fn the_two_messages_this_depends_on_are_recognised() {
+        assert!(
+            is_unrepresentable_text("invalid byte sequence for encoding \"UTF8\": 0x00"),
+            "a NUL byte in text is refused by every Postgres encoding, so this \
+             one fires on ordinary UTF-8 deployments"
+        );
+        assert!(
+            is_unrepresentable_text(
+                "character with byte sequence 0xf0 0x9f 0x90 0xb4 in encoding \
+                 \"UTF8\" has no equivalent in encoding \"LATIN1\""
+            ),
+            "a character outside the cluster's encoding"
+        );
+    }
+
+    /// Errors that are genuinely the server's problem must NOT be reclassified.
+    ///
+    /// The predicate is a substring match on prose, which is exactly the shape
+    /// that quietly grows to swallow things it should not.
+    #[test]
+    fn unrelated_database_messages_are_left_alone() {
+        for msg in [
+            "could not connect to server: Connection refused",
+            "deadlock detected",
+            "out of shared memory",
+            "canceling statement due to statement timeout",
+            "duplicate key value violates unique constraint \"users_email_key\"",
+        ] {
+            assert!(
+                !is_unrepresentable_text(msg),
+                "{msg:?} is not a text-representation problem and must keep its \
+                 own classification"
+            );
+        }
+    }
+
     use super::*;
     use axum::body::to_bytes;
     use diesel::result::DatabaseErrorKind as Kind;
@@ -343,21 +491,43 @@ mod tests {
                 "{kind:?}"
             );
         }
-        // Named explicitly, because it is the arm the hostile-encoding finding
-        // lands in and it must not drift into a 4xx by accident. Postgres
-        // reports untranslatable text as SQLSTATE 22P05, diesel has no
-        // structured kind for it, and `DatabaseErrorInformation` exposes no
-        // SQLSTATE — so classifying it would mean matching English prose that
-        // changes with the server's lc_messages. It stays a 500 and is recorded
-        // in TESTING.md rather than guessed at here.
-        assert_eq!(
-            status_of(ApiError::from(db_error(
-                Kind::Unknown,
-                "character with byte sequence 0xf0 0x9f 0x9a 0xa7 in encoding \
-                 \"UTF8\" has no equivalent in encoding \"LATIN1\""
-            ))),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
+        // Text the database cannot represent is now a 400, and this is the
+        // record of that being deliberate.
+        //
+        // This assertion previously demanded 500 here, with the reasoning that
+        // classifying it would mean matching English prose that changes with
+        // the server's lc_messages -- true, and it was the right call while the
+        // defect looked like a LATIN1-only curiosity. It is not: a NUL byte is
+        // refused by every Postgres encoding, so the same arm answered 500 on
+        // ordinary UTF-8 deployments. `is_unrepresentable_text` and its own
+        // tests carry the reasoning and pin the two phrases.
+        for message in [
+            "character with byte sequence 0xf0 0x9f 0x9a 0xa7 in encoding \
+             \"UTF8\" has no equivalent in encoding \"LATIN1\"",
+            "invalid byte sequence for encoding \"UTF8\": 0x00",
+        ] {
+            assert_eq!(
+                status_of(ApiError::from(db_error(Kind::Unknown, message))),
+                StatusCode::BAD_REQUEST,
+                "{message:?}"
+            );
+        }
+
+        // The other half of the original assertion, kept: an Unknown that is
+        // NOT a text-representation problem must stay ours. The predicate is a
+        // substring match on prose, and this is what stops it growing to
+        // swallow errors that really are the server's fault.
+        for message in [
+            "deadlock detected",
+            "out of shared memory",
+            "could not connect to server: Connection refused",
+        ] {
+            assert_eq!(
+                status_of(ApiError::from(db_error(Kind::Unknown, message))),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{message:?}"
+            );
+        }
     }
 
     #[tokio::test]

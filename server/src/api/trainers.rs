@@ -108,19 +108,13 @@ async fn assign_tool_trainer(
     let _tool = state
         .db
         .get_tool_by_id(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get tool: {}", e);
-            ApiError::InternalServerError("Failed to verify tool".to_string())
-        })?
+        .map_err(|e| ApiError::from_db("Failed to get tool", e))?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
     // Verify the user exists
     let _user = state
         .db
         .find_user_by_id(payload.user_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get user: {}", e);
-            ApiError::InternalServerError("Failed to verify user".to_string())
-        })?
+        .map_err(|e| ApiError::from_db("Failed to get user", e))?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
     let notes = payload.notes.clone();
@@ -182,10 +176,7 @@ async fn get_tool_trainers(
     let trainers = state
         .db
         .get_tool_trainers(tool_id, include_inactive)
-        .map_err(|e| {
-            tracing::error!("Failed to get tool trainers: {}", e);
-            ApiError::InternalServerError("Failed to retrieve tool trainers".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to get tool trainers", e))?;
 
     Ok(Json(ApiResponse::success(trainers)))
 }
@@ -265,10 +256,7 @@ async fn check_trainer_authorization(
     let is_authorized = state
         .db
         .is_active_tool_trainer(tool_id, user_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check trainer authorization: {}", e);
-            ApiError::InternalServerError("Failed to check trainer authorization".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to check trainer authorization", e))?;
 
     Ok(Json(ApiResponse::success(is_authorized)))
 }
@@ -285,10 +273,7 @@ async fn create_training_record(
     let is_trainer = state
         .db
         .is_active_tool_trainer(payload.tool_id, user.0.id)
-        .map_err(|e| {
-            tracing::error!("Failed to check trainer status: {}", e);
-            ApiError::InternalServerError("Failed to verify trainer status".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
     if !is_trainer {
         return Err(ApiError::Forbidden(
@@ -311,10 +296,10 @@ async fn create_training_record(
         next_steps: payload.next_steps,
     };
 
-    let record = state.db.create_training_record(&new_record).map_err(|e| {
-        tracing::error!("Failed to create training record: {}", e);
-        ApiError::InternalServerError("Failed to create training record".to_string())
-    })?;
+    let record = state
+        .db
+        .create_training_record(&new_record)
+        .map_err(|e| ApiError::from_db("Failed to create training record", e))?;
 
     // Log the training completion to audit logs
     if let Err(e) = state
@@ -398,10 +383,7 @@ async fn get_training_records(
             query.limit,
             query.offset,
         )
-        .map_err(|e| {
-            tracing::error!("Failed to get training records: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training records".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to get training records", e))?;
 
     Ok(Json(ApiResponse::success(records)))
 }
@@ -428,10 +410,7 @@ async fn get_user_training_records(
     let records = state
         .db
         .get_user_training_records(target_user_id, as_trainer)
-        .map_err(|e| {
-            tracing::error!("Failed to get user training records: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training records".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to get user training records", e))?;
 
     Ok(Json(ApiResponse::success(records)))
 }
@@ -447,10 +426,7 @@ async fn update_training_record(
     let existing_record = state
         .db
         .get_training_records(None, None, None, None, None)
-        .map_err(|e| {
-            tracing::error!("Failed to get training records: {}", e);
-            ApiError::InternalServerError("Failed to verify record".to_string())
-        })?
+        .map_err(|e| ApiError::from_db("Failed to get training records", e))?
         .into_iter()
         .find(|r| r.record.id == record_id)
         .ok_or_else(|| ApiError::NotFound("Training record not found".to_string()))?;
@@ -476,10 +452,7 @@ async fn update_training_record(
     let updated_record = state
         .db
         .update_training_record(record_id, &update_record)
-        .map_err(|e| {
-            tracing::error!("Failed to update training record: {}", e);
-            ApiError::InternalServerError("Failed to update training record".to_string())
-        })?;
+        .map_err(|e| ApiError::from_db("Failed to update training record", e))?;
 
     Ok(Json(ApiResponse::success(updated_record)))
 }
