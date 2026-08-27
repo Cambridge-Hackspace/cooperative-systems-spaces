@@ -14,17 +14,32 @@ use crate::{
         responses::{ApiResponse, PaginatedResponse, UpdateUserRequest, UserResponse, PaginationParams},
     },
     auth::{AdminUser, AuthUser, PasswordHashUtil},
-    models::{UpdateUser, UserRole},
+    models::{AuditEventType, NewAuditLog, UpdateUser, UserRole},
     AppState,
 };
 
 pub fn user_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_users))
+        .route("/me/password", put(change_own_password))
         .route("/{id}", get(get_user_by_id))
         .route("/{id}", put(update_user))
         .route("/{id}", delete(delete_user))
         .route("/{id}/theme", patch(update_user_theme))
+}
+
+fn audit(state: &AppState, event: AuditEventType, actor: Uuid, data: serde_json::Value) {
+    let log = NewAuditLog {
+        event_type: event.as_str().to_string(),
+        user_id: Some(actor),
+        actor_id: Some(actor),
+        event_data: data,
+        ip_address: None,
+        user_agent: None,
+    };
+    if let Err(e) = state.db.create_audit_log(&log) {
+        tracing::error!("Failed to write user audit log {}: {}", event.as_str(), e);
+    }
 }
 
 // List all users (admin only)
@@ -176,6 +191,62 @@ async fn update_user(
     Ok(Json(ApiResponse::success_with_message(
         UserResponse::from(updated_user),
         "User updated successfully".to_string(),
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+// Self-service password change. Requires proof of the current password so a
+// hijacked session (stolen token, unattended logged-in browser) can't be used
+// to silently lock the real owner out -- unlike update_user's password field,
+// which is only reachable by staff/admin acting on someone else's account and
+// intentionally skips this check (that's the admin-reset path).
+async fn change_own_password(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    if !PasswordHashUtil::verify(&payload.current_password, &auth_user.0.password_hash)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::BadRequest("Current password is incorrect".to_string()));
+    }
+
+    let config = state.config_manager.get_config();
+    if payload.new_password.len() < config.auth.password_min_length {
+        return Err(ApiError::BadRequest(format!(
+            "Password must be at least {} characters long",
+            config.auth.password_min_length
+        )));
+    }
+
+    let password_hash = PasswordHashUtil::hash(&payload.new_password)
+        .map_err(|_| ApiError::InternalServerError("Failed to hash password".to_string()))?;
+
+    let update_data = UpdateUser {
+        username: None,
+        email: None,
+        password_hash: Some(password_hash),
+        full_name: None,
+        is_active: None,
+        role: None,
+        profile: None,
+        meta: None,
+        updated_at: Some(Utc::now().naive_utc()),
+    };
+
+    state.db.update_user(auth_user.0.id, &update_data)
+        .map_err(ApiError::from)?;
+
+    audit(&state, AuditEventType::UserPasswordChange, auth_user.0.id, serde_json::json!({}));
+
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        "Password changed successfully".to_string(),
     )))
 }
 

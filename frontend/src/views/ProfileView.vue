@@ -27,6 +27,17 @@
       <router-link to="/profile/mfa" class="btn btn-primary btn-sm">Manage</router-link>
     </div>
 
+    <!-- Change password link (only shown for own profile) -->
+    <div v-if="isOwnProfile" class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4">
+      <div>
+        <div class="font-medium">Password</div>
+        <div class="text-sm text-base-content/70">
+          Change your account password.
+        </div>
+      </div>
+      <router-link to="/profile/password" class="btn btn-primary btn-sm">Change</router-link>
+    </div>
+
     <!-- Theme Picker (only shown for own profile) -->
     <ThemePicker
       v-if="isOwnProfile"

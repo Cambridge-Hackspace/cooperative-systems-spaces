@@ -267,6 +267,14 @@ export const userApi = {
   activateUser(userId: string): Promise<ApiResponse<User>> {
     return apiClient.put(`/admin/users/${userId}/activate`)
   },
+
+  // Change your own password (requires current password)
+  changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<void>> {
+    return apiClient.put<void>('/users/me/password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+  },
 }
 
 export default apiClient
