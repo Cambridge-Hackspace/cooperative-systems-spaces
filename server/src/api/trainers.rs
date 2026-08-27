@@ -245,14 +245,19 @@ async fn create_training_record(
     user: AuthUser,
     Json(payload): Json<CreateTrainingRecordRequest>,
 ) -> Result<Json<ApiResponse<TrainingRecord>>, ApiError> {
-    // Check if user is an active trainer for this tool
+    // Check if user is an active trainer for this tool -- staff/admin can
+    // record training regardless, matching update_training_record's
+    // trainer-or-staff pattern below (a stricter create than update makes
+    // no sense: staff who can already correct any record should be able to
+    // create one in the first place, e.g. backfilling or entering training
+    // done by someone else).
     let is_trainer = state.db.is_active_tool_trainer(payload.tool_id, user.0.id)
         .map_err(|e| {
             tracing::error!("Failed to check trainer status: {}", e);
             ApiError::InternalServerError("Failed to verify trainer status".to_string())
         })?;
 
-    if !is_trainer {
+    if !is_trainer && !user.0.role.can_access_staff() {
         return Err(ApiError::Forbidden("User is not authorized as a trainer for this tool".to_string()));
     }
 
