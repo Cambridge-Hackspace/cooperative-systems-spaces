@@ -34,7 +34,7 @@ mod devices_inbound;
 mod devices_transport;
 use config::{ConfigManager, load_config};
 use database::{DatabaseManager, initialize_database};
-use profile::{ProfileValidator, AuditLogger};
+use profile::AuditLogger;
 use throttle::RegistrationThrottleService;
 use recaptcha::RecaptchaService;
 use calendar::CalendarService;
@@ -66,7 +66,6 @@ struct Args {
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub db: Arc<DatabaseManager>,
-    pub profile_validator: ProfileValidator,
     pub audit_logger: AuditLogger,
     pub throttle_service: Arc<RegistrationThrottleService>,
     pub recaptcha_service: Arc<RecaptchaService>,
@@ -170,7 +169,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
     prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
-    let profile_validator = ProfileValidator::new(&app_config.user.profile_fields_seed);
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
     let recaptcha_service = Arc::new(RecaptchaService::new(
@@ -288,7 +286,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let app_state = AppState {
         config_manager: config_manager,
         db: db_manager,
-        profile_validator,
         audit_logger,
         throttle_service,
         recaptcha_service,
