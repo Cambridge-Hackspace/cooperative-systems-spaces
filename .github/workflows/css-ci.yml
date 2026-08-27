@@ -461,20 +461,66 @@ jobs:
         shell: pwsh
         run: |
           choco install openssl --yes --no-progress
-          $candidates = @(
-            'C:\Program Files\OpenSSL-Win64',
-            'C:\Program Files\OpenSSL',
-            'C:\Program Files\FireDaemon OpenSSL 3'
-          )
-          $ssl = $candidates | Where-Object { Test-Path (Join-Path $_ 'include\openssl\ssl.h') } |
-                 Select-Object -First 1
-          if (-not $ssl) {
-            Write-Error "OpenSSL headers not found after install; looked in: $($candidates -join ', ')"
+
+          # Located rather than assumed. The first attempt set OPENSSL_DIR from
+          # wherever the headers were and let openssl-sys infer `lib` beside
+          # them; the import libraries are not there, and the build failed with
+          # "libdir does not contain the required files". Windows OpenSSL
+          # distributions disagree about layout -- some ship lib\VC\x64\MD,
+          # some a flat lib -- and this runs on whatever choco resolves to
+          # today, so the layout is not a thing to hardcode.
+          #
+          # openssl-sys accepts OPENSSL_LIB_DIR + OPENSSL_INCLUDE_DIR in place
+          # of OPENSSL_DIR, which is what makes searching viable.
+          # paho-mqtt-sys locates OpenSSL through CMake instead, and CMake reads
+          # OPENSSL_ROOT_DIR, so that is set as well.
+          $ErrorActionPreference = 'Stop'
+
+          $roots = Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)' -Directory -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -match 'OpenSSL' }
+          if (-not $roots) { Write-Error "no OpenSSL directory found after choco install"; exit 1 }
+
+          # A usable lib dir has both halves. Matching only on ssl would happily
+          # select a directory with no crypto library and fail later at link
+          # time, which is a worse place to find out.
+          $libDir = $null
+          foreach ($root in $roots) {
+            $cands = Get-ChildItem $root.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+                     Group-Object DirectoryName
+            foreach ($g in $cands) {
+              $names = $g.Group.Name
+              $hasSsl    = $names | Where-Object { $_ -in @('libssl.lib','ssl.lib') }
+              $hasCrypto = $names | Where-Object { $_ -in @('libcrypto.lib','crypto.lib') }
+              if ($hasSsl -and $hasCrypto) { $libDir = $g.Name; break }
+            }
+            if ($libDir) { $root_used = $root.FullName; break }
+          }
+
+          if (-not $libDir) {
+            Write-Host "=== no directory held both an ssl and a crypto import library ==="
+            foreach ($root in $roots) {
+              Write-Host "--- $($root.FullName) ---"
+              Get-ChildItem $root.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "  $($_.FullName)" }
+            }
+            Write-Error "OpenSSL import libraries not found; the listing above is what was installed"
             exit 1
           }
-          Write-Host "OpenSSL at $ssl"
-          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_DIR=$ssl"
-          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$ssl"
+
+          $incDir = Join-Path $root_used 'include'
+          if (-not (Test-Path (Join-Path $incDir 'openssl\ssl.h'))) {
+            $found = Get-ChildItem $root_used -Recurse -Filter 'ssl.h' -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+            if (-not $found) { Write-Error "OpenSSL headers not found under $root_used"; exit 1 }
+            $incDir = Split-Path (Split-Path $found.FullName -Parent) -Parent
+          }
+
+          Write-Host "OpenSSL root:    $root_used"
+          Write-Host "OpenSSL libs:    $libDir"
+          Write-Host "OpenSSL headers: $incDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_LIB_DIR=$libDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_INCLUDE_DIR=$incDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$root_used"
 
       - name: Install PostgreSQL client library (macOS)
         if: runner.os == 'macOS'
