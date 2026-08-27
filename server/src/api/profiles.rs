@@ -180,8 +180,8 @@ async fn get_profile_config(
     _auth_user: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
-    // profile_fields is versioned in the database, which is authoritative
-    // across instances; profiles_enabled is a plain file-backed setting.
+    // profile_fields and profiles_enabled are versioned together in the
+    // database, which is authoritative across instances.
     let profile_fields = current_profile_fields(&state).await?;
     let profiles_enabled = state.config_manager.get_config().user.profiles_enabled;
 
@@ -201,20 +201,17 @@ async fn update_profile_config(
 ) -> Result<Json<ApiResponse<ProfileConfigResponse>>, ApiError> {
     validate_profile_fields(&payload.profile_fields)?;
 
-    // Persist a new, immutable version of the field schema...
+    // Persist a new, immutable version of the field schema and enabled
+    // toggle together...
     let fields_json = serde_json::to_value(&payload.profile_fields)
         .map_err(|e| ApiError::InternalServerError(format!("Failed to serialize profile fields: {}", e)))?;
     let new_version = state.db
-        .insert_profile_config_version(fields_json, Some(admin_user.0.id))
+        .insert_profile_config_version(fields_json, payload.profiles_enabled, Some(admin_user.0.id))
         .map_err(ApiError::from)?;
 
-    // ...and keep the in-process config cache (used by validation) and the
-    // file-backed profiles_enabled toggle up to date.
+    // ...and keep the in-process config cache (used by validation) in sync.
     state.config_manager.set_profile_fields(payload.profile_fields.clone());
-    let profiles_enabled = payload.profiles_enabled;
-    state.config_manager.update_config(|config| {
-        config.user.profiles_enabled = profiles_enabled;
-    }).map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+    state.config_manager.set_profiles_enabled(payload.profiles_enabled);
 
     // Log the configuration change
     let audit_logger = AuditLogger::new(state.db.clone());
@@ -281,10 +278,11 @@ async fn rollback_profile_config(
         .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
 
     let new_version = state.db
-        .insert_profile_config_version(target.profile_fields, Some(admin_user.0.id))
+        .insert_profile_config_version(target.profile_fields, target.profiles_enabled, Some(admin_user.0.id))
         .map_err(ApiError::from)?;
 
     state.config_manager.set_profile_fields(profile_fields.clone());
+    state.config_manager.set_profiles_enabled(target.profiles_enabled);
 
     let audit_logger = AuditLogger::new(state.db.clone());
     if let Err(e) = audit_logger.log_event(

@@ -519,6 +519,7 @@ diesel::table! {
         profile_fields -> Jsonb,
         created_by -> Nullable<Uuid>,
         created_at -> Timestamptz,
+        profiles_enabled -> Bool,
     }
 }
 

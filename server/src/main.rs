@@ -147,11 +147,12 @@ async fn main() -> Result<(), anyhow::Error> {
         Some(latest) => {
             let fields: Vec<config::ProfileField> = serde_json::from_value(latest.profile_fields)?;
             config_manager.set_profile_fields(fields);
+            config_manager.set_profiles_enabled(latest.profiles_enabled);
             info!("Loaded profile field schema from database (version {})", latest.version);
         }
         None => {
             let seed = serde_json::to_value(&app_config.user.profile_fields)?;
-            db_manager.insert_profile_config_version(seed, None)?;
+            db_manager.insert_profile_config_version(seed, app_config.user.profiles_enabled, None)?;
             info!("Seeded profile field schema version 1 from config file");
         }
     }

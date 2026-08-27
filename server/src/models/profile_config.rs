@@ -18,6 +18,7 @@ pub struct ProfileConfigVersion {
     pub profile_fields: serde_json::Value,
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub profiles_enabled: bool,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -27,4 +28,5 @@ pub struct NewProfileConfigVersion {
     pub version: i64,
     pub profile_fields: serde_json::Value,
     pub created_by: Option<Uuid>,
+    pub profiles_enabled: bool,
 }

@@ -1,11 +1,13 @@
 use std::fmt::{Display, Formatter};
 use anyhow::{Context, Result};
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, RwLock};
-use tracing::{info, warn};
+use tracing::info;
 pub(crate) use css_lib::{MqttConfig};
 
 /// Merge two TOML values, with the first taking precedence
@@ -475,10 +477,28 @@ impl AuthMfaConfig {
     }
 }
 
+/// The old, publicly-known placeholder JWT secret. Any config carrying this
+/// exact value (rather than a generated one) signing tokens is a full auth
+/// bypass, so it's rejected at load time rather than just warned about.
+const LEGACY_DEFAULT_JWT_SECRET: &str = "your-super-secret-jwt-key-change-this-in-production";
+
+/// A fresh, unguessable JWT secret for new installs: a recognizable prefix
+/// (so it's still obvious in a config file that it was auto-generated,
+/// not a deliberately chosen production secret) plus 32 random
+/// alphanumeric characters, which is enough entropy for an HMAC key.
+fn generate_default_jwt_secret() -> String {
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    format!("{}-{}", LEGACY_DEFAULT_JWT_SECRET, suffix)
+}
+
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            jwt_secret: "your-super-secret-jwt-key-change-this-in-production".to_string(),
+            jwt_secret: generate_default_jwt_secret(),
             jwt_expiration_hours: 24,
             allow_registration: true,
             require_email_verification: false,
@@ -1155,7 +1175,7 @@ impl ConfigManager {
             .with_context(|| "Failed to reload configuration")?;
 
         // Validate the new configuration
-        self.validate_config(&new_config)?;
+        validate_config(&new_config)?;
 
         // Update the configuration atomically
         {
@@ -1164,31 +1184,6 @@ impl ConfigManager {
         }
 
         info!("Configuration reloaded successfully");
-        Ok(())
-    }
-
-    /// Validate configuration before applying
-    fn validate_config(&self, config: &AppConfig) -> Result<()> {
-        // Validate JWT secret is not default
-        if config.auth.jwt_secret == "your-super-secret-jwt-key-change-this-in-production" {
-            warn!("JWT secret is still set to default value - this is insecure for production");
-        }
-
-        // Validate database connection string
-        if config.database.get_url().is_empty() {
-            return Err(anyhow::anyhow!("Database URL cannot be empty"));
-        }
-
-        // Validate server bind address
-        if config.server.bind_address.is_empty() {
-            return Err(anyhow::anyhow!("Server bind address cannot be empty"));
-        }
-
-        // Validate initial setup admin email format
-        if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
-            return Err(anyhow::anyhow!("Initial setup admin email must be a valid email address"));
-        }
-
         Ok(())
     }
 
@@ -1206,47 +1201,69 @@ impl ConfigManager {
         self.config.write().unwrap().user.profile_fields = profile_fields;
     }
 
-    /// Apply an in-place mutation to the shared configuration and persist
-    /// the result to the config file, if one is known.
-    pub fn update_config<F>(&self, mutator: F) -> Result<()>
-    where
-        F: FnOnce(&mut AppConfig),
-    {
-        let updated = {
-            let mut config_guard = self.config.write().unwrap();
-            mutator(&mut config_guard);
-            config_guard.clone()
-        };
-
-        if let Some(config_path) = &self.config_path {
-            updated.to_file(config_path)
-                .with_context(|| "Failed to persist updated configuration")?;
-        } else {
-            warn!("No config path available; configuration change was not persisted to disk");
-        }
-
-        Ok(())
+    /// Overwrite the in-memory `profiles_enabled` toggle without touching
+    /// the config file. The `profile_config_versions` table in the
+    /// database is the source of truth (versioned alongside
+    /// `profile_fields`); this just keeps the shared `AppConfig` in sync.
+    pub fn set_profiles_enabled(&self, enabled: bool) {
+        self.config.write().unwrap().user.profiles_enabled = enabled;
     }
+}
+
+/// Validate configuration before applying it, whether at startup or reload.
+fn validate_config(config: &AppConfig) -> Result<()> {
+    // Reject the well-known placeholder JWT secret outright: it's public
+    // (it's the code default, and has shipped in tracked config files), so
+    // a server signing tokens with it is a full auth bypass, not just an
+    // insecure setting to warn about.
+    if config.auth.jwt_secret == LEGACY_DEFAULT_JWT_SECRET {
+        return Err(anyhow::anyhow!(
+            "auth.jwt_secret is still set to the default placeholder value. \
+             Set a real, random secret before starting (or delete the [auth] \
+             section and restart to have one generated automatically)."
+        ));
+    }
+
+    // Validate database connection string
+    if config.database.get_url().is_empty() {
+        return Err(anyhow::anyhow!("Database URL cannot be empty"));
+    }
+
+    // Validate server bind address
+    if config.server.bind_address.is_empty() {
+        return Err(anyhow::anyhow!("Server bind address cannot be empty"));
+    }
+
+    // Validate initial setup admin email format
+    if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
+        return Err(anyhow::anyhow!("Initial setup admin email must be a valid email address"));
+    }
+
+    Ok(())
 }
 
 /// Load configuration from file or create default configuration
 pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
     let path = config_path.as_ref();
-    
-    if path.exists() {
+
+    let config = if path.exists() {
         println!("Loading configuration from: {}", path.display());
-        AppConfig::from_file(path)
+        AppConfig::from_file(path)?
     } else {
         println!("Config file not found. Creating default configuration at: {}", path.display());
         let default_config = AppConfig::default();
-        
+
         // Save default configuration to file
         default_config.to_file(path)
             .with_context(|| "Failed to create default configuration file")?;
-        
+
         println!("Default configuration file created. Please review and modify as needed.");
-        Ok(default_config)
-    }
+        default_config
+    };
+
+    validate_config(&config)?;
+
+    Ok(config)
 }
 
 /// Generate a sample configuration file with comments
@@ -1300,8 +1317,19 @@ mod tests {
         
         // load_config should create a default config
         let _config = load_config(path).unwrap();
-        
+
         // File should now exist
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_load_config_rejects_legacy_default_jwt_secret() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = LEGACY_DEFAULT_JWT_SECRET.to_string();
+        config.to_file(temp_file.path()).unwrap();
+
+        let err = load_config(temp_file.path()).unwrap_err();
+        assert!(err.to_string().contains("jwt_secret"));
     }
 }
