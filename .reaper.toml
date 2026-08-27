@@ -159,7 +159,15 @@ warm_cache = true
 ttl        = "12h"
 # Cold, so a warm cache can never be the reason a nightly run passed.
 warm_cache = false
-env = { CSS_E2E_STAGES = "all", FUZZ_ITERATIONS = "4000", JOURNEY_ITERATIONS = "2000", CSS_E2E_DB_ENCODING = "SQL_ASCII" }
+# CSS_-prefixed, because that is what the drivers read. `FUZZ_ITERATIONS` was
+# set here and is read by nothing, so the nightly -- whose entire purpose is a
+# long hunt -- has been running the fuzzer at its default 400 rather than 4000.
+# The same mistake was found and fixed in the CI workflow and not here.
+#
+# JOURNEY_ITERATIONS is still read by nothing, and deliberately kept: the Tier 9
+# journey driver is not written (TESTING.md section 7). It is configuration for
+# a tier that does not exist yet, not a typo.
+env = { CSS_E2E_STAGES = "all", CSS_FUZZ_ITERATIONS = "4000", JOURNEY_ITERATIONS = "2000", CSS_E2E_DB_ENCODING = "SQL_ASCII" }
 
 [profiles.hunt]
 # Long seeded hunting runs. Opt-in, because cost has to stay known by default.
