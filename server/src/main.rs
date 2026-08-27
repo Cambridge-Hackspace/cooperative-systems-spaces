@@ -147,7 +147,15 @@ async fn main() -> Result<(), anyhow::Error> {
         Some(latest) => {
             let fields: Vec<config::ProfileField> = serde_json::from_value(latest.profile_fields)?;
             config_manager.set_profile_fields(fields);
-            config_manager.set_profiles_enabled(latest.profiles_enabled);
+            let profiles_enabled = latest.profiles_enabled.unwrap_or_else(|| {
+                warn!(
+                    "profile_config_versions version {} predates the profiles_enabled column; \
+                     falling back to config file's profiles_enabled_seed",
+                    latest.version
+                );
+                app_config.user.profiles_enabled_seed
+            });
+            config_manager.set_profiles_enabled(profiles_enabled);
             info!("Loaded profile field schema from database (version {})", latest.version);
         }
         None => {

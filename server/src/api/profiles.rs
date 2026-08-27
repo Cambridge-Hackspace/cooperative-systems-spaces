@@ -277,6 +277,11 @@ async fn rollback_profile_config(
     let profile_fields: Vec<ProfileField> = serde_json::from_value(target.profile_fields.clone())
         .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
 
+    // NULL only for a row that predates the profiles_enabled column; fall
+    // back to the config-file seed rather than guessing.
+    let target_profiles_enabled = target.profiles_enabled
+        .unwrap_or_else(|| state.config_manager.get_config().user.profiles_enabled_seed);
+
     // Rolling back to the version that's already current would insert a
     // byte-identical version and log a rollback event for a no-op change.
     // Short-circuit instead of padding the (immutable, audit-relevant)
@@ -285,7 +290,7 @@ async fn rollback_profile_config(
     if latest.as_ref().map(|l| l.version) == Some(target.version) {
         let response = ProfileConfigResponse {
             profile_fields,
-            profiles_enabled: target.profiles_enabled,
+            profiles_enabled: target_profiles_enabled,
         };
         return Ok(Json(ApiResponse::success_with_message(
             response,
@@ -294,11 +299,11 @@ async fn rollback_profile_config(
     }
 
     let new_version = state.db
-        .insert_profile_config_version(target.profile_fields, target.profiles_enabled, Some(admin_user.0.id))
+        .insert_profile_config_version(target.profile_fields, target_profiles_enabled, Some(admin_user.0.id))
         .map_err(ApiError::from)?;
 
     state.config_manager.set_profile_fields(profile_fields.clone());
-    state.config_manager.set_profiles_enabled(target.profiles_enabled);
+    state.config_manager.set_profiles_enabled(target_profiles_enabled);
 
     let audit_logger = AuditLogger::new(state.db.clone());
     if let Err(e) = audit_logger.log_event(
@@ -319,7 +324,7 @@ async fn rollback_profile_config(
 
     let response = ProfileConfigResponse {
         profile_fields,
-        profiles_enabled: target.profiles_enabled,
+        profiles_enabled: target_profiles_enabled,
     };
 
     Ok(Json(ApiResponse::success_with_message(
@@ -341,7 +346,11 @@ async fn current_profile_config(state: &AppState) -> Result<(Vec<ProfileField>, 
         Some(latest) => {
             let fields = serde_json::from_value(latest.profile_fields)
                 .map_err(|e| ApiError::InternalServerError(format!("Failed to decode stored profile fields: {}", e)))?;
-            Ok((fields, latest.profiles_enabled))
+            // NULL only for a row that predates the profiles_enabled column;
+            // fall back to the config-file seed rather than guessing.
+            let enabled = latest.profiles_enabled
+                .unwrap_or_else(|| state.config_manager.get_config().user.profiles_enabled_seed);
+            Ok((fields, enabled))
         }
         None => {
             let cached = state.config_manager.get_config();
