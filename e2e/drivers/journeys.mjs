@@ -76,6 +76,35 @@ function note(action, detail) {
   log.push(`${String(log.length + 1).padStart(4, ' ')}  ${action} ${detail}`)
 }
 
+// ---------------------------------------------------------------------------
+// The transcript -- Tier 11's raw material
+// ---------------------------------------------------------------------------
+// Tier 9 asks whether the world stayed consistent. Tier 11 asks a question no
+// invariant can: would any of this make sense to a person?
+//
+// So every action also records what a human would have been shown -- the status
+// and, when the server refused, the message it gave. An assertion can tell you
+// a request answered 404; only a reader can tell you that the 404 said
+// "Requested resource not found" when the user typed a tool name, or that a
+// message meant for an administrator was shown to a member who cannot act on it.
+//
+// Written as JSONL so the reader needs no parser and no dependency, and so a
+// partial file from a crashed run is still readable line by line.
+const transcript = []
+function witness(actor, action, target, res) {
+  const body = res?.json
+  transcript.push({
+    step: transcript.length + 1,
+    actor,
+    action,
+    target,
+    status: res?.status ?? null,
+    // The message a person would actually see. `error` is the envelope's field;
+    // a success carries none, which is itself worth recording.
+    message: typeof body?.error === 'string' ? body.error : null,
+  })
+}
+
 
 // ---------------------------------------------------------------------------
 // Repeated assertions are tallied, not re-recorded.
@@ -145,8 +174,10 @@ async function changeRole() {
   if (res.status < 300) {
     u.role = role
     note('changeRole', `${u.username} -> ${role}`)
+    witness('an administrator', `changed ${u.username}'s role to ${role}`, u.username, res)
   } else {
     note('changeRole', `${u.username} -> ${role} REFUSED ${res.status}`)
+    witness('an administrator', `tried to change ${u.username}'s role to ${role}`, u.username, res)
   }
 }
 
@@ -172,6 +203,7 @@ async function deleteUser() {
     note('deleteUser', u.username)
   } else {
     note('deleteUser', `${u.username} REFUSED ${res.status}`)
+    witness('an administrator', `tried to remove ${u.username}`, u.username, res)
   }
 }
 
@@ -198,6 +230,7 @@ async function addDoorRule() {
     note('addDoorRule', `${kind}=${value} on ${door} -> ${id}`)
   } else {
     note('addDoorRule', `${kind}=${value} REFUSED ${res.status}`)
+    witness('an administrator', `tried to add a ${kind} rule to a door`, door, res)
   }
 }
 
@@ -228,6 +261,7 @@ async function createInviteAndRegister() {
   const code = invite.json?.data?.device_code
   if (invite.status >= 300 || !code) {
     note('createInvite', `REFUSED ${invite.status}`)
+    witness('an administrator', 'tried to create a device invite', 'a new device', invite)
     return
   }
   note('createInvite', code)
@@ -259,6 +293,7 @@ async function nemesisWrongCredential() {
   if (!u) return
   const res = await PUT(`/api/users/${u.id}`, { body: { role: 'Admin' } })
   note('nemesis/no-token', `${u.username} ${res.status}`)
+  witness('somebody not signed in', `tried to change ${u.username}'s role`, u.username, res)
   // Asserted, because a missing credential granting a role change is the one
   // outcome here that is never acceptable.
   tallied('journeys/nemesis/unauthenticated-role-change-refused', res.status === 401,
@@ -270,6 +305,7 @@ async function nemesisDeletedUserAction() {
   if (!dead) return
   const res = await PUT(`/api/users/${dead.id}`, { token: admin.token, body: { role: 'Member' } })
   note('nemesis/deleted-user', `${dead.username} ${res.status}`)
+  witness('an administrator', `acted on ${dead.username}, who had been removed`, dead.username, res)
   tallied('journeys/nemesis/acting-on-a-deleted-user-is-not-a-5xx', res.status < 500,
     `answered ${res.status} for a user that was deleted`)
 }
@@ -278,7 +314,8 @@ async function nemesisMalformedBody() {
   const u = pick(livingUsers())
   if (!u) return
   const res = await PUT(`/api/users/${u.id}`, { token: admin.token, body: { role: 'Sovereign' } })
-  note('nemesis/bad-role', `${res.status}`)
+  note('nemesis/bad-role', 'unknown role')
+  witness('an administrator', 'set a role the system does not have', 'a member', res)
   tallied('journeys/nemesis/an-unknown-role-is-not-a-5xx', res.status < 500,
     `an unrecognised role answered ${res.status}`)
 }
@@ -520,6 +557,19 @@ main(async () => {
     'the driver is not exercising the application')
   ok('journeys/invariants-were-checked', checks > 0,
     'no invariant check ran')
+
+  // The transcript, written whatever happened -- a crashed run's partial file is
+  // still readable, which is the reason for JSONL over a single JSON document.
+  try {
+    const { writeFileSync } = await import('node:fs')
+    const dir = process.env.CSS_STACK_DIR ?? '.'
+    writeFileSync(
+      `${dir}/journey-transcript.jsonl`,
+      transcript.map((t) => JSON.stringify(t)).join('\n') + '\n'
+    )
+  } catch (e) {
+    record('journeys/transcript-written', 'fail', `could not write the transcript: ${e}`)
+  }
 
   flushTally()
 

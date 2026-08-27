@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -1067,6 +1067,71 @@ stage_audit() {
   fi
 
   emit_junit audit
+}
+
+# Tier 11: human evidence.
+#
+# The one tier with no oracle, because the question -- would any of this make
+# sense to a newcomer -- is about whether English written for a person does its
+# job, and no assertion settles that.
+#
+# So it produces evidence and makes looking cheap. The journey driver records
+# what a human would have been shown at each step; this renders it as prose and,
+# more usefully, collects every distinct message the system produced with how
+# often and to whom. A suite can prove a route answers 404. Only a reader can
+# notice the 404 said "Requested resource not found" to somebody who mistyped a
+# tool name, or that a message about a database encoding was shown to a member
+# who cannot change one.
+#
+# It asserts almost nothing on purpose. `fuzz`, `logs` and `audit` already own
+# the no-5xx assertion; a fourth would be a fourth place to exempt the same
+# known finding.
+stage_evidence() {
+  cases_begin evidence
+  stack_paths
+
+  local src="${STACK_DIR}/journey-transcript.jsonl"
+  if [[ ! -s ${src} ]]; then
+    record_case "evidence/transcript-present" fail \
+      "no journey transcript at ${src}; the journeys stage did not run or wrote nothing"
+    emit_junit evidence
+    return 1
+  fi
+  record_case "evidence/transcript-present" ok
+
+  # Rendered on the host with the bootstrapped node -- no container and no
+  # stack. The point of a zero-dependency reader is that the evidence is
+  # readable on the machine somebody is sitting at, including the FreeBSD
+  # workstation where css-server cannot even be built.
+  if run_node_host "${ROOT}/e2e/evidence/transcript.mjs" "${src}" \
+    >"${OUT}/EVIDENCE.md" 2>"${OUT}/logs/evidence.log"; then
+    record_case "evidence/rendered" ok "out/EVIDENCE.md"
+  else
+    record_case "evidence/rendered" fail "see logs/evidence.log"
+    emit_junit evidence
+    return 1
+  fi
+
+  # The count is the check. A transcript that renders but describes nothing is
+  # the failure mode here -- the tier would produce a beautifully formatted
+  # account of an empty run and report success.
+  local steps
+  steps="$(grep -cE '^\{' "${src}" || true)"
+  if [[ ${steps:-0} -ge 5 ]]; then
+    record_case "evidence/transcript-has-content" ok "${steps} step(s)"
+  else
+    record_case "evidence/transcript-has-content" fail \
+      "only ${steps:-0} step(s) recorded; there is nothing for a person to read"
+  fi
+
+  # Surfaced as a case so the distinct-message count appears in the report
+  # without anybody opening the file. Not asserted on: a run with more messages
+  # is not worse than one with fewer.
+  local msgs
+  msgs="$(grep -cE '^  [0-9]{3}  x' "${OUT}/EVIDENCE.md" || true)"
+  record_case "evidence/distinct-messages" ok "${msgs:-0} distinct message(s) shown to a person"
+
+  emit_junit evidence
 }
 
 stage_logs() {

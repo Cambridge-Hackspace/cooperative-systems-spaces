@@ -392,6 +392,36 @@ collect_stack_logs() {
 # The driver's contract, in both environments: it writes a TSV of
 # `name<TAB>status<TAB>message` to $CASES_OUT and exits non-zero if any case
 # failed. Nothing parses its stdout, so a driver is free to log.
+# Put a usable node on PATH, or die saying why.
+#
+# e2e/build.sh bootstraps a checksum-pinned Node into $REAPER_CACHE_NODE (or
+# e2e/.node), so the drivers have a toolchain even where the environment
+# supplies none -- the ubuntu-26.04 guest carries podman and no toolchains at
+# all. An already-present `node` wins, which keeps CI on the one its own setup
+# step installed.
+ensure_node() {
+  command -v node >/dev/null 2>&1 && return 0
+  local bootstrapped
+  bootstrapped="$(find "${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}" -maxdepth 3 -type f -name node -perm -u+x 2>/dev/null | head -1)"
+  [[ -n ${bootstrapped} ]] \
+    || die "no node on PATH and none bootstrapped by e2e/build.sh"
+  PATH="$(dirname "${bootstrapped}"):${PATH}"
+  export PATH
+}
+
+# Run a plain node script on the host, with no container and no driver-cases
+# protocol.
+#
+# Separate from run_node because the two exist for different things. run_node
+# drives the stack and reports through $CASES_OUT; this runs a script that needs
+# nothing but a file -- the Tier 11 reader -- and its whole point is being
+# available on a machine with no engine and no stack, which is where somebody
+# actually sits down to read evidence.
+run_node_host() {
+  ensure_node
+  node "$@"
+}
+
 run_node() {
   local script="$1"
   shift
@@ -403,14 +433,7 @@ run_node() {
     # e2e/.node), so the drivers have a toolchain even where the environment
     # supplies none. An already-present `node` wins, which keeps CI on the one
     # its own setup step installed.
-    if ! command -v node >/dev/null 2>&1; then
-      local bootstrapped
-      bootstrapped="$(find "${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}" -maxdepth 3 -type f -name node -perm -u+x 2>/dev/null | head -1)"
-      [[ -n ${bootstrapped} ]] \
-        || die "--provision=external needs node; none on PATH and none bootstrapped by e2e/build.sh"
-      PATH="$(dirname "${bootstrapped}"):${PATH}"
-      export PATH
-    fi
+    ensure_node
     CASES_OUT="${cases_out}" \
       CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       CSS_STACK_DIR="${STACK_DIR}" \

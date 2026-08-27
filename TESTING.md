@@ -61,7 +61,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Running.** A seeded driver takes 200 weighted actions through the shipping API — registrations, role changes, deactivations, deletions, door rules, profile-config writes, and three nemesis classes in the same pool — maintaining a shadow model and checking all six invariants every 20 actions. A recent run: 29 users, 24 door rules, 10 checks, no violation. Two of the six invariants cannot currently mean what they were written to mean, and say so rather than passing quietly: `deactivations-held` is vacuous because deactivated users are not listed at all, and `invites-are-single-use` can only check its count half because nothing links a device to its invite. Both are §8 findings, not test debt. |
 | 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Running.** 14 tests across desktop and phone viewports, against the real server over everything the earlier stages created. Injects nothing — that is Tier 5's job and doing it here would produce findings belonging to whichever stage noticed first. The oracle is a watchdog: every test records what the browser actually received and fails on any 5xx or uncaught page error, so a server error on a page that still looks fine is caught. The watchdog self-tests, because every other assertion in the file passes by it staying silent. |
-| 11 Human evidence | Does this make sense to a newcomer? | **Half started.** The contrast audit exists: WCAG relative luminance over all fourteen themes, with OKLCH converted for daisyUI's built-ins and the reference implementation checked against three known answers. It found **36 semantic/base pairings below AA**, pinned as a ratchet. The prose-transcript half needs Tier 9's journey driver and does not exist. |
+| 11 Human evidence | Does this make sense to a newcomer? | **Running.** Two halves. The contrast audit: WCAG relative luminance over all fourteen themes, OKLCH converted for daisyUI's built-ins, the reference implementation checked against three known answers — it found **36 semantic/base pairings below AA**, pinned as a ratchet. And the transcript: the journey driver records what a person would have been shown at each step, and a zero-dependency reader renders it as prose plus every distinct message with how often and to whom. It asserts almost nothing on purpose — the question has no oracle — but it made a real finding on its first run (§8, the generic conflict message). Runs on the workstation, where `css-server` cannot be built. |
 
 **Formatting and linting are complete and gating.** `rustfmt`, `prettier`,
 `eslint` (type-aware, flat config), `shellcheck` and `shfmt` all pass, and CI
@@ -665,6 +665,33 @@ It also makes `deactivations-held` vacuous. That invariant asks whether anything
 the driver deactivated is reported active, and a deactivated user is not
 reported at all — so one of Tier 9's six invariants judges an empty set until
 this is fixed.
+
+### "Resource already exists" does not say what already exists
+
+Found by Tier 11 on its first run, and it is the shape that tier exists for:
+every assertion in the suite is satisfied by this response, and it is still the
+wrong thing to show somebody.
+
+    23. an administrator tried to add a role rule to a door.
+        The system refused. It said: "Resource already exists"
+
+A correct 409. But the administrator is not told *which* resource, nor that the
+rule they wanted is already on the door and nothing needs doing. A reasonable
+reader concludes something must be deleted first, or that the door is in a bad
+state. Two lines earlier in the same transcript, `"User not found"` does the job
+properly — specific, and it tells you what to change.
+
+The message comes from `From<diesel::result::Error>`'s `UniqueViolation` arm,
+which by construction cannot know what the caller was trying to create. That is
+the same division of knowledge as the device-invite case above: the generic
+classifier is right as a default, and only the handler knows enough to say
+something useful. The fix is per-handler overrides at the routes where a
+conflict is likely and the object is known — door rules first, since that is
+where it was observed.
+
+Not fixed here. Tier 11's output is evidence for a person to act on, and turning
+every conflict into bespoke prose across ~40 handlers is a unit of work with a
+design decision in it, not a correction.
 
 ### Nothing links a device back to the invite that created it
 
