@@ -70,7 +70,11 @@ describe('special places', () => {
   })
 
   it('produce no group when there are none', () => {
-    expect(picker([place('r1', 'Workshop')]).find('optgroup').exists()).toBe(false)
+    expect(
+      picker([place('r1', 'Workshop')])
+        .find('optgroup')
+        .exists()
+    ).toBe(false)
   })
 })
 
@@ -163,6 +167,10 @@ describe('what the picker emits', () => {
 
   it('disables itself when there is nothing to choose', () => {
     expect(picker([]).find('select').attributes('disabled')).toBeDefined()
-    expect(picker([place('r1', 'W')]).find('select').attributes('disabled')).toBeUndefined()
+    expect(
+      picker([place('r1', 'W')])
+        .find('select')
+        .attributes('disabled')
+    ).toBeUndefined()
   })
 })

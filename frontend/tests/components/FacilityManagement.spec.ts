@@ -14,7 +14,13 @@ import { mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 
 const query = ref<Record<string, unknown>>({})
-const replace = vi.fn(() => Promise.resolve())
+// The parameter is typed rather than inferred from a no-arg implementation.
+// `vi.fn(() => ...)` infers `calls: []`, which makes `calls[0][0]` a
+// compile error under `npm run type-check` -- and, worse, makes the argument
+// the component actually passes invisible to the type checker.
+const replace = vi.fn<(to: { query: Record<string, string> }) => Promise<void>>(() =>
+  Promise.resolve()
+)
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({
@@ -52,8 +58,15 @@ function facility(initial: Record<string, unknown> = {}) {
   return mount(FacilityManagement, { global: { stubs } })
 }
 
-const tabNamed = (w: ReturnType<typeof facility>, name: string) =>
-  w.findAll('[role="tab"]').find((t) => t.text().trim() === name)!
+// Throws rather than returning undefined. Under the non-strict base tsconfig a
+// `!` here is a no-op the linter correctly rejects, and without one a missing
+// tab surfaces as "Cannot read properties of undefined" at the call site
+// instead of naming the tab it looked for.
+function tabNamed(w: ReturnType<typeof facility>, name: string) {
+  const tab = w.findAll('[role="tab"]').find((t) => t.text().trim() === name)
+  if (!tab) throw new Error(`no tab labelled ${JSON.stringify(name)}`)
+  return tab
+}
 
 describe('which tab is shown', () => {
   it('defaults to Places when the URL says nothing', () => {

@@ -23,10 +23,23 @@ import { mount } from '@vue/test-utils'
 import PlaceNode from '@/components/PlaceNode.vue'
 import type { Place, PlaceConfig } from '@/types'
 
-const CONFIG = { enabled: true, types: ['Building', 'Room', 'Spot'] } as unknown as PlaceConfig
+const CONFIG: PlaceConfig = { enabled: true, types: ['Building', 'Room', 'Spot'] }
 
+// Every field of `Place`, not a cast. `as unknown as Place` would let the type
+// drift out from under this fixture silently -- a component reading a field the
+// fixture never sets sees `undefined`, and the test still compiles.
 function place(id: string, name: string, place_type: string, is_special = false): Place {
-  return { id, name, place_type, is_special } as unknown as Place
+  return {
+    id,
+    name,
+    place_type,
+    is_special,
+    parent_id: null,
+    description: null,
+    external_id: null,
+    created_at: '2026-01-15T12:00:00Z',
+    updated_at: '2026-01-15T12:00:00Z',
+  }
 }
 
 /** `childrenMap` is keyed by parent id, which is how the component walks down. */
@@ -94,8 +107,10 @@ describe('recursion', () => {
     })
     expect(w.text()).toContain('Building A')
     expect(w.text()).toContain('Workshop')
-    expect(w.text(), 'a grandchild was not rendered, so the recursion stops at one level')
-      .toContain('Lathe corner')
+    expect(
+      w.text(),
+      'a grandchild was not rendered, so the recursion stops at one level'
+    ).toContain('Lathe corner')
   })
 
   it('forwards a grandchild’s events to the top', async () => {

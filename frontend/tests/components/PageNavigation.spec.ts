@@ -71,7 +71,10 @@ describe('which navigation is shown', () => {
 })
 
 describe('the three states stay distinct', () => {
-  it('shows a spinner while the request is in flight', async () => {
+  // Not `async`: mount is synchronous and the fetch never settles, so there is
+  // nothing to await. An idle `async` here is what `require-await` exists to
+  // catch -- it reads like the assertions wait for something, and they do not.
+  it('shows a spinner while the request is in flight', () => {
     fetchMock.mockReturnValue(new Promise(() => {}))
     const w = mount(PageNavigation, { props: { type: 'wiki' } })
     expect(w.find('.loading-state').exists()).toBe(true)
