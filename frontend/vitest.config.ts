@@ -28,6 +28,15 @@ export default mergeConfig(
       // ambient magic to run.
       globals: false,
 
+      // A fixed, non-UTC timezone. `tests/setup.ts` freezes the clock for the
+      // same reason this pins the zone: under UTC, code that reads
+      // `toISOString()` where it meant the user's local date behaves
+      // identically to code that gets it right, and the tests that would
+      // distinguish them pass either way. A GitHub runner is UTC by default,
+      // so without this the suite is at its least discriminating exactly where
+      // it runs most often. America/Chicago matches what the e2e stack uses.
+      env: { TZ: 'America/Chicago' },
+
       setupFiles: ['./tests/setup.ts'],
       // tests/components is tier 2 -- component conformance against jsdom.
       // tests/unit is tier 1, plain functions. tests/structure is tier 3, files
