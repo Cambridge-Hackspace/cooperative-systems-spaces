@@ -1,5 +1,12 @@
 // Tier 2: AssignTrainerModal.
 //
+// NOTHING IMPORTS THIS COMPONENT. `tests/structure/components-are-reachable.spec.ts`
+// records it as unreferenced: the assign form that operators actually use is
+// inlined in `TrainerManagement.vue`, and that one emits and reloads properly.
+// So the defect below is real and nobody is hitting it -- which is also the
+// reason it survived: a success path that does nothing is invisible when no
+// parent is listening.
+//
 // `submitForm` is `loadUsers` with the request swapped out and nothing else
 // changed. Every branch still talks about loading users:
 //

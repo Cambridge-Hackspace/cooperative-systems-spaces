@@ -1,5 +1,12 @@
 // Tier 2: ToolTrainingCard.
 //
+// NOTHING IMPORTS THIS COMPONENT. `tests/structure/components-are-reachable.spec.ts`
+// records it as unreferenced: `ToolTrainingModal` renders the same training
+// flow, and this copy is superseded. So every defect pinned below is real and
+// none of it is reaching users today -- including the red debug banner, which
+// nobody has seen. They arrive the day it is wired up, which is why they are
+// pinned rather than left for that day to discover.
+//
 // A member's view of their training on one tool, and the button that would let
 // them begin is behind a staff check:
 //
@@ -306,9 +313,10 @@ describe('debug output', () => {
   //     <div style="background: red; color: white; padding: 5px; margin: 5px">
   //       ToolTrainingCard is rendering! Tool: {{ tool.name }}
   //
-  // It is outside `.training-card`, so it renders above every tool's training
-  // section, for every user, in production.
-  it('renders a red debug banner above the card, in production', async () => {
+  // It is outside `.training-card`, so it would render above every tool's
+  // training section for every user -- if anything mounted this component. See
+  // the note at the top of this file: nothing does.
+  it('renders a red debug banner above the card', async () => {
     const w = await card()
     expect(
       w.text(),
