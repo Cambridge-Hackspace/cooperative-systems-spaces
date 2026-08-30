@@ -28,3 +28,6 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 walkdir = "2.5"
+# For reading tracked config files as data. Deliberately not `css-server`:
+# this crate stays compilable on a workstation where the server is not.
+toml = { workspace = true }

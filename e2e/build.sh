@@ -21,6 +21,62 @@ cd "${ROOT}"
 log() { printf '\n=== %s ===\n' "$*"; }
 
 # ---------------------------------------------------------------------------
+# Failure collection
+# ---------------------------------------------------------------------------
+# `set -e` makes this script stop at the first failing command, which is right
+# for a build and wrong for a gate. On a merge of any size the difference is
+# whole round trips: five consecutive sessions were spent here, each one
+# surfacing exactly one more problem -- a missing module, then a type error,
+# then a config test, then a route census, then a stale field name -- because
+# every run aborted at the first and threw away whatever the remaining steps
+# would have said.
+#
+# So independent steps run under `soft`, which records a failure and carries
+# on. Steps that others genuinely depend on stay hard: there is nothing to
+# learn from running `cargo test` after `cargo build` failed.
+#
+# The script still exits non-zero if anything failed. This changes how much a
+# run reports, not what it accepts.
+FAILED=()
+
+soft() { # soft <label> <command...>
+  local label="$1"
+  shift
+  log "${label}"
+  if "$@"; then
+    return 0
+  fi
+  echo "  FAILED: ${label}" >&2
+  FAILED+=("${label}")
+  return 1
+}
+
+# Same, but for a step whose failure makes everything after it meaningless.
+hard() { # hard <label> <command...>
+  local label="$1"
+  shift
+  log "${label}"
+  if "$@"; then
+    return 0
+  fi
+  echo "  FAILED: ${label} -- this one is load-bearing, stopping here" >&2
+  FAILED+=("${label}")
+  report_and_exit
+}
+
+report_and_exit() {
+  if [ ${#FAILED[@]} -eq 0 ]; then
+    return 0
+  fi
+  printf '\n=== %d step(s) failed ===\n' "${#FAILED[@]}" >&2
+  local step
+  for step in "${FAILED[@]}"; do
+    echo "  - ${step}" >&2
+  done
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
 # System dependencies
 # ---------------------------------------------------------------------------
 # The honest cost of using a stock Rust image rather than inventing a builder
@@ -169,7 +225,6 @@ npm --version
 # instruments differently and has failed on its own before.
 frontend_gate() { # frontend_gate <dir>
   local dir="$1"
-  log "gating ${dir}"
   (
     cd "${dir}"
     npm run format:check
@@ -186,9 +241,11 @@ frontend_gate() { # frontend_gate <dir>
   )
 }
 
+# The bundle only. Split from the gate so the two can be ordered
+# independently: `frontend_edge/dist` is a hard input to `cargo build`, while
+# both gates are things the workstation already ran.
 build_frontend() { # build_frontend <dir>
   local dir="$1"
-  log "building ${dir}"
   (
     cd "${dir}"
     if [ -f package-lock.json ]; then
@@ -196,24 +253,20 @@ build_frontend() { # build_frontend <dir>
     else
       npm install --no-audit --no-fund
     fi
-  )
-  # Gate before build, so a lint failure costs seconds rather than a bundle.
-  frontend_gate "${dir}"
-  (
-    cd "${dir}"
     npm run build
   )
   # An empty bundle compiles and serves 404 for the whole UI, so "the command
   # exited zero" is not the assertion worth making here.
   if [ ! -s "${dir}/dist/index.html" ]; then
     echo "${dir}/dist/index.html is missing or empty after a successful build" >&2
-    exit 1
+    return 1
   fi
   echo "  ${dir}/dist/index.html: $(wc -c <"${dir}/dist/index.html") bytes"
 }
 
-build_frontend frontend_edge
-build_frontend frontend
+# frontend_edge's bundle is a hard input to the Rust build and nothing else
+# here is, so it is the only Node work that happens before cargo.
+hard "building frontend_edge" build_frontend frontend_edge
 
 # ---------------------------------------------------------------------------
 # Cargo
@@ -238,8 +291,7 @@ cargo --version
 # CI runs this as its own job. It costs under a second and it is the only thing
 # checking the scripts this file and run.sh are made of, so running it here as
 # well means a shellcheck failure is caught before a session is spent.
-log "e2e/lint.sh"
-./e2e/lint.sh
+soft "e2e/lint.sh" ./e2e/lint.sh || true
 
 # `cargo fmt --check` is a CI job on its own, and it is the cheapest thing in
 # this file. Running it before the build means a formatting failure costs a
@@ -256,24 +308,54 @@ if ! cargo fmt --version >/dev/null 2>&1; then
   rustup component add rustfmt
 fi
 
-log "cargo fmt --check"
-cargo fmt --all -- --check
+soft "cargo fmt --check" cargo fmt --all -- --check || true
 
-log "cargo build"
-cargo build --locked --all-targets
+# Hard: everything below reads the same target directory, and a compile error
+# makes each of them report the same error again in a longer form.
+hard "cargo build" cargo build --locked --all-targets
 
-log "cargo test"
-cargo test --locked --all-targets
+# `--no-fail-fast`, deliberately. Without it cargo stops at the first test
+# *binary* that fails, so a run reports one file's failures and hides every
+# other target's. Three consecutive sessions on this branch each ended on a
+# different single test binary -- config, then contract_matrix, then
+# stack_config_parses -- and all three were present from the first of them.
+soft "cargo test" cargo test --locked --all-targets --no-fail-fast || true
 
 # Doc tests are a separate target and --all-targets does not include them.
-log "cargo test --doc"
-cargo test --locked --doc
+soft "cargo test --doc" cargo test --locked --doc --no-fail-fast || true
 
 # kiosk and the two toolguard UIs are outside default-members on purpose
 # (d78227d) because bevy and egui are heavy. Compile-checking them stops them
 # rotting without paying to link them.
-log "cargo check (full workspace, incl. the GUI crates)"
-cargo check --locked --workspace --all-targets
+soft "cargo check (full workspace, incl. the GUI crates)" \
+  cargo check --locked --workspace --all-targets || true
+
+# ---------------------------------------------------------------------------
+# The Node gates
+# ---------------------------------------------------------------------------
+# Last, and that is the whole point of the ordering in this file.
+#
+# Everything here also runs on the workstation: `npm run format:check`, `lint`,
+# `type-check`, `type-check:strict` and the vitest suite all work on FreeBSD,
+# and are run there before anything is pushed. What does *not* work there is
+# `css-server`, because `dr-metrix-axum` calls
+# `prometheus::process_collector`, which prometheus gates behind
+# `target_os = "linux"`. So the Rust battery is the only part of this file that
+# a session is the first place to learn anything from.
+#
+# Running these first meant every iteration paid several minutes to re-run a
+# ~950-test suite that had already passed locally and had not changed, before
+# reaching the part that could actually fail. They still run -- reaper is the
+# pre-push loop, and anything CI can reject has to be rejectable here -- they
+# just run where their cost is paid once rather than on every iteration.
+soft "gating frontend_edge" frontend_gate frontend_edge || true
+soft "building frontend" build_frontend frontend || true
+soft "gating frontend" frontend_gate frontend || true
+
+# Nothing below is worth producing if anything above failed: the artifacts are
+# what run.sh executes, and shipping binaries out of a red build is how a stack
+# run ends up testing something no gate accepted.
+report_and_exit
 
 # ---------------------------------------------------------------------------
 # Artifacts for the run verb

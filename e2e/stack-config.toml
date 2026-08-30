@@ -140,23 +140,29 @@ setup_enabled = true
 setup_admin_email = "admin@e2e.invalid"
 
 [user]
-profiles_enabled = true
+# `*_seed`, not the old names. These now seed the `profile_config_versions`
+# table on first boot and are ignored afterwards -- the database is the source
+# of truth for the field schema. The rename is why this file stopped parsing:
+# neither field has a serde default, so the old names are a missing-field
+# error, which `AppConfig::from_file` answers by rewriting the file and
+# refusing to boot.
+profiles_enabled_seed = true
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "card_id"
 label = "Access Card"
 field_type = "Text"
 required = false
 help_text = "RFID card identifier"
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "bio"
 label = "Bio"
 field_type = "Text"
 required = false
 help_text = "Tell us about yourself"
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "phone"
 label = "Phone Number"
 field_type = "Phone"
