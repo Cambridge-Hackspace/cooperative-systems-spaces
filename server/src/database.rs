@@ -484,10 +484,17 @@ impl DatabaseManager {
     pub fn delete_user(&self, user_id: uuid::Uuid) -> Result<(), DatabaseError> {
         let mut conn = self.get_connection()?;
 
-        diesel::delete(users::table.filter(users::id.eq(user_id)))
+        // The row count is the answer, not a detail to discard.
+        // Deleting nothing reported success.
+        let affected = diesel::delete(users::table.filter(users::id.eq(user_id)))
             .execute(&mut conn)
-            .map(|_| ())
-            .map_err(DatabaseError::Diesel)
+            .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+
+        Ok(())
     }
 
     /// List users with pagination
@@ -750,10 +757,17 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::delete(tools.find(tool_id))
+        // The row count is the answer, not a detail to discard.
+        // Deleting nothing reported success.
+        let affected = diesel::delete(tools.find(tool_id))
             .execute(&mut conn)
-            .map(|_| ())
-            .map_err(DatabaseError::Diesel)
+            .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+
+        Ok(())
     }
 
     /// Create a tool event
@@ -994,13 +1008,19 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::update(training_steps.filter(id.eq(step_id)))
+        // The row count is the answer, not a detail to discard.
+        // Renumbering a step that does not exist reported success.
+        let affected = diesel::update(training_steps.filter(id.eq(step_id)))
             .set((
                 step_number.eq(new_step_number),
                 updated_at.eq(chrono::Utc::now()),
             ))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
 
         Ok(())
     }
@@ -1024,9 +1044,15 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::delete(training_steps.filter(id.eq(step_id)))
+        // The row count is the answer, not a detail to discard.
+        // Deleting nothing reported success.
+        let affected = diesel::delete(training_steps.filter(id.eq(step_id)))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
 
         Ok(())
     }
@@ -1075,9 +1101,17 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::delete(training_prerequisites.filter(id.eq(prereq_id)))
+        // The row count is the answer, not a detail to discard.
+        // Reached with a `training_steps` id where this deletes from
+        // `training_prerequisites`, so it matched nothing on every call and
+        // answered 200 -- the prerequisite stayed on screen.
+        let affected = diesel::delete(training_prerequisites.filter(id.eq(prereq_id)))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
 
         Ok(())
     }
@@ -1226,9 +1260,15 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
-        diesel::delete(training_instructors.filter(id.eq(instructor_id)))
+        // The row count is the answer, not a detail to discard.
+        // Revoking a certification nobody held reported success.
+        let affected = diesel::delete(training_instructors.filter(id.eq(instructor_id)))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
 
         Ok(())
     }
@@ -2670,13 +2710,19 @@ impl DatabaseManager {
     pub fn confirm_user_totp(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+        // The row count is the answer, not a detail to discard.
+        // Enrolment was reported confirmed whether or not a row moved.
+        let affected = diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
             .set((
                 confirmed_at.eq(Some(chrono::Utc::now())),
                 updated_at.eq(chrono::Utc::now()),
             ))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+
         Ok(())
     }
 
@@ -2798,10 +2844,18 @@ impl DatabaseManager {
     pub fn mark_recovery_code_used(&self, code_id: uuid::Uuid) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_recovery_codes::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::update(user_mfa_recovery_codes.filter(id.eq(code_id)))
+        // The row count is the answer, not a detail to discard.
+        // A recovery code is single-use. Matching zero rows means it was NOT consumed
+        // while the caller went on to treat the login as authenticated, so the
+        // code stays usable.
+        let affected = diesel::update(user_mfa_recovery_codes.filter(id.eq(code_id)))
             .set(used_at.eq(Some(chrono::Utc::now())))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+
         Ok(())
     }
 
@@ -2825,10 +2879,16 @@ impl DatabaseManager {
     ) -> Result<(), DatabaseError> {
         use crate::schema::users::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::update(users.filter(id.eq(uid)))
+        // The row count is the answer, not a detail to discard.
+        // The flag that says an account has a second factor.
+        let affected = diesel::update(users.filter(id.eq(uid)))
             .set(mfa_enrolled_at.eq(when))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+
         Ok(())
     }
 

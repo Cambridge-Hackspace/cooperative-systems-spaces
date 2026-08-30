@@ -63,53 +63,18 @@ const WRITERS: &[Writer] = &[
                       costs a stale `last_used_at`, not a wrong decision.",
         ),
     },
-    // ---- The rest are recorded defects, worst first. ----
-    Writer {
-        name: "mark_recovery_code_used",
-        exempt: None, // A single-use credential. Matching zero rows means the
-                      // code was NOT consumed, and the caller proceeds as
-                      // though it was.
-    },
-    Writer {
-        name: "confirm_user_totp",
-        exempt: None, // Same shape: enrolment is reported confirmed whether or
-                      // not a row moved.
-    },
-    Writer {
-        name: "set_user_mfa_enrolled",
-        exempt: None,
-    },
-    Writer {
-        name: "remove_training_prerequisite",
-        exempt: None, // Called with the wrong id on every invocation today.
-    },
-    Writer {
-        name: "revoke_instructor_certification",
-        exempt: None,
-    },
-    Writer {
-        name: "update_training_step_position",
-        exempt: None,
-    },
-    Writer {
-        name: "delete_training_step",
-        exempt: None,
-    },
-    Writer {
-        name: "delete_tool",
-        exempt: None,
-    },
-    Writer {
-        name: "delete_user",
-        exempt: None,
-    },
+    // Every writer that used to be here has been fixed: each reads the row
+    // count and returns `NotFound` when it is zero. The list is empty on
+    // purpose rather than deleted, because the check below it -- "no writer
+    // matching this pattern is unlisted" -- is what stops a tenth appearing.
 ];
 
 /// The number of writers that ignore a row count they should be reading.
 ///
-/// May only go down. If it goes up, a new writer was added in the shape that
-/// has already produced two production defects.
-const RECORDED_DEFECTS: usize = 9;
+/// Zero. It was nine; each one now reads the count and returns `NotFound` when
+/// it is zero. It may not go up: a new writer in that shape is the shape that
+/// produced two production defects before anyone went looking for the rest.
+const RECORDED_DEFECTS: usize = 0;
 
 /// Extract `pub fn <name>` bodies from `database.rs`, brace-matched.
 fn functions(source: &str) -> Vec<(String, String)> {
@@ -173,23 +138,34 @@ fn returns_unit(body: &str) -> bool {
 }
 
 #[test]
-fn the_scan_finds_the_writers_this_check_is_about() {
+fn the_scan_can_still_read_this_file() {
     let source = read("server/src/database.rs");
-    let found: Vec<String> = functions(&source)
-        .into_iter()
-        .filter(|(_, body)| returns_unit(body) && discards_row_count(body))
-        .map(|(name, _)| name)
-        .collect();
+    let all = functions(&source);
 
-    // Anti-vacuity. A parser that stopped matching would make every assertion
-    // below trivially true, so the scan is asserted to have found something of
-    // roughly the expected size before it is compared to anything.
+    // Anti-vacuity, and it is deliberately not counting *defects*. It used to
+    // assert "at least eight writers discard their row count", which was true
+    // while nine did -- and would have started failing as a *success*, the
+    // moment they were fixed. A check calibrated to the broken state cannot
+    // survive the fix.
+    //
+    // So this asserts the parser still works: that it finds a plausible number
+    // of functions at all, and that it still sees writers running statements.
     assert!(
-        found.len() >= 8,
-        "the scan found only {} writers, which means the parser stopped working \
-         rather than the code getting better. Fix the parser before trusting \
-         this file. Found: {found:?}",
-        found.len()
+        all.len() > 80,
+        "only {} functions parsed out of database.rs -- the parser stopped \
+         working rather than the file getting smaller",
+        all.len()
+    );
+
+    let writers = all
+        .iter()
+        .filter(|(_, body)| body.contains(".execute(&mut conn)"))
+        .count();
+    assert!(
+        writers > 20,
+        "only {writers} functions run a statement, which means the parser is no \
+         longer finding them. Everything below compares against this scan, so \
+         fix the parser before trusting it."
     );
 }
 
@@ -269,7 +245,18 @@ fn the_two_writers_already_fixed_stay_fixed() {
     /// Writers that were in the offending shape and have been fixed. A regression
     /// here is the same defect coming back, so it is a gate rather than part of
     /// the ratchet above.
-    const ALREADY_FIXED: &[&str] = &["remove_tool_trainer"];
+    const ALREADY_FIXED: &[&str] = &[
+        "remove_tool_trainer",
+        "mark_recovery_code_used",
+        "confirm_user_totp",
+        "set_user_mfa_enrolled",
+        "remove_training_prerequisite",
+        "revoke_instructor_certification",
+        "update_training_step_position",
+        "delete_training_step",
+        "delete_tool",
+        "delete_user",
+    ];
 
     for name in ALREADY_FIXED {
         let (_, body) = by_name
@@ -278,10 +265,20 @@ fn the_two_writers_already_fixed_stay_fixed() {
             .unwrap_or_else(|| panic!("`{name}` is gone from database.rs"));
         assert!(
             body.contains("let affected"),
-            "`{name}` stopped reading its row count. It was fixed on this branch \
-             precisely because returning 200 for removing nothing, and then \
-             writing an audit entry saying otherwise, is how an access-control \
-             system loses track of who may open a door."
+            "`{name}` stopped reading its row count. It was fixed precisely \
+             because returning 200 for removing nothing, and then writing an \
+             audit entry saying otherwise, is how an access-control system \
+             loses track of who may open a door."
+        );
+        // Binding the count is not the same as acting on it. Deleting the guard
+        // and keeping `let affected` leaves the function behaving exactly as it
+        // did before the fix, while every scan in this file still reads it as
+        // fixed -- which a mutation check found by surviving.
+        assert!(
+            body.contains("if affected == 0"),
+            "`{name}` reads its row count and does nothing with it. The count \
+             matters because zero means the row was not there; without the \
+             guard the caller is told the write succeeded."
         );
     }
 }
