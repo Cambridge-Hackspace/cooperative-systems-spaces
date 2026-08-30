@@ -27,11 +27,16 @@ log() { printf '\n=== %s ===\n' "$*"; }
 # image nobody has built. diesel links libpq; paho-mqtt-sys compiles the bundled
 # Paho C library with cmake; the edge crate's transitive GUI dependencies want
 # alsa and udev headers. Guarded, so after the first run this is one lookup.
-if ! command -v cmake >/dev/null 2>&1 || [ ! -e /usr/include/postgresql/libpq-fe.h ]; then
+#
+# Two of these are for e2e/lint.sh rather than for the build: the shell linter
+# and its formatter. They are installed here because a gate that only exists in
+# CI is a gate you discover by pushing, then fixing, then pushing again.
+if ! command -v cmake >/dev/null 2>&1 || [ ! -e /usr/include/postgresql/libpq-fe.h ] \
+  || ! command -v shellcheck >/dev/null 2>&1; then
   log "installing system dependencies"
   apt-get -qq update
   apt-get -qq install -y --no-install-recommends \
-    libpq-dev cmake build-essential libasound2-dev libudev-dev
+    libpq-dev cmake build-essential libasound2-dev libudev-dev shellcheck shfmt
 fi
 
 # curl and xz are used by the Node bootstrap below. Both are in the Rust image;
@@ -95,6 +100,35 @@ npm --version
 # build.rs's placeholder -- a binary that compiles cleanly and serves a "UI not
 # built" page as its own interface, which is exactly the failure the CI
 # `mkdir -p /builds/...` line was papering over.
+# The same gate CI runs on this directory, in the same order, before the build.
+#
+# It is here and not only in CI because the alternative is the loop this whole
+# tool exists to avoid: push, watch a lint job fail twenty minutes later, commit
+# a fix, push again. That happened twice while the tier-2 specs were being
+# written, and both fixups are in the history. reaper is the pre-push loop, so
+# anything CI can reject has to be rejectable here first.
+#
+# `test:coverage` rather than `test`, matching CI: the coverage provider
+# instruments differently and has failed on its own before.
+frontend_gate() { # frontend_gate <dir>
+  local dir="$1"
+  log "gating ${dir}"
+  (
+    cd "${dir}"
+    npm run format:check
+    npm run lint
+    npm run type-check
+    npm run type-check:strict
+    # frontend_edge has no test suite yet. Asserted rather than assumed, so the
+    # day it gets one this stops silently skipping it.
+    if node -e 'process.exit(require("./package.json").scripts["test:coverage"] ? 0 : 1)'; then
+      npm run test:coverage
+    else
+      echo "  ${dir}: no test:coverage script -- nothing to run"
+    fi
+  )
+}
+
 build_frontend() { # build_frontend <dir>
   local dir="$1"
   log "building ${dir}"
@@ -105,6 +139,11 @@ build_frontend() { # build_frontend <dir>
     else
       npm install --no-audit --no-fund
     fi
+  )
+  # Gate before build, so a lint failure costs seconds rather than a bundle.
+  frontend_gate "${dir}"
+  (
+    cd "${dir}"
     npm run build
   )
   # An empty bundle compiles and serves 404 for the whole UI, so "the command
@@ -136,6 +175,21 @@ cargo --version
 # default-members is server, cli, edge, css_lib. --all-targets picks up the
 # tests/ and benches/ directories that `cargo test --bin <name>` silently
 # ignored, which is the reason CI never ran an integration test.
+# ---------------------------------------------------------------------------
+# The shell gate
+# ---------------------------------------------------------------------------
+# CI runs this as its own job. It costs under a second and it is the only thing
+# checking the scripts this file and run.sh are made of, so running it here as
+# well means a shellcheck failure is caught before a session is spent.
+log "e2e/lint.sh"
+./e2e/lint.sh
+
+# `cargo fmt --check` is a CI job on its own, and it is the cheapest thing in
+# this file. Running it before the build means a formatting failure costs a
+# second rather than a full compile.
+log "cargo fmt --check"
+cargo fmt --all -- --check
+
 log "cargo build"
 cargo build --locked --all-targets
 
