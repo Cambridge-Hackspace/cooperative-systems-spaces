@@ -40,6 +40,7 @@ pub mod models;
 pub mod mqtt;
 pub mod pages;
 pub mod profile;
+pub mod profile_fields;
 pub mod recaptcha;
 pub mod schedules;
 pub mod schema;
@@ -58,7 +59,7 @@ use crate::doors::DoorService;
 use crate::mfa::MfaService;
 use crate::mqtt::MqttService;
 use crate::pages::PagesService;
-use crate::profile::{AuditLogger, ProfileValidator};
+use crate::profile::AuditLogger;
 use crate::recaptcha::RecaptchaService;
 use crate::throttle::RegistrationThrottleService;
 use crate::webhooks::WebhookDispatcher;
@@ -67,7 +68,6 @@ use crate::webhooks::WebhookDispatcher;
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub db: Arc<DatabaseManager>,
-    pub profile_validator: ProfileValidator,
     pub audit_logger: AuditLogger,
     pub throttle_service: Arc<RegistrationThrottleService>,
     pub recaptcha_service: Arc<RecaptchaService>,

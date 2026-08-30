@@ -150,11 +150,19 @@ impl From<AuthError> for ApiError {
             AuthError::InvalidToken => {
                 ApiError::Unauthorized("Invalid authentication token".to_string())
             }
-            // The second conversion path for the same error, and it has to
-            // agree with AuthError's own IntoResponse or a role rejection means
-            // one thing when the extractor rejects and another when a handler
-            // converts. That is precisely the divergence this file was changed
-            // for once already.
+            // Both branches invented this variant independently, for the same
+            // reason: an insufficient role used to answer 401 Invalid token,
+            // which the frontend interceptor reads as an expired session and
+            // logs the user out -- so a member who touched an admin route was
+            // silently signed out, and signing back in changed nothing. 403
+            // says what actually happened.
+            //
+            // It is also the second conversion path for the same error, and it
+            // has to agree with AuthError's own IntoResponse or a role
+            // rejection means one thing when the extractor rejects and another
+            // when a handler converts. That is precisely the divergence this
+            // file was changed for once already; IntoResponse now delegates
+            // here, so this arm is the only answer.
             AuthError::Forbidden(what) => {
                 ApiError::Forbidden(format!("Insufficient permissions: {what} required"))
             }
@@ -166,11 +174,6 @@ impl From<AuthError> for ApiError {
             AuthError::InternalError => {
                 ApiError::InternalServerError("Authentication service error".to_string())
             }
-            // dev's, and it is the fix for a real defect: an insufficient role
-            // answered 401 Invalid token, which the frontend interceptor treats
-            // as an expired session and logs the user out. 403 says what
-            // happened.
-            AuthError::Forbidden(what) => ApiError::Forbidden(what.to_string()),
         }
     }
 }

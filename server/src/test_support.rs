@@ -24,7 +24,7 @@ use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 use crate::doors::DoorService;
 use crate::mfa::MfaService;
 use crate::pages::PagesService;
-use crate::profile::{AuditLogger, ProfileValidator};
+use crate::profile::AuditLogger;
 use crate::recaptcha::RecaptchaService;
 use crate::throttle::RegistrationThrottleService;
 use crate::webhooks::WebhookDispatcher;
@@ -78,7 +78,6 @@ pub async fn app_state() -> AppState {
         .expect("PagesService::new with both repos None does no I/O");
 
     AppState {
-        profile_validator: ProfileValidator::new(&config.user),
         audit_logger: AuditLogger::new(db.clone()),
         throttle_service: Arc::new(RegistrationThrottleService::new()),
         recaptcha_service: Arc::new(RecaptchaService::new(String::new())),
