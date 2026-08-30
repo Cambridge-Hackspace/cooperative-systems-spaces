@@ -1,0 +1,22 @@
+{
+  // The production build, and only what ships in it.
+  //
+  // `build` was `vue-tsc && vite build`, which uses tsconfig.json -- and that
+  // includes `tests/**/*.ts`. So the bundle could not be produced unless the
+  // whole test suite type-checked, which coupled a shipping artifact to files
+  // that are never in it.
+  //
+  // That surfaced as a container build failure and nowhere else:
+  // tests/components/CalendarEvents.spec.ts imports
+  // ../../../e2e/corpus/hostile.json -- the one hostile-input corpus shared by
+  // the frontend specs, the fuzz driver and the journey driver, deliberately a
+  // single file read by both languages. The Dockerfile copies `frontend/` and
+  // nothing else, so the import cannot resolve there. In CI's frontend job the
+  // whole repository is checked out and it resolves fine.
+  //
+  // The tests are still type-checked, by `type-check` and `type-check:strict`,
+  // both of which CI runs. This narrows what the *build* checks, not what the
+  // project checks.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "src/**/*.vue", "src/**/*.js"]
+}
