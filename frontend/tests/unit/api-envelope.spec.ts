@@ -179,30 +179,45 @@ describe('doorsApi never rejects, however the transport failed', () => {
     })
   })
 
-  it('reports the fallback when there is no response at all', async () => {
+  it('leaves the message to the caller when there is no response at all', async () => {
     // **The branch 92afb4c added.** A network failure, a DNS failure, a
-    // cancelled request: `e.response` is undefined, so without a fallback the
-    // alert renders empty -- a red box with no text, in a corridor, on
-    // somebody's phone.
+    // cancelled request: `e.response` is undefined, so there is nothing from
+    // the server to show.
     //
     // Only a transport-level rejection reaches it. Injecting a 500 does not:
     // axios attaches a response to those, so a suite that only injects HTTP
     // errors reports this line as covered while never running it.
+    //
+    // The guard deliberately supplies no message. It wraps every method on the
+    // object, so anything it could say would be generic -- and a generic
+    // message here shadows the specific one every call site already has
+    // (`r.error || 'Failed to load door'`), which is what the browser tier
+    // caught. `error` absent is what lets that `||` fire.
     const { doorsApi } = await import('@/utils/api')
     transport.get.mockRejectedValue(new Error('Network Error'))
     const r = await doorsApi.info('d1')
     expect(r.success).toBe(false)
-    expect(r.error?.length ?? 0).toBeGreaterThan(0)
+    expect(r.error).toBeUndefined()
   })
 
   it('guards the action, not only the load', async () => {
     // Silence after pressing the button is indistinguishable from success to
-    // somebody standing at a door that did not open.
+    // somebody standing at a door that did not open. The guard's contribution
+    // is `success: false` rather than a rejection; the words are the caller's.
     const { doorsApi } = await import('@/utils/api')
     transport.post.mockRejectedValue(new Error('Network Error'))
     const r = await doorsApi.checkin('d1')
     expect(r.success).toBe(false)
-    expect(r.error?.length ?? 0).toBeGreaterThan(0)
+    expect(r.error).toBeUndefined()
+  })
+
+  it('still passes the server through when there is one', async () => {
+    // The other half: dropping the generic fallback must not drop the
+    // server's own words, which are the whole reason the extraction exists.
+    const { doorsApi } = await import('@/utils/api')
+    transport.get.mockRejectedValue(axiosish(403, { error: 'Door is not published' }))
+    const r = await doorsApi.info('d1')
+    expect(r.error).toBe('Door is not published')
   })
 
   it('guards every method the object exposes, not a remembered few', async () => {
