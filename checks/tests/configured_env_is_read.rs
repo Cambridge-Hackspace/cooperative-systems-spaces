@@ -11,7 +11,7 @@
 //! was found and fixed in the CI workflow, because a workflow that runs is read
 //! and a profile that is invoked occasionally is not.
 //!
-//! The cost was concrete. The fuzz tier is a seeded search over 164 routes, and
+//! The cost was concrete. The fuzz tier is a seeded search over 165 routes, and
 //! at 400 iterations a run samples a small part of that space. Two consecutive
 //! CI runs each found a different route answering 500 where a 4xx was owed --
 //! the class TESTING.md section 9 tracks as 109 remaining sites. A nightly at

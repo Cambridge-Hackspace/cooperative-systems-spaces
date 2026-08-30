@@ -1,6 +1,6 @@
 //! Tier 4: every route × every credential state that carries no valid user.
 //!
-//! 164 routes × 7 credential states. Runs in-process over the real router with
+//! 165 routes x 7 credential states. Runs in-process over the real router with
 //! a non-connecting database, so it needs no PostgreSQL and no containers.
 //!
 //! The expectation is deliberately **one line**, not a thousand hand-written
@@ -260,7 +260,7 @@ async fn the_table_is_not_empty_and_covers_every_guard_kind() {
     // above pass vacuously.
     assert!(
         ROUTES.len() > 150,
-        "only {} routes in the table; the API has ~164",
+        "only {} routes in the table; the API has ~165",
         ROUTES.len()
     );
     for guard in [
@@ -309,7 +309,7 @@ async fn the_database_is_never_reached_by_a_rejected_request() {
 async fn guarded_routes_are_not_asserted_for_role_gating() {
     // Not a test of the server — a test of this file's own honesty.
     //
-    // It would be easy to read "164 routes × 7 credentials, all green" as "the
+    // It would be easy to read "165 routes x 7 credentials, all green" as "the
     // authorization matrix is covered". It is not: every case here carries *no*
     // valid user, so the difference between Admin, Staff, Member and Auth is
     // never exercised. A route whose guard was downgraded from AdminUser to
@@ -358,9 +358,14 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
-    assert_eq!(jwt_routes, 139, "JWT-authenticated routes");
+    // 140, up from 139: `PUT /api/users/me/password` is new (self-service
+    // password change). The two training-session routes moved from
+    // `/sessions/{start,complete}` to `/progress/{user_id}/{start,complete}`,
+    // which is net zero. The device surface did not move, which is the number
+    // this test actually exists to hold still.
+    assert_eq!(jwt_routes, 140, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 139 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 140 * 7 + 6 * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device token can only be rejected on its

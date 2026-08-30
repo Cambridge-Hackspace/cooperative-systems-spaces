@@ -5,7 +5,7 @@
 //! returns the API surface *without* its prefix and something has to add it.
 //! `main.rs` builds the real one. Nothing made those two agree, and the failure
 //! mode is the quietest kind there is: the contract tier would keep asserting
-//! 991 route/credential pairs against a router nobody serves, reporting
+//! 998 route/credential pairs against a router nobody serves, reporting
 //! complete coverage of a surface that had moved.
 //!
 //! Three things are checked, all as source data, all reporting drift rather
@@ -96,7 +96,7 @@ fn main_nests_the_api_router_at_exactly_slash_api() {
         src.contains(".nest(\"/api\", api::api_routes()"),
         "server/src/main.rs no longer nests api::api_routes() at \"/api\".\n\n\
          The contract tier builds its router as \
-         `Router::new().nest(\"/api\", api::api_routes())` and asserts 991 \
+         `Router::new().nest(\"/api\", api::api_routes())` and asserts 998 \
          route/credential pairs against it. If production mounts the same \
          routes somewhere else, every one of those assertions is still true and \
          none of them is about the running server any more."
@@ -126,7 +126,7 @@ fn main_composes_nothing_but_the_listed_routes() {
          Routes in main.rs are invisible to the contract tier, which builds its \
          router from api::api_routes() alone. Either move these into \
          api::api_routes() — where the route table, the parity check and the \
-         991-pair matrix all see them — or add them to MAIN_ONLY in this file \
+         998-pair matrix all see them — or add them to MAIN_ONLY in this file \
          with the reason they cannot live there and the tier that does cover \
          them."
     );

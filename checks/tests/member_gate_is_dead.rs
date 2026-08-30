@@ -83,7 +83,7 @@ fn no_route_is_member_gated_yet() {
          Good -- but three things have to move together, and this check exists \
          so they do:\n\
          1. add the route's row to server/tests/common/mod.rs with Guard::Member;\n\
-         2. the 991-pair matrix will then assert it refuses every invalid \
+         2. the 998-pair matrix will then assert it refuses every invalid \
             credential;\n\
          3. add a live case to the contract stage proving a Member is accepted \
             and a Newbie is refused with 403 -- the offline matrix cannot show \

@@ -3,7 +3,7 @@
 // Three oracles, and the value of this tier is entirely in how weak they are.
 // A strong oracle needs a model of what each endpoint should return, which is
 // the contract tier's job and costs a line per case. These three need no model
-// at all, apply to all 164 endpoints at once, and are still violated by real
+// at all, apply to all 165 endpoints at once, and are still violated by real
 // defects:
 //
 //   1. NO 5xx.  A 4xx is the server saying no. A 5xx is the server saying it
@@ -432,7 +432,7 @@ main(async () => {
     // check that should mean something becomes noise:
     //
     //   * the run never tried this endpoint -- a seeded fuzzer picks uniformly
-    //     from 164 endpoints, so at 400 iterations any given one is missed
+    //     from 165 endpoints, so at 400 iterations any given one is missed
     //     about a tenth of the time. That is not news.
     //   * the run DID try it and got something else -- either the defect was
     //     fixed, or it changed shape. That is news either way.
@@ -453,7 +453,7 @@ main(async () => {
       record(`fuzz/known-finding-not-reached: ${key}`, 'skip',
         statuses.size === 0
           ? `this run never tried ${k.method} ${k.template}. At ${ITERATIONS} ` +
-            'iterations across 164 endpoints that is ordinary; raise ' +
+            'iterations across 165 endpoints that is ordinary; raise ' +
             'CSS_FUZZ_ITERATIONS to make the coverage claim stronger.'
           : `every attempt was refused before the handler ran (${[...statuses].join(',')}), ` +
             'so this run says nothing about the finding.')
