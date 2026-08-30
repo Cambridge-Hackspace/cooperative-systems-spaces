@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use chrono::Utc;
@@ -66,7 +66,9 @@ pub struct CreateHomeLinkRequest {
     #[serde(default)]
     pub expires_at: Option<chrono::DateTime<Utc>>,
 }
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct UpdateHomeLinkRequest {
@@ -101,8 +103,7 @@ pub struct HomeLinkResponse {
 
 impl HomeLinkResponse {
     fn from_row(row: HomeLink) -> Self {
-        let audience =
-            HomeLinkAudience::parse(&row.audience).unwrap_or(HomeLinkAudience::Everyone);
+        let audience = HomeLinkAudience::parse(&row.audience).unwrap_or(HomeLinkAudience::Everyone);
         Self {
             id: row.id,
             label: row.label,
@@ -133,7 +134,11 @@ fn audit(state: &AppState, event: AuditEventType, actor: Option<Uuid>, data: ser
         user_agent: None,
     };
     if let Err(e) = state.db.create_audit_log(&log) {
-        tracing::error!("Failed to write home_link audit log {}: {}", event.as_str(), e);
+        tracing::error!(
+            "Failed to write home_link audit log {}: {}",
+            event.as_str(),
+            e
+        );
     }
 }
 
@@ -251,7 +256,10 @@ async fn create_link(
         Some(admin.0.id),
         serde_json::json!({ "home_link_id": row.id, "label": row.label, "audience": row.audience }),
     );
-    Ok((StatusCode::CREATED, Json(ApiResponse::success(HomeLinkResponse::from_row(row)))))
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::success(HomeLinkResponse::from_row(row))),
+    ))
 }
 
 async fn update_link(
@@ -318,32 +326,50 @@ mod tests {
     #[test]
     fn everyone_sees_everyone() {
         assert!(visible_to(HomeLinkAudience::Everyone, None));
-        assert!(visible_to(HomeLinkAudience::Everyone, Some(&UserRole::Member)));
+        assert!(visible_to(
+            HomeLinkAudience::Everyone,
+            Some(&UserRole::Member)
+        ));
     }
 
     #[test]
     fn anonymous_only_when_signed_out() {
         assert!(visible_to(HomeLinkAudience::Anonymous, None));
-        assert!(!visible_to(HomeLinkAudience::Anonymous, Some(&UserRole::Newbie)));
+        assert!(!visible_to(
+            HomeLinkAudience::Anonymous,
+            Some(&UserRole::Newbie)
+        ));
     }
 
     #[test]
     fn logged_in_hidden_when_signed_out() {
         assert!(!visible_to(HomeLinkAudience::LoggedIn, None));
-        assert!(visible_to(HomeLinkAudience::LoggedIn, Some(&UserRole::Newbie)));
+        assert!(visible_to(
+            HomeLinkAudience::LoggedIn,
+            Some(&UserRole::Newbie)
+        ));
     }
 
     #[test]
     fn member_gate_respects_hierarchy() {
-        assert!(!visible_to(HomeLinkAudience::Member, Some(&UserRole::Newbie)));
-        assert!(visible_to(HomeLinkAudience::Member, Some(&UserRole::Member)));
+        assert!(!visible_to(
+            HomeLinkAudience::Member,
+            Some(&UserRole::Newbie)
+        ));
+        assert!(visible_to(
+            HomeLinkAudience::Member,
+            Some(&UserRole::Member)
+        ));
         assert!(visible_to(HomeLinkAudience::Member, Some(&UserRole::Staff)));
         assert!(visible_to(HomeLinkAudience::Member, Some(&UserRole::Admin)));
     }
 
     #[test]
     fn staff_gate_respects_hierarchy() {
-        assert!(!visible_to(HomeLinkAudience::Staff, Some(&UserRole::Member)));
+        assert!(!visible_to(
+            HomeLinkAudience::Staff,
+            Some(&UserRole::Member)
+        ));
         assert!(visible_to(HomeLinkAudience::Staff, Some(&UserRole::Staff)));
         assert!(visible_to(HomeLinkAudience::Staff, Some(&UserRole::Admin)));
     }

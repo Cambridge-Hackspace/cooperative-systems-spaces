@@ -1,20 +1,17 @@
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     routing::{get, post, put},
     Json, Router,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    api::{
-        errors::ApiError,
-        responses::ApiResponse,
-    },
+    api::{errors::ApiError, responses::ApiResponse},
     auth::{AuthUser, StaffUser},
     models::{
-        Tool, NewTool, ToolStatus, ToolCategory, ToolEvent, NewToolEvent, 
-        ToolTrainingType, UserToolTraining, trainers::ToolTrainer
+        trainers::ToolTrainer, NewTool, NewToolEvent, Tool, ToolCategory, ToolEvent, ToolStatus,
+        ToolTrainingType, UserToolTraining,
     },
     AppState,
 };
@@ -79,21 +76,32 @@ pub fn tools_routes() -> Router<AppState> {
     Router::new()
         // Tool CRUD operations (staff only)
         .route("/", get(list_tools).post(create_tool))
-        .route("/{tool_id}", get(get_tool).put(update_tool).delete(delete_tool))
-        
+        .route(
+            "/{tool_id}",
+            get(get_tool).put(update_tool).delete(delete_tool),
+        )
         // Tool status and event management
         .route("/{tool_id}/status", put(change_tool_status))
-        .route("/{tool_id}/events", get(get_tool_events).post(add_tool_event))
-        
+        .route(
+            "/{tool_id}/events",
+            get(get_tool_events).post(add_tool_event),
+        )
         // Tool training management
-        .route("/{tool_id}/training-types", get(get_tool_training_types).post(create_training_type))
-        .route("/{tool_id}/trainers", get(get_tool_trainers).post(authorize_trainer))
-        
+        .route(
+            "/{tool_id}/training-types",
+            get(get_tool_training_types).post(create_training_type),
+        )
+        .route(
+            "/{tool_id}/trainers",
+            get(get_tool_trainers).post(authorize_trainer),
+        )
         // User training records
         .route("/{tool_id}/user-training", get(get_user_training_for_tool))
         .route("/user-training", get(get_user_training))
-        .route("/user-training/{training_id}", post(complete_training).delete(revoke_training))
-        
+        .route(
+            "/user-training/{training_id}",
+            post(complete_training).delete(revoke_training),
+        )
         // Public endpoints for members to view tools
         .route("/available", get(list_available_tools))
         .route("/visible", get(list_visible_tools))
@@ -106,11 +114,10 @@ async fn list_tools(
     State(state): State<AppState>,
     query: Query<ToolQuery>,
 ) -> Result<Json<ApiResponse<Vec<Tool>>>, ApiError> {
-    let tools = state.db.get_tools(query.0)
-        .map_err(|e| {
-            tracing::error!("Failed to query tools: {}", e);
-            ApiError::InternalServerError("Failed to fetch tools".to_string())
-        })?;
+    let tools = state
+        .db
+        .get_tools(query.0)
+        .map_err(|e| ApiError::from_db("Failed to query tools", e))?;
 
     Ok(Json(ApiResponse::success(tools)))
 }
@@ -121,11 +128,10 @@ async fn get_tool(
     State(state): State<AppState>,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Tool>>, ApiError> {
-    let tool = state.db.get_tool_by_id(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to query tool: {}", e);
-            ApiError::InternalServerError("Failed to fetch tool".to_string())
-        })?
+    let tool = state
+        .db
+        .get_tool_by_id(tool_id)
+        .map_err(|e| ApiError::from_db("Failed to query tool", e))?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
 
     Ok(Json(ApiResponse::success(tool)))
@@ -156,11 +162,10 @@ async fn create_tool(
         schedule_id: payload.schedule_id,
     };
 
-    let created_tool = state.db.create_tool(&new_tool)
-        .map_err(|e| {
-            tracing::error!("Failed to create tool: {}", e);
-            ApiError::InternalServerError("Failed to create tool".to_string())
-        })?;
+    let created_tool = state
+        .db
+        .create_tool(&new_tool)
+        .map_err(|e| ApiError::from_db("Failed to create tool", e))?;
 
     // Log the tool creation event
     let event = NewToolEvent {
@@ -191,11 +196,16 @@ async fn update_tool(
     Path(tool_id): Path<Uuid>,
     Json(payload): Json<UpdateToolRequest>,
 ) -> Result<Json<ApiResponse<Tool>>, ApiError> {
-    let updated_tool = state.db.update_tool(tool_id, &payload)
-        .map_err(|e| {
-            tracing::error!("Failed to update tool: {}", e);
-            ApiError::InternalServerError("Failed to update tool".to_string())
-        })?;
+    // Logged, then converted -- not replaced. `map_err` to a bare
+    // InternalServerError threw away everything the error knew: updating a tool
+    // that does not exist answered 500 rather than 404, and a name that
+    // collided answered 500 rather than 409. The fuzz tier found it by asking
+    // for a tool id that matches nothing, which is the first thing anybody
+    // would try by hand and the last thing anybody writes a test for.
+    let updated_tool = state.db.update_tool(tool_id, &payload).map_err(|e| {
+        tracing::warn!("update_tool({tool_id}) failed: {e}");
+        ApiError::from(e)
+    })?;
 
     Ok(Json(ApiResponse::success_with_message(
         updated_tool,
@@ -209,11 +219,10 @@ async fn delete_tool(
     State(state): State<AppState>,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
-    let tool = state.db.get_tool_by_id(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to query tool: {}", e);
-            ApiError::InternalServerError("Database query failed".to_string())
-        })?
+    let tool = state
+        .db
+        .get_tool_by_id(tool_id)
+        .map_err(|e| ApiError::from_db("Failed to query tool", e))?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
 
     // Log the deletion event before deleting
@@ -232,11 +241,10 @@ async fn delete_tool(
         tracing::warn!("Failed to log tool deletion event: {}", e);
     }
 
-    state.db.delete_tool(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to delete tool: {}", e);
-            ApiError::InternalServerError("Failed to delete tool".to_string())
-        })?;
+    state
+        .db
+        .delete_tool(tool_id)
+        .map_err(|e| ApiError::from_db("Failed to delete tool", e))?;
 
     Ok(Json(ApiResponse::success_with_message(
         (),
@@ -251,18 +259,16 @@ async fn change_tool_status(
     Path(tool_id): Path<Uuid>,
     Json(payload): Json<ChangeToolStatusRequest>,
 ) -> Result<Json<ApiResponse<Tool>>, ApiError> {
-    let old_tool = state.db.get_tool_by_id(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to query tool: {}", e);
-            ApiError::InternalServerError("Database query failed".to_string())
-        })?
+    let old_tool = state
+        .db
+        .get_tool_by_id(tool_id)
+        .map_err(|e| ApiError::from_db("Failed to query tool", e))?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
 
-    let updated_tool = state.db.update_tool_status(tool_id, &payload.status)
-        .map_err(|e| {
-            tracing::error!("Failed to update tool status: {}", e);
-            ApiError::InternalServerError("Failed to update tool status".to_string())
-        })?;
+    let updated_tool = state
+        .db
+        .update_tool_status(tool_id, &payload.status)
+        .map_err(|e| ApiError::from_db("Failed to update tool status", e))?;
 
     // Log the status change event
     let event = NewToolEvent {
@@ -292,11 +298,10 @@ async fn get_tool_events(
     State(state): State<AppState>,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Vec<ToolEvent>>>, ApiError> {
-    let events = state.db.get_tool_events(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to query tool events: {}", e);
-            ApiError::InternalServerError("Failed to fetch tool events".to_string())
-        })?;
+    let events = state
+        .db
+        .get_tool_events(tool_id)
+        .map_err(|e| ApiError::from_db("Failed to query tool events", e))?;
 
     Ok(Json(ApiResponse::success(events)))
 }
@@ -311,11 +316,10 @@ async fn add_tool_event(
     event.tool_id = tool_id;
     event.actor_id = Some(staff.0.id);
 
-    let created_event = state.db.create_tool_event(&event)
-        .map_err(|e| {
-            tracing::error!("Failed to create tool event: {}", e);
-            ApiError::InternalServerError("Failed to create tool event".to_string())
-        })?;
+    let created_event = state
+        .db
+        .create_tool_event(&event)
+        .map_err(|e| ApiError::from_db("Failed to create tool event", e))?;
 
     Ok(Json(ApiResponse::success(created_event)))
 }
@@ -333,11 +337,10 @@ async fn list_available_tools(
         per_page: None,
     };
 
-    let tools = state.db.get_tools(query)
-        .map_err(|e| {
-            tracing::error!("Failed to query available tools: {}", e);
-            ApiError::InternalServerError("Failed to fetch tools".to_string())
-        })?;
+    let tools = state
+        .db
+        .get_tools(query)
+        .map_err(|e| ApiError::from_db("Failed to query available tools", e))?;
 
     Ok(Json(ApiResponse::success(tools)))
 }
@@ -351,17 +354,16 @@ async fn list_visible_tools(
     _user: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Tool>>>, ApiError> {
-    let tools = state.db.get_tools(ToolQuery {
-        category: None,
-        status: None,
-        requires_training: None,
-        page: None,
-        per_page: Some(100),
-    })
-        .map_err(|e| {
-            tracing::error!("Failed to query visible tools: {}", e);
-            ApiError::InternalServerError("Failed to fetch tools".to_string())
-        })?
+    let tools = state
+        .db
+        .get_tools(ToolQuery {
+            category: None,
+            status: None,
+            requires_training: None,
+            page: None,
+            per_page: Some(100),
+        })
+        .map_err(|e| ApiError::from_db("Failed to query visible tools", e))?
         .into_iter()
         .filter(|t| t.status != ToolStatus::Retired)
         .collect();
@@ -375,21 +377,19 @@ async fn can_user_use_tool(
     State(state): State<AppState>,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
-    let tool = state.db.get_tool_by_id(tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to query tool: {}", e);
-            ApiError::InternalServerError("Database query failed".to_string())
-        })?
+    let tool = state
+        .db
+        .get_tool_by_id(tool_id)
+        .map_err(|e| ApiError::from_db("Failed to query tool", e))?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
 
     let can_use = if !tool.requires_training {
         true
     } else {
-        state.db.user_has_valid_training(user.0.id, tool_id)
-            .map_err(|e| {
-                tracing::error!("Failed to check user training: {}", e);
-                ApiError::InternalServerError("Failed to check training status".to_string())
-            })?
+        state
+            .db
+            .user_has_valid_training(user.0.id, tool_id)
+            .map_err(|e| ApiError::from_db("Failed to check user training", e))?
     };
 
     Ok(Json(ApiResponse::success(can_use)))
@@ -411,7 +411,9 @@ async fn create_training_type(
     Path(_tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<ToolTrainingType>>, ApiError> {
     // TODO: Implement training type creation
-    Err(ApiError::NotImplemented("Training type creation not yet implemented".to_string()))
+    Err(ApiError::NotImplemented(
+        "Training type creation not yet implemented".to_string(),
+    ))
 }
 
 async fn get_tool_trainers(
@@ -429,7 +431,9 @@ async fn authorize_trainer(
     Path(_tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<ToolTrainer>>, ApiError> {
     // TODO: Implement trainer authorization
-    Err(ApiError::NotImplemented("Trainer authorization not yet implemented".to_string()))
+    Err(ApiError::NotImplemented(
+        "Trainer authorization not yet implemented".to_string(),
+    ))
 }
 
 async fn get_user_training_for_tool(
@@ -455,7 +459,9 @@ async fn complete_training(
     Path(_training_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<UserToolTraining>>, ApiError> {
     // TODO: Implement training completion
-    Err(ApiError::NotImplemented("Training completion not yet implemented".to_string()))
+    Err(ApiError::NotImplemented(
+        "Training completion not yet implemented".to_string(),
+    ))
 }
 
 async fn revoke_training(
@@ -464,5 +470,7 @@ async fn revoke_training(
     Path(_training_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     // TODO: Implement training revocation
-    Err(ApiError::NotImplemented("Training revocation not yet implemented".to_string()))
+    Err(ApiError::NotImplemented(
+        "Training revocation not yet implemented".to_string(),
+    ))
 }

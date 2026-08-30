@@ -4,8 +4,8 @@ import type { ApiResponse, DeviceStatus, RegistrationRequest, SyncPayload } from
 const api = axios.create({
   baseURL: '/api',
   headers: {
-    'Content-Type': 'application/json'
-  }
+    'Content-Type': 'application/json',
+  },
 })
 
 export const deviceApi = {
@@ -22,5 +22,5 @@ export const deviceApi = {
   async getToolguardState(): Promise<ApiResponse<SyncPayload>> {
     const response = await api.get<ApiResponse<SyncPayload>>('/toolguard/state')
     return response.data
-  }
+  },
 }

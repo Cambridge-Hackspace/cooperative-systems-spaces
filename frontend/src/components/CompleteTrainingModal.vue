@@ -3,7 +3,7 @@
     <div class="modal-content" @click.stop>
       <div class="modal-header">
         <h3>Complete Training Session</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -18,26 +18,22 @@
         <form @submit.prevent="completeTraining">
           <div class="form-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
-                v-model="form.passed"
-                class="checkbox"
-              >
+              <input v-model="form.passed" type="checkbox" class="checkbox" />
               <span class="checkbox-text">Training completed successfully</span>
             </label>
           </div>
 
-          <div class="form-group" v-if="step.passing_score">
+          <div v-if="step.passing_score" class="form-group">
             <label for="score">Assessment Score (%):</label>
-            <input 
+            <input
               id="score"
-              type="number"
               v-model.number="form.assessment_score"
+              type="number"
               class="form-control"
               min="0"
               max="100"
               :placeholder="`Minimum passing score: ${step.passing_score}%`"
-            >
+            />
             <div v-if="form.assessment_score && step.passing_score" class="score-feedback">
               <span v-if="form.assessment_score >= step.passing_score" class="score-pass">
                 ✓ Meets passing requirements
@@ -50,7 +46,7 @@
 
           <div class="form-group">
             <label for="notes">Training Notes:</label>
-            <textarea 
+            <textarea
               id="notes"
               v-model="form.notes"
               class="form-control"
@@ -60,35 +56,34 @@
             ></textarea>
           </div>
 
-          <div class="training-summary" v-if="form.passed">
+          <div v-if="form.passed" class="training-summary">
             <h5>Training Completion Summary</h5>
             <ul>
               <li>Trainee has successfully completed the training requirements</li>
-              <li v-if="step.expiry_days">
-                Certification will expire in {{ step.expiry_days }} days
+              <li v-if="step.expires_after_days">
+                Certification will expire in {{ step.expires_after_days }} days
               </li>
-              <li v-if="form.assessment_score">
-                Final score: {{ form.assessment_score }}%
-              </li>
+              <li v-if="form.assessment_score">Final score: {{ form.assessment_score }}%</li>
               <li>This will unlock access to the next training step (if applicable)</li>
             </ul>
           </div>
 
-          <div class="training-failed" v-else-if="form.passed === false">
+          <div v-else-if="form.passed === false" class="training-failed">
             <h5>Training Not Completed</h5>
-            <p>Please provide detailed notes about what needs improvement before the trainee can retry.</p>
+            <p>
+              Please provide detailed notes about what needs improvement before the trainee can
+              retry.
+            </p>
           </div>
 
           <div class="form-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
-            <button 
-              type="submit" 
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
+            <button
+              type="submit"
               :disabled="loading || !canSubmit"
               :class="form.passed ? 'btn btn-success' : 'btn btn-warning'"
             >
-              {{ loading ? 'Saving...' : (form.passed ? 'Mark Complete' : 'Mark Failed') }}
+              {{ loading ? 'Saving...' : form.passed ? 'Mark Complete' : 'Mark Failed' }}
             </button>
           </div>
         </form>
@@ -104,11 +99,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { trainingApi } from '../utils/api'
-import type {
-  TrainingStep,
-  CompleteTrainingRequest,
-  User
-} from '../types'
+import type { TrainingStep, CompleteTrainingRequest, User } from '../types'
 
 interface Props {
   step: TrainingStep
@@ -130,21 +121,21 @@ const form = ref<CompleteTrainingRequest & { assessment_score?: number }>({
   training_step_id: props.step.id,
   passed: true,
   assessment_score: undefined,
-  notes: ''
+  notes: '',
 })
 
 // Computed
 const canSubmit = computed(() => {
   // Must have notes
   if (!form.value.notes.trim()) return false
-  
+
   // If there's a passing score requirement and they passed, must meet minimum score
   if (props.step.passing_score && form.value.passed) {
     if (!form.value.assessment_score || form.value.assessment_score < props.step.passing_score) {
       return false
     }
   }
-  
+
   return true
 })
 
@@ -165,11 +156,11 @@ const completeTraining = async () => {
       training_step_id: form.value.training_step_id,
       passed: form.value.passed,
       assessment_score: form.value.assessment_score,
-      notes: form.value.notes
+      notes: form.value.notes,
     }
 
     const response = await trainingApi.completeTrainingSession(props.user.id, requestData)
-    
+
     if (response.success) {
       emit('completed')
     } else {
@@ -198,7 +189,7 @@ const completeTraining = async () => {
 }
 
 .modal-content {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   max-width: 600px;
   width: 90%;
@@ -211,12 +202,12 @@ const completeTraining = async () => {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .modal-header h3 {
   margin: 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .close-btn {
@@ -234,7 +225,7 @@ const completeTraining = async () => {
 }
 
 .close-btn:hover {
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .modal-body {
@@ -242,7 +233,7 @@ const completeTraining = async () => {
 }
 
 .step-info {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   padding: 1rem;
   border-radius: 6px;
   margin-bottom: 1.5rem;
@@ -250,7 +241,7 @@ const completeTraining = async () => {
 
 .step-info h4 {
   margin: 0 0 0.5rem 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .step-info p {
@@ -270,7 +261,7 @@ const completeTraining = async () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   font-weight: 500;
 }
 
@@ -288,13 +279,13 @@ const completeTraining = async () => {
 }
 
 .checkbox-text {
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .form-control {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 0.9rem;
 }
@@ -429,11 +420,11 @@ const completeTraining = async () => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

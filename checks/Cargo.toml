@@ -1,0 +1,33 @@
+[package]
+name = "css-checks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Source-as-data structural checks: tier 3 of docs/testing-methodology.md.
+#
+# The cheapest tier to run and the one that catches rot -- code that is still
+# correct about a product that changed. It parses this repository's own source
+# as data and asserts structural claims about it: no browser, no framework, no
+# runtime, no database.
+#
+# Deliberately depends on NONE of the other workspace crates. These checks read
+# text, so they compile and run in seconds on any host, including the FreeBSD
+# workstation where css-server cannot be built at all. A dependency on
+# css-server would make the cheapest tier in the suite the slowest, and a tier
+# people skip is a tier that does not exist.
+#
+# The two checks that genuinely need real Rust types -- enum wire formats and
+# the config sample -- live in server/tests/ instead, because scraping a Rust
+# enum with a regex is exactly the kind of test that rots.
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+walkdir = "2.5"
+# For reading tracked config files as data. Deliberately not `css-server`:
+# this crate stays compilable on a workstation where the server is not.
+toml = { workspace = true }

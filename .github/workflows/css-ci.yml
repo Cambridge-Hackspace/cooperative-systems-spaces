@@ -1,203 +1,456 @@
 name: CI
 
+# This is the gate. reaper is the pre-push loop and runs the same suites on an
+# ephemeral machine, but nothing here depends on reaper existing: every job
+# below provisions what it needs.
+
 on:
   push:
-    branches: [ master, dev ]
+    branches: [master, dev]
   pull_request:
-    branches: [ master, dev ]
+    branches: [master, dev]
+  # Manually runnable, and the reason is that without it this workflow could not
+  # be verified at all. It triggers only on master/dev and on pull requests
+  # targeting them -- which is the right policy for a project, and it means a
+  # feature branch can carry a rewritten CI configuration that has never once
+  # executed. That was the state of this file for the whole of the work that
+  # produced it: aligned, reviewed, and unrun.
+  #
+  # `gh workflow run CI --ref <branch>` now exercises it before it is merged,
+  # which is the only way to find out whether the --provision=external path
+  # works before it is the thing gating everybody's pushes.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Which machine the Linux jobs run on.
+#
+# Unset -- the default -- means GitHub-hosted `ubuntu-latest`. An undefined
+# repository variable evaluates to the empty string, which is falsy in a GitHub
+# expression, so the fallback applies with nothing configured anywhere. Set the
+# repository or organization variable `CI_RUNNER` to a self-hosted label (this
+# project's upstream uses `arc-runner-set`) to send them elsewhere.
+#
+# It is a variable because it was a hardcoded `arc-runner-set` for two and a
+# half months, and that made the workflow unrunnable anywhere except the one
+# organization those runners are registered to. Forks do not inherit a parent's
+# self-hosted runners -- deliberately, since inheriting them would let any fork
+# execute arbitrary code on the parent's infrastructure. So on a fork every job
+# here sat `queued` against a runner that could never claim it, until GitHub
+# canceled it at the twenty-four hour mark. Nothing failed, nothing reported,
+# and the repository's Actions tab stayed empty through a merge to master.
+#
+# The expression is repeated at each job rather than defined once because the
+# `env` context is not available in `runs-on`. `vars` is.
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  checks:
-    runs-on: arc-runner-set
-    strategy:
-      matrix:
-        job: [frontend, server, cli, edge]
+  # ---------------------------------------------------------------------------
+  # frontend_edge/dist is embedded into the edge crate by include_dir! at compile
+  # time, so every Rust job needs it to exist AND to contain the real bundle.
+  #
+  # This job is that dependency, expressed as one. It replaces
+  # `mkdir -p /builds/<org>/<repo>/edge/../frontend_edge/dist`, which hardcoded a
+  # single runner's checkout path and produced an *empty* embedding -- a binary
+  # that compiles cleanly and serves 404 for its own UI. edge/build.rs now
+  # guarantees the directory exists at all; this guarantees it has something in it.
+  # ---------------------------------------------------------------------------
+  assets:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
-
-      # ARC's default runner image ships no compilers
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libpq-dev cmake
-
-      # FRONTEND JOBS
-      - name: Set up Node.js
-        if: matrix.job == 'frontend' || matrix.job == 'edge'
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
-      - name: Install frontend dependencies
-        if: matrix.job == 'frontend'
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend_edge/package-lock.json
+      - name: Build frontend_edge
+        working-directory: frontend_edge
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Build frontend
         working-directory: frontend
-        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Assert the bundles are real, not empty
+        run: |
+          test -s frontend/dist/index.html
+          test -s frontend_edge/dist/index.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            frontend/dist
+            frontend_edge/dist
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Run frontend build
-        if: matrix.job == 'frontend'
+  # --- Tiers 1 and 2, plus lint/format/type ----------------------------------
+  frontend:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - working-directory: frontend
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund
+      - name: Format
         working-directory: frontend
+        run: npm run format:check
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Type-check
+        working-directory: frontend
+        run: npm run type-check
+      # The strictness ratchet. Shrinking tsconfig.strict.json's include list is
+      # a narrowing and needs a stated reason; growing it is the unit of work.
+      - name: Type-check (strict ratchet)
+        working-directory: frontend
+        run: npm run type-check:strict
+      - name: Test
+        working-directory: frontend
+        run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-test-results
+          path: |
+            frontend/test-results/
+            frontend/coverage/
+          if-no-files-found: error
+
+  frontend-edge:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend_edge/package-lock.json }
+      - working-directory: frontend_edge
+        run: npm ci --no-audit --no-fund
+      - working-directory: frontend_edge
+        run: npm run format:check
+      - working-directory: frontend_edge
+        run: npm run lint
+      - working-directory: frontend_edge
+        run: npm run type-check
+      # Stricter than frontend's equivalent and deliberately not a ratchet:
+      # this directory is 565 lines and its base tsconfig is already
+      # `"strict": true`, so noUncheckedIndexedAccess and noImplicitOverride
+      # apply to all of it rather than to a growing list.
+      - working-directory: frontend_edge
+        run: npm run type-check:strict
+      - working-directory: frontend_edge
         run: npm run build
 
-      - name: Install frontend-edge dependencies
-        if: matrix.job == 'frontend' || matrix.job == 'edge'
-        working-directory: frontend_edge
-        run: npm ci
-
-      - name: Run frontend-edge build
-        if: matrix.job == 'frontend' || matrix.job == 'edge'
-        working-directory: frontend_edge
-        run: npm run build
-
-
-
-      #- name: Run frontend tests
-      #  if: matrix.job == 'frontend'
-      #  working-directory: frontend
-      #  run: npm run test -- --ci --coverage
-
-      # BACKEND JOBS (SERVER & CLI & EDGE)
-      - name: Install addtl development libraries
-        if: (matrix.job == 'edge') && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
-
-      - name: Set up Rust
-        if: matrix.job == 'server' || matrix.job == 'cli' || matrix.job == 'edge'
-        uses: actions-rs/toolchain@v1
+  # --- The e2e suite's own code, and the Tier 9 oracle ------------------------
+  # Runs on every PR and costs seconds. It needs no stack, and the tier it
+  # validates does not run on every PR -- which is exactly why the thing that
+  # decides whether that tier means anything should.
+  shell:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to the same version `e2e/build.sh` pins. Ubuntu's package moves
+      # on its own schedule and the container's was 0.9.0, so "the tree is
+      # clean" meant different things on different machines.
+      # checks/tests/reaper_runs_what_ci_runs.rs asserts the two stay equal.
+      - name: Install shellcheck (pinned)
+        run: |
+          set -Eeuo pipefail
+          ver=v0.11.0
+          sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          curl -fsSL -o sc.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.x86_64.tar.xz"
+          echo "${sha}  sc.tar.xz" | sha256sum -c -
+          sudo tar -xJf sc.tar.xz --strip-components=1 -C /usr/local/bin \
+            "shellcheck-${ver}/shellcheck"
+          rm -f sc.tar.xz
+          shellcheck --version
+      # Pinned, and to the same version `e2e/build.sh` pins. Unpinned this action
+      # installs whatever is latest, and a formatter that differs between two
+      # machines is a formatter that rejects a tree the other accepts. Debian
+      # bookworm's 3.6.0 rewrites `${VAR:-}` to `${VAR-}` -- not the same
+      # expression -- and later versions stopped doing it, which is how the
+      # disagreement was found. checks/tests/reaper_runs_what_ci_runs.rs asserts
+      # the two pins stay equal.
+      - uses: mfinelli/setup-shfmt@v3
         with:
-          toolchain: stable
-          override: true
-          profile: minimal
+          version: '3.13.1'
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: ./e2e/lint.sh
 
-      - name: Run server checks
-        if: matrix.job == 'server'
-        working-directory: server
+  # --- Tiers 1, 1b, 3 and 4, Rust side ---------------------------------------
+  rust:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    needs: assets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: . }
+      - name: System dependencies
         run: |
-          cargo test --bin css-server
-#          cargo fmt --bin css-server
-#          cargo clippy --all-targets --all-features -- -D warnings=
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libpq-dev cmake \
+            libasound2-dev libudev-dev
+      # actions-rs/* has been archived and unmaintained since 2023.
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Run cli checks
-        if: matrix.job == 'cli'
-        working-directory: cli
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # `cargo test --bin css-server` was a *target filter*: it ran only unit
+      # tests inside that one binary, excluded css_lib entirely, and silently
+      # ignored every tests/ directory in the workspace -- so an integration
+      # test could be added and never run once. --all-targets is what picks
+      # them up.
+      - name: Test
+        run: cargo test --locked --all-targets
+      - name: Doc tests
+        run: cargo test --locked --doc
+
+      # kiosk and the two toolguard UIs are outside default-members on purpose
+      # (d78227d) because bevy and egui are heavy. Compile-checking them stops
+      # them rotting without paying to link them.
+      - name: Check the full workspace, including the GUI crates
+        run: cargo check --locked --workspace --all-targets
+
+  # --- Tier 5: the real app against the fake API ------------------------------
+  # In the pinned Playwright image, which carries its own browsers -- which is
+  # why PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 is set in every other job and why the
+  # package.json pin and this image tag have to agree. They do: 1.62.1.
+  #
+  # No database, no broker and no css-server: the fake is a Vite middleware, so
+  # this job needs the frontend and nothing else. It is also the only job in
+  # this workflow that runs a browser at all.
+  browser-fake:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - working-directory: frontend
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund
+      - name: Run the browser tier
+        working-directory: frontend
+        env:
+          CI: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npx playwright test --config playwright.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-fake-results
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          if-no-files-found: error
+
+  # --- Tier 4's DB-backed half, and tiers 6-8 --------------------------------
+  # A `services:` Postgres, so this needs no reaper and no container engine of
+  # its own. e2e/run.sh --provision=external takes the endpoint from the
+  # environment rather than starting anything.
+  #
+  # No continue-on-error and no `if:` guard. If this cannot run, that is a
+  # runner defect to fix, not a suite to skip.
+  stack:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # Deliberately NOT `needs: assets`. This job runs e2e/build.sh, which is the
+    # same script the reaper session runs, and that script builds both frontends
+    # itself. Downloading the bundle instead would leave build.sh -- the thing
+    # every session depends on -- exercised only where reaper exists.
+    needs: rust
+    timeout-minutes: 60
+    services:
+      postgres:
+        # Deliberately not UTF-8, and this is the configuration that found the
+        # migration this suite could not apply: an ellipsis in a SQL comment
+        # made the schema impossible to create on a LATIN1 cluster, invisibly,
+        # because every developer machine and every default runner is UTF-8.
+        #
+        # lc_collate=C also makes every "alphabetical" list an actual assertion,
+        # and lc_ctype=C means no case folding outside ASCII, which exercises
+        # case-insensitive email and username lookup for real.
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_DB: css
+          POSTGRES_USER: css_user
+          POSTGRES_PASSWORD: css_pass
+          # The same flags e2e/stack.sh passes, so the two environments
+          # provision the same cluster rather than two similar ones.
+          POSTGRES_INITDB_ARGS: '--encoding=LATIN1 --lc-collate=C --lc-ctype=C'
+          # Not UTC. The schema stage asserts this, because chrono::Local falls
+          # back to UTC when tzdata is absent and every timezone check
+          # downstream would then be a no-op that passes.
+          TZ: America/Chicago
+          PGTZ: America/Chicago
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U css_user -d css"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CSS_TEST_DATABASE_URL: postgres://css_user:css_pass@localhost:5432/css
+      # The driver reads CSS_-prefixed names. A bare FUZZ_ITERATIONS was read by
+      # nothing and the fuzz tier quietly ran its default.
+      CSS_FUZZ_ITERATIONS: '600'
+      CSS_RACE_ROUNDS: '4'
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies
         run: |
-          cargo test --bin css-cli
-#          cargo fmt --bin css-cli
-#          cargo clippy --all-targets --all-features -- -D warnings=
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libpq-dev cmake \
+            libasound2-dev libudev-dev \
+            postgresql-client mosquitto
+          # mosquitto's package starts a broker on 1883 with its own
+          # configuration. The suite starts its own, pointed at a config it
+          # wrote, so the packaged service has to be out of the way first --
+          # otherwise the port is taken and the failure reads as a bind error.
+          sudo systemctl stop mosquitto 2>/dev/null || true
+          sudo systemctl disable mosquitto 2>/dev/null || true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Node for the API, fuzz and concurrency drivers. e2e/build.sh will
+      # bootstrap its own if this step is ever removed, but using the runner's
+      # is faster and is the version the frontend jobs use.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend_edge/package-lock.json
+      - name: Build everything the stack runs
+        run: ./e2e/build.sh
+      - name: Run the stack tiers
+        run: ./e2e/run.sh --provision=external
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: e2e/out/
+          if-no-files-found: error
 
-      - name: Run edge checks
-        if: matrix.job == 'edge'
-        working-directory: edge
-        run: |
-          cargo test --bin css-edge
-#          cargo fmt --bin css-edge
-#          cargo clippy --all-targets --all-features -- -D warnings=
-
+  # --- packaging --------------------------------------------------------------
   docker-server:
-    needs: checks
-    runs-on: arc-runner-set
-    permissions:
-      contents: read
-      packages: write
+    needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
+    # Publishing only. There is nothing for this job to do on a branch it will
+    # not push from, and without this guard it still checks out, authenticates
+    # to the registry and exits -- a job that reports success for having done
+    # nothing, on every feature branch forever.
+    if: github.ref_name == 'master' || github.ref_name == 'dev'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
+      - name: Build and push (master)
         if: github.ref_name == 'master'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:latest .
-
-      - name: Push Docker image
-        if: github.ref_name == 'master'
-        run: |
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} \
+                       -t ghcr.io/${{ github.repository }}/app:latest .
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/app:latest
-
-      - name: Build Dev Docker image
+      - name: Build and push (dev)
         if: github.ref_name == 'dev'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} -t ghcr.io/${{ github.repository }}/app:dev .
-
-      - name: Push Dev Docker image
-        if: github.ref_name == 'dev'
-        run: |
-          docker push ghcr.io/${{ github.repository }}/app:dev
+          docker build -t ghcr.io/${{ github.repository }}/app:${{ github.sha }} \
+                       -t ghcr.io/${{ github.repository }}/app:dev .
           docker push ghcr.io/${{ github.repository }}/app:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}/app:dev
 
   docker-edge:
-    needs: checks
-    runs-on: arc-runner-set
-    permissions:
-      contents: read
-      packages: write
+    needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
+    if: github.ref_name == 'master' || github.ref_name == 'dev'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
+      - name: Build and push (master)
         if: github.ref_name == 'master'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:latest -f Dockerfile.edge  .
-
-      - name: Push Docker image
-        if: github.ref_name == 'master'
-        run: |
+          docker build -f Dockerfile.edge \
+            -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} \
+            -t ghcr.io/${{ github.repository }}/edge:latest .
           docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/edge:latest
-
-      - name: Build Dev Docker image
+      - name: Build and push (dev)
         if: github.ref_name == 'dev'
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} -t ghcr.io/${{ github.repository }}/edge:dev -f Dockerfile.edge  .
-
-      - name: Push Dev Docker image
-        if: github.ref_name == 'dev'
-        run: |
+          docker build -f Dockerfile.edge \
+            -t ghcr.io/${{ github.repository }}/edge:${{ github.sha }} \
+            -t ghcr.io/${{ github.repository }}/edge:dev .
+          docker push ghcr.io/${{ github.repository }}/edge:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}/edge:dev
 
-
   release:
-    needs: checks
+    needs: [frontend, frontend-edge, rust, shell, stack, browser-fake]
+    # Three operating systems building three binaries each. Worth paying for at
+    # the gate and not on every push to every branch.
+    #
+    # Pull requests are included deliberately: the Windows and macOS legs are
+    # the only cross-platform coverage this project has, they break
+    # independently of the Linux build, and upstream's pipeline is red right now
+    # for exactly that reason. Catching it after the merge is catching it late.
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_name == 'master' || github.ref_name == 'dev'
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ arc-runner-set, windows-latest, macos-latest ]
         include:
-          - os: arc-runner-set
+          - os: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
             artifact_name: linux
-            asset_name: css-server
-            asset_name_cli: css
+            server_bin: css-server
+            cli_bin: css-cli
+            edge_bin: css-edge
+            build_server: true
           - os: windows-latest
             artifact_name: windows
-            asset_name: css-server.exe
-            asset_name_cli: css.exe
+            server_bin: css-server.exe
+            cli_bin: css-cli.exe
+            edge_bin: css-edge.exe
+            build_server: false
           - os: macos-latest
             artifact_name: macos
-            asset_name: css-server
-            asset_name_cli: css
+            server_bin: css-server
+            cli_bin: css-cli
+            edge_bin: css-edge
+            build_server: false
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          profile: minimal
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install PostgreSQL client library (Windows)
         if: runner.os == 'Windows'
@@ -206,59 +459,201 @@ jobs:
           choco install postgresql --yes --no-progress
           $pg = Get-ChildItem 'C:\Program Files\PostgreSQL' -ErrorAction SilentlyContinue |
                 Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $pg) { Write-Error "PostgreSQL not found in C:\Program Files\PostgreSQL"; exit 1 }
+          if (-not $pg) { Write-Error "PostgreSQL not found"; exit 1 }
           $prefix = $pg.FullName
-          Write-Host "Postgres prefix: $prefix"
-          Add-Content -Path $env:GITHUB_ENV -Value "PG_PREFIX=$prefix"
           Add-Content -Path $env:GITHUB_ENV -Value "PATH=${prefix}\bin;${env:PATH}"
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=${prefix}\lib;${env:LIB}"
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=${prefix}\include;${env:INCLUDE}"
-          Add-Content -Path $env:GITHUB_ENV -Value "LIBRARY_PATH=${prefix}\lib;${env:LIBRARY_PATH}"
+
+      # openssl-sys reaches this leg by three independent routes, two of which
+      # build here: css-cli and css-edge both pull reqwest -> native-tls, and
+      # css-edge additionally pulls paho-mqtt -> paho-mqtt-sys, which compiles
+      # the Paho C library and locates OpenSSL through CMake rather than through
+      # openssl-sys. So pointing only OPENSSL_DIR at an installation fixes the
+      # Rust half and leaves the C half looking somewhere else; OPENSSL_ROOT_DIR
+      # is what CMake reads.
+      #
+      # Swapping the TLS stack would not avoid this. rustls would take reqwest
+      # out of the picture and paho-mqtt-sys would still need OpenSSL, so the
+      # dependency change would be large, would alter what the shipped binaries
+      # negotiate, and would not remove the requirement.
+      #
+      # This is the same shape as the PostgreSQL step above: a system library
+      # the build needs and a Windows runner does not ship.
+      # openssl-sys reaches this leg by two routes that both build here:
+      # css-cli and css-edge pull reqwest -> native-tls, and css-edge also pulls
+      # paho-mqtt -> paho-mqtt-sys, which compiles the Paho C library and finds
+      # OpenSSL through CMake's OPENSSL_ROOT_DIR rather than openssl-sys's
+      # OPENSSL_DIR. Both are set. Swapping to rustls would not avoid this:
+      # paho-mqtt-sys would still need OpenSSL.
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Look before installing.
+          #
+          # This ran `choco install openssl` unconditionally, and that package
+          # fetches its installer from slproweb.com. On 2026-08-27 the download
+          # hung for ten minutes and died with "Received an unexpected EOF or 0
+          # bytes from the transport stream", failing the job -- while the next
+          # lines of the same step found a perfectly good OpenSSL at
+          # C:\Program Files\OpenSSL, because the runner image already ships one.
+          #
+          # The install was never needed in the common case, and putting it on
+          # the critical path made a third-party CDN a dependency of this gate.
+          # It stays as a fallback for an image without OpenSSL; the step fails
+          # only if the search still comes up empty afterwards.
+          #
+          # A usable directory holds BOTH halves. Matching on ssl alone would
+          # select one with no crypto library and fail later at link time, which
+          # is a worse place to find out. Layouts differ between distributions --
+          # some ship lib\VC\x64\MD, some a flat lib -- so this searches rather
+          # than hardcoding one.
+          function Find-OpenSSL {
+            $roots = Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)' -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -match 'OpenSSL' }
+            foreach ($root in $roots) {
+              $groups = Get-ChildItem $root.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+                        Group-Object DirectoryName
+              foreach ($g in $groups) {
+                $names = $g.Group.Name
+                if (($names | Where-Object { $_ -in @('libssl.lib','ssl.lib') }) -and
+                    ($names | Where-Object { $_ -in @('libcrypto.lib','crypto.lib') })) {
+                  return [pscustomobject]@{ Root = $root.FullName; Lib = $g.Name }
+                }
+              }
+            }
+            return $null
+          }
+
+          $found = Find-OpenSSL
+          if ($found) {
+            Write-Host "OpenSSL already on this image; not installing"
+          } else {
+            Write-Host "no usable OpenSSL found; falling back to choco"
+            choco install openssl --yes --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "choco exited $LASTEXITCODE -- checking anyway, since the files may still be usable"
+            }
+            $found = Find-OpenSSL
+          }
+
+          if (-not $found) {
+            Write-Host "=== no directory held both an ssl and a crypto import library ==="
+            Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)' -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match 'OpenSSL' } |
+              ForEach-Object {
+                Write-Host "--- $($_.FullName) ---"
+                Get-ChildItem $_.FullName -Recurse -Filter '*.lib' -ErrorAction SilentlyContinue |
+                  ForEach-Object { Write-Host "  $($_.FullName)" }
+              }
+            Write-Error "OpenSSL import libraries not found; the listing above is what was on disk"
+            exit 1
+          }
+
+          $incDir = Join-Path $found.Root 'include'
+          if (-not (Test-Path (Join-Path $incDir 'openssl\ssl.h'))) {
+            $hdr = Get-ChildItem $found.Root -Recurse -Filter 'ssl.h' -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if (-not $hdr) { Write-Error "OpenSSL headers not found under $($found.Root)"; exit 1 }
+            $incDir = Split-Path (Split-Path $hdr.FullName -Parent) -Parent
+          }
+
+          Write-Host "OpenSSL root:    $($found.Root)"
+          Write-Host "OpenSSL libs:    $($found.Lib)"
+          Write-Host "OpenSSL headers: $incDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_LIB_DIR=$($found.Lib)"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_INCLUDE_DIR=$incDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_ROOT_DIR=$($found.Root)"
+
+      # Diagnostic, not a check. It always succeeds.
+      #
+      # `paho-mqtt-sys` builds the Paho C library through the `cmake` crate,
+      # which asks the `cc` crate which Visual Studio is installed and turns the
+      # answer into a CMake generator string. When `cc` does not recognize the
+      # installation, the failure is `couldn't determine visual studio
+      # generator` with nothing said about what was actually there.
+      #
+      # The fix attempted alongside this is the upgrade -- cc 1.2.40 -> 1.4.4
+      # and cmake 0.1.54 -> 0.1.58, both of which were stale -- on the theory
+      # that the runner image ships a Visual Studio newer than the pinned `cc`
+      # knew about. If that theory is wrong, this step is what says so, because
+      # there is no Windows machine here and every guess otherwise costs a full
+      # CI run to disprove.
+      - name: Report the Visual Studio the runner has (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            # -format json, not -format value: `value` accepts a single
+            # property, and asking it for three printed nothing at all -- a
+            # diagnostic that silently produces no output is worse than no
+            # diagnostic, because the empty space reads as "nothing to report".
+            & $vswhere -latest -products * -format json |
+              ConvertFrom-Json |
+              ForEach-Object {
+                Write-Host "Visual Studio: $($_.displayName)"
+                Write-Host "  version:     $($_.installationVersion)"
+                Write-Host "  path:        $($_.installationPath)"
+              }
+          } else {
+            Write-Host "vswhere not present at $vswhere"
+          }
+          Write-Host "CMAKE_GENERATOR=$env:CMAKE_GENERATOR (empty means cc/cmake decide)"
 
       - name: Install PostgreSQL client library (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install libpq
+          brew update && brew install libpq
           prefix=$(brew --prefix libpq)
           echo "LDFLAGS=-L${prefix}/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I${prefix}/include" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=${prefix}/lib/pkgconfig" >> $GITHUB_ENV
 
-      - name: Install PostgreSQL client library (Ubuntu)
+      - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev libpq-dev cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libpq-dev cmake \
+            libasound2-dev libudev-dev
 
-      - name: Install Edge Client Libraries
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
-
-      - name: Install frontend dependencies
+      - name: Build the edge bundle
         working-directory: frontend_edge
-        run: npm ci
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Assert the bundle is real
+        shell: bash
+        run: test -s frontend_edge/dist/index.html
 
-      - name: Run frontend build
-        working-directory: frontend_edge
-        run: npm run build
+      - run: cargo build --locked --release --bin css-cli
+      - run: cargo build --locked --release --bin css-edge
+      - if: matrix.build_server
+        run: cargo build --locked --release --bin css-server
 
-      - name: Build CLI
-        run: cargo build --release --bin css-cli
-
-      - name: Build Edge
-        run: cargo build --release --bin css-edge
-
-      - name: Build Server
-        if: runner.os == 'Linux'
-        run: cargo build --release --bin css-server
-
-      - name: Upload CLI artifacts
-        uses: actions/upload-artifact@v4
+      # This is a workspace: cargo writes to <root>/target/release, never to
+      # cli/target/release, and the binary is `css-cli`, not `css`. The previous
+      # paths matched nothing on every platform, and upload-artifact defaults to
+      # `if-no-files-found: warn` -- so the CLI release artifact has been
+      # silently empty for as long as this job has existed. `error` is what makes
+      # that impossible to repeat.
+      - uses: actions/upload-artifact@v4
         with:
           name: css-cli-${{ matrix.artifact_name }}
-          path: cli/target/release/${{ matrix.asset_name_cli }}
-
-      - name: Upload Server artifacts
+          path: target/release/${{ matrix.cli_bin }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: css-edge-${{ matrix.artifact_name }}
+          path: target/release/${{ matrix.edge_bin }}
+          if-no-files-found: error
+      # Only where it was actually built. This previously uploaded css-server on
+      # Windows and macOS, where the build step was gated on Linux.
+      - if: matrix.build_server
         uses: actions/upload-artifact@v4
         with:
           name: css-server-${{ matrix.artifact_name }}
-          path: target/release/${{ matrix.asset_name }}
+          path: target/release/${{ matrix.server_bin }}
+          if-no-files-found: error

@@ -24,7 +24,10 @@
 
     <template v-else>
       <div v-if="!status.enabled" class="alert alert-warning mb-6">
-        <span>MFA is disabled in server configuration. Ask an admin to enable it in <code>[auth.mfa]</code>.</span>
+        <span
+          >MFA is disabled in server configuration. Ask an admin to enable it in
+          <code>[auth.mfa]</code>.</span
+        >
       </div>
 
       <div v-if="status.must_enroll" class="alert alert-info mb-6">
@@ -45,20 +48,34 @@
           </div>
 
           <div v-else>
-            <button v-if="!totpSetup" class="btn btn-primary btn-sm w-fit" :disabled="!status.enabled || busy" @click="beginTotp">
+            <button
+              v-if="!totpSetup"
+              class="btn btn-primary btn-sm w-fit"
+              :disabled="!status.enabled || busy"
+              @click="beginTotp"
+            >
               Set up authenticator
             </button>
 
             <div v-else class="mt-2 space-y-3">
               <div class="flex flex-col items-center gap-2">
-                <img v-if="qrDataUrl" :src="qrDataUrl" alt="otpauth QR" class="border border-base-300 rounded p-2 bg-white" />
-                <code class="text-xs break-all bg-base-200 p-2 rounded">{{ totpSetup.secret_base32 }}</code>
+                <img
+                  v-if="qrDataUrl"
+                  :src="qrDataUrl"
+                  alt="otpauth QR"
+                  class="border border-base-300 rounded p-2 bg-white"
+                />
+                <code class="text-xs break-all bg-base-200 p-2 rounded">{{
+                  totpSetup.secret_base32
+                }}</code>
                 <p class="text-xs text-base-content/60">
                   Scan the QR code, or enter the secret manually if your app needs it.
                 </p>
               </div>
 
-              <label class="label"><span class="label-text">Enter the current 6-digit code to confirm</span></label>
+              <label class="label"
+                ><span class="label-text">Enter the current 6-digit code to confirm</span></label
+              >
               <input
                 v-model="totpConfirmCode"
                 type="text"
@@ -70,7 +87,11 @@
               />
               <div class="flex justify-end gap-2">
                 <button class="btn btn-ghost btn-sm" @click="cancelTotp">Cancel</button>
-                <button class="btn btn-primary btn-sm" :disabled="busy || totpConfirmCode.length < 6" @click="confirmTotp">
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="busy || totpConfirmCode.length < 6"
+                  @click="confirmTotp"
+                >
                   Confirm
                 </button>
               </div>
@@ -89,7 +110,12 @@
 
           <table v-if="webauthn.length" class="table table-sm mt-2">
             <thead>
-              <tr><th>Label</th><th>Added</th><th>Last used</th><th></th></tr>
+              <tr>
+                <th>Label</th>
+                <th>Added</th>
+                <th>Last used</th>
+                <th></th>
+              </tr>
             </thead>
             <tbody>
               <tr v-for="c in webauthn" :key="c.id">
@@ -97,7 +123,9 @@
                 <td class="text-xs">{{ fmt(c.created_at) }}</td>
                 <td class="text-xs">{{ c.last_used_at ? fmt(c.last_used_at) : '—' }}</td>
                 <td class="text-right">
-                  <button class="btn btn-ghost btn-xs text-error" @click="removeWebauthn(c.id)">Remove</button>
+                  <button class="btn btn-ghost btn-xs text-error" @click="removeWebauthn(c.id)">
+                    Remove
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -106,9 +134,18 @@
           <div class="flex items-end gap-2 mt-3">
             <div class="form-control flex-1">
               <label class="label py-1"><span class="label-text">Label for this key</span></label>
-              <input v-model="newKeyLabel" type="text" class="input input-bordered input-sm" placeholder="Yubikey 5C" />
+              <input
+                v-model="newKeyLabel"
+                type="text"
+                class="input input-bordered input-sm"
+                placeholder="Yubikey 5C"
+              />
             </div>
-            <button class="btn btn-primary btn-sm" :disabled="!status.enabled || busy || !newKeyLabel.trim()" @click="addWebauthn">
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="!status.enabled || busy || !newKeyLabel.trim()"
+              @click="addWebauthn"
+            >
               Add security key
             </button>
           </div>
@@ -122,7 +159,9 @@
           <p class="text-sm text-base-content/70">
             One-time codes for when you lose access to your other factors. Each can be used once.
           </p>
-          <p class="text-sm">Unused codes remaining: <strong>{{ status.recovery_codes_remaining }}</strong></p>
+          <p class="text-sm">
+            Unused codes remaining: <strong>{{ status.recovery_codes_remaining }}</strong>
+          </p>
 
           <div v-if="freshRecovery.length" class="mt-3">
             <div class="alert alert-warning mb-2">
@@ -133,8 +172,16 @@
             </ul>
           </div>
 
-          <button class="btn btn-outline btn-sm w-fit mt-3" :disabled="!status.enabled || busy" @click="regenRecovery">
-            {{ status.recovery_codes_remaining > 0 ? 'Regenerate recovery codes' : 'Generate recovery codes' }}
+          <button
+            class="btn btn-outline btn-sm w-fit mt-3"
+            :disabled="!status.enabled || busy"
+            @click="regenRecovery"
+          >
+            {{
+              status.recovery_codes_remaining > 0
+                ? 'Regenerate recovery codes'
+                : 'Generate recovery codes'
+            }}
           </button>
         </div>
       </section>
@@ -165,19 +212,34 @@ const freshRecovery = ref<string[]>([])
 function notify(message: string, ok = true) {
   flash.value = message
   flashOk.value = ok
-  setTimeout(() => { if (flash.value === message) flash.value = '' }, 5000)
+  setTimeout(() => {
+    if (flash.value === message) flash.value = ''
+  }, 5000)
 }
-function fmt(iso: string) { return new Date(iso).toLocaleString() }
+function fmt(iso: string) {
+  return new Date(iso).toLocaleString()
+}
 
 async function loadAll() {
-  const [s, w] = await Promise.all([mfaApi.status(), mfaApi.listWebauthn()])
-  if (s.success && s.data) status.value = s.data
-  if (w.success && w.data) webauthn.value = w.data
+  try {
+    const [s, w] = await Promise.all([mfaApi.status(), mfaApi.listWebauthn()])
+    // The whole page is gated on `v-if="!status"`, so a refused status left it
+    // a spinner forever -- on the page whose job is letting somebody secure
+    // their account.
+    if (s.success && s.data) status.value = s.data
+    else notify(s.error || 'Could not load your two-factor settings', false)
+    if (w.success && w.data) webauthn.value = w.data
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load your two-factor settings', false)
+  }
 }
 
 // Regenerate the QR data URL whenever a new TOTP setup arrives.
 watch(totpSetup, async (v) => {
-  if (!v) { qrDataUrl.value = ''; return }
+  if (!v) {
+    qrDataUrl.value = ''
+    return
+  }
   try {
     qrDataUrl.value = await QRCode.toDataURL(v.otpauth_uri, { margin: 1, width: 220 })
   } catch (e: any) {
@@ -187,25 +249,35 @@ watch(totpSetup, async (v) => {
 
 async function beginTotp() {
   busy.value = true
-  const r = await mfaApi.totpSetup()
-  busy.value = false
-  if (r.success && r.data) {
-    totpSetup.value = r.data
-    totpConfirmCode.value = ''
-  } else notify(r.error || 'Failed to start TOTP setup', false)
+  try {
+    const r = await mfaApi.totpSetup()
+    if (r.success && r.data) {
+      totpSetup.value = r.data
+      totpConfirmCode.value = ''
+    } else notify(r.error || 'Failed to start TOTP setup', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to start TOTP setup', false)
+  } finally {
+    busy.value = false
+  }
 }
 
 async function confirmTotp() {
   busy.value = true
-  const r = await mfaApi.totpConfirm(totpConfirmCode.value.trim())
-  busy.value = false
-  if (r.success && r.data) {
-    freshRecovery.value = r.data.recovery_codes
-    totpSetup.value = null
-    totpConfirmCode.value = ''
-    notify('TOTP enabled.')
-    await loadAll()
-  } else notify(r.error || 'Invalid code', false)
+  try {
+    const r = await mfaApi.totpConfirm(totpConfirmCode.value.trim())
+    if (r.success && r.data) {
+      freshRecovery.value = r.data.recovery_codes
+      totpSetup.value = null
+      totpConfirmCode.value = ''
+      notify('TOTP enabled.')
+      await loadAll()
+    } else notify(r.error || 'Invalid code', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Invalid code', false)
+  } finally {
+    busy.value = false
+  }
 }
 
 function cancelTotp() {
@@ -216,8 +288,10 @@ function cancelTotp() {
 async function disableTotp() {
   if (!confirm('Disable authenticator-app login?')) return
   const r = await mfaApi.totpDisable()
-  if (r.success) { notify('TOTP disabled.'); await loadAll() }
-  else notify(r.error || 'Failed', false)
+  if (r.success) {
+    notify('TOTP disabled.')
+    await loadAll()
+  } else notify(r.error || 'Failed', false)
 }
 
 async function addWebauthn() {
@@ -225,7 +299,8 @@ async function addWebauthn() {
   try {
     const begin = await mfaApi.webauthnRegisterBegin(newKeyLabel.value.trim())
     if (!begin.success || !begin.data) {
-      notify(begin.error || 'Failed to start key registration', false); return
+      notify(begin.error || 'Failed to start key registration', false)
+      return
     }
     const credential = await webauthnCreate(begin.data.options as any)
     const finish = await mfaApi.webauthnRegisterFinish(begin.data.challenge_token, credential)
@@ -244,20 +319,32 @@ async function addWebauthn() {
 async function removeWebauthn(id: string) {
   if (!confirm('Remove this security key?')) return
   const r = await mfaApi.webauthnRemove(id)
-  if (r.success) { notify('Removed.'); await loadAll() }
-  else notify(r.error || 'Failed', false)
+  if (r.success) {
+    notify('Removed.')
+    await loadAll()
+  } else notify(r.error || 'Failed', false)
 }
 
 async function regenRecovery() {
-  if (!confirm('Generate a fresh set of recovery codes? Any existing unused codes will be invalidated.')) return
+  if (
+    !confirm(
+      'Generate a fresh set of recovery codes? Any existing unused codes will be invalidated.'
+    )
+  )
+    return
   busy.value = true
-  const r = await mfaApi.regenerateRecoveryCodes()
-  busy.value = false
-  if (r.success && r.data) {
-    freshRecovery.value = r.data.recovery_codes
-    notify('New recovery codes generated.')
-    await loadAll()
-  } else notify(r.error || 'Failed', false)
+  try {
+    const r = await mfaApi.regenerateRecoveryCodes()
+    if (r.success && r.data) {
+      freshRecovery.value = r.data.recovery_codes
+      notify('New recovery codes generated.')
+      await loadAll()
+    } else notify(r.error || 'Failed', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed', false)
+  } finally {
+    busy.value = false
+  }
 }
 
 onMounted(loadAll)

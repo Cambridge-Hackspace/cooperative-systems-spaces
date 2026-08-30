@@ -1,10 +1,10 @@
 -- Admin-curated links on the public home page, gated by audience.
 -- Audience is one of:
---   everyone   — anyone can see it (signed-in or not)
---   anonymous  — only signed-out visitors
---   logged_in  — any authenticated user
---   member     — Member or higher
---   staff      — Staff or higher
+--   everyone   -- anyone can see it (signed-in or not)
+--   anonymous  -- only signed-out visitors
+--   logged_in  -- any authenticated user
+--   member     -- Member or higher
+--   staff      -- Staff or higher
 
 CREATE TABLE home_links (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

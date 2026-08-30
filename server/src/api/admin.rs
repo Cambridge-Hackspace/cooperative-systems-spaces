@@ -4,16 +4,13 @@ use axum::{
     routing::{get, post, put},
     Router,
 };
-use uuid::Uuid;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
-    api::{
-        errors::ApiError,
-        responses::ApiResponse,
-    },
+    api::{errors::ApiError, responses::ApiResponse},
     auth::AdminUser,
-    models::{UserRole, UpdateUser, AuditLog},
+    models::{AuditLog, UpdateUser, UserRole},
     AppState,
 };
 
@@ -43,7 +40,10 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/users/{user_id}/role", put(update_user_role))
         .route("/users/{user_id}/activate", put(activate_user))
         .route("/users/{user_id}/deactivate", put(deactivate_user))
-        .route("/users/{user_id}/mfa", axum::routing::delete(reset_user_mfa))
+        .route(
+            "/users/{user_id}/mfa",
+            axum::routing::delete(reset_user_mfa),
+        )
         .route("/audit-logs", get(get_audit_logs))
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
@@ -79,10 +79,14 @@ async fn reload_config(
             )))
         }
         Err(e) => {
+            //  rather than : anyhow's alternate format prints the
+            // whole cause chain, and a config reload fails for a reason three
+            // layers down more often than not.
             tracing::error!("Failed to reload configuration: {:#}", e);
-            Err(ApiError::InternalServerError(
-                format!("Failed to reload configuration: {:#}", e)
-            ))
+            Err(ApiError::InternalServerError(format!(
+                "Failed to reload configuration: {:#}",
+                e
+            )))
         }
     }
 }
@@ -92,11 +96,10 @@ async fn get_roster(
     _admin_user: AdminUser, // Ensures only admin users can access
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<RosterUser>>>, ApiError> {
-    let users = state.db.get_all_users()
-        .map_err(|e| {
-            tracing::error!("Failed to query users: {}", e);
-            ApiError::InternalServerError("Failed to fetch users".to_string())
-        })?;
+    let users = state
+        .db
+        .get_all_users()
+        .map_err(|e| ApiError::from_db("Failed to query users", e))?;
 
     let roster_users: Vec<RosterUser> = users
         .into_iter()
@@ -123,11 +126,10 @@ async fn update_user_role(
     Json(payload): Json<UpdateUserRoleRequest>,
 ) -> Result<Json<ApiResponse<RosterUser>>, ApiError> {
     // First check if user exists
-    let user = state.db.find_user_by_id(user_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check if user exists: {}", e);
-            ApiError::InternalServerError("Database query failed".to_string())
-        })?;
+    let user = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
     let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -144,11 +146,10 @@ async fn update_user_role(
         meta: None,
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data)
-        .map_err(|e| {
-            tracing::error!("Failed to update user role: {}", e);
-            ApiError::InternalServerError("Failed to update user role".to_string())
-        })?;
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
+        .map_err(|e| ApiError::from_db("Failed to update user role", e))?;
 
     let roster_user = RosterUser {
         id: updated_user.id,
@@ -162,19 +163,23 @@ async fn update_user_role(
     };
 
     // Log the role change
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::UserRoleChange,
-        Some(updated_user.id),
-        Some(_admin_user.0.id),
-        serde_json::json!({
-            "old_role": "unknown", // We don't have the old role easily accessible
-            "new_role": format!("{:?}", updated_user.role),
-            "username": updated_user.username,
-            "action": "User role updated by admin"
-        }),
-        None,
-        None,
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserRoleChange,
+            Some(updated_user.id),
+            Some(_admin_user.0.id),
+            serde_json::json!({
+                "old_role": "unknown", // We don't have the old role easily accessible
+                "new_role": format!("{:?}", updated_user.role),
+                "username": updated_user.username,
+                "action": "User role updated by admin"
+            }),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log role change: {}", e);
     }
 
@@ -193,11 +198,10 @@ async fn activate_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<RosterUser>>, ApiError> {
-    let user = state.db.find_user_by_id(user_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check if user exists: {}", e);
-            ApiError::InternalServerError("Database query failed".to_string())
-        })?;
+    let user = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
     let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -214,11 +218,10 @@ async fn activate_user(
         meta: None,
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data)
-        .map_err(|e| {
-            tracing::error!("Failed to activate user: {}", e);
-            ApiError::InternalServerError("Failed to activate user".to_string())
-        })?;
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
+        .map_err(|e| ApiError::from_db("Failed to activate user", e))?;
 
     let roster_user = RosterUser {
         id: updated_user.id,
@@ -232,17 +235,21 @@ async fn activate_user(
     };
 
     // Log the activation
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::UserActivation,
-        Some(updated_user.id),
-        Some(_admin_user.0.id),
-        serde_json::json!({
-            "username": updated_user.username,
-            "action": "User activated by admin"
-        }),
-        None,
-        None,
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserActivation,
+            Some(updated_user.id),
+            Some(_admin_user.0.id),
+            serde_json::json!({
+                "username": updated_user.username,
+                "action": "User activated by admin"
+            }),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log user activation: {}", e);
     }
 
@@ -261,11 +268,10 @@ async fn deactivate_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<RosterUser>>, ApiError> {
-    let user = state.db.find_user_by_id(user_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check if user exists: {}", e);
-            ApiError::InternalServerError("Database query failed".to_string())
-        })?;
+    let user = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
     let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -282,11 +288,10 @@ async fn deactivate_user(
         meta: None,
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data)
-        .map_err(|e| {
-            tracing::error!("Failed to deactivate user: {}", e);
-            ApiError::InternalServerError("Failed to deactivate user".to_string())
-        })?;
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
+        .map_err(|e| ApiError::from_db("Failed to deactivate user", e))?;
 
     let roster_user = RosterUser {
         id: updated_user.id,
@@ -300,17 +305,21 @@ async fn deactivate_user(
     };
 
     // Log the deactivation
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::UserDeactivation,
-        Some(updated_user.id),
-        Some(_admin_user.0.id),
-        serde_json::json!({
-            "username": updated_user.username,
-            "action": "User deactivated by admin"
-        }),
-        None,
-        None,
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserDeactivation,
+            Some(updated_user.id),
+            Some(_admin_user.0.id),
+            serde_json::json!({
+                "username": updated_user.username,
+                "action": "User deactivated by admin"
+            }),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log user deactivation: {}", e);
     }
 
@@ -340,11 +349,10 @@ async fn get_audit_logs(
     let per_page = std::cmp::min(query.per_page.unwrap_or(50), 100); // Cap at 100 records per page
     let offset = (page - 1) * per_page;
 
-    let logs = state.db.get_audit_logs(offset as i64, per_page as i64, query.event_type.clone())
-        .map_err(|e| {
-            tracing::error!("Failed to query audit logs: {}", e);
-            ApiError::InternalServerError("Failed to fetch audit logs".to_string())
-        })?;
+    let logs = state
+        .db
+        .get_audit_logs(offset as i64, per_page as i64, query.event_type.clone())
+        .map_err(|e| ApiError::from_db("Failed to query audit logs", e))?;
 
     Ok(Json(ApiResponse::success(logs)))
 }
@@ -354,8 +362,25 @@ async fn refresh_wiki_pages(
     _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    // Asked before it is attempted, rather than inferred from the failure.
+    //
+    // "No repository configured" is a state an administrator put the instance
+    // in, not a fault -- so a 500 tells them the server broke about a setting
+    // they can change in the next screen. 409 says what is actually true: the
+    // request conflicts with the current configuration.
+    //
+    // Checked against the config rather than by matching the error's text. The
+    // message is ours today and one refactor away from being somebody else's,
+    // and a status code that depends on a string is a status code that changes
+    // when a message is reworded.
+    if state.config_manager.get_config().pages.wiki_repo.is_none() {
+        return Err(ApiError::Conflict(
+            "No wiki repository is configured; set one before refreshing".to_string(),
+        ));
+    }
+
     let mut pages_service = state.pages_service.write().await;
-    
+
     match pages_service.trigger_wiki_update().await {
         Ok(()) => {
             let store = pages_service.get_store();
@@ -364,14 +389,18 @@ async fn refresh_wiki_pages(
                     "wiki_pages_count": store.wiki_pages.len(),
                     "updated_at": chrono::Utc::now().to_rfc3339(),
                 }),
-                format!("Wiki pages refreshed successfully. {} pages loaded.", store.wiki_pages.len()),
+                format!(
+                    "Wiki pages refreshed successfully. {} pages loaded.",
+                    store.wiki_pages.len()
+                ),
             )))
         }
         Err(e) => {
             tracing::error!("Failed to refresh wiki pages: {}", e);
-            Err(ApiError::InternalServerError(
-                format!("Failed to refresh wiki pages: {}", e)
-            ))
+            Err(ApiError::InternalServerError(format!(
+                "Failed to refresh wiki pages: {}",
+                e
+            )))
         }
     }
 }
@@ -381,8 +410,25 @@ async fn refresh_site_pages(
     _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    // Asked before it is attempted, rather than inferred from the failure.
+    //
+    // "No repository configured" is a state an administrator put the instance
+    // in, not a fault -- so a 500 tells them the server broke about a setting
+    // they can change in the next screen. 409 says what is actually true: the
+    // request conflicts with the current configuration.
+    //
+    // Checked against the config rather than by matching the error's text. The
+    // message is ours today and one refactor away from being somebody else's,
+    // and a status code that depends on a string is a status code that changes
+    // when a message is reworded.
+    if state.config_manager.get_config().pages.site_repo.is_none() {
+        return Err(ApiError::Conflict(
+            "No site repository is configured; set one before refreshing".to_string(),
+        ));
+    }
+
     let mut pages_service = state.pages_service.write().await;
-    
+
     match pages_service.trigger_site_update().await {
         Ok(()) => {
             let store = pages_service.get_store();
@@ -392,14 +438,18 @@ async fn refresh_site_pages(
                     "has_index": store.site_index.is_some(),
                     "updated_at": chrono::Utc::now().to_rfc3339(),
                 }),
-                format!("Site pages refreshed successfully. {} pages loaded.", store.site_pages.len()),
+                format!(
+                    "Site pages refreshed successfully. {} pages loaded.",
+                    store.site_pages.len()
+                ),
             )))
         }
         Err(e) => {
             tracing::error!("Failed to refresh site pages: {}", e);
-            Err(ApiError::InternalServerError(
-                format!("Failed to refresh site pages: {}", e)
-            ))
+            Err(ApiError::InternalServerError(format!(
+                "Failed to refresh site pages: {}",
+                e
+            )))
         }
     }
 }
@@ -422,14 +472,18 @@ async fn reset_user_mfa(
 
     // Emit one event per disabled artifact category so webhook subscribers
     // can see exactly what was reset, plus an aggregate audit entry.
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::MfaTotpDisabled,
-        Some(user_id),
-        Some(admin_user.0.id),
-        serde_json::json!({ "reason": "admin_reset", "target_username": target.username }),
-        None,
-        None,
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::MfaTotpDisabled,
+            Some(user_id),
+            Some(admin_user.0.id),
+            serde_json::json!({ "reason": "admin_reset", "target_username": target.username }),
+            None,
+            None,
+        )
+        .await
+    {
         tracing::warn!("Failed to log MFA reset audit: {}", e);
     }
 

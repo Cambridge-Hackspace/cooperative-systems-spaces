@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use chrono::Utc;
@@ -16,9 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
-use crate::models::{
-    AuditEventType, NewAuditLog, NewSchedule, Schedule, UpdateSchedule,
-};
+use crate::models::{AuditEventType, NewAuditLog, NewSchedule, Schedule, UpdateSchedule};
 use crate::schedules::{parse_intervals, validate, ScheduleInterval};
 use crate::AppState;
 
@@ -131,7 +129,11 @@ fn audit(state: &AppState, event: AuditEventType, actor: Option<Uuid>, data: ser
         user_agent: None,
     };
     if let Err(e) = state.db.create_audit_log(&log) {
-        tracing::error!("Failed to write schedule audit log {}: {}", event.as_str(), e);
+        tracing::error!(
+            "Failed to write schedule audit log {}: {}",
+            event.as_str(),
+            e
+        );
     }
 }
 
@@ -171,7 +173,9 @@ async fn get_schedule_admin(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let s = state.db.get_schedule(id)?;
-    Ok(Json(ApiResponse::success(ScheduleResponse::try_from_schedule(s)?)))
+    Ok(Json(ApiResponse::success(
+        ScheduleResponse::try_from_schedule(s)?,
+    )))
 }
 
 async fn create_schedule(
@@ -204,7 +208,9 @@ async fn create_schedule(
     // No transitions to compute here — rules don't reference this schedule yet.
     Ok((
         StatusCode::CREATED,
-        Json(ApiResponse::success(ScheduleResponse::try_from_schedule(created)?)),
+        Json(ApiResponse::success(ScheduleResponse::try_from_schedule(
+            created,
+        )?)),
     ))
 }
 
@@ -246,7 +252,9 @@ async fn update_schedule(
     // Any rule that references this schedule may now allow/deny different
     // cards; re-evaluate all door devices.
     state.door_service.republish_all();
-    Ok(Json(ApiResponse::success(ScheduleResponse::try_from_schedule(updated)?)))
+    Ok(Json(ApiResponse::success(
+        ScheduleResponse::try_from_schedule(updated)?,
+    )))
 }
 
 async fn delete_schedule(
@@ -297,5 +305,7 @@ async fn get_schedule_member(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let s = state.db.get_schedule(id)?;
-    Ok(Json(ApiResponse::success(ScheduleResponse::try_from_schedule(s)?)))
+    Ok(Json(ApiResponse::success(
+        ScheduleResponse::try_from_schedule(s)?,
+    )))
 }

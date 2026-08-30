@@ -3,7 +3,7 @@
     <div class="modal" @click.stop>
       <div class="modal-header">
         <h3>Edit Trainer Assignment</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -15,7 +15,7 @@
         <form @submit.prevent="submitForm">
           <div class="form-group">
             <label for="expires_at">Expiration Date</label>
-            <input 
+            <input
               id="expires_at"
               v-model="formData.expires_at"
               type="date"
@@ -27,7 +27,7 @@
 
           <div class="form-group">
             <label for="notes">Notes</label>
-            <textarea 
+            <textarea
               id="notes"
               v-model="formData.notes"
               class="form-control"
@@ -38,11 +38,7 @@
 
           <div class="form-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
-                v-model="formData.is_active"
-                class="checkbox"
-              />
+              <input v-model="formData.is_active" type="checkbox" class="checkbox" />
               Active Trainer
             </label>
             <small class="form-text">Uncheck to temporarily deactivate this trainer</small>
@@ -51,9 +47,7 @@
           <div v-if="error" class="error">{{ error }}</div>
 
           <div class="modal-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="submitting" class="btn btn-primary">
               {{ submitting ? 'Updating...' : 'Update Trainer' }}
             </button>
@@ -65,9 +59,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { trainerApi } from '../utils/api'
 import type { Tool, ToolTrainerWithUser, UpdateTrainerRequest } from '../types'
+import { localDate, utcDateOf } from '@/lib/dates'
 
 interface Props {
   tool: Tool
@@ -76,8 +71,8 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
-  'close': []
-  'updated': []
+  close: []
+  updated: []
 }>()
 
 // State
@@ -86,16 +81,18 @@ const error = ref('')
 
 const formData = ref<UpdateTrainerRequest & { expires_at: string }>({
   notes: props.trainerWithUser.trainer.notes || '',
-  expires_at: props.trainerWithUser.trainer.expires_at 
-    ? new Date(props.trainerWithUser.trainer.expires_at).toISOString().split('T')[0]
-    : '',
-  is_active: props.trainerWithUser.trainer.is_active
+  // `utcDateOf`, not `localDateOf`: this is a stored timestamp whose date
+  // component is the date somebody picked. Rendering the instant locally shows
+  // the previous day west of UTC, and walks back one more each time the form is
+  // opened and saved.
+  expires_at: utcDateOf(props.trainerWithUser.trainer.expires_at),
+  is_active: props.trainerWithUser.trainer.is_active,
 })
 
 // Computed
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// The user's date, not UTC's. `toISOString()` here floored the picker at the
+// UTC date, so west of UTC a trainer could not be given an expiry of today.
+const today = computed(() => localDate())
 
 // Methods
 const submitForm = async () => {
@@ -107,7 +104,7 @@ const submitForm = async () => {
     const requestData: UpdateTrainerRequest = {
       notes: formData.value.notes || undefined,
       expires_at: formData.value.expires_at || undefined,
-      is_active: formData.value.is_active
+      is_active: formData.value.is_active,
     }
 
     const response = await trainerApi.updateToolTrainer(
@@ -144,7 +141,7 @@ const submitForm = async () => {
 }
 
 .modal {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   width: 90%;
@@ -157,16 +154,16 @@ const submitForm = async () => {
 
 .modal-header {
   padding: 1.5rem;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
 }
 
 .modal-header h3 {
   margin: 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   font-size: 1.25rem;
 }
 
@@ -187,7 +184,7 @@ const submitForm = async () => {
 }
 
 .close-btn:hover {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   color: #495057;
 }
 
@@ -197,7 +194,7 @@ const submitForm = async () => {
 }
 
 .trainer-info {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   padding: 1rem;
   border-radius: 6px;
   margin-bottom: 1.5rem;
@@ -205,7 +202,7 @@ const submitForm = async () => {
 
 .trainer-info h4 {
   margin: 0 0 0.25rem 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   font-size: 1.1rem;
 }
 
@@ -227,7 +224,7 @@ label {
   display: block;
   margin-bottom: 0.5rem;
   font-weight: 500;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .checkbox-label {
@@ -245,7 +242,7 @@ label {
 .form-control {
   width: 100%;
   padding: 0.75rem;
-  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 1rem;
   transition: border-color 0.2s;
@@ -278,7 +275,7 @@ label {
   justify-content: flex-end;
   margin-top: 1.5rem;
   padding-top: 1rem;
-  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-top: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .btn {
@@ -331,16 +328,16 @@ textarea.form-control {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .modal-header,
   .modal-body {
     padding: 1rem;
   }
-  
+
   .modal-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

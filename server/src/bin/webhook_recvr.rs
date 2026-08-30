@@ -30,7 +30,10 @@ use sha2::Sha256;
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Parser, Debug)]
-#[command(name = "css-webhook-recvr", about = "Test sink that prints received webhooks")]
+#[command(
+    name = "css-webhook-recvr",
+    about = "Test sink that prints received webhooks"
+)]
 struct Args {
     /// Address to listen on.
     #[arg(long, env = "WEBHOOK_RECVR_BIND", default_value = "127.0.0.1:4398")]
@@ -66,7 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("│  css-webhook-recvr listening on {:<14}│", args.bind);
     println!(
         "│  signature check: {:<28}│",
-        if state.secret.is_some() { "enabled" } else { "disabled (no --secret)" }
+        if state.secret.is_some() {
+            "enabled"
+        } else {
+            "disabled (no --secret)"
+        }
     );
     println!("╰───────────────────────────────────────────────╯");
 
@@ -115,7 +122,10 @@ async fn handler(
 
     // Signature verification (if a secret was supplied).
     if let Some(secret) = &state.secret {
-        match headers.get("x-webhook-signature").and_then(|v| v.to_str().ok()) {
+        match headers
+            .get("x-webhook-signature")
+            .and_then(|v| v.to_str().ok())
+        {
             Some(provided) => {
                 let expected = format!("sha256={}", sign(secret, &body));
                 let ok = provided == expected;
@@ -133,7 +143,8 @@ async fn handler(
     match serde_json::from_slice::<serde_json::Value>(&body) {
         Ok(json) => println!(
             "{}",
-            serde_json::to_string_pretty(&json).unwrap_or_else(|_| String::from_utf8_lossy(&body).into_owned())
+            serde_json::to_string_pretty(&json)
+                .unwrap_or_else(|_| String::from_utf8_lossy(&body).into_owned())
         ),
         Err(_) => println!("{}", String::from_utf8_lossy(&body)),
     }

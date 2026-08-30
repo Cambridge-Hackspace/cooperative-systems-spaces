@@ -1,6 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { User, LoginRequest, LoginResponse, LoginOutcome, MfaChallenge, RegisterRequest } from '@/types'
+import type {
+  User,
+  LoginRequest,
+  LoginResponse,
+  LoginOutcome,
+  MfaChallenge,
+  RegisterRequest,
+} from '@/types'
 import { isMfaChallenge, UserRole } from '@/types'
 import { apiClient } from '@/utils/api'
 
@@ -66,7 +73,7 @@ export const useAuthStore = defineStore('auth', () => {
         return 'mfa'
       }
 
-      const data = response.data as LoginResponse
+      const data = response.data
       token.value = data.token
       user.value = data.user
       mustEnrollMfa.value = !!data.must_enroll_mfa
@@ -99,7 +106,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const response = await apiClient.post<User>('/auth/register', userData)
-      
+
       if (response.success) {
         // Registration successful, but user needs to login
         return true
@@ -132,7 +139,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const response = await apiClient.get<User>('/auth/me')
-      
+
       if (response.success && response.data) {
         user.value = response.data
         return true
@@ -142,6 +149,9 @@ export const useAuthStore = defineStore('auth', () => {
         return false
       }
     } catch (err: any) {
+      // Logged rather than discarded: a swallowed error is indistinguishable
+      // from a successful no-op to anyone reading the console.
+      console.error(err)
       // Token is likely invalid
       logout()
       return false
@@ -158,7 +168,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const response = await apiClient.put<User>(`/users/${user.value.id}`, updates)
-      
+
       if (response.success && response.data) {
         user.value = response.data
         return true
@@ -176,21 +186,21 @@ export const useAuthStore = defineStore('auth', () => {
 
   const hasRole = (requiredRole: UserRole): boolean => {
     if (!user.value) return false
-    
+
     const roleHierarchy: Record<string, number> = {
-      'unknown': 0,
-      'newbie': 1,
-      'member': 2,
-      'staff': 3,
-      'admin': 4
+      unknown: 0,
+      newbie: 1,
+      member: 2,
+      staff: 3,
+      admin: 4,
     }
-    
+
     const userRoleString = String(user.value.role).toLowerCase()
     const requiredRoleString = String(requiredRole).toLowerCase()
-    
+
     const userRoleLevel = roleHierarchy[userRoleString] || 0
     const requiredRoleLevel = roleHierarchy[requiredRoleString] || 0
-    
+
     return userRoleLevel >= requiredRoleLevel
   }
 

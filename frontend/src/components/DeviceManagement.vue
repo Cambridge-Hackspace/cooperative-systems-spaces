@@ -2,23 +2,17 @@
   <div class="device-management">
     <div class="header-section">
       <h2>Device Management</h2>
-      <button @click="showInviteModal = true" class="btn btn-primary">
+      <button class="btn btn-primary" @click="showInviteModal = true">
         <span class="icon">➕</span> Generate Device Invite
       </button>
     </div>
 
     <!-- Tabs -->
     <div class="tabs">
-      <button
-        :class="['tab', { active: activeTab === 'devices' }]"
-        @click="activeTab = 'devices'"
-      >
+      <button :class="['tab', { active: activeTab === 'devices' }]" @click="activeTab = 'devices'">
         <span class="icon">📱</span> Devices
       </button>
-      <button
-        :class="['tab', { active: activeTab === 'invites' }]"
-        @click="activeTab = 'invites'"
-      >
+      <button :class="['tab', { active: activeTab === 'invites' }]" @click="activeTab = 'invites'">
         <span class="icon">🎫</span> Invites
       </button>
     </div>
@@ -37,12 +31,9 @@
           >
             <div class="device-header">
               <div class="device-status">
-                <span
-                  class="status-dot"
-                  :class="{ online: device.is_online }"
-                ></span>
+                <span class="status-dot" :class="{ online: device.is_online }"></span>
                 <span class="status-text">
-                  {{ device.is_online ? "Online" : "Offline" }}
+                  {{ device.is_online ? 'Online' : 'Offline' }}
                 </span>
               </div>
               <span class="device-kind-badge">{{ device.kind }}</span>
@@ -53,21 +44,19 @@
             <div class="device-details">
               <div class="detail-row">
                 <span class="label">MAC Address:</span>
-                <span class="value">{{ device.mac_address || "N/A" }}</span>
+                <span class="value">{{ device.mac_address || 'N/A' }}</span>
               </div>
               <div class="detail-row">
                 <span class="label">Platform:</span>
-                <span class="value">{{ device.platform || "N/A" }}</span>
+                <span class="value">{{ device.platform || 'N/A' }}</span>
               </div>
               <div class="detail-row">
                 <span class="label">Version:</span>
-                <span class="value">{{
-                  device.software_version || "N/A"
-                }}</span>
+                <span class="value">{{ device.software_version || 'N/A' }}</span>
               </div>
               <div class="detail-row">
                 <span class="label">IPv4:</span>
-                <span class="value">{{ device.ipv4_address || "N/A" }}</span>
+                <span class="value">{{ device.ipv4_address || 'N/A' }}</span>
               </div>
               <div class="detail-row">
                 <span class="label">Uptime:</span>
@@ -75,23 +64,15 @@
               </div>
               <div class="detail-row">
                 <span class="label">Last Seen:</span>
-                <span class="value">{{
-                  formatLastSeen(device.last_seen_at)
-                }}</span>
+                <span class="value">{{ formatLastSeen(device.last_seen_at) }}</span>
               </div>
             </div>
 
             <div class="device-actions">
-              <button
-                @click="renameDevice(device)"
-                class="btn btn-small btn-secondary"
-              >
+              <button class="btn btn-small btn-secondary" @click="renameDevice(device)">
                 ✏️ Rename
               </button>
-              <button
-                @click="confirmDelete(device)"
-                class="btn btn-small btn-danger"
-              >
+              <button class="btn btn-small btn-danger" @click="confirmDelete(device)">
                 🗑️ Delete
               </button>
             </div>
@@ -133,13 +114,13 @@
               </td>
               <td>{{ formatExpiry(invite.expires_at) }}</td>
               <td>
-                {{ invite.used_by_device_name || "-" }}
+                {{ invite.used_by_device_name || '-' }}
               </td>
               <td>
                 <button
                   v-if="!invite.used_at && !isExpired(invite.expires_at)"
-                  @click="expireInvite(invite.device_code)"
                   class="btn btn-small btn-danger"
+                  @click="expireInvite(invite.device_code)"
                 >
                   Expire
                 </button>
@@ -161,7 +142,7 @@
       <div class="modal-content" @click.stop>
         <div class="modal-header">
           <h3>Generate Device Invite</h3>
-          <button @click="closeInviteModal" class="close-btn">✕</button>
+          <button class="close-btn" @click="closeInviteModal">✕</button>
         </div>
 
         <div v-if="generatedInvite" class="generated-invite">
@@ -182,12 +163,8 @@
           </div>
 
           <div class="modal-actions">
-            <button @click="copyInviteCode" class="btn btn-secondary">
-              📋 Copy Code
-            </button>
-            <button @click="closeInviteModal" class="btn btn-primary">
-              Done
-            </button>
+            <button class="btn btn-secondary" @click="copyInviteCode">📋 Copy Code</button>
+            <button class="btn btn-primary" @click="closeInviteModal">Done</button>
           </div>
         </div>
 
@@ -198,15 +175,9 @@
           </div>
 
           <div class="modal-actions">
-            <button @click="closeInviteModal" class="btn btn-secondary">
-              Cancel
-            </button>
-            <button
-              @click="generateInvite"
-              :disabled="generating"
-              class="btn btn-primary"
-            >
-              {{ generating ? "Generating..." : "Generate Invite" }}
+            <button class="btn btn-secondary" @click="closeInviteModal">Cancel</button>
+            <button :disabled="generating" class="btn btn-primary" @click="generateInvite">
+              {{ generating ? 'Generating...' : 'Generate Invite' }}
             </button>
           </div>
         </div>
@@ -218,7 +189,7 @@
       <div class="modal-content" @click.stop>
         <div class="modal-header">
           <h3>Rename Device</h3>
-          <button @click="closeRenameModal" class="close-btn">✕</button>
+          <button class="close-btn" @click="closeRenameModal">✕</button>
         </div>
 
         <div class="modal-body">
@@ -234,15 +205,13 @@
         </div>
 
         <div class="modal-actions">
-          <button @click="closeRenameModal" class="btn btn-secondary">
-            Cancel
-          </button>
+          <button class="btn btn-secondary" @click="closeRenameModal">Cancel</button>
           <button
-            @click="submitRename"
             :disabled="!renameModal.newName || renaming"
             class="btn btn-primary"
+            @click="submitRename"
           >
-            {{ renaming ? "Renaming..." : "Rename" }}
+            {{ renaming ? 'Renaming...' : 'Rename' }}
           </button>
         </div>
       </div>
@@ -253,7 +222,7 @@
       <div class="modal-content" @click.stop>
         <div class="modal-header">
           <h3>Delete Device</h3>
-          <button @click="closeDeleteModal" class="close-btn">✕</button>
+          <button class="close-btn" @click="closeDeleteModal">✕</button>
         </div>
 
         <div class="modal-body">
@@ -261,28 +230,17 @@
             <span class="warning-icon">⚠️</span>
             <div>
               <p>
-                <strong>Are you sure you want to delete "{{
-                  deleteModal.device?.name
-                }}"?</strong>
+                <strong>Are you sure you want to delete "{{ deleteModal.device?.name }}"?</strong>
               </p>
-              <p>
-                The device will be disconnected and will need to be re-registered to
-                reconnect.
-              </p>
+              <p>The device will be disconnected and will need to be re-registered to reconnect.</p>
             </div>
           </div>
         </div>
 
         <div class="modal-actions">
-          <button @click="closeDeleteModal" class="btn btn-secondary">
-            Cancel
-          </button>
-          <button
-            @click="submitDelete"
-            :disabled="deleting"
-            class="btn btn-danger"
-          >
-            {{ deleting ? "Deleting..." : "Delete Device" }}
+          <button class="btn btn-secondary" @click="closeDeleteModal">Cancel</button>
+          <button :disabled="deleting" class="btn btn-danger" @click="submitDelete">
+            {{ deleting ? 'Deleting...' : 'Delete Device' }}
           </button>
         </div>
       </div>
@@ -391,7 +349,7 @@ const generateInvite = async () => {
   try {
     const response = await apiClient.raw.post('/admin/devices/invite', {})
     generatedInvite.value = response.data.data
-    loadInvites() // Refresh invites list
+    void loadInvites() // Refresh invites list
   } catch (err: any) {
     alert('Failed to generate invite: ' + err.message)
   } finally {
@@ -399,10 +357,19 @@ const generateInvite = async () => {
   }
 }
 
-const copyInviteCode = () => {
-  if (generatedInvite.value) {
-    navigator.clipboard.writeText(generatedInvite.value.device_code)
+const copyInviteCode = async () => {
+  if (!generatedInvite.value) return
+  const code = generatedInvite.value.device_code
+  try {
+    await navigator.clipboard.writeText(code)
     alert('Invite code copied to clipboard!')
+  } catch (error) {
+    // writeText rejects on an insecure origin, a denied permission, or a
+    // browser without the API. This previously ran unawaited with the success
+    // alert underneath it unconditionally, so a failed copy still said
+    // "copied" -- and the admin walked away with a code they could not paste.
+    console.error('Could not copy the invite code:', error)
+    alert(`Could not copy automatically. The invite code is: ${code}`)
   }
 }
 
@@ -416,7 +383,7 @@ const expireInvite = async (code: string) => {
 
   try {
     await apiClient.raw.delete(`/admin/devices/invites/${code}`)
-    loadInvites() // Refresh list
+    void loadInvites() // Refresh list
   } catch (err: any) {
     alert('Failed to expire invite: ' + err.message)
   }
@@ -440,14 +407,13 @@ const closeRenameModal = () => {
 
 const submitRename = async () => {
   if (!renameModal.value.device) return
-  
+
   renaming.value = true
   try {
-    await apiClient.raw.patch(
-      `/admin/devices/${renameModal.value.device.id}/name`,
-      { name: renameModal.value.newName }
-    )
-    loadDevices() // Refresh devices
+    await apiClient.raw.patch(`/admin/devices/${renameModal.value.device.id}/name`, {
+      name: renameModal.value.newName,
+    })
+    void loadDevices() // Refresh devices
     closeRenameModal()
   } catch (err: any) {
     alert('Failed to rename device: ' + err.message)
@@ -472,11 +438,11 @@ const closeDeleteModal = () => {
 
 const submitDelete = async () => {
   if (!deleteModal.value.device) return
-  
+
   deleting.value = true
   try {
     await apiClient.raw.delete(`/admin/devices/${deleteModal.value.device.id}`)
-    loadDevices() // Refresh devices
+    void loadDevices() // Refresh devices
     closeDeleteModal()
   } catch (err: any) {
     alert('Failed to delete device: ' + err.message)
@@ -528,8 +494,8 @@ const getInviteStatus = (invite: Invite): 'used' | 'expired' | 'active' => {
 
 // Lifecycle
 onMounted(() => {
-  loadDevices()
-  loadInvites()
+  void loadDevices()
+  void loadInvites()
 })
 </script>
 
@@ -556,7 +522,7 @@ h2 {
   display: flex;
   gap: 10px;
   margin-bottom: 30px;
-  border-bottom: 2px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 2px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .tab {
@@ -648,8 +614,8 @@ h2 {
 }
 
 .device-card {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
-  border: 2px solid var(--fallback-b3,oklch(var(--b3)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
+  border: 2px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 8px;
   padding: 20px;
   transition: all 0.2s;
@@ -746,24 +712,24 @@ h2 {
 .invites-table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
 }
 
 .invites-table th,
 .invites-table td {
   padding: 12px;
   text-align: left;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .invites-table th {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   font-weight: 600;
   color: #666;
 }
 
 .device-code {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   padding: 4px 8px;
   border-radius: 4px;
   font-family: monospace;
@@ -822,7 +788,7 @@ h2 {
 }
 
 .modal-content {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   width: 90%;
   max-width: 500px;
@@ -832,7 +798,7 @@ h2 {
 
 .modal-header {
   padding: 20px;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -859,7 +825,7 @@ h2 {
 }
 
 .close-btn:hover {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
 }
 
 .modal-body {
@@ -868,7 +834,7 @@ h2 {
 
 .modal-actions {
   padding: 20px;
-  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-top: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   display: flex;
   gap: 10px;
   justify-content: flex-end;
@@ -877,7 +843,7 @@ h2 {
 .form-input {
   width: 100%;
   padding: 10px;
-  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 14px;
   margin-top: 8px;
@@ -909,7 +875,7 @@ h2 {
 }
 
 .invite-code-display {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   border-radius: 8px;
   padding: 20px;
   margin: 20px 0;

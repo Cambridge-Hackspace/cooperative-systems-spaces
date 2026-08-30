@@ -33,7 +33,6 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 mime_guess = "2.0"
 rust-embed = "8.0"
-axum-embed = "0.1"
 include_dir = "0.7.4"
 
 css_lib = {path = "../css_lib"}

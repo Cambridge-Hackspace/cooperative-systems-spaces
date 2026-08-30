@@ -1,20 +1,20 @@
-use std::fmt::{Display, Formatter};
 use anyhow::{Context, Result};
+pub use css_lib::MqttConfig;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::fs;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use tracing::info;
-pub(crate) use css_lib::{MqttConfig};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{info, warn};
 
 /// Merge two TOML values, with the first taking precedence
 /// This is used to merge existing config with defaults for missing fields
 fn merge_toml_values(existing: toml::Value, defaults: toml::Value) -> toml::Value {
     use toml::Value;
-    
+
     match (existing, defaults) {
         (Value::Table(mut existing_table), Value::Table(defaults_table)) => {
             // For tables, merge recursively
@@ -386,7 +386,21 @@ impl Default for RegistrationChallengeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// JWT secret key for signing tokens
+    /// JWT secret key for signing tokens.
+    ///
+    /// Optional in the file. `config.sample.toml` deliberately ships without
+    /// it -- writing a real secret into a sample is how a public one ends up
+    /// signing production tokens -- so this has to deserialize from its
+    /// absence or the shipped sample does not parse at all.
+    ///
+    /// Absence means the empty string here, not a generated secret, and that
+    /// is deliberate: `load_config` fills it in *and writes it back*.
+    /// Generating in the serde default would mint a fresh secret on every
+    /// boot without persisting any of them, so every restart would invalidate
+    /// every session -- a symptom that looks like broken token expiry and
+    /// would not lead anyone here. `validate_config` refuses an empty secret,
+    /// so the unfilled value can never reach `EncodingKey`.
+    #[serde(default)]
     pub jwt_secret: String,
     /// JWT token expiration time in hours
     pub jwt_expiration_hours: u32,
@@ -588,7 +602,6 @@ impl Default for ServerConfig {
             cors_origins: vec!["http://localhost:3000".to_string()],
         }
     }
-
 }
 
 /// Profile field configuration
@@ -632,7 +645,9 @@ pub enum ProfileFieldType {
     Number,
     Date,
     Boolean,
-    Select { options: Vec<String> },
+    Select {
+        options: Vec<String>,
+    },
 }
 
 impl Default for UserConfig {
@@ -666,7 +681,6 @@ impl Default for UserConfig {
     }
 }
 
-
 /// ToolGuard Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolGuardConfig {
@@ -683,7 +697,7 @@ impl Default for ToolGuardConfig {
         Self {
             enabled: true,
             profile_field: "card_id".to_string(),
-            global_api_key: None
+            global_api_key: None,
         }
     }
 }
@@ -722,11 +736,7 @@ impl PlaceConfig {
 
     /// `Ok(())` iff `child_type` is deeper than `parent_type`. Both types
     /// must appear in [`Self::types`].
-    pub fn validate_parent_child(
-        &self,
-        parent_type: &str,
-        child_type: &str,
-    ) -> Result<(), String> {
+    pub fn validate_parent_child(&self, parent_type: &str, child_type: &str) -> Result<(), String> {
         let parent_idx = self
             .index_of(parent_type)
             .ok_or_else(|| format!("Unknown parent place_type '{parent_type}'"))?;
@@ -797,14 +807,12 @@ impl Default for CalendarConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            calendars: vec![
-                CalendarSource {
-                    ical_link: "https://example.com/calendar.ics".to_string(),
-                    name: "Example Calendar".to_string(),
-                    color: "#3788d8".to_string(),
-                    enabled: false,
-                },
-            ],
+            calendars: vec![CalendarSource {
+                ical_link: "https://example.com/calendar.ics".to_string(),
+                name: "Example Calendar".to_string(),
+                color: "#3788d8".to_string(),
+                enabled: false,
+            }],
             cache_duration_minutes: 15,
             max_events_display: 10,
             lookahead_days: 30,
@@ -873,7 +881,7 @@ impl Default for PagesConfig {
             users_pages_enabled: false,
             user_profile_field: "user_page_repository".to_string(),
             user_period: 900,
-            user_readme: true
+            user_readme: true,
         }
     }
 }
@@ -881,7 +889,7 @@ impl Default for PagesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeConfig {
     pub edge_enabled: bool,
-    pub edge_mqtt_config: Option<MqttConfig>
+    pub edge_mqtt_config: Option<MqttConfig>,
 }
 
 impl Default for EdgeConfig {
@@ -1038,6 +1046,46 @@ impl Default for AppConfig {
     }
 }
 
+/// Returned when `from_file` filled in fields a configuration was missing and
+/// rewrote it. The operator has to review the result before the server runs.
+///
+/// This is an error type rather than a `std::process::exit` inside the loader,
+/// and the distinction is the whole point of it existing.
+///
+/// `from_file` used to call `std::process::exit(0)` here. Zero is what a
+/// program returns when it did what it was asked, so systemd saw a clean stop
+/// and did not restart, `docker run` reported success, and any orchestrator
+/// watching exit codes was told the server had finished normally — while the
+/// server had in fact refused to start and rewritten its own configuration on
+/// the way out. A deployment could sit down for the length of a config upgrade
+/// and every automated signal would say it was fine.
+///
+/// The second reason is testability, and it is not a minor one: a test calling
+/// `from_file` would have terminated the whole test binary reporting success,
+/// taking every test scheduled after it with it, silently.
+#[derive(Debug)]
+pub struct ConfigRewritten {
+    /// The configuration file, now containing defaults for what was missing.
+    pub path: PathBuf,
+    /// The copy of the file as it was before the rewrite.
+    pub backup: PathBuf,
+}
+
+impl fmt::Display for ConfigRewritten {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the configuration at {} was missing required fields; defaults were \
+             written in and the original was backed up to {}. Review the result \
+             and start the server again.",
+            self.path.display(),
+            self.backup.display()
+        )
+    }
+}
+
+impl std::error::Error for ConfigRewritten {}
+
 impl AppConfig {
     /// Load configuration from a TOML file at boot. If the file is missing
     /// fields added since it was written, self-heals by merging in
@@ -1075,8 +1123,10 @@ impl AppConfig {
                     eprintln!("Error: {}\n", e);
 
                     // Create a backup of the old config with unix timestamp
-                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
-                        .unwrap_or_default().as_secs();
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
                     let backup_path = format!("{}.{}.backup", path.as_ref().display(), timestamp);
                     fs::copy(&path, &backup_path)
                         .with_context(|| format!("Failed to create backup at: {}", backup_path))?;
@@ -1090,7 +1140,9 @@ impl AppConfig {
                     let existing_value: toml::Value = toml::from_str(&content)
                         .unwrap_or(toml::Value::Table(toml::map::Map::new()));
                     let default_value: toml::Value = match toml::to_string(&default_config) {
-                        Ok(s) => toml::from_str(&s).unwrap_or(toml::Value::Table(toml::map::Map::new())),
+                        Ok(s) => {
+                            toml::from_str(&s).unwrap_or(toml::Value::Table(toml::map::Map::new()))
+                        }
                         Err(_) => toml::Value::Table(toml::map::Map::new()),
                     };
 
@@ -1098,25 +1150,20 @@ impl AppConfig {
                     let merged_value = merge_toml_values(existing_value, default_value);
 
                     // Parse the merged config
-                    let merged_config: AppConfig = toml::from_str(&toml::to_string(&merged_value).unwrap())
+                    let merged_text = toml::to_string(&merged_value)
+                        .with_context(|| "Failed to serialize the merged configuration")?;
+                    let merged_config: AppConfig = toml::from_str(&merged_text)
                         .with_context(|| "Failed to parse merged configuration")?;
 
                     // Write the updated config back to file
-                    merged_config.to_file(&path)
+                    merged_config
+                        .to_file(&path)
                         .with_context(|| "Failed to write updated configuration")?;
 
-                    eprintln!("✅ Updated configuration file with default values for missing fields.");
-                    eprintln!("📝 Please review the configuration at: {}", path.as_ref().display());
-                    eprintln!("\n🛑 Server will now exit. Please restart after reviewing the configuration.\n");
-
-                    std::process::exit(0);
-                } else if error_msg.contains("missing field") {
-                    return Err(e).with_context(|| {
-                        "Config reload failed: file is missing required fields. \
-                         The running server keeps its current configuration; fix \
-                         the file and reload again (or restart the process, which \
-                         can self-heal missing fields at boot)"
-                    });
+                    return Err(anyhow::Error::new(ConfigRewritten {
+                        path: path.as_ref().to_path_buf(),
+                        backup: PathBuf::from(&backup_path),
+                    }));
                 } else {
                     // Some other parsing error
                     return Err(e).with_context(|| "Failed to parse TOML configuration");
@@ -1154,16 +1201,17 @@ impl AppConfig {
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .with_context(|| "Failed to serialize configuration to TOML")?;
-        
+
         // Create parent directories if they don't exist
         if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
-        
+
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
-        
+
         Ok(())
     }
 
@@ -1196,12 +1244,15 @@ impl ConfigManager {
 
     /// Reload configuration from disk
     pub fn reload_config(&self) -> Result<()> {
-        let config_path = self.config_path.as_ref()
+        let config_path = self
+            .config_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No config path available for reloading"))?;
 
         info!("Reloading configuration from: {}", config_path.display());
 
-        let new_config = AppConfig::from_file_for_reload(config_path)?;
+        let new_config =
+            AppConfig::from_file(config_path).with_context(|| "Failed to reload configuration")?;
 
         // Validate the new configuration
         validate_config(&new_config)?;
@@ -1230,6 +1281,29 @@ impl ConfigManager {
         self.config.write().unwrap().user.profile_fields_seed = profile_fields;
     }
 
+    /// Apply an in-place mutation to the shared configuration and persist
+    /// the result to the config file, if one is known.
+    pub fn update_config<F>(&self, mutator: F) -> Result<()>
+    where
+        F: FnOnce(&mut AppConfig),
+    {
+        let updated = {
+            let mut config_guard = self.config.write().unwrap();
+            mutator(&mut config_guard);
+            config_guard.clone()
+        };
+
+        if let Some(config_path) = &self.config_path {
+            updated
+                .to_file(config_path)
+                .with_context(|| "Failed to persist updated configuration")?;
+        } else {
+            warn!("No config path available; configuration change was not persisted to disk");
+        }
+
+        Ok(())
+    }
+
     /// Overwrite the in-memory `profiles_enabled` seed without touching
     /// the config file. Same caveat as `set_profile_fields`: the
     /// `profile_config_versions` table is authoritative, this is just the
@@ -1253,6 +1327,20 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         ));
     }
 
+    // An empty secret is worse than the placeholder: HMAC accepts a zero-length
+    // key, so the server would sign and verify tokens with a key an attacker
+    // does not even have to look up. `load_config` fills an absent secret in
+    // before it gets here, so reaching this means either a config that set it
+    // to "" explicitly, or a live reload of one -- and the reload path is why
+    // this lives in `validate_config` rather than next to the generation.
+    if config.auth.jwt_secret.is_empty() {
+        return Err(anyhow::anyhow!(
+            "auth.jwt_secret is empty. Remove the key entirely to have a \
+             secret generated and written back, or set a real random value; \
+             an empty secret signs tokens with a zero-length HMAC key."
+        ));
+    }
+
     // Validate database connection string
     if config.database.get_url().is_empty() {
         return Err(anyhow::anyhow!("Database URL cannot be empty"));
@@ -1265,7 +1353,9 @@ fn validate_config(config: &AppConfig) -> Result<()> {
 
     // Validate initial setup admin email format
     if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
-        return Err(anyhow::anyhow!("Initial setup admin email must be a valid email address"));
+        return Err(anyhow::anyhow!(
+            "Initial setup admin email must be a valid email address"
+        ));
     }
 
     Ok(())
@@ -1275,20 +1365,39 @@ fn validate_config(config: &AppConfig) -> Result<()> {
 pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
     let path = config_path.as_ref();
 
-    let config = if path.exists() {
+    let mut config = if path.exists() {
         println!("Loading configuration from: {}", path.display());
         AppConfig::from_file(path)?
     } else {
-        println!("Config file not found. Creating default configuration at: {}", path.display());
+        println!(
+            "Config file not found. Creating default configuration at: {}",
+            path.display()
+        );
         let default_config = AppConfig::default();
 
         // Save default configuration to file
-        default_config.to_file(path)
+        default_config
+            .to_file(path)
             .with_context(|| "Failed to create default configuration file")?;
 
         println!("Default configuration file created. Please review and modify as needed.");
         default_config
     };
+
+    // An existing file that omits auth.jwt_secret gets one generated here and
+    // written straight back. Persisting is the whole point: an in-memory-only
+    // secret would be different on every boot, so every restart would silently
+    // sign out every user, and the config file would still look fine.
+    //
+    // The file-did-not-exist branch above already persisted, via `to_file` on a
+    // fresh `AppConfig::default()`; this covers the branch that read a file.
+    if config.auth.jwt_secret.is_empty() {
+        println!("auth.jwt_secret is not set; generating one and writing it to the config file.");
+        config.auth.jwt_secret = generate_default_jwt_secret();
+        config
+            .to_file(path)
+            .with_context(|| "Failed to persist the generated auth.jwt_secret")?;
+    }
 
     validate_config(&config)?;
 
@@ -1298,11 +1407,15 @@ pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
 /// Generate a sample configuration file with comments
 pub fn generate_sample_config<P: AsRef<Path>>(path: P) -> Result<()> {
     let default_config = AppConfig::default();
-    
-    default_config.to_file(&path)
+
+    default_config
+        .to_file(&path)
         .with_context(|| "Failed to write sample configuration file")?;
-    
-    println!("Sample configuration file generated at: {}", path.as_ref().display());
+
+    println!(
+        "Sample configuration file generated at: {}",
+        path.as_ref().display()
+    );
     println!("Please review and modify the configuration as needed.");
     Ok(())
 }
@@ -1316,7 +1429,7 @@ mod tests {
     fn test_default_config_serialization() {
         let config = AppConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
-        
+
         // Verify we can deserialize it back
         let _: AppConfig = toml::from_str(&toml_str).unwrap();
     }
@@ -1325,25 +1438,259 @@ mod tests {
     fn test_config_file_roundtrip() {
         let temp_file = NamedTempFile::new().unwrap();
         let config = AppConfig::default();
-        
+
         // Save to file
         config.to_file(temp_file.path()).unwrap();
-        
+
         // Load from file
         let loaded_config = AppConfig::from_file(temp_file.path()).unwrap();
-        
+
         // Compare (using debug format since we don't implement PartialEq)
         assert_eq!(format!("{:?}", config), format!("{:?}", loaded_config));
+    }
+
+    /// A configuration missing a required field must come back as an error.
+    ///
+    /// **This test could not have existed before the change it covers.**
+    /// `from_file` responded to a missing field by calling
+    /// `std::process::exit(0)`, so running this would have terminated the whole
+    /// test binary — reporting success — and silently taken every test
+    /// scheduled after it. That is not a hypothetical: the stack battery's
+    /// first successful bring-up found the same code path in production, where
+    /// it told the container runtime the server had finished normally after
+    /// refusing to start.
+    #[test]
+    fn a_config_missing_a_field_is_an_error_and_not_an_exit() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("config.toml");
+
+        // A real configuration with one field removed. `lookahead_days` has no
+        // `#[serde(default)]`, so omitting it is a missing-field error -- the
+        // same shape that stopped the stack battery booting on its first run.
+        //
+        // The assertion that the removal changed something is not decoration.
+        // The first version of this test removed a line the serializer does not
+        // emit, so the config parsed cleanly, `from_file` succeeded, and the
+        // test failed with a wall of Debug output rather than saying the
+        // fixture was wrong. A mutation that does not mutate is a test that
+        // proves nothing while looking like it proves something.
+        let text = toml::to_string_pretty(&AppConfig::default()).expect("serialize");
+        let broken: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("lookahead_days"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            text.lines().count(),
+            broken.lines().count(),
+            "the fixture removed nothing; AppConfig no longer serializes lookahead_days"
+        );
+        std::fs::write(&path, &broken).expect("write the config");
+
+        let err = AppConfig::from_file(&path)
+            .expect_err("a config missing a required field must not load silently");
+
+        let rewritten = err
+            .downcast_ref::<ConfigRewritten>()
+            .expect("the caller has to be able to tell this apart from a parse failure");
+
+        assert_eq!(rewritten.path, path, "the error names the file it rewrote");
+        assert!(
+            rewritten.backup.exists(),
+            "the original was not backed up to {}, so the operator's file is gone",
+            rewritten.backup.display()
+        );
+
+        // And the rewrite happened: the file now loads.
+        AppConfig::from_file(&path)
+            .expect("the rewritten configuration should load on the second attempt");
+    }
+
+    /// A file that is not TOML at all is a plain parse failure, not a rewrite.
+    ///
+    /// The two are different: one is a configuration a version upgrade left
+    /// incomplete, and rewriting it is a service. The other is a typo, and
+    /// rewriting *that* would replace whatever the operator meant to write with
+    /// a wall of defaults.
+    #[test]
+    fn a_config_that_is_not_toml_is_not_rewritten() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "this is not toml = = =").expect("write");
+
+        let err = AppConfig::from_file(&path).expect_err("invalid TOML must not load");
+        assert!(
+            err.downcast_ref::<ConfigRewritten>().is_none(),
+            "invalid TOML was treated as a missing-field migration and the file was rewritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            "this is not toml = = =",
+            "the file was modified"
+        );
+    }
+
+    /// The shipped sample must be loadable.
+    ///
+    /// It is the first thing a new deployment copies, and a sample that does
+    /// not parse turns the very first boot into the rewrite path above — which
+    /// then hands the operator `PagesConfig::default()`'s live GitHub URLs and
+    /// starts cloning them.
+    ///
+    /// Asserted with `toml::from_str` rather than `from_file`, deliberately:
+    /// `from_file` would repair the file in place, so a broken sample would
+    /// make this test pass and quietly edit a tracked file in the working tree.
+    #[test]
+    fn the_shipped_sample_config_parses() {
+        let sample = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.sample.toml");
+        let text = std::fs::read_to_string(sample)
+            .unwrap_or_else(|e| panic!("config.sample.toml must exist and be readable: {e}"));
+        let config: AppConfig = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("config.sample.toml does not parse as an AppConfig: {e}"));
+
+        // And it must not ship pointing at somebody's repositories. PagesService
+        // git-clones these at boot into a hardcoded /tmp path.
+        assert!(
+            config.pages.wiki_repo.is_none() && config.pages.site_repo.is_none(),
+            "the sample names a wiki or site repository; a fresh deployment would \
+             clone it on first boot without anybody asking for it"
+        );
+    }
+
+    /// The sample deliberately ships no `auth.jwt_secret`, because a real one
+    /// written into a tracked sample is a public secret the moment anybody
+    /// copies the file. That only works if absence is a valid parse.
+    ///
+    /// Pinned separately from the parse test above so the reason survives: if
+    /// somebody "fixes" a future parse failure by putting a value back into the
+    /// sample, this fails and says why.
+    #[test]
+    fn the_sample_ships_no_jwt_secret() {
+        let sample = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.sample.toml");
+        let text = std::fs::read_to_string(sample).expect("config.sample.toml");
+
+        let raw: toml::Value = toml::from_str(&text).expect("sample is valid TOML");
+        let present = raw.get("auth").and_then(|a| a.get("jwt_secret")).is_some();
+
+        assert!(
+            !present,
+            "config.sample.toml sets auth.jwt_secret. Whatever value is there \
+             is now public, and every deployment that copies this file signs \
+             its tokens with it. Remove the key: load_config generates one and \
+             writes it back on first boot."
+        );
+
+        // And the absence really does deserialize, rather than only being
+        // tolerated by a `from_file` repair that would edit a tracked file.
+        let config: AppConfig = toml::from_str(&text).expect("sample parses");
+        assert!(config.auth.jwt_secret.is_empty());
+    }
+
+    /// An absent secret must come back *generated and persisted*, not
+    /// generated per boot. The persistence half is the one that fails
+    /// silently: sessions would die on every restart and the config file
+    /// would still look correct.
+    #[test]
+    fn an_absent_jwt_secret_is_generated_and_written_back() {
+        // Absence, not `jwt_secret = ""`. The sample's shape is a missing key,
+        // and a test that wrote an empty string would pass even if serde still
+        // required the field.
+        let temp_file = NamedTempFile::new().unwrap();
+        let mut seed = AppConfig::default();
+        seed.auth.jwt_secret = "placeholder-to-be-stripped".to_string();
+        seed.to_file(temp_file.path()).unwrap();
+
+        let text = std::fs::read_to_string(temp_file.path()).unwrap();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("jwt_secret"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !stripped.contains("jwt_secret"),
+            "the key was not actually removed, so this test proves nothing"
+        );
+        std::fs::write(temp_file.path(), &stripped).unwrap();
+
+        let first = load_config(temp_file.path()).expect("load generates a secret");
+        assert!(
+            !first.auth.jwt_secret.is_empty(),
+            "an absent secret was left empty; validate_config should have refused \
+             it, and if it did not the server signs with a zero-length HMAC key"
+        );
+        assert_ne!(first.auth.jwt_secret, LEGACY_DEFAULT_JWT_SECRET);
+
+        // The persistence claim, and the whole reason this is not a serde
+        // default: a second load must find the same secret, not mint another.
+        let second = load_config(temp_file.path()).expect("second load");
+        assert_eq!(
+            first.auth.jwt_secret, second.auth.jwt_secret,
+            "the generated secret was not written back, so every restart mints a \
+             new one and signs out every user"
+        );
+    }
+
+    /// An explicitly empty secret is refused rather than used. This is the
+    /// path a live `admin_config_reload` takes, which never goes through
+    /// `load_config` and so is never filled in for.
+    #[test]
+    fn an_empty_jwt_secret_is_refused() {
+        let mut config = AppConfig::default();
+        config.database.url = Some("postgres://localhost/x".to_string());
+        config.auth.jwt_secret = String::new();
+
+        let err = validate_config(&config).expect_err("an empty secret must be refused");
+        assert!(
+            err.to_string().contains("jwt_secret"),
+            "the refusal must name the field: {err}"
+        );
+    }
+
+    /// A finding, recorded rather than changed.
+    ///
+    /// `PagesConfig::default()` names two live GitHub repositories, and
+    /// `PagesService::new` git-clones whatever is there into a hardcoded
+    /// /tmp/css-{wiki,site}-repo during boot. So a deployment that starts with
+    /// no config file at all -- which `load_config` handles by writing the
+    /// defaults and carrying on -- clones two repositories belonging to
+    /// somebody else on its first boot, and fails closed the moment the
+    /// network or those repositories do.
+    ///
+    /// Whether the shipped default should be a working demo or an empty one is
+    /// a product decision, not a test's. What a test can do is make the current
+    /// answer visible and stop it changing silently in either direction, which
+    /// is what this is. The tracked sample has both commented out, asserted by
+    /// `the_shipped_sample_config_parses` above, so the path a real operator
+    /// takes is already clean; this covers the path taken by a first boot with
+    /// no file.
+    #[test]
+    fn the_default_config_still_names_two_live_repositories() {
+        let defaults = AppConfig::default();
+        assert_eq!(
+            defaults.pages.wiki_repo.as_deref(),
+            Some("https://github.com/neiam/css-wiki-example"),
+            "the default wiki repository changed. If it became None, delete this \
+             test -- the finding is fixed. If it became a different URL, a first \
+             boot now clones that one instead."
+        );
+        assert_eq!(
+            defaults.pages.site_repo.as_deref(),
+            Some("https://github.com/neiam/css-site-example"),
+        );
+        // The one thing that keeps it survivable: neither is polled, so the
+        // clone happens once at boot rather than every ten minutes.
+        assert!(!defaults.pages.wiki_auto_enabled);
+        assert!(!defaults.pages.site_auto_enabled);
     }
 
     #[test]
     fn test_load_config_creates_default_if_missing() {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
-        
+
         // Delete the file so it doesn't exist
         std::fs::remove_file(path).unwrap();
-        
+
         // load_config should create a default config
         let _config = load_config(path).unwrap();
 

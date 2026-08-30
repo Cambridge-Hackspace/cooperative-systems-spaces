@@ -6,5 +6,12 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true
   },
-  "include": ["vite.config.ts"]
+  "//": "The build-tool configs. They import vite.config.ts, so they belong in the same project as it -- listing them in tsconfig.json instead makes TypeScript demand a built .d.ts for a file it can already see (TS6305).",
+  "include": [
+    "vite.config.ts",
+    "vitest.config.ts",
+    "vite.fake.config.ts",
+    "playwright.config.ts",
+    "playwright.live.config.ts"
+  ]
 }

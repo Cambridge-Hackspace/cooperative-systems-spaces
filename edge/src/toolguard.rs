@@ -77,11 +77,14 @@ impl ToolGuardState {
     pub fn new_with_notify() -> (Self, std::sync::mpsc::Receiver<SyncPayload>) {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let (ws_tx, _) = broadcast::channel(16);
-        (Self {
-            inner: Arc::new(RwLock::new(None)),
-            notify_tx: Some(tx),
-            ws_tx,
-        }, rx)
+        (
+            Self {
+                inner: Arc::new(RwLock::new(None)),
+                notify_tx: Some(tx),
+                ws_tx,
+            },
+            rx,
+        )
     }
 
     /// Subscribe to WebSocket state-change notifications (serialized JSON).
@@ -119,7 +122,7 @@ impl ToolGuardState {
         self.inner.read().unwrap().clone()
     }
 
-    /// Check whether a card holder is authorised to activate a tool.
+    /// Check whether a card holder is authorized to activate a tool.
     ///
     /// `card_value`  – the scanned card value (matched against `profile_field_value`)
     /// `tool_id_str` – the hardware tool identifier (matched against `external_id` first,
@@ -134,7 +137,11 @@ impl ToolGuardState {
             }
         };
 
-        let user = match state.users.iter().find(|u| u.profile_field_value == card_value) {
+        let user = match state
+            .users
+            .iter()
+            .find(|u| u.profile_field_value == card_value)
+        {
             Some(u) => u,
             None => return AccessResult::UnknownCard,
         };
@@ -145,8 +152,7 @@ impl ToolGuardState {
 
         // Find the tool in the top-level tools list by external_id or UUID
         let tool = match state.tools.iter().find(|t| {
-            t.external_id.as_deref() == Some(tool_id_str)
-                || t.id.to_string() == tool_id_str
+            t.external_id.as_deref() == Some(tool_id_str) || t.id.to_string() == tool_id_str
         }) {
             Some(t) => t,
             None => return AccessResult::ToolNotAuthorized,

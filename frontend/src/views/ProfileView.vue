@@ -10,14 +10,13 @@
       </ul>
     </div>
 
-    <UserProfile 
-      :user-id="userId" 
-      :user="user || undefined"
-      class="mb-8"
-    />
+    <UserProfile :user-id="userId" :user="user || undefined" class="mb-8" />
 
     <!-- Two-factor link (only when viewing own profile AND MFA is enabled server-side) -->
-    <div v-if="isOwnProfile && mfaAvailable" class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4">
+    <div
+      v-if="isOwnProfile && mfaAvailable"
+      class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4"
+    >
       <div>
         <div class="font-medium">Two-factor authentication</div>
         <div class="text-sm text-base-content/70">
@@ -28,18 +27,22 @@
     </div>
 
     <!-- Change password link (only shown for own profile) -->
-    <div v-if="isOwnProfile" class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4">
+    <div
+      v-if="isOwnProfile"
+      class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4"
+    >
       <div>
         <div class="font-medium">Password</div>
-        <div class="text-sm text-base-content/70">
-          Change your account password.
-        </div>
+        <div class="text-sm text-base-content/70">Change your account password.</div>
       </div>
       <router-link to="/profile/password" class="btn btn-primary btn-sm">Change</router-link>
     </div>
 
     <!-- Transit card link (only when viewing own profile AND a card field is configured) -->
-    <div v-if="isOwnProfile && cardFieldConfigured" class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4">
+    <div
+      v-if="isOwnProfile && cardFieldConfigured"
+      class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4"
+    >
       <div>
         <div class="font-medium">Transit Card</div>
         <div class="text-sm text-base-content/70">
@@ -50,10 +53,7 @@
     </div>
 
     <!-- Theme Picker (only shown for own profile) -->
-    <ThemePicker
-      v-if="isOwnProfile"
-      :user-id="userId"
-    />
+    <ThemePicker v-if="isOwnProfile" :user-id="userId" />
 
     <!-- Instance QR (own profile only). Drives cross-device handoff into the
          Cooperative Spaces app — the JSON payload mirrors what the Android
@@ -136,14 +136,20 @@ onMounted(async () => {
 })
 
 // Watch for route changes
-watch(() => userId.value, async () => {
-  await fetchUser()
-})
+watch(
+  () => userId.value,
+  async () => {
+    await fetchUser()
+  }
+)
 
 // Watch for auth changes
-watch(() => authStore.user, () => {
-  if (isOwnProfile.value) {
-    user.value = authStore.user
+watch(
+  () => authStore.user,
+  () => {
+    if (isOwnProfile.value) {
+      user.value = authStore.user
+    }
   }
-})
+)
 </script>

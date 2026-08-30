@@ -21,7 +21,7 @@ withDefaults(
     schedules: Schedule[]
     disabled?: boolean
   }>(),
-  { disabled: false },
+  { disabled: false }
 )
 
 const emit = defineEmits<{

@@ -1,0 +1,9 @@
+# Revisions that only reformat. `git blame` skips these with:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Without it, a repo-wide reformat destroys the authorship history of every
+# line it touches, permanently.
+
+# Repo-wide `cargo fmt --all` under the new rustfmt.toml. No behaviour change.
+44708a620c9411a4bb18e70a286640c436c2a6d9

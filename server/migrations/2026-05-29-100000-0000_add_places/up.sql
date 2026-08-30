@@ -1,5 +1,5 @@
 -- Self-referential, configurable hierarchy of physical places.
--- The level vocabulary (`Facility`, `Building`, `Floor`, `Room`, `Spot`, …)
+-- The level vocabulary (`Facility`, `Building`, `Floor`, `Room`, `Spot`, ...)
 -- is declared in `[place].types` in config and validated at the API layer.
 
 CREATE TABLE places (

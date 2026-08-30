@@ -5,16 +5,19 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use uuid::Uuid;
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::{
     api::{
         errors::ApiError,
-        responses::{ApiResponse, PaginatedResponse, UpdateUserRequest, UserResponse, PaginationParams},
+        responses::{
+            ApiResponse, PaginatedResponse, PaginationParams, UpdateUserRequest, UserResponse,
+        },
     },
     auth::{AdminUser, AuthUser, PasswordHashUtil},
     models::{AuditEventType, NewAuditLog, UpdateUser, UserRole},
+    profile::AuditLogger,
     AppState,
 };
 
@@ -52,31 +55,26 @@ async fn list_users(
     let per_page = params.per_page.unwrap_or(20);
 
     if page == 0 || per_page == 0 || per_page > 100 {
-        return Err(ApiError::BadRequest("Invalid pagination parameters".to_string()));
+        return Err(ApiError::BadRequest(
+            "Invalid pagination parameters".to_string(),
+        ));
     }
 
     let offset = ((page - 1) * per_page) as i64;
     let limit = per_page as i64;
 
     // Get total count
-    let total_count = state.db.count_active_users()
-        .map_err(ApiError::from)? as u32;
+    let total_count = state.db.count_active_users().map_err(ApiError::from)? as u32;
 
     // Get users (we'll implement this method in database.rs)
-    let users = state.db.list_users_paginated(limit, offset)
+    let users = state
+        .db
+        .list_users_paginated(limit, offset)
         .map_err(ApiError::from)?;
 
-    let user_responses: Vec<UserResponse> = users
-        .into_iter()
-        .map(UserResponse::from)
-        .collect();
+    let user_responses: Vec<UserResponse> = users.into_iter().map(UserResponse::from).collect();
 
-    let paginated_response = PaginatedResponse::new(
-        user_responses,
-        page,
-        per_page,
-        total_count,
-    );
+    let paginated_response = PaginatedResponse::new(user_responses, page, per_page, total_count);
 
     Ok(Json(ApiResponse::success(paginated_response)))
 }
@@ -89,10 +87,14 @@ async fn get_user_by_id(
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
     // Users can view their own profile, or staff/admin users can view any profile
     if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("You can only view your own profile".to_string()));
+        return Err(ApiError::Forbidden(
+            "You can only view your own profile".to_string(),
+        ));
     }
 
-    let user = state.db.find_user_by_id(user_id)
+    let user = state
+        .db
+        .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -108,23 +110,33 @@ async fn update_user(
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
     // Users can only update their own profile, unless they're staff/admin
     if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("You can only update your own profile".to_string()));
+        return Err(ApiError::Forbidden(
+            "You can only update your own profile".to_string(),
+        ));
     }
 
     // Non-staff users cannot update is_active or role
-    if !auth_user.0.role.can_access_staff() && (payload.is_active.is_some() || payload.role.is_some()) {
-        return Err(ApiError::Forbidden("You cannot modify account status or role".to_string()));
+    if !auth_user.0.role.can_access_staff()
+        && (payload.is_active.is_some() || payload.role.is_some())
+    {
+        return Err(ApiError::Forbidden(
+            "You cannot modify account status or role".to_string(),
+        ));
     }
 
     // Only admins can set admin role
     if let Some(ref new_role) = payload.role {
         if *new_role == UserRole::Admin && !auth_user.0.role.can_access_admin() {
-            return Err(ApiError::Forbidden("Only admins can assign admin role".to_string()));
+            return Err(ApiError::Forbidden(
+                "Only admins can assign admin role".to_string(),
+            ));
         }
     }
 
     // Check if user exists
-    let existing_user = state.db.find_user_by_id(user_id)
+    let existing_user = state
+        .db
+        .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -144,12 +156,14 @@ async fn update_user(
     // Hash new password if provided
     if let Some(new_password) = payload.password {
         if new_password.len() < 8 {
-            return Err(ApiError::BadRequest("Password must be at least 8 characters long".to_string()));
+            return Err(ApiError::BadRequest(
+                "Password must be at least 8 characters long".to_string(),
+            ));
         }
-        
+
         let password_hash = PasswordHashUtil::hash(&new_password)
             .map_err(|_| ApiError::InternalServerError("Failed to hash password".to_string()))?;
-        
+
         update_data.password_hash = Some(password_hash);
     }
 
@@ -159,7 +173,7 @@ async fn update_user(
             if !email.contains('@') {
                 return Err(ApiError::BadRequest("Invalid email format".to_string()));
             }
-            
+
             if let Ok(Some(_)) = state.db.find_user_by_email(email) {
                 return Err(ApiError::Conflict("Email already exists".to_string()));
             }
@@ -172,7 +186,7 @@ async fn update_user(
             if username.is_empty() {
                 return Err(ApiError::BadRequest("Username cannot be empty".to_string()));
             }
-            
+
             if let Ok(Some(_)) = state.db.find_user_by_username(username) {
                 return Err(ApiError::Conflict("Username already exists".to_string()));
             }
@@ -180,7 +194,9 @@ async fn update_user(
     }
 
     // Update user
-    let updated_user = state.db.update_user(user_id, &update_data)
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
 
     // Broadcast toolguard state if active status changed (affects tool access)
@@ -213,7 +229,9 @@ async fn change_own_password(
     if !PasswordHashUtil::verify(&payload.current_password, &auth_user.0.password_hash)
         .unwrap_or(false)
     {
-        return Err(ApiError::BadRequest("Current password is incorrect".to_string()));
+        return Err(ApiError::BadRequest(
+            "Current password is incorrect".to_string(),
+        ));
     }
 
     let config = state.config_manager.get_config();
@@ -239,10 +257,17 @@ async fn change_own_password(
         updated_at: Some(Utc::now().naive_utc()),
     };
 
-    state.db.update_user(auth_user.0.id, &update_data)
+    state
+        .db
+        .update_user(auth_user.0.id, &update_data)
         .map_err(ApiError::from)?;
 
-    audit(&state, AuditEventType::UserPasswordChange, auth_user.0.id, serde_json::json!({}));
+    audit(
+        &state,
+        AuditEventType::UserPasswordChange,
+        auth_user.0.id,
+        serde_json::json!({}),
+    );
 
     Ok(Json(ApiResponse::success_with_message(
         (),
@@ -258,17 +283,61 @@ async fn delete_user(
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     // Admin cannot delete themselves
     if admin_user.0.id == user_id {
-        return Err(ApiError::BadRequest("You cannot delete your own account".to_string()));
+        return Err(ApiError::BadRequest(
+            "You cannot delete your own account".to_string(),
+        ));
     }
 
     // Check if user exists
-    state.db.find_user_by_id(user_id)
+    let victim = state
+        .db
+        .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
+    // Audited BEFORE the delete, and with the subject in `event_data` rather
+    // than in `user_id`. Two reasons, and both were found by running this:
+    //
+    //   * `audit_logs.user_id` is `REFERENCES users(id) ON DELETE SET NULL`, so
+    //     a row inserted *after* the delete violates the constraint outright --
+    //     and `create_audit_log` is called as `let _ = ..`, so the failure goes
+    //     to a log line nobody reads and the record simply does not exist;
+    //   * even a row inserted before the delete has its `user_id` set to NULL by
+    //     the cascade a moment later, so the only durable record of *who* was
+    //     deleted is the JSON.
+    //
+    // Until now this handler wrote nothing at all. The most destructive
+    // administrative action in the system left no trace, which is the one place
+    // an audit trail is not optional.
+    let audit_logger = AuditLogger::new(state.db.clone());
+    if let Err(e) = audit_logger
+        .log_event(
+            AuditEventType::UserDeletion,
+            None,
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "deleted_user_id": victim.id,
+                "deleted_username": victim.username,
+                "deleted_email": victim.email,
+                "deleted_role": victim.role,
+                "action": "User deleted by admin",
+            }),
+            None,
+            None,
+        )
+        .await
+    {
+        // Refused, not swallowed. If the deletion cannot be recorded, it does
+        // not happen: an unrecorded deletion of a member account is worse than
+        // a deletion that failed and can be retried.
+        tracing::error!("Refusing to delete user {user_id}: audit write failed: {e}");
+        return Err(ApiError::InternalServerError(
+            "Could not record this deletion; the user was not deleted".to_string(),
+        ));
+    }
+
     // Delete user
-    state.db.delete_user(user_id)
-        .map_err(ApiError::from)?;
+    state.db.delete_user(user_id).map_err(ApiError::from)?;
 
     Ok(Json(ApiResponse::success_with_message(
         (),
@@ -291,23 +360,46 @@ async fn update_user_theme(
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
     // Users can only update their own theme (unless admin)
     if auth_user.0.id != user_id && auth_user.0.role != UserRole::Admin {
-        return Err(ApiError::Forbidden("You can only update your own theme".to_string()));
+        return Err(ApiError::Forbidden(
+            "You can only update your own theme".to_string(),
+        ));
     }
 
     // Validate theme value (must match themes in tailwind.config.js, plus
-    // "system" which the frontend resolves to css-light/css-dark based on
-    // the browser's prefers-color-scheme rather than a fixed daisyUI theme).
-    let valid_themes = ["system", "css-light", "css-dark", "afterdark", "her",
-                        "forest", "sky", "clays", "stones",
-                        "lofi", "black", "light", "dark", "cupcake", "corporate"];
-    
+    // "system", which the frontend resolves to css-light/css-dark from the
+    // browser's prefers-color-scheme rather than naming a daisyUI theme).
+    //
+    // frontend/tests/structure/themes.spec.ts asserts this list against
+    // tailwind.config.js and ThemePicker.vue, so the three cannot drift.
+    let valid_themes = [
+        "system",
+        "css-light",
+        "css-dark",
+        "afterdark",
+        "her",
+        "forest",
+        "sky",
+        "clays",
+        "stones",
+        "lofi",
+        "black",
+        "light",
+        "dark",
+        "cupcake",
+        "corporate",
+    ];
     if !valid_themes.contains(&payload.theme.as_str()) {
-        return Err(ApiError::BadRequest(format!("Invalid theme: {}. Must be one of: {}", 
-            payload.theme, valid_themes.join(", "))));
+        return Err(ApiError::BadRequest(format!(
+            "Invalid theme: {}. Must be one of: {}",
+            payload.theme,
+            valid_themes.join(", ")
+        )));
     }
 
     // Get existing user
-    let existing_user = state.db.find_user_by_id(user_id)
+    let existing_user = state
+        .db
+        .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
@@ -327,7 +419,9 @@ async fn update_user_theme(
         updated_at: Some(Utc::now().naive_utc()),
     };
 
-    let updated_user = state.db.update_user(user_id, &update_data)
+    let updated_user = state
+        .db
+        .update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
 
     Ok(Json(ApiResponse::success(UserResponse::from(updated_user))))

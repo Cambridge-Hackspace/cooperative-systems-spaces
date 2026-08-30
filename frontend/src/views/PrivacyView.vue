@@ -12,16 +12,16 @@
     <div class="mx-auto max-w-2xl space-y-6 text-base-content/90">
       <div class="alert alert-warning text-sm">
         <span>
-          This draft reflects what this site's software actually does as of today. It hasn't
-          been formally adopted by Cambridge Hackspace or reviewed by legal counsel &mdash;
-          please have someone review it before treating it as final.
+          This draft reflects what this site's software actually does as of today. It hasn't been
+          formally adopted by Cambridge Hackspace or reviewed by legal counsel &mdash; please have
+          someone review it before treating it as final.
         </span>
       </div>
 
       <section>
         <p class="leading-relaxed">
-          This policy explains what information Cambridge Hackspace collects through this site
-          and its membership system, why we collect it, and who can see it.
+          This policy explains what information Cambridge Hackspace collects through this site and
+          its membership system, why we collect it, and who can see it.
         </p>
       </section>
 
@@ -29,22 +29,22 @@
         <h2 class="text-xl font-semibold mb-2">Information we collect</h2>
         <ul class="list-disc pl-6 space-y-2 leading-relaxed">
           <li>
-            <strong>Account information:</strong> your name, username, email address, and
-            password (stored as a salted hash, never in plain text).
+            <strong>Account information:</strong> your name, username, email address, and password
+            (stored as a salted hash, never in plain text).
           </li>
           <li>
             <strong>Profile fields:</strong> additional fields our admins configure for the
-            community &mdash; this can include things like an RFID card identifier used for
-            physical door and tool access.
+            community &mdash; this can include things like an RFID card identifier used for physical
+            door and tool access.
           </li>
           <li>
-            <strong>Multi-factor authentication data:</strong> if you enable MFA, we store a
-            TOTP secret or WebAuthn credential and a set of hashed recovery codes.
+            <strong>Multi-factor authentication data:</strong> if you enable MFA, we store a TOTP
+            secret or WebAuthn credential and a set of hashed recovery codes.
           </li>
           <li>
-            <strong>Access and usage records:</strong> door check-ins and unlocks, tool checkout
-            and usage events, and training completion records, each with a timestamp and the
-            member involved.
+            <strong>Access and usage records:</strong> door check-ins and unlocks, tool checkout and
+            usage events, and training completion records, each with a timestamp and the member
+            involved.
           </li>
           <li>
             <strong>Audit logs:</strong> security-relevant actions (logins, role changes,
@@ -58,27 +58,27 @@
         <h2 class="text-xl font-semibold mb-2">How we use it</h2>
         <p class="leading-relaxed">
           We use this information to run the space: authenticating members, controlling door and
-          tool access, tracking training and certifications, and keeping an audit trail for
-          security and accountability. We don't use it for advertising, and we don't sell it.
+          tool access, tracking training and certifications, and keeping an audit trail for security
+          and accountability. We don't use it for advertising, and we don't sell it.
         </p>
       </section>
 
       <section>
         <h2 class="text-xl font-semibold mb-2">Who can see it</h2>
         <p class="leading-relaxed">
-          Access follows your role. Ordinary members see their own data. Staff and admins can
-          see roster, access, and training information as needed to run the space and help
-          members. Only admins can see the full audit log.
+          Access follows your role. Ordinary members see their own data. Staff and admins can see
+          roster, access, and training information as needed to run the space and help members. Only
+          admins can see the full audit log.
         </p>
       </section>
 
       <section>
         <h2 class="text-xl font-semibold mb-2">Third-party sharing</h2>
         <p class="leading-relaxed">
-          We do not sell or rent your information. Admins can configure outbound webhooks that
-          send event data (like a login or a tool status change) to a URL of their choosing, for
-          integrations they set up &mdash; for example, posting activity to a chat tool. If
-          you'd like to know what webhooks are currently active, ask an admin.
+          We do not sell or rent your information. Admins can configure outbound webhooks that send
+          event data (like a login or a tool status change) to a URL of their choosing, for
+          integrations they set up &mdash; for example, posting activity to a chat tool. If you'd
+          like to know what webhooks are currently active, ask an admin.
         </p>
       </section>
 
@@ -93,18 +93,18 @@
       <section>
         <h2 class="text-xl font-semibold mb-2">Security</h2>
         <p class="leading-relaxed">
-          Passwords and recovery codes are hashed, not stored in plain text, and we apply
-          reasonable technical safeguards throughout the system. No system is perfectly secure,
-          and we can't guarantee against every possible incident.
+          Passwords and recovery codes are hashed, not stored in plain text, and we apply reasonable
+          technical safeguards throughout the system. No system is perfectly secure, and we can't
+          guarantee against every possible incident.
         </p>
       </section>
 
       <section>
         <h2 class="text-xl font-semibold mb-2">Your choices</h2>
         <p class="leading-relaxed">
-          You can review and update your own profile information at any time. To request that
-          your account or its data be deleted, contact an admin &mdash; some records, like audit
-          and access logs, may be retained longer where needed for security or legal reasons.
+          You can review and update your own profile information at any time. To request that your
+          account or its data be deleted, contact an admin &mdash; some records, like audit and
+          access logs, may be retained longer where needed for security or legal reasons.
         </p>
       </section>
 
@@ -126,5 +126,9 @@
 </template>
 
 <script setup lang="ts">
-const lastUpdated = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+const lastUpdated = new Date().toLocaleDateString('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+})
 </script>

@@ -24,12 +24,7 @@
       >
         Places
       </a>
-      <a
-        role="tab"
-        class="tab"
-        :class="{ 'tab-active': tab === 'doors' }"
-        @click="setTab('doors')"
-      >
+      <a role="tab" class="tab" :class="{ 'tab-active': tab === 'doors' }" @click="setTab('doors')">
         Doors
       </a>
       <a
@@ -40,12 +35,7 @@
       >
         Schedules
       </a>
-      <a
-        role="tab"
-        class="tab"
-        :class="{ 'tab-active': tab === 'graph' }"
-        @click="setTab('graph')"
-      >
+      <a role="tab" class="tab" :class="{ 'tab-active': tab === 'graph' }" @click="setTab('graph')">
         Graph
       </a>
     </div>
@@ -76,12 +66,15 @@ const router = useRouter()
 
 /** Tab is reflected in the URL via `?tab=places|doors` so deep-links and
     refresh land you back on the right view. */
-const tab = ref<Tab>(((route.query.tab as Tab) || 'places') as Tab)
+const tab = ref<Tab>((route.query.tab as Tab) || 'places')
 
 function setTab(next: Tab) {
   if (tab.value === next) return
   tab.value = next
-  router.replace({ query: { ...route.query, tab: next } })
+  // A rejected navigation is a NavigationFailure (aborted or redirected by a
+  // guard), which is an outcome rather than an error -- but it is still a
+  // promise, and leaving it floating is an unhandled rejection.
+  void router.replace({ query: { ...route.query, tab: next } })
 }
 
 // React to a manual URL change too (back/forward, paste).
@@ -90,6 +83,6 @@ watch(
   (v) => {
     const next = (v as Tab) || 'places'
     if (next !== tab.value) tab.value = next
-  },
+  }
 )
 </script>

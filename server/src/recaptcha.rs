@@ -31,10 +31,16 @@ impl RecaptchaService {
 
     /// Verify a reCAPTCHA response token
     /// Returns Ok(true) if verification succeeds, Ok(false) if it fails, Err for network/API errors
-    pub async fn verify_token(&self, token: &str, remote_ip: Option<&str>) -> Result<bool, RecaptchaError> {
+    pub async fn verify_token(
+        &self,
+        token: &str,
+        remote_ip: Option<&str>,
+    ) -> Result<bool, RecaptchaError> {
         if self.secret_key.is_empty() {
             error!("reCAPTCHA secret key is empty");
-            return Err(RecaptchaError::ConfigurationError("reCAPTCHA secret key not configured".to_string()));
+            return Err(RecaptchaError::ConfigurationError(
+                "reCAPTCHA secret key not configured".to_string(),
+            ));
         }
 
         if token.is_empty() {
@@ -42,10 +48,7 @@ impl RecaptchaService {
             return Ok(false);
         }
 
-        let mut params = vec![
-            ("secret", self.secret_key.as_str()),
-            ("response", token),
-        ];
+        let mut params = vec![("secret", self.secret_key.as_str()), ("response", token)];
 
         if let Some(ip) = remote_ip {
             params.push(("remoteip", ip));
@@ -64,13 +67,10 @@ impl RecaptchaService {
                 RecaptchaError::NetworkError(e.to_string())
             })?;
 
-        let recaptcha_response: RecaptchaResponse = response
-            .json()
-            .await
-            .map_err(|e| {
-                error!("Failed to parse reCAPTCHA response: {}", e);
-                RecaptchaError::ParseError(e.to_string())
-            })?;
+        let recaptcha_response: RecaptchaResponse = response.json().await.map_err(|e| {
+            error!("Failed to parse reCAPTCHA response: {}", e);
+            RecaptchaError::ParseError(e.to_string())
+        })?;
 
         debug!("reCAPTCHA verification response: {:?}", recaptcha_response);
 
@@ -79,7 +79,10 @@ impl RecaptchaService {
             Ok(true)
         } else {
             if let Some(error_codes) = &recaptcha_response.error_codes {
-                debug!("reCAPTCHA verification failed with error codes: {:?}", error_codes);
+                debug!(
+                    "reCAPTCHA verification failed with error codes: {:?}",
+                    error_codes
+                );
             }
             Ok(false)
         }
@@ -95,7 +98,9 @@ impl RecaptchaService {
     ) -> Result<bool, RecaptchaError> {
         if self.secret_key.is_empty() {
             error!("reCAPTCHA secret key is empty");
-            return Err(RecaptchaError::ConfigurationError("reCAPTCHA secret key not configured".to_string()));
+            return Err(RecaptchaError::ConfigurationError(
+                "reCAPTCHA secret key not configured".to_string(),
+            ));
         }
 
         if token.is_empty() {
@@ -103,16 +108,16 @@ impl RecaptchaService {
             return Ok(false);
         }
 
-        let mut params = vec![
-            ("secret", self.secret_key.as_str()),
-            ("response", token),
-        ];
+        let mut params = vec![("secret", self.secret_key.as_str()), ("response", token)];
 
         if let Some(ip) = remote_ip {
             params.push(("remoteip", ip));
         }
 
-        debug!("Verifying reCAPTCHA v3 token with score threshold: {}", min_score);
+        debug!(
+            "Verifying reCAPTCHA v3 token with score threshold: {}",
+            min_score
+        );
 
         let response = self
             .client
@@ -125,15 +130,15 @@ impl RecaptchaService {
                 RecaptchaError::NetworkError(e.to_string())
             })?;
 
-        let recaptcha_response: RecaptchaResponse = response
-            .json()
-            .await
-            .map_err(|e| {
-                error!("Failed to parse reCAPTCHA response: {}", e);
-                RecaptchaError::ParseError(e.to_string())
-            })?;
+        let recaptcha_response: RecaptchaResponse = response.json().await.map_err(|e| {
+            error!("Failed to parse reCAPTCHA response: {}", e);
+            RecaptchaError::ParseError(e.to_string())
+        })?;
 
-        debug!("reCAPTCHA v3 verification response: {:?}", recaptcha_response);
+        debug!(
+            "reCAPTCHA v3 verification response: {:?}",
+            recaptcha_response
+        );
 
         if recaptcha_response.success {
             if let Some(score) = recaptcha_response.score {
@@ -145,7 +150,10 @@ impl RecaptchaService {
             }
         } else {
             if let Some(error_codes) = &recaptcha_response.error_codes {
-                debug!("reCAPTCHA verification failed with error codes: {:?}", error_codes);
+                debug!(
+                    "reCAPTCHA verification failed with error codes: {:?}",
+                    error_codes
+                );
             }
             Ok(false)
         }

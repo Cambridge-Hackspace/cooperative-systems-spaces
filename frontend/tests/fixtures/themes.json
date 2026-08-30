@@ -1,0 +1,19 @@
+{
+  "_comment": "The themes the accessibility audit iterates. A third copy on purpose: deriving it from tailwind.config.js or from ThemePicker.vue would make the audit agree with whatever that source said, and a theme added to both code paths would silently escape the audit. tests/structure/themes.spec.ts asserts all three agree, as sets and in order.",
+  "themes": [
+    "css-light",
+    "css-dark",
+    "afterdark",
+    "her",
+    "forest",
+    "sky",
+    "clays",
+    "stones",
+    "lofi",
+    "black",
+    "light",
+    "dark",
+    "cupcake",
+    "corporate"
+  ]
+}

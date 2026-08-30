@@ -91,7 +91,7 @@ async fn get_wiki_page(
     Path(slug): Path<String>,
 ) -> Result<Json<PageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let pages_service = state.pages_service.read().await;
-    
+
     // Strip leading slash if present (from catch-all route)
     let slug = slug.trim_start_matches('/');
 
@@ -99,13 +99,21 @@ async fn get_wiki_page(
         Some(page) => {
             let repo_url = pages_service.get_wiki_repo_url();
             let default_branch = pages_service.get_wiki_default_branch();
-            Ok(Json(PageResponse::from_page(page.clone(), repo_url, default_branch)))
-        },
+            Ok(Json(PageResponse::from_page(
+                page.clone(),
+                repo_url,
+                default_branch,
+            )))
+        }
+        // The standard envelope. This used to answer
+        // `{"error": .., "slug": ..}` -- no `success`, and one extra key --
+        // so a client parsing responses generically got a third shape from
+        // these two routes alone.
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "Wiki page not found",
-                "slug": slug
+                "success": false,
+                "error": format!("Wiki page not found: {slug}"),
             })),
         )),
     }
@@ -141,12 +149,17 @@ async fn get_site_index(
         Some(page) => {
             let repo_url = pages_service.get_site_repo_url();
             let default_branch = pages_service.get_site_default_branch();
-            Ok(Json(PageResponse::from_page(page.clone(), repo_url, default_branch)))
-        },
+            Ok(Json(PageResponse::from_page(
+                page.clone(),
+                repo_url,
+                default_branch,
+            )))
+        }
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "Site index page not found"
+                "success": false,
+                "error": "Site index page not found",
             })),
         )),
     }
@@ -158,7 +171,7 @@ async fn get_site_page(
     Path(slug): Path<String>,
 ) -> Result<Json<PageResponse>, (StatusCode, Json<serde_json::Value>)> {
     let pages_service = state.pages_service.read().await;
-    
+
     // Strip leading slash if present (from catch-all route)
     let slug = slug.trim_start_matches('/');
 
@@ -166,13 +179,17 @@ async fn get_site_page(
         Some(page) => {
             let repo_url = pages_service.get_site_repo_url();
             let default_branch = pages_service.get_site_default_branch();
-            Ok(Json(PageResponse::from_page(page.clone(), repo_url, default_branch)))
-        },
+            Ok(Json(PageResponse::from_page(
+                page.clone(),
+                repo_url,
+                default_branch,
+            )))
+        }
         None => Err((
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "Site page not found",
-                "slug": slug
+                "success": false,
+                "error": format!("Site page not found: {slug}"),
             })),
         )),
     }

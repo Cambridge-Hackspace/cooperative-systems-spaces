@@ -122,17 +122,17 @@ fn main() {
             .after(poll_mqtt),
     )
     // ── Panes views ──
-    .add_systems(OnEnter(KioskView::HorizontalPanes), spawn_horizontal_panes_view)
+    .add_systems(
+        OnEnter(KioskView::HorizontalPanes),
+        spawn_horizontal_panes_view,
+    )
     .add_systems(OnExit(KioskView::HorizontalPanes), despawn_view)
     .add_systems(OnEnter(KioskView::VerticalPanes), spawn_vertical_panes_view)
     .add_systems(OnExit(KioskView::VerticalPanes), despawn_view)
     .add_systems(
         Update,
         update_panes_view
-            .run_if(
-                in_state(KioskView::HorizontalPanes)
-                    .or(in_state(KioskView::VerticalPanes)),
-            )
+            .run_if(in_state(KioskView::HorizontalPanes).or(in_state(KioskView::VerticalPanes)))
             .after(poll_mqtt),
     )
     // ── Shared update ──
@@ -349,7 +349,14 @@ fn spawn_horizontal_panes_view(
     conn: Res<ConnectionStatus>,
     theme: Res<Theme>,
 ) {
-    build_panes_ui(&mut commands, &tg, &cal, &conn, &theme.0, FlexDirection::Row);
+    build_panes_ui(
+        &mut commands,
+        &tg,
+        &cal,
+        &conn,
+        &theme.0,
+        FlexDirection::Row,
+    );
 }
 
 fn spawn_vertical_panes_view(
@@ -359,7 +366,14 @@ fn spawn_vertical_panes_view(
     conn: Res<ConnectionStatus>,
     theme: Res<Theme>,
 ) {
-    build_panes_ui(&mut commands, &tg, &cal, &conn, &theme.0, FlexDirection::Column);
+    build_panes_ui(
+        &mut commands,
+        &tg,
+        &cal,
+        &conn,
+        &theme.0,
+        FlexDirection::Column,
+    );
 }
 
 fn update_panes_view(
@@ -479,7 +493,10 @@ fn add_toolguard_content(
         .with_children(|header| {
             header.spawn((
                 Text::new("TOOL STATUS"),
-                TextFont { font_size: 28.0, ..default() },
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
                 TextColor(theme.content),
             ));
             header
@@ -490,8 +507,11 @@ fn add_toolguard_content(
                     ..default()
                 })
                 .with_children(|ind| {
-                    let dot_color =
-                        if conn.connected { DOT_CONNECTED } else { DOT_DISCONNECTED };
+                    let dot_color = if conn.connected {
+                        DOT_CONNECTED
+                    } else {
+                        DOT_DISCONNECTED
+                    };
                     ind.spawn((
                         Node {
                             width: Val::Px(12.0),
@@ -503,8 +523,15 @@ fn add_toolguard_content(
                         BackgroundColor(dot_color),
                     ));
                     ind.spawn((
-                        Text::new(if conn.connected { "connected" } else { "disconnected" }),
-                        TextFont { font_size: 14.0, ..default() },
+                        Text::new(if conn.connected {
+                            "connected"
+                        } else {
+                            "disconnected"
+                        }),
+                        TextFont {
+                            font_size: 14.0,
+                            ..default()
+                        },
                         TextColor(theme.dim),
                     ));
                 });
@@ -529,7 +556,10 @@ fn add_toolguard_content(
             .with_children(|ep| {
                 ep.spawn((
                     Text::new(format!("⚠ {err}")),
-                    TextFont { font_size: 14.0, ..default() },
+                    TextFont {
+                        font_size: 14.0,
+                        ..default()
+                    },
                     TextColor(Color::srgb(1.0, 0.4, 0.4)),
                 ));
             });
@@ -553,7 +583,10 @@ fn add_toolguard_content(
             if tg.tools.is_empty() {
                 grid.spawn((
                     Text::new("Waiting for state…"),
-                    TextFont { font_size: 36.0, ..default() },
+                    TextFont {
+                        font_size: 36.0,
+                        ..default()
+                    },
                     TextColor(theme.dim),
                 ));
                 return;
@@ -591,18 +624,27 @@ fn add_toolguard_content(
                     .with_children(|info| {
                         info.spawn((
                             Text::new(tool.name.clone()),
-                            TextFont { font_size: 44.0, ..default() },
+                            TextFont {
+                                font_size: 44.0,
+                                ..default()
+                            },
                             TextColor(theme.content),
                         ));
                         info.spawn((
                             Text::new(status_label(&tool.status)),
-                            TextFont { font_size: 32.0, ..default() },
+                            TextFont {
+                                font_size: 32.0,
+                                ..default()
+                            },
                             TextColor(color),
                         ));
                         if let Some(ref user) = tool.inuse_by {
                             info.spawn((
                                 Text::new(user.clone()),
-                                TextFont { font_size: 28.0, ..default() },
+                                TextFont {
+                                    font_size: 28.0,
+                                    ..default()
+                                },
                                 TextColor(theme.dim),
                             ));
                         }
@@ -633,7 +675,10 @@ fn add_calendar_content(
         .with_children(|header| {
             header.spawn((
                 Text::new("UPCOMING EVENTS"),
-                TextFont { font_size: 28.0, ..default() },
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
                 TextColor(theme.content),
             ));
             header
@@ -644,8 +689,11 @@ fn add_calendar_content(
                     ..default()
                 })
                 .with_children(|ind| {
-                    let dot_color =
-                        if conn.connected { DOT_CONNECTED } else { DOT_DISCONNECTED };
+                    let dot_color = if conn.connected {
+                        DOT_CONNECTED
+                    } else {
+                        DOT_DISCONNECTED
+                    };
                     ind.spawn((
                         Node {
                             width: Val::Px(12.0),
@@ -657,8 +705,15 @@ fn add_calendar_content(
                         BackgroundColor(dot_color),
                     ));
                     ind.spawn((
-                        Text::new(if conn.connected { "connected" } else { "disconnected" }),
-                        TextFont { font_size: 14.0, ..default() },
+                        Text::new(if conn.connected {
+                            "connected"
+                        } else {
+                            "disconnected"
+                        }),
+                        TextFont {
+                            font_size: 14.0,
+                            ..default()
+                        },
                         TextColor(theme.dim),
                     ));
                 });
@@ -687,7 +742,10 @@ fn add_calendar_content(
             if cal.events.is_empty() {
                 list.spawn((
                     Text::new("No upcoming events"),
-                    TextFont { font_size: 18.0, ..default() },
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
                     TextColor(theme.dim),
                 ));
                 return;
@@ -725,18 +783,27 @@ fn add_calendar_content(
                     .with_children(|t| {
                         t.spawn((
                             Text::new(event.date_str()),
-                            TextFont { font_size: 18.0, ..default() },
+                            TextFont {
+                                font_size: 18.0,
+                                ..default()
+                            },
                             TextColor(theme.dim),
                         ));
                         t.spawn((
                             Text::new(event.time_str()),
-                            TextFont { font_size: 18.0, ..default() },
+                            TextFont {
+                                font_size: 18.0,
+                                ..default()
+                            },
                             TextColor(theme.dim),
                         ));
                     });
                     row.spawn((
                         Text::new(event.summary.clone()),
-                        TextFont { font_size: 18.0, ..default() },
+                        TextFont {
+                            font_size: 18.0,
+                            ..default()
+                        },
                         TextColor(color),
                     ));
                 });

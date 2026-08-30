@@ -4,43 +4,63 @@
       <div class="flex items-center justify-between mb-6">
         <h2 class="card-title text-2xl">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
           </svg>
           Profile Configuration
         </h2>
-        
+
         <div class="flex gap-2">
           <button
             v-if="!isEditing"
-            @click="startEditing"
             class="btn btn-primary btn-sm"
             :disabled="loading"
+            @click="startEditing"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+              />
             </svg>
             Edit Configuration
           </button>
-          
+
           <button
             v-if="isEditing"
-            @click="cancelEditing"
             class="btn btn-ghost btn-sm"
             :disabled="loading"
+            @click="cancelEditing"
           >
             Cancel
           </button>
-          
+
           <button
             v-if="isEditing"
-            @click="saveConfiguration"
             class="btn btn-primary btn-sm"
             :disabled="loading || !isFormValid"
+            @click="saveConfiguration"
           >
             <span v-if="loading" class="loading loading-spinner loading-sm"></span>
             <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M5 13l4 4L19 7"
+              />
             </svg>
             Save Configuration
           </button>
@@ -56,13 +76,18 @@
       <!-- Error state -->
       <div v-else-if="error && !profileConfig" class="alert alert-error">
         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <div>
           <h3 class="font-bold">Error loading configuration</h3>
           <div class="text-xs">{{ error }}</div>
         </div>
-        <button @click="loadConfiguration" class="btn btn-sm">Retry</button>
+        <button class="btn btn-sm" @click="loadConfiguration">Retry</button>
       </div>
 
       <!-- Configuration form -->
@@ -71,7 +96,7 @@
         <div class="card bg-base-200">
           <div class="card-body">
             <h3 class="card-title text-lg mb-4">Global Settings</h3>
-            
+
             <div class="form-control">
               <label class="label cursor-pointer justify-start gap-4">
                 <input
@@ -94,13 +119,14 @@
           <div class="card-body">
             <div class="flex items-center justify-between mb-4">
               <h3 class="card-title text-lg">Profile Fields</h3>
-              <button
-                v-if="isEditing"
-                @click="addField"
-                class="btn btn-primary btn-sm"
-              >
+              <button v-if="isEditing" class="btn btn-primary btn-sm" @click="addField">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M12 4v16m8-8H4"
+                  />
                 </svg>
                 Add Field
               </button>
@@ -109,12 +135,17 @@
             <!-- Validation errors -->
             <div v-if="validationErrors.length > 0" class="alert alert-error mb-4">
               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
               </svg>
               <div>
                 <h3 class="font-bold">Please fix the following errors:</h3>
                 <ul class="text-xs list-disc list-inside">
-                  <li v-for="error in validationErrors" :key="error">{{ error }}</li>
+                  <li v-for="fieldError in validationErrors" :key="fieldError">{{ fieldError }}</li>
                 </ul>
               </div>
             </div>
@@ -131,11 +162,16 @@
                     <h4 class="font-semibold">Field {{ index + 1 }}</h4>
                     <button
                       v-if="isEditing"
-                      @click="removeField(index)"
                       class="btn btn-error btn-xs"
+                      @click="removeField(index)"
                     >
                       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                        />
                       </svg>
                       Remove
                     </button>
@@ -181,7 +217,9 @@
                         v-model="field.field_type"
                         class="select select-bordered select-sm"
                         :disabled="!isEditing"
-                        @change="handleFieldTypeChange(field, ($event.target as HTMLSelectElement)?.value)"
+                        @change="
+                          handleFieldTypeChange(field, ($event.target as HTMLSelectElement)?.value)
+                        "
                       >
                         <option value="">Select type...</option>
                         <option value="Text">Text</option>
@@ -225,25 +263,51 @@
                             placeholder="Option text"
                             class="input input-bordered input-sm flex-1"
                             :disabled="!isEditing"
-                            @input="updateSelectOption(field.field_type, optionIndex, ($event.target as HTMLInputElement)?.value)"
+                            @input="
+                              updateSelectOption(
+                                field.field_type,
+                                optionIndex,
+                                ($event.target as HTMLInputElement)?.value
+                              )
+                            "
                           />
                           <button
                             v-if="isEditing"
-                            @click="removeSelectOption(field.field_type, optionIndex)"
                             class="btn btn-error btn-xs"
+                            @click="removeSelectOption(field.field_type, optionIndex)"
                           >
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            <svg
+                              class="w-3 h-3"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12"
+                              />
                             </svg>
                           </button>
                         </div>
                         <button
                           v-if="isEditing"
-                          @click="addSelectOption(field.field_type)"
                           class="btn btn-ghost btn-sm"
+                          @click="addSelectOption(field.field_type)"
                         >
-                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                          <svg
+                            class="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M12 4v16m8-8H4"
+                            />
                           </svg>
                           Add Option
                         </button>
@@ -269,16 +333,24 @@
 
             <!-- No fields message -->
             <div v-else class="text-center py-8">
-              <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              <svg
+                class="w-16 h-16 mx-auto text-base-content/30 mb-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
               </svg>
               <h3 class="text-lg font-medium text-base-content/70 mb-2">No Profile Fields</h3>
-              <p class="text-base-content/50 mb-4">Add profile fields to allow users to customize their profiles.</p>
-              <button
-                v-if="isEditing"
-                @click="addField"
-                class="btn btn-primary"
-              >
+              <p class="text-base-content/50 mb-4">
+                Add profile fields to allow users to customize their profiles.
+              </p>
+              <button v-if="isEditing" class="btn btn-primary" @click="addField">
                 Add Your First Field
               </button>
             </div>
@@ -292,18 +364,22 @@
             <div class="text-sm text-base-content/70 mb-4">
               This is how the profile form will look to users:
             </div>
-            
+
             <div class="card bg-base-100">
               <div class="card-body">
                 <div class="grid gap-4 md:grid-cols-2">
-                  <div v-for="field in editConfig.profile_fields" :key="field.key" class="form-control">
+                  <div
+                    v-for="field in editConfig.profile_fields"
+                    :key="field.key"
+                    class="form-control"
+                  >
                     <label class="label">
                       <span class="label-text font-medium">
                         {{ field.label }}
                         <span v-if="field.required" class="text-error">*</span>
                       </span>
                     </label>
-                    <div class="text-xs text-base-content/60 mb-1" v-if="field.help_text">
+                    <div v-if="field.help_text" class="text-xs text-base-content/60 mb-1">
                       {{ field.help_text }}
                     </div>
                     <div class="text-sm text-base-content/50">
@@ -331,7 +407,7 @@ const profileStore = useProfileStore()
 const isEditing = ref(false)
 const editConfig = ref<UpdateProfileConfigRequest>({
   profiles_enabled: false,
-  profile_fields: []
+  profile_fields: [],
 })
 const validationErrors = ref<string[]>([])
 
@@ -351,7 +427,7 @@ function addField() {
     label: '',
     field_type: 'Text' as ProfileFieldType,
     required: false,
-    help_text: ''
+    help_text: '',
   })
 }
 
@@ -437,7 +513,7 @@ function validateConfiguration() {
       if (options.length === 0) {
         errors.push(`Field ${fieldNum}: Select fields must have at least one option`)
       } else {
-        const emptyOptions = options.filter(opt => !opt || opt.trim() === '')
+        const emptyOptions = options.filter((opt) => !opt || opt.trim() === '')
         if (emptyOptions.length > 0) {
           errors.push(`Field ${fieldNum}: All select options must have values`)
         }
@@ -455,7 +531,7 @@ function validateConfiguration() {
 function syncEditConfigFromProfile() {
   editConfig.value = {
     profiles_enabled: profileConfig.value?.profiles_enabled || false,
-    profile_fields: JSON.parse(JSON.stringify(profileConfig.value?.profile_fields || []))
+    profile_fields: JSON.parse(JSON.stringify(profileConfig.value?.profile_fields || [])),
   }
 }
 
@@ -467,6 +543,9 @@ function startEditing() {
 
 function cancelEditing() {
   isEditing.value = false
+  // dev's fix, and it is the right one. Resetting to the empty default meant
+  // cancelling an edit put the page back to claiming there was no
+  // configuration -- the same reason the read-only view showed nothing.
   syncEditConfigFromProfile()
   validationErrors.value = []
   profileStore.clearError()
@@ -474,17 +553,20 @@ function cancelEditing() {
 
 async function saveConfiguration() {
   validateConfiguration()
-  
+
   if (!isFormValid.value) {
     return
   }
-  
+
   try {
     await profileStore.updateProfileConfig(editConfig.value)
     isEditing.value = false
     syncEditConfigFromProfile()
     validationErrors.value = []
   } catch (err) {
+    // Logged rather than discarded: a swallowed error is indistinguishable
+    // from a successful no-op to anyone reading the console.
+    console.error(err)
     // Error is already handled by the store
   }
 }
@@ -494,6 +576,9 @@ async function loadConfiguration() {
     await profileStore.fetchProfileConfig()
     syncEditConfigFromProfile()
   } catch (err) {
+    // Logged rather than discarded: a swallowed error is indistinguishable
+    // from a successful no-op to anyone reading the console.
+    console.error(err)
     // Error is already handled by the store
   }
 }

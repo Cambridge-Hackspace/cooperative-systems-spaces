@@ -5,24 +5,17 @@ use std::sync::{Arc, RwLock};
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
 
-mod calendar;
-mod config;
-mod registration;
-mod system_info;
-mod mqtt;
-mod toolguard;
-mod doors;
-mod edge_inbound;
-mod ws;
-mod web_server;
-
-use config::{generate_sample_config, load_config};
-use crate::config::AuthStatus;
-use crate::registration::{register_device, is_registered};
-use crate::mqtt::{EdgeMqttClient, LocalMqttClient, run_mqtt_event_loop, run_local_mqtt_event_loop};
-use crate::toolguard::ToolGuardState;
-use crate::doors::DoorsState;
-use crate::web_server::start_web_server;
+// The modules live in the library (see src/lib.rs); this binary is a shim over
+// it, so that `edge/tests/` can reach them and so that live-but-binary-private
+// code is not reported as dead.
+use css_edge::config::{generate_sample_config, load_config, AuthStatus};
+use css_edge::doors::DoorsState;
+use css_edge::mqtt::{
+    run_local_mqtt_event_loop, run_mqtt_event_loop, EdgeMqttClient, LocalMqttClient,
+};
+use css_edge::registration::{is_registered, register_device};
+use css_edge::toolguard::ToolGuardState;
+use css_edge::web_server::start_web_server;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -108,7 +101,10 @@ async fn main() -> Result<()> {
     let web_port = 8080;
 
     if let Some(mqtt) = &app_config.local_mqtt_config {
-        info!("Local MQTT enabled - connecting to: {}", mqtt.mqtt_instance_url);
+        info!(
+            "Local MQTT enabled - connecting to: {}",
+            mqtt.mqtt_instance_url
+        );
     } else {
         info!("Local MQTT disabled");
     }
@@ -116,18 +112,41 @@ async fn main() -> Result<()> {
     match app_config.auth_status {
         AuthStatus::Unauthenticated => {
             info!("Edge client is unauthenticated");
-            info!("Web UI available at http://localhost:{} for registration", web_port);
+            info!(
+                "Web UI available at http://localhost:{} for registration",
+                web_port
+            );
             info!("Or use: edge register --instance-url <url> --code <code>");
-            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new()), args.frontend_path).await?;
+            start_web_server(
+                config_arc,
+                args.config,
+                web_port,
+                Arc::new(ToolGuardState::new()),
+                args.frontend_path,
+            )
+            .await?;
         }
         AuthStatus::Pending => {
             info!("Edge client authentication is pending on server, please wait");
-            info!("Web UI available at http://localhost:{} for status", web_port);
-            start_web_server(config_arc, args.config, web_port, Arc::new(ToolGuardState::new()), args.frontend_path).await?;
+            info!(
+                "Web UI available at http://localhost:{} for status",
+                web_port
+            );
+            start_web_server(
+                config_arc,
+                args.config,
+                web_port,
+                Arc::new(ToolGuardState::new()),
+                args.frontend_path,
+            )
+            .await?;
         }
         AuthStatus::Approved => {
             info!("Edge client is authenticated");
-            info!("Web UI available at http://localhost:{} for status", web_port);
+            info!(
+                "Web UI available at http://localhost:{} for status",
+                web_port
+            );
 
             // Shared toolguard state — notify_rx fires on every state change
             let (toolguard_state_inner, state_notify_rx) = ToolGuardState::new_with_notify();
@@ -138,12 +157,14 @@ async fn main() -> Result<()> {
             // `doors_event_*` flows local → remote (scans → server audit log).
             let doors_state = DoorsState::new();
             let (doors_unlock_tx, doors_unlock_rx) =
-                tokio::sync::mpsc::unbounded_channel::<crate::doors::UnlockCommand>();
+                tokio::sync::mpsc::unbounded_channel::<css_edge::doors::UnlockCommand>();
             let (doors_event_tx, doors_event_rx) =
-                tokio::sync::mpsc::unbounded_channel::<crate::doors::DoorsEvent>();
+                tokio::sync::mpsc::unbounded_channel::<css_edge::doors::DoorsEvent>();
 
             // Extract device credentials once
-            let device_info = app_config.remote_device_info.clone()
+            let device_info = app_config
+                .remote_device_info
+                .clone()
                 .expect("Approved device must have remote_device_info");
             let remote_instance_url = device_info.remote_instance_url.clone();
             let remote_auth_token = device_info.remote_auth_token.clone();
@@ -159,7 +180,11 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(resp) if resp.status().is_success() => {
-                        info!("Boot-reset: server acknowledged ({} {})", resp.status().as_u16(), url);
+                        info!(
+                            "Boot-reset: server acknowledged ({} {})",
+                            resp.status().as_u16(),
+                            url
+                        );
                     }
                     Ok(resp) => {
                         warn!("Boot-reset returned HTTP {}", resp.status());
@@ -181,21 +206,16 @@ async fn main() -> Result<()> {
                     loop {
                         ticker.tick().await;
                         let url = format!("{}/api/toolguard/sync", instance_url);
-                        match client
-                            .get(&url)
-                            .bearer_auth(&auth_token)
-                            .send()
-                            .await
-                        {
-                            Ok(resp) if resp.status().is_success() => {
-                                match resp.bytes().await {
-                                    Ok(bytes) => match state.apply_sync_bytes(&bytes) {
-                                        Ok(()) => info!("ToolGuard state synced from remote"),
-                                        Err(e) => warn!("Failed to parse toolguard sync response: {}", e),
-                                    },
-                                    Err(e) => warn!("Failed to read toolguard sync body: {}", e),
-                                }
-                            }
+                        match client.get(&url).bearer_auth(&auth_token).send().await {
+                            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                                Ok(bytes) => match state.apply_sync_bytes(&bytes) {
+                                    Ok(()) => info!("ToolGuard state synced from remote"),
+                                    Err(e) => {
+                                        warn!("Failed to parse toolguard sync response: {}", e)
+                                    }
+                                },
+                                Err(e) => warn!("Failed to read toolguard sync body: {}", e),
+                            },
                             Ok(resp) => warn!("ToolGuard sync returned HTTP {}", resp.status()),
                             Err(e) => warn!("ToolGuard sync request failed: {}", e),
                         }
@@ -219,7 +239,9 @@ async fn main() -> Result<()> {
                     remote_auth_token.clone(),
                     Arc::clone(&doors_state),
                     doors_event_tx.clone(),
-                ).await {
+                )
+                .await
+                {
                     Ok((local_client, local_rx)) => {
                         let local_client = Arc::new(local_client);
                         if let Err(e) = local_client.subscribe_to_requests() {
@@ -257,7 +279,7 @@ async fn main() -> Result<()> {
             drop(doors_unlock_rx);
 
             // ── Shared inbound dispatcher (used by whichever remote transport runs) ──
-            let edge_inbound = std::sync::Arc::new(crate::edge_inbound::EdgeInbound {
+            let edge_inbound = std::sync::Arc::new(css_edge::edge_inbound::EdgeInbound {
                 config_manager: config_arc.clone(),
                 toolguard_state: Arc::clone(&toolguard_state),
                 doors_state: Arc::clone(&doors_state),
@@ -270,13 +292,21 @@ async fn main() -> Result<()> {
             let frontend_path_for_web = args.frontend_path.clone();
             let tgs_for_web = Arc::clone(&toolguard_state);
             tokio::spawn(async move {
-                if let Err(e) = start_web_server(config_for_web, config_path_for_web, web_port, tgs_for_web, frontend_path_for_web).await {
+                if let Err(e) = start_web_server(
+                    config_for_web,
+                    config_path_for_web,
+                    web_port,
+                    tgs_for_web,
+                    frontend_path_for_web,
+                )
+                .await
+                {
                     error!("Web server error: {}", e);
                 }
             });
 
             // ── Remote transport: MQTT or WebSocket ──────────────────────────
-            use crate::config::RemoteTransport;
+            use css_edge::config::RemoteTransport;
             match app_config.remote_transport {
                 RemoteTransport::Mqtt => {
                     if app_config.remote_mqtt_config.is_none() {
@@ -288,10 +318,8 @@ async fn main() -> Result<()> {
                     }
 
                     info!("Starting remote MQTT connection...");
-                    let (mqtt_client, rx) = EdgeMqttClient::new(
-                        &app_config,
-                        edge_inbound.clone(),
-                    ).await?;
+                    let (mqtt_client, rx) =
+                        EdgeMqttClient::new(&app_config, edge_inbound.clone()).await?;
                     let mqtt_client = Arc::new(mqtt_client);
 
                     mqtt_client.subscribe_to_commands()?;
@@ -333,7 +361,7 @@ async fn main() -> Result<()> {
                 }
                 RemoteTransport::Websocket => {
                     info!("Starting remote WebSocket connection...");
-                    let ws_client = crate::ws::WsClient::start(
+                    let ws_client = css_edge::ws::WsClient::start(
                         &remote_instance_url,
                         remote_auth_token.clone(),
                         edge_inbound.clone(),

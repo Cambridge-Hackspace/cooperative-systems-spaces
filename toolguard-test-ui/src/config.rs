@@ -41,12 +41,24 @@ impl Default for Config {
             mqtt_broker_url: "tcp://localhost:1883".to_string(),
             mqtt_client_id: default_client_id(),
             cards: vec![
-                VirtualCard { name: "Alice".to_string(), value: "ALICE001".to_string() },
-                VirtualCard { name: "Bob".to_string(),   value: "BOB002".to_string() },
+                VirtualCard {
+                    name: "Alice".to_string(),
+                    value: "ALICE001".to_string(),
+                },
+                VirtualCard {
+                    name: "Bob".to_string(),
+                    value: "BOB002".to_string(),
+                },
             ],
             tools: vec![
-                VirtualTool { name: "Laser Cutter".to_string(), id: "laser-01".to_string() },
-                VirtualTool { name: "3D Printer".to_string(),   id: "3dprinter-01".to_string() },
+                VirtualTool {
+                    name: "Laser Cutter".to_string(),
+                    id: "laser-01".to_string(),
+                },
+                VirtualTool {
+                    name: "3D Printer".to_string(),
+                    id: "3dprinter-01".to_string(),
+                },
             ],
         }
     }
@@ -65,8 +77,7 @@ impl Config {
             }
         } else {
             // Write a sample config so the user can edit it
-            let sample = toml::to_string_pretty(&Config::default())
-                .unwrap_or_default();
+            let sample = toml::to_string_pretty(&Config::default()).unwrap_or_default();
             let _ = fs::write(p, sample);
             eprintln!("No config found — wrote defaults to {path}");
         }

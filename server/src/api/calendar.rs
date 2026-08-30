@@ -1,13 +1,8 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde_json::json;
 use tracing::error;
 
-use crate::calendar::{CalendarEvent, CalendarService};
+use crate::calendar::CalendarEvent;
 use crate::AppState;
 
 /// Routes for calendar functionality
@@ -30,8 +25,8 @@ async fn get_calendar_events(
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
+                    "success": false,
                     "error": "Failed to fetch calendar events",
-                    "details": e.to_string()
                 })),
             ))
         }
@@ -43,7 +38,7 @@ async fn refresh_calendar_events(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CalendarEvent>>, (StatusCode, Json<serde_json::Value>)> {
     let calendar_service = state.calendar_service.read().await;
-    
+
     // Clear all cache
     calendar_service.clear_all_cache().await;
 
@@ -55,8 +50,8 @@ async fn refresh_calendar_events(
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
+                    "success": false,
                     "error": "Failed to refresh calendar events",
-                    "details": e.to_string()
                 })),
             ))
         }

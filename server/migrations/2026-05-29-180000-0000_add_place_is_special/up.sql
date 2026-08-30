@@ -1,4 +1,4 @@
--- Allow operators to mark "special" places (Outside, Common Area, Parking Lot, …).
+-- Allow operators to mark "special" places (Outside, Common Area, Parking Lot, ...).
 -- Special places sit outside the normal hierarchy rules: they need not have a
 -- parent and their place_type is free-form (not validated against [place].types).
 -- Doors/tools/devices reference them like any other place via the existing

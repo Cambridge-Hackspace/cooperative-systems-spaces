@@ -1,59 +1,31 @@
 // @generated automatically by Diesel CLI.
 
 pub mod sql_types {
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "assessment_type"))]
     pub struct AssessmentType;
 
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "space_device_kind"))]
     pub struct SpaceDeviceKind;
 
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "space_device_platform"))]
     pub struct SpaceDevicePlatform;
 
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "tool_category"))]
     pub struct ToolCategory;
 
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "tool_status"))]
     pub struct ToolStatus;
 
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "training_status"))]
     pub struct TrainingStatus;
 
-    #[derive(
-        serde::Serialize,
-        serde::Deserialize,
-        diesel::sql_types::SqlType,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "user_role"))]
     pub struct UserRole;
 }

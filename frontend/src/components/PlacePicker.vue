@@ -41,7 +41,7 @@ const props = withDefaults(
     nullLabel: '— Unassigned —',
     hideNull: false,
     disabled: false,
-  },
+  }
 )
 
 const emit = defineEmits<{
@@ -50,12 +50,12 @@ const emit = defineEmits<{
 
 /** Special places listed separately in their own optgroup. */
 const specials = computed(() =>
-  props.places.filter(p => p.is_special).sort((a, b) => a.name.localeCompare(b.name)),
+  props.places.filter((p) => p.is_special).sort((a, b) => a.name.localeCompare(b.name))
 )
 
 /** Walks the regular hierarchy (specials excluded) into a depth-indented list. */
 const flat = computed(() => {
-  const regular = props.places.filter(p => !p.is_special)
+  const regular = props.places.filter((p) => !p.is_special)
   const byParent = new Map<string | null, Place[]>()
   for (const p of regular) {
     const k = p.parent_id

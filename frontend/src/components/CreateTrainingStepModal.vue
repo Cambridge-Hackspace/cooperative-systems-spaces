@@ -3,25 +3,16 @@
     <div class="modal-content bg-base-100" @click.stop>
       <div class="modal-header bg-gradient-to-br from-primary via-secondary to-primary">
         <h3 class="font-bold">Create Training Step</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body bg-base-200">
         <form @submit.prevent="createStep">
           <div class="form-group">
             <label for="tool_id">Tool:</label>
-            <select 
-              id="tool_id" 
-              v-model="form.tool_id"
-              class="form-control select"
-              required
-            >
+            <select id="tool_id" v-model="form.tool_id" class="form-control select" required>
               <option value="">Select a tool</option>
-              <option 
-                v-for="tool in tools" 
-                :key="tool.id"
-                :value="tool.id"
-              >
+              <option v-for="tool in tools" :key="tool.id" :value="tool.id">
                 {{ tool.name }}
               </option>
             </select>
@@ -29,31 +20,31 @@
 
           <div class="form-group">
             <label for="step_number">Step Number:</label>
-            <input 
+            <input
               id="step_number"
-              type="number"
               v-model.number="form.step_number"
+              type="number"
               class="form-control input"
               min="1"
               required
-            >
+            />
           </div>
 
           <div class="form-group">
             <label for="step_name">Title:</label>
             <input
               id="step_name"
-              type="text"
               v-model="form.step_name"
+              type="text"
               class="form-control input"
               required
               placeholder="e.g., Safety Orientation"
-            >
+            />
           </div>
 
           <div class="form-group">
             <label for="description">Description:</label>
-            <textarea 
+            <textarea
               id="description"
               v-model="form.description"
               class="form-control textarea"
@@ -65,8 +56,8 @@
 
           <div class="form-group">
             <label for="assessment_type">Assessment Type:</label>
-            <select 
-              id="assessment_type" 
+            <select
+              id="assessment_type"
               v-model="form.assessment_type"
               class="form-control select"
               required
@@ -78,46 +69,40 @@
             </select>
           </div>
 
-          <div class="form-group" v-if="form.assessment_type !== 'observation_only'">
+          <div v-if="form.assessment_type !== 'observation_only'" class="form-group">
             <label for="passing_score">Passing Score (%):</label>
-            <input 
+            <input
               id="passing_score"
-              type="number"
               v-model.number="form.passing_score"
+              type="number"
               class="form-control input"
               min="0"
               max="100"
               placeholder="e.g., 80"
-            >
+            />
           </div>
 
           <div class="form-group">
-            <label for="expiry_days">Expires After (days):</label>
-            <input 
-              id="expiry_days"
+            <label for="expires_after_days">Expires After (days):</label>
+            <input
+              id="expires_after_days"
+              v-model.number="form.expires_after_days"
               type="number"
-              v-model.number="form.expiry_days"
               class="form-control input"
               min="1"
               placeholder="Leave blank for no expiration"
-            >
+            />
           </div>
 
           <div class="form-group">
             <label class="checkbox-label">
-              <input 
-                type="checkbox" 
-                v-model="form.is_active"
-                class="checkbox"
-              >
+              <input v-model="form.is_active" type="checkbox" class="checkbox" />
               <span class="checkbox-text px-4">Active (visible to users)</span>
             </label>
           </div>
 
           <div class="form-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="loading" class="btn btn-primary">
               {{ loading ? 'Creating...' : 'Create Training Step' }}
             </button>
@@ -135,16 +120,12 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { trainingApi } from '../utils/api'
-import {
-  Tool,
-  CreateTrainingStepRequest,
-  TrainingStep, AssessmentType
-} from '../types'
+import { Tool, CreateTrainingStepRequest, TrainingStep, AssessmentType } from '../types'
 
 interface Props {
   tools: Tool[]
 }
-const props = defineProps<Props>()
+defineProps<Props>()
 const emit = defineEmits<{
   close: []
   created: [step: TrainingStep]
@@ -161,8 +142,8 @@ const form = reactive<CreateTrainingStepRequest>({
   description: '',
   assessment_type: AssessmentType.Practical,
   passing_score: undefined,
-  expiry_days: undefined,
-  is_active: true
+  expires_after_days: undefined,
+  is_active: true,
 })
 
 // Methods
@@ -172,7 +153,7 @@ const createStep = async () => {
     error.value = ''
 
     const response = await trainingApi.createTrainingStep(form)
-    
+
     if (response.success && response.data) {
       emit('created', response.data)
     } else {
@@ -201,7 +182,7 @@ const createStep = async () => {
 }
 
 .modal-content {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   max-width: 600px;
   width: 90%;
@@ -214,7 +195,7 @@ const createStep = async () => {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .modal-header h3 {
@@ -237,7 +218,7 @@ const createStep = async () => {
 }
 
 .close-btn:hover {
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .modal-body {
@@ -274,7 +255,7 @@ const createStep = async () => {
 .form-control {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 0.9rem;
 }
@@ -306,7 +287,6 @@ const createStep = async () => {
   cursor: not-allowed;
 }
 
-
 .error-message {
   background: #f8d7da;
   color: #721c24;
@@ -321,11 +301,11 @@ const createStep = async () => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

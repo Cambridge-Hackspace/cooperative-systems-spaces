@@ -1,17 +1,9 @@
-use axum::{
-    extract::State,
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{extract::State, response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::{
-        errors::ApiError,
-        responses::ApiResponse,
-    },
-    config::{ToolCategoryMapping, LinkLocation},
+    api::{errors::ApiError, responses::ApiResponse},
+    config::{LinkLocation, ToolCategoryMapping},
     AppState,
 };
 
@@ -136,8 +128,12 @@ fn build_public_config(state: &AppState) -> PublicConfig {
             favicon_url: config.theme.favicon_url.clone(),
             dark_mode_enabled: config.theme.dark_mode_enabled,
         },
-        doors: PublicDoorsConfig { enabled: config.door.enabled },
-        calendar: PublicCalendarConfig { enabled: config.calendar.enabled },
+        doors: PublicDoorsConfig {
+            enabled: config.door.enabled,
+        },
+        calendar: PublicCalendarConfig {
+            enabled: config.calendar.enabled,
+        },
         toolguard: PublicToolGuardConfig {
             enabled: config.toolguard.enabled,
             profile_field: config.toolguard.profile_field.clone(),

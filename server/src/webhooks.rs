@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
+use crate::config::ConfigManager;
 use crate::database::DatabaseManager;
 use crate::models::{AuditLog, NewWebhookDelivery, Webhook, WebhookAuthHeader};
 
@@ -50,12 +51,18 @@ fn sign(secret: &str, body: &[u8]) -> String {
 pub struct WebhookDispatcher {
     db: Arc<DatabaseManager>,
     http: reqwest::Client,
+    /// Read live rather than snapshotted, so `admin_config_reload` takes effect
+    /// on the next delivery instead of at the next restart.
+    config: Arc<ConfigManager>,
 }
 
 impl WebhookDispatcher {
     /// Build the dispatcher and spawn its background consumer, returning the
     /// sender to register on the [`DatabaseManager`].
-    pub fn start(db: Arc<DatabaseManager>) -> (Arc<Self>, mpsc::UnboundedSender<AuditLog>) {
+    pub fn start(
+        db: Arc<DatabaseManager>,
+        config: Arc<ConfigManager>,
+    ) -> (Arc<Self>, mpsc::UnboundedSender<AuditLog>) {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
@@ -64,7 +71,7 @@ impl WebhookDispatcher {
                 reqwest::Client::new()
             });
 
-        let dispatcher = Arc::new(Self { db, http });
+        let dispatcher = Arc::new(Self { db, http, config });
         let (tx, mut rx) = mpsc::unbounded_channel::<AuditLog>();
 
         let consumer = dispatcher.clone();
@@ -142,14 +149,15 @@ impl WebhookDispatcher {
                     let status = resp.status();
                     let code = status.as_u16() as i32;
                     let text = resp.text().await.unwrap_or_default();
-                    let truncated = truncate(&text, 4096);
+                    let debug = self.config.get_config().site.debug;
+                    let body = recordable_body(debug, status.is_success(), &text);
                     if status.is_success() {
-                        (true, Some(code), Some(truncated), None)
+                        (true, Some(code), body, None)
                     } else {
                         (
                             false,
                             Some(code),
-                            Some(truncated),
+                            body,
                             Some(format!("non-success status {code}")),
                         )
                     }
@@ -276,6 +284,31 @@ pub fn test_payload() -> serde_json::Value {
     })
 }
 
+/// What, if anything, of a receiver's response to keep.
+///
+/// The body is a debugging aid: when a delivery fails, the receiver's own words
+/// are usually the only thing that says why -- "invalid token", "unknown room",
+/// "payload too large". Without it the Deliveries tab shows a bare status code
+/// and the operator is guessing.
+///
+/// It is also, on a *successful* delivery, whatever the URL returned. Nothing
+/// validates a webhook's host beyond its scheme (api/webhooks.rs), so an admin
+/// can point one at a link-local or loopback address, fire a test delivery, and
+/// read the answer back out of the admin UI. That is a read primitive against
+/// anything the server can reach, built out of a debugging convenience.
+///
+/// So the two are separated. A failure keeps its body, because that is the case
+/// the field exists for and a failing delivery is the one worth diagnosing. A
+/// success keeps nothing unless `[site] debug` is on -- which is off by default
+/// and is already the flag for "this deployment is being worked on rather than
+/// run".
+pub fn recordable_body(debug: bool, success: bool, text: &str) -> Option<String> {
+    if success && !debug {
+        return None;
+    }
+    Some(truncate(text, 4096))
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
@@ -286,4 +319,62 @@ fn truncate(s: &str, max: usize) -> String {
         end -= 1;
     }
     format!("{}…[truncated]", &s[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recordable_body;
+
+    // The debugging value: a failed delivery keeps the receiver's own words,
+    // because that is the case the field exists for and the only one an
+    // operator is trying to diagnose.
+    #[test]
+    fn a_failed_delivery_keeps_its_body_whatever_debug_says() {
+        assert_eq!(
+            recordable_body(false, false, "invalid token"),
+            Some("invalid token".to_string())
+        );
+        assert_eq!(
+            recordable_body(true, false, "invalid token"),
+            Some("invalid token".to_string())
+        );
+    }
+
+    // The exposure: nothing validates a webhook's host beyond its scheme, so a
+    // *successful* body is whatever the URL returned -- including a link-local
+    // metadata endpoint. Off by default, it is not kept.
+    #[test]
+    fn a_successful_delivery_keeps_nothing_unless_debug_is_on() {
+        assert_eq!(
+            recordable_body(false, true, "ami-id\ninstance-id\niam/"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_successful_delivery_keeps_its_body_when_debug_is_on() {
+        assert_eq!(
+            recordable_body(true, true, "queued"),
+            Some("queued".to_string())
+        );
+    }
+
+    // The cap still applies wherever a body is kept: a receiver that answers
+    // with a megabyte of HTML should not put a megabyte in every delivery row.
+    #[test]
+    fn a_kept_body_is_still_truncated() {
+        let huge = "x".repeat(10_000);
+        let kept = recordable_body(false, false, &huge).expect("a failure keeps its body");
+        assert!(kept.len() < huge.len());
+        assert!(kept.ends_with("…[truncated]"));
+    }
+
+    #[test]
+    fn truncation_does_not_split_a_character() {
+        // 4096 is a byte cap and the boundary lands mid-character here, which
+        // is a panic rather than a wrong answer if it is not handled.
+        let body = "é".repeat(4000);
+        let kept = recordable_body(true, false, &body).expect("kept");
+        assert!(kept.ends_with("…[truncated]"));
+    }
 }

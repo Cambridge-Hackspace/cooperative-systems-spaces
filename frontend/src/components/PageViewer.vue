@@ -8,22 +8,33 @@
     <div v-else-if="error" class="error-state">
       <h2>😕 Page Not Found</h2>
       <p>{{ error }}</p>
-      <button @click="$emit('back')" class="back-btn">← Back to List</button>
+      <button class="back-btn" @click="$emit('back')">← Back to List</button>
     </div>
 
     <article v-else-if="page" class="page-content">
       <header class="page-header">
         <h1>{{ page.title }}</h1>
         <div class="page-meta">
-          <span class="page-path bg-secondary text-secondary-content">📄 {{ page.relative_path }}</span>
+          <span class="page-path bg-secondary text-secondary-content"
+            >📄 {{ page.relative_path }}</span
+          >
         </div>
       </header>
 
+      <!-- Deliberate and narrow: markdown already rendered to HTML server-side by comrak with Options::default()
+       (server/src/pages.rs:398), whose render.unsafe_ is false -- raw HTML in the
+       source is escaped before it is ever sent. -->
+      <!-- eslint-disable-next-line vue/no-v-html -->
       <div class="page-body markdown-content text-base-content" v-html="page.html_content"></div>
 
       <!-- Edit link in bottom right -->
       <div v-if="editUrl" class="edit-link-container">
-        <a :href="editUrl" target="_blank" rel="noopener noreferrer" class="edit-link bg-primary text-primary-content">
+        <a
+          :href="editUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="edit-link bg-primary text-primary-content"
+        >
           ✏️ Edit on {{ platformName }}
         </a>
       </div>
@@ -54,7 +65,7 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'back'): void
 }>()
 
@@ -117,13 +128,17 @@ const platformName = computed(() => {
 })
 
 // Watch for slug changes and load the page
-watch(() => props.slug, (newSlug) => {
-  if (newSlug) {
-    fetchPage(newSlug)
-  } else {
-    page.value = null
-  }
-}, { immediate: true })
+watch(
+  () => props.slug,
+  (newSlug) => {
+    if (newSlug) {
+      void fetchPage(newSlug)
+    } else {
+      page.value = null
+    }
+  },
+  { immediate: true }
+)
 
 async function fetchPage(slug: string) {
   loading.value = true
@@ -131,12 +146,10 @@ async function fetchPage(slug: string) {
   page.value = null
 
   try {
-    const endpoint = props.type === 'wiki' 
-      ? `/api/pages/wiki/${slug}`
-      : `/api/pages/page/${slug}`
-    
+    const endpoint = props.type === 'wiki' ? `/api/pages/wiki/${slug}` : `/api/pages/page/${slug}`
+
     const response = await fetch(endpoint)
-    
+
     if (!response.ok) {
       if (response.status === 404) {
         throw new Error('Page not found')
@@ -180,8 +193,12 @@ async function fetchPage(slug: string) {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .error-state {

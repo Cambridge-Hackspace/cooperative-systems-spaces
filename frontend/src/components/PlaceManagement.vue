@@ -12,9 +12,11 @@
       <div>
         <h1 v-if="!embedded" class="text-3xl font-bold mb-1">Places</h1>
         <p class="text-base-content/70">
-          A self-referential hierarchy of physical places. The level vocabulary
-          (<span class="font-mono text-sm">{{ config?.types?.join(' › ') || '…' }}</span>)
-          comes from <code class="text-xs bg-base-300 px-1 rounded">[place].types</code> in your server config.
+          A self-referential hierarchy of physical places. The level vocabulary (<span
+            class="font-mono text-sm"
+            >{{ config?.types?.join(' › ') || '…' }}</span
+          >) comes from <code class="text-xs bg-base-300 px-1 rounded">[place].types</code> in your
+          server config.
         </p>
       </div>
       <div class="flex gap-2">
@@ -36,7 +38,9 @@
     </div>
 
     <div v-if="config && !config.enabled" class="alert alert-warning mb-6">
-      <span>The places module is disabled in server configuration (<code>[place].enabled</code>).</span>
+      <span
+        >The places module is disabled in server configuration (<code>[place].enabled</code>).</span
+      >
     </div>
 
     <div v-if="flash" class="alert mb-4" :class="flashOk ? 'alert-success' : 'alert-error'">
@@ -44,7 +48,9 @@
       <button class="btn btn-ghost btn-xs" @click="flash = ''">✕</button>
     </div>
 
-    <div v-if="loading" class="text-center py-12"><span class="loading loading-spinner loading-lg"></span></div>
+    <div v-if="loading" class="text-center py-12">
+      <span class="loading loading-spinner loading-lg"></span>
+    </div>
     <div v-else-if="!places.length" class="text-center py-8 text-base-content/60">
       No places yet. Click <strong>+ New root place</strong> to start.
     </div>
@@ -95,7 +101,7 @@
     <div v-if="showForm" class="modal modal-open">
       <div class="modal-box max-w-lg">
         <h3 class="font-bold text-lg mb-1">
-          {{ editing ? 'Edit place' : (form.is_special ? 'New special place' : 'New place') }}
+          {{ editing ? 'Edit place' : form.is_special ? 'New special place' : 'New place' }}
         </h3>
         <p v-if="formParent && !form.is_special" class="text-sm text-base-content/60 mb-3">
           inside <strong>{{ formParent.name }}</strong> ({{ formParent.place_type }})
@@ -109,19 +115,22 @@
               class="toggle toggle-warning"
               @change="onSpecialToggle"
             />
-            <span class="label-text">
-              Special place (Outside, Common Area, Parking Lot, …)
-            </span>
+            <span class="label-text"> Special place (Outside, Common Area, Parking Lot, …) </span>
           </label>
           <span class="label-text-alt mt-1 text-base-content/60">
-            Special places sit outside the normal hierarchy: free-form type, no parent, no level rules.
+            Special places sit outside the normal hierarchy: free-form type, no parent, no level
+            rules.
           </span>
         </div>
 
         <div class="form-control mb-3">
           <label class="label"><span class="label-text">Name</span></label>
-          <input v-model="form.name" type="text" class="input input-bordered"
-                 :placeholder="form.is_special ? 'Outside' : 'Room 5'" />
+          <input
+            v-model="form.name"
+            type="text"
+            class="input input-bordered"
+            :placeholder="form.is_special ? 'Outside' : 'Room 5'"
+          />
         </div>
 
         <div class="form-control mb-3">
@@ -140,9 +149,7 @@
             <template v-if="form.is_special">
               Free-form label; pick anything that reads well in pickers.
             </template>
-            <template v-else>
-              Children must use a level deeper than their parent.
-            </template>
+            <template v-else> Children must use a level deeper than their parent. </template>
           </span>
         </div>
 
@@ -162,12 +169,20 @@
 
         <div class="form-control mb-3">
           <label class="label"><span class="label-text">External ID (optional)</span></label>
-          <input v-model="form.external_id" type="text" class="input input-bordered input-sm font-mono" />
+          <input
+            v-model="form.external_id"
+            type="text"
+            class="input input-bordered input-sm font-mono"
+          />
         </div>
 
         <div class="modal-action">
           <button class="btn btn-ghost" @click="showForm = false">Cancel</button>
-          <button class="btn btn-primary" :disabled="saving || !form.name.trim() || !form.place_type" @click="save">
+          <button
+            class="btn btn-primary"
+            :disabled="saving || !form.name.trim() || !form.place_type"
+            @click="save"
+          >
             <span v-if="saving" class="loading loading-spinner loading-sm"></span>
             <span v-else>{{ editing ? 'Save' : 'Create' }}</span>
           </button>
@@ -191,7 +206,7 @@ withDefaults(
         duplicating page chrome. */
     embedded?: boolean
   }>(),
-  { embedded: false },
+  { embedded: false }
 )
 
 const loading = ref(false)
@@ -224,7 +239,9 @@ const form = ref<{
 function notify(msg: string, ok = true) {
   flash.value = msg
   flashOk.value = ok
-  setTimeout(() => { if (flash.value === msg) flash.value = '' }, 5000)
+  setTimeout(() => {
+    if (flash.value === msg) flash.value = ''
+  }, 5000)
 }
 
 const childrenMap = computed(() => {
@@ -238,9 +255,11 @@ const childrenMap = computed(() => {
   for (const list of m.values()) list.sort((a, b) => a.name.localeCompare(b.name))
   return m
 })
-const roots = computed(() => (childrenMap.value.get(null) ?? []))
-const specialPlaces = computed(() => places.value.filter(p => p.is_special).sort((a, b) => a.name.localeCompare(b.name)))
-const hierarchyRoots = computed(() => roots.value.filter(p => !p.is_special))
+const roots = computed(() => childrenMap.value.get(null) ?? [])
+const specialPlaces = computed(() =>
+  places.value.filter((p) => p.is_special).sort((a, b) => a.name.localeCompare(b.name))
+)
+const hierarchyRoots = computed(() => roots.value.filter((p) => !p.is_special))
 
 /** Types that are strictly deeper than the (prospective) parent's type. */
 const allowedTypes = computed(() => {
@@ -258,21 +277,31 @@ const movableParentOptions = computed(() => {
   // BFS to enumerate descendants of `editing.value`.
   const stack = [editing.value.id]
   while (stack.length) {
-    const id = stack.pop()!
+    const id = stack.pop()
     for (const c of childrenMap.value.get(id) ?? []) {
       banned.add(c.id)
       stack.push(c.id)
     }
   }
-  return places.value.filter(p => !banned.has(p.id))
+  return places.value.filter((p) => !banned.has(p.id))
 })
 
 async function loadAll() {
   loading.value = true
-  const [cfg, list] = await Promise.all([placesApi.config(), placesApi.list()])
-  loading.value = false
-  if (cfg.success && cfg.data) config.value = cfg.data
-  if (list.success && list.data) places.value = list.data
+  try {
+    const [cfg, list] = await Promise.all([placesApi.config(), placesApi.list()])
+    // A refused config used to leave `config` null, which is exactly what the
+    // module being switched off looks like: no warning, the level vocabulary
+    // rendered as "…", and both create buttons dead with nothing to say why.
+    if (cfg.success && cfg.data) config.value = cfg.data
+    else notify(cfg.error || 'Could not load the places configuration', false)
+    if (list.success && list.data) places.value = list.data
+    else notify(list.error || 'Could not load the places', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load the places', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 function openCreate(parent: Place | null) {
@@ -320,7 +349,7 @@ function onSpecialToggle() {
 
 function openEdit(p: Place) {
   editing.value = p
-  formParent.value = p.parent_id ? places.value.find(x => x.id === p.parent_id) ?? null : null
+  formParent.value = p.parent_id ? (places.value.find((x) => x.id === p.parent_id) ?? null) : null
   form.value = {
     name: p.name,
     place_type: p.place_type,
@@ -343,40 +372,48 @@ function allowedTypesFor(parent: Place | null): string[] {
 async function save() {
   saving.value = true
   let res
-  if (editing.value) {
-    res = await placesApi.update(editing.value.id, {
-      name: form.value.name.trim(),
-      place_type: form.value.place_type,
-      parent_id: form.value.parent_id,
-      description: form.value.description,
-      external_id: form.value.external_id,
-      is_special: form.value.is_special,
-    })
-  } else {
-    res = await placesApi.create({
-      name: form.value.name.trim(),
-      place_type: form.value.place_type,
-      parent_id: form.value.parent_id,
-      description: form.value.description,
-      external_id: form.value.external_id,
-      is_special: form.value.is_special,
-    })
-  }
-  saving.value = false
-  if (res.success) {
-    notify(editing.value ? 'Place saved' : 'Place created')
-    showForm.value = false
-    await loadAll()
-  } else {
-    notify(res.error || 'Failed to save', false)
+  try {
+    if (editing.value) {
+      res = await placesApi.update(editing.value.id, {
+        name: form.value.name.trim(),
+        place_type: form.value.place_type,
+        parent_id: form.value.parent_id,
+        description: form.value.description,
+        external_id: form.value.external_id,
+        is_special: form.value.is_special,
+      })
+    } else {
+      res = await placesApi.create({
+        name: form.value.name.trim(),
+        place_type: form.value.place_type,
+        parent_id: form.value.parent_id,
+        description: form.value.description,
+        external_id: form.value.external_id,
+        is_special: form.value.is_special,
+      })
+    }
+    if (res.success) {
+      notify(editing.value ? 'Place saved' : 'Place created')
+      showForm.value = false
+      await loadAll()
+    } else {
+      notify(res.error || 'Failed to save', false)
+    }
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save', false)
+  } finally {
+    saving.value = false
   }
 }
 
 async function onDelete(p: Place) {
-  if (!confirm(`Delete "${p.name}"? Attached doors/tools/devices will be detached but kept.`)) return
+  if (!confirm(`Delete "${p.name}"? Attached doors/tools/devices will be detached but kept.`))
+    return
   const r = await placesApi.remove(p.id)
-  if (r.success) { notify('Place deleted'); await loadAll() }
-  else notify(r.error || 'Failed to delete (move/delete children first?)', false)
+  if (r.success) {
+    notify('Place deleted')
+    await loadAll()
+  } else notify(r.error || 'Failed to delete (move/delete children first?)', false)
 }
 
 onMounted(loadAll)

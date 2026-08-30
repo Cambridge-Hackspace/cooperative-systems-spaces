@@ -5,9 +5,9 @@
       <div class="flex flex-wrap gap-4 items-center">
         <div class="flex flex-wrap gap-2 items-center">
           <select
-              v-model="selectedCategory"
-              @change="loadTools"
-              class="select select-bordered select-sm"
+            v-model="selectedCategory"
+            class="select select-bordered select-sm"
+            @change="loadTools"
           >
             <option value="">All Categories</option>
             <option v-for="category in categories" :key="category" :value="category">
@@ -16,9 +16,9 @@
           </select>
 
           <select
-              v-model="selectedStatus"
-              @change="loadTools"
-              class="select select-bordered select-sm"
+            v-model="selectedStatus"
+            class="select select-bordered select-sm"
+            @change="loadTools"
           >
             <option value="">All Statuses</option>
             <option v-for="status in statuses" :key="status" :value="status">
@@ -27,71 +27,62 @@
           </select>
 
           <input
-              v-model="searchQuery"
-              @input="loadTools"
-              type="text"
-              placeholder="Search tools..."
-              class="input input-bordered input-sm w-48"
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search tools..."
+            class="input input-bordered input-sm w-48"
+            @input="loadTools"
           />
         </div>
 
         <button
-            v-if="canManageTools"
-            @click="showCreateModal = true"
-            class="btn btn-primary btn-sm"
+          v-if="canManageTools"
+          class="btn btn-primary btn-sm"
+          @click="showCreateModal = true"
         >
           Add Tool
         </button>
       </div>
     </div>
 
-    <div v-if="loading" class="text-center py-12 text-lg">
-      Loading tools...
-    </div>
+    <div v-if="loading" class="text-center py-12 text-lg">Loading tools...</div>
 
     <div v-else-if="error" class="alert alert-error">
       <span>{{ error }}</span>
     </div>
 
-    <div
-        v-else
-        class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch"
-    >
+    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
       <ToolCard
-          :tool="tool"
-          :can-manage="canManageTools"
-          :can-use-based-on-training="getCanUseBasedOnTraining(tool)"
-          :has-training-steps="hasTrainingSteps(tool)"
-          @edit="editTool"
-          @delete="deleteTool"
-          @status-change="changeToolStatus"
-          @view-history="viewToolHistory"
-          @training-updated="onTrainingUpdated"
-          @training-status-changed="onTrainingStatusChanged"
-          v-for="tool in tools"
-          :key="tool.id"
-          class="h-full background-secondary"
+        v-for="tool in tools"
+        :key="tool.id"
+        :tool="tool"
+        :can-manage="canManageTools"
+        :can-use-based-on-training="getCanUseBasedOnTraining(tool)"
+        :has-training-steps="hasTrainingSteps(tool)"
+        class="h-full background-secondary"
+        @edit="editTool"
+        @delete="deleteTool"
+        @status-change="changeToolStatus"
+        @view-history="viewToolHistory"
+        @training-updated="onTrainingUpdated"
+        @training-status-changed="onTrainingStatusChanged"
       />
     </div>
 
     <ToolCreateModal
-        v-if="showCreateModal"
-        @close="showCreateModal = false"
-        @created="onToolCreated"
+      v-if="showCreateModal"
+      @close="showCreateModal = false"
+      @created="onToolCreated"
     />
 
     <ToolEditModal
-        v-if="editingTool"
-        :tool="editingTool"
-        @close="editingTool = null"
-        @updated="onToolUpdated"
+      v-if="editingTool"
+      :tool="editingTool"
+      @close="editingTool = null"
+      @updated="onToolUpdated"
     />
 
-    <ToolEventHistory
-        v-if="viewingHistory"
-        :tool="viewingHistory"
-        @close="viewingHistory = null"
-    />
+    <ToolEventHistory v-if="viewingHistory" :tool="viewingHistory" @close="viewingHistory = null" />
   </div>
 </template>
 
@@ -126,15 +117,13 @@ const canManageTools = computed(() => {
   return userRole === 'staff' || userRole === 'admin'
 })
 
-const currentUser = computed(() => auth.user)
-
 const categories: ToolCategory[] = [
   ToolCategory.Saw,
   ToolCategory.PowerTool,
   ToolCategory.HandTools,
   ToolCategory.Measuring,
   ToolCategory.Safety,
-  ToolCategory.Other
+  ToolCategory.Other,
 ]
 
 const statuses: ToolStatus[] = [
@@ -143,7 +132,7 @@ const statuses: ToolStatus[] = [
   ToolStatus.Maintenance,
   ToolStatus.Broken,
   ToolStatus.Repair,
-  ToolStatus.Retired
+  ToolStatus.Retired,
 ]
 
 // Methods
@@ -151,15 +140,15 @@ const loadTools = async () => {
   try {
     loading.value = true
     error.value = ''
-    
+
     const params: Record<string, string> = {}
     if (selectedCategory.value) params.category = selectedCategory.value
     if (selectedStatus.value) params.status = selectedStatus.value
     if (searchQuery.value) params.search = searchQuery.value
-    
-    const response = canManageTools.value 
+
+    const response = canManageTools.value
       ? await toolsApi.getTools(params)
-      : await toolsApi.getAvailableTools?.() || await toolsApi.getTools(params)
+      : (await toolsApi.getAvailableTools?.()) || (await toolsApi.getTools(params))
 
     tools.value = response.data || []
 
@@ -179,11 +168,14 @@ const checkToolsForTraining = async () => {
   // For each tool, check if it has training steps
   for (const tool of tools.value) {
     try {
-      const response = await toolsApi.getToolTrainingSteps?.(tool.id) || { data: [] }
+      const response = (await toolsApi.getToolTrainingSteps?.(tool.id)) || { data: [] }
       if (response.data && response.data.length > 0) {
         toolsWithTraining.value.add(tool.id)
       }
     } catch (err) {
+      // Logged rather than discarded: a swallowed error is indistinguishable
+      // from a successful no-op to anyone reading the console.
+      console.error(err)
       // If training API fails, assume no training
       console.debug(`No training steps found for tool ${tool.name}`)
     }
@@ -196,7 +188,7 @@ const editTool = (tool: Tool) => {
 
 const deleteTool = async (tool: Tool) => {
   if (!confirm(`Are you sure you want to delete "${tool.name}"?`)) return
-  
+
   try {
     await toolsApi.deleteTool(tool.id)
     await loadTools()
@@ -220,12 +212,12 @@ const viewToolHistory = (tool: Tool) => {
 
 const onToolCreated = () => {
   showCreateModal.value = false
-  loadTools()
+  void loadTools()
 }
 
 const onToolUpdated = () => {
   editingTool.value = null
-  loadTools()
+  void loadTools()
 }
 
 const getCanUseBasedOnTraining = (tool: Tool): boolean => {
@@ -249,20 +241,20 @@ const onTrainingStatusChanged = (toolId: string, canAccessTool: boolean) => {
 
 const onTrainingUpdated = () => {
   // Reload tools to refresh training status
-  loadTools()
+  void loadTools()
 }
 
 const formatCategory = (category: string) => {
-  return category.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return category.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
 const formatStatus = (status: string) => {
-  return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
 // Lifecycle
 onMounted(() => {
-  loadTools()
+  void loadTools()
 })
 </script>
 
@@ -300,7 +292,8 @@ onMounted(() => {
   align-items: center;
 }
 
-.filters select, .search-input {
+.filters select,
+.search-input {
   padding: 0.5rem;
   border: 1px solid #ddd;
   border-radius: 4px;
@@ -329,7 +322,8 @@ onMounted(() => {
   //background-color: #2980b9;
 }
 
-.loading, .error {
+.loading,
+.error {
   text-align: center;
   padding: 2rem;
   font-size: 1.1rem;
@@ -361,16 +355,16 @@ onMounted(() => {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .tools-controls {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .filters {
     flex-wrap: wrap;
   }
-  
+
   .tools-grid {
     grid-template-columns: 1fr;
   }

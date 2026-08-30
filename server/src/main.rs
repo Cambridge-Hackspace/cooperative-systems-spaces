@@ -1,50 +1,30 @@
-use std::sync::Arc;
-use axum::extract::{State, FromRef};
-use axum::{Json, Router};
-use axum::http::StatusCode;
 use axum::routing::get;
+use axum::Router;
+use clap::Parser;
+use css_server::devices_inbound::DeviceInbound;
+use css_server::{api, config, root, AppState};
 use dr_metrix_axum::{metrics_handler, PrometheusMetrics};
 use dr_metrix_core::collector::CollectorConfig;
 use dr_metrix_postgres::PostgresMetrics;
-use clap::Parser;
-use serde_json::json;
+use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-mod config;
-mod database;
-mod models;
-mod schema;
-mod auth;
-mod api;
-mod profile;
-mod profile_fields;
-mod throttle;
-mod recaptcha;
-mod calendar;
-mod pages;
-mod mqtt;
-mod webhooks;
-mod mfa;
-mod doors;
-mod schedules;
-mod devices_inbound;
-mod devices_transport;
-use config::{ConfigManager, load_config};
-use database::{DatabaseManager, initialize_database};
-use profile::AuditLogger;
-use throttle::RegistrationThrottleService;
-use recaptcha::RecaptchaService;
-use calendar::CalendarService;
-use crate::pages::PagesService;
-use crate::mqtt::MqttService;
-use crate::webhooks::WebhookDispatcher;
-use crate::mfa::MfaService;
-use crate::doors::DoorService;
-use crate::devices_inbound::DeviceInbound;
-use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
+use css_server::calendar::CalendarService;
+use css_server::config::{load_config, ConfigManager};
+use css_server::database::{initialize_database, DatabaseManager};
+use css_server::devices_transport::{DeviceChannelRegistry, DeviceTransport};
+use css_server::doors::DoorService;
+use css_server::mfa::MfaService;
+use css_server::mqtt::MqttService;
+use css_server::pages::PagesService;
+use css_server::profile::AuditLogger;
+use css_server::profile_fields;
+use css_server::recaptcha::RecaptchaService;
+use css_server::throttle::RegistrationThrottleService;
+use css_server::webhooks::WebhookDispatcher;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -60,39 +40,6 @@ struct Args {
     /// FRONTEND_PATH environment variable
     #[arg(long, env = "FRONTEND_PATH", default_value = "./frontend/dist")]
     frontend_path: String,
-}
-
-#[derive(Clone)]
-pub struct AppState {
-    pub config_manager: Arc<ConfigManager>,
-    pub db: Arc<DatabaseManager>,
-    pub audit_logger: AuditLogger,
-    pub throttle_service: Arc<RegistrationThrottleService>,
-    pub recaptcha_service: Arc<RecaptchaService>,
-    pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
-    pub pages_service: Arc<tokio::sync::RwLock<PagesService>>,
-    pub mqtt_service: Option<Arc<MqttService>>,
-    pub webhook_dispatcher: Arc<WebhookDispatcher>,
-    pub mfa_service: MfaService,
-    pub door_service: Arc<DoorService>,
-    /// Transport-agnostic outbound router (WS → MQTT fallback).
-    pub device_transport: Arc<DeviceTransport>,
-    /// Per-device WS session registry; the WS handler inserts/removes itself.
-    pub device_registry: Arc<DeviceChannelRegistry>,
-    /// Shared inbound dispatcher used by both transports.
-    pub device_inbound: Arc<DeviceInbound>,
-}
-
-// Main dashboard handler
-async fn root(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let config = state.config_manager.get_config();
-    Ok(Json(json!({
-        "status": "ok",
-        "site_name": config.site.site_name,
-        "version": env!("CARGO_PKG_VERSION")
-    })))
 }
 
 #[tokio::main]
@@ -118,16 +65,36 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // Load configuration
-    let app_config = load_config(&args.config_path)?;
+    // A configuration that had to be rewritten is not a crash and it is not a
+    // success. It gets its own exit code -- 78, sysexits.h's EX_CONFIG -- so a
+    // supervisor can tell "this needs a human to look at the config" apart from
+    // both "the server stopped normally" and "the server fell over". The loader
+    // used to exit(0) here, which told every one of them the opposite.
+    let app_config = match load_config(&args.config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            if let Some(rewritten) = e.downcast_ref::<css_server::config::ConfigRewritten>() {
+                eprintln!("\n{rewritten}\n");
+                std::process::exit(78);
+            }
+            return Err(e);
+        }
+    };
     info!("Configuration loaded from: {}", args.config_path);
-    info!("Site: {} running in {} mode",
-          app_config.site.site_name,
-          if app_config.site.debug { "debug" } else { "production" });
+    info!(
+        "Site: {} running in {} mode",
+        app_config.site.site_name,
+        if app_config.site.debug {
+            "debug"
+        } else {
+            "production"
+        }
+    );
 
     // Create configuration manager
     let config_manager = Arc::new(ConfigManager::new(
         app_config.clone(),
-        Some(std::path::PathBuf::from(&args.config_path))
+        Some(std::path::PathBuf::from(&args.config_path)),
     ));
 
     // Initialize database
@@ -156,13 +123,21 @@ async fn main() -> Result<(), anyhow::Error> {
                 app_config.user.profiles_enabled_seed
             });
             config_manager.set_profiles_enabled(profiles_enabled);
-            info!("Loaded profile field schema from database (version {})", latest.version);
+            info!(
+                "Loaded profile field schema from database (version {})",
+                latest.version
+            );
         }
         None => {
-            profile_fields::validate_profile_fields(&app_config.user.profile_fields_seed)
-                .map_err(|e| anyhow::anyhow!("Invalid profile_fields_seed in config file: {}", e))?;
+            profile_fields::validate_profile_fields(&app_config.user.profile_fields_seed).map_err(
+                |e| anyhow::anyhow!("Invalid profile_fields_seed in config file: {}", e),
+            )?;
             let seed = serde_json::to_value(&app_config.user.profile_fields_seed)?;
-            db_manager.insert_profile_config_version(seed, app_config.user.profiles_enabled_seed, None)?;
+            db_manager.insert_profile_config_version(
+                seed,
+                app_config.user.profiles_enabled_seed,
+                None,
+            )?;
             info!("Seeded profile field schema version 1 from config file");
         }
     }
@@ -173,27 +148,33 @@ async fn main() -> Result<(), anyhow::Error> {
             .with_process_collector()
             .build()?,
     );
-    let pg_config = CollectorConfig { namespace: "css".into(), ..Default::default() };
+    let pg_config = CollectorConfig {
+        namespace: "css".into(),
+        ..Default::default()
+    };
     let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
     prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
     let recaptcha_service = Arc::new(RecaptchaService::new(
-        app_config.registration_challenge.recaptcha_secret_key.clone()
+        app_config
+            .registration_challenge
+            .recaptcha_secret_key
+            .clone(),
     ));
-    
+
     // Initialize calendar service
     info!("Initializing calendar service...");
-    let calendar_service = Arc::new(tokio::sync::RwLock::new(
-        CalendarService::new(app_config.calendar.clone())
-    ));
+    let calendar_service = Arc::new(tokio::sync::RwLock::new(CalendarService::new(
+        app_config.calendar.clone(),
+    )));
     info!("Calendar service initialized");
 
     // Initialize pages service
     info!("Initializing pages service...");
     let pages_service = Arc::new(tokio::sync::RwLock::new(
-        PagesService::new(app_config.pages.clone()).await?
+        PagesService::new(app_config.pages.clone()).await?,
     ));
     info!("Pages service initialized");
 
@@ -209,25 +190,21 @@ async fn main() -> Result<(), anyhow::Error> {
     let mqtt_service_arc = if app_config.edge.edge_enabled {
         if let Some(mqtt_config) = &app_config.edge.edge_mqtt_config {
             info!("Initializing MQTT service...");
-            let (mqtt_service, rx) = MqttService::new(
-                mqtt_config,
-                db_manager.clone(),
-                device_inbound.clone(),
-            )
+            let (mqtt_service, rx) = MqttService::new(mqtt_config, device_inbound.clone())
                 .map_err(|e| anyhow::anyhow!("Failed to initialize MQTT service: {}", e))?;
 
             let mqtt_service_arc = Arc::new(mqtt_service);
             let mqtt_service_for_task = mqtt_service_arc.as_ref().clone();
-            
+
             info!("MQTT service initialized, starting event loop...");
-            
+
             // Spawn MQTT service in background
             tokio::spawn(async move {
                 if let Err(e) = mqtt_service_for_task.start(rx).await {
                     error!("MQTT service error: {}", e);
                 }
             });
-            
+
             info!("MQTT service started");
             Some(mqtt_service_arc)
         } else {
@@ -241,7 +218,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize webhook dispatcher and wire it to audit-log creation.
     info!("Initializing webhook dispatcher...");
-    let (webhook_dispatcher, webhook_tx) = WebhookDispatcher::start(db_manager.clone());
+    let (webhook_dispatcher, webhook_tx) =
+        WebhookDispatcher::start(db_manager.clone(), config_manager.clone());
     db_manager.set_webhook_sender(webhook_tx);
     info!("Webhook dispatcher initialized");
 
@@ -273,7 +251,10 @@ async fn main() -> Result<(), anyhow::Error> {
     if app_config.door.enabled {
         door_service.republish_all();
     }
-    info!("Door access service initialized (enabled={})", app_config.door.enabled);
+    info!(
+        "Door access service initialized (enabled={})",
+        app_config.door.enabled
+    );
 
     // Schedule ticker: re-evaluate every rule's schedule each minute and
     // republish any device whose compiled snapshot changed. Quiet during
@@ -292,7 +273,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let app_state = AppState {
-        config_manager: config_manager,
+        config_manager,
         db: db_manager,
         audit_logger,
         throttle_service,
@@ -310,17 +291,37 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Serve frontend static files
     let frontend_path = args.frontend_path.clone();
+    // `fallback`, not `not_found_service`. They differ in exactly one way and it
+    // is the one that matters here: tower-http's `not_found_service` is
+    // documented as "set the fallback service **and override the fallback's
+    // status code to 404 Not Found**". So every client-side route -- /tools,
+    // /profile, /door/{id}/checkin -- was served the correct index.html with a
+    // 404 status.
+    //
+    // In a browser that is invisible: the body arrives, Vue Router takes over,
+    // the page works. Everywhere else it is not. Uptime monitoring reports
+    // every deep link as missing. Anything checking `res.ok` treats the page as
+    // an error. Link previews and crawlers see a dead URL. And the concrete
+    // one for this product: /door/{id}/checkin is a QR code on a door, opened
+    // cold by a phone camera, and some in-app browsers and link scanners refuse
+    // or warn on a 404 before a person ever sees the page.
+    //
+    // Found by the stack battery probing the fallback at three depths rather
+    // than one. / was 200 because ServeDir found index.html for itself and the
+    // fallback never ran.
     let serve_dir = ServeDir::new(&frontend_path)
-        .not_found_service(ServeFile::new(format!("{}/index.html", frontend_path)));
+        .fallback(ServeFile::new(format!("{}/index.html", frontend_path)));
 
-    let general_route = Router::new()
-        .route("/status", get(root));
-        // .route("/profile", get(handlers::show_profile))
-        // .layer(axum::middleware::from_fn_with_state(
-        //     app_state.db.clone(),
-        //     web_auth_middleware
-        // ));
+    let general_route = Router::new().route("/status", get(root));
+    // .route("/profile", get(handlers::show_profile))
+    // .layer(axum::middleware::from_fn_with_state(
+    //     app_state.db.clone(),
+    //     web_auth_middleware
+    // ));
 
+    // The SPA fallback below catches everything the router did not match --
+    // including, without care, unmatched /api paths. `api::api_routes()` owns
+    // its own 404 for exactly that reason; the note is there.
     let app = Router::new()
         .route("/metrics", get(metrics_handler).with_state(prom.clone()))
         .merge(general_route)
@@ -338,8 +339,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
 /// Test basic database operations
 async fn test_database_operations(db_manager: &DatabaseManager) -> Result<(), anyhow::Error> {
-    use models::NewUser;
-    use auth::PasswordHashUtil;
+    use css_server::auth::PasswordHashUtil;
+    use css_server::models::NewUser;
 
     // Test database health check
     db_manager.health_check()?;
@@ -370,7 +371,10 @@ async fn test_database_operations(db_manager: &DatabaseManager) -> Result<(), an
     info!("Test user found by ID");
 
     let found_user_by_username = db_manager.find_user_by_username("test_user")?;
-    assert!(found_user_by_username.is_some(), "User should be found by username");
+    assert!(
+        found_user_by_username.is_some(),
+        "User should be found by username"
+    );
     info!("Test user found by username");
 
     // Test user count

@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
-    }
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
   },
   server: {
     port: 3000,
@@ -18,12 +18,12 @@ export default defineConfig({
         target: 'http://localhost:4399',
         changeOrigin: true,
         secure: false,
-      }
-    }
+      },
+    },
   },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    sourcemap: true
-  }
+    sourcemap: true,
+  },
 })

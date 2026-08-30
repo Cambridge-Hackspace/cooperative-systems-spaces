@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use chrono::Utc;
@@ -18,9 +18,7 @@ use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
 use crate::database::DatabaseError;
-use crate::models::{
-    AuditEventType, NewAuditLog, NewPlace, Place, UpdatePlace,
-};
+use crate::models::{AuditEventType, NewAuditLog, NewPlace, Place, UpdatePlace};
 use crate::AppState;
 
 use super::errors::ApiError;
@@ -164,10 +162,7 @@ fn validate_place_payload(
         )));
     }
     if let Some(parent_id) = parent_id {
-        let parent = state
-            .db
-            .get_place(parent_id)
-            .map_err(ApiError::from)?;
+        let parent = state.db.get_place(parent_id).map_err(ApiError::from)?;
         if parent.is_special {
             // Children of special places use the regular hierarchy from here on.
             // (Allowed — e.g. `Outside → Parking Lot A`.) Skip the type-deeper
@@ -186,9 +181,7 @@ fn map_diesel_conflict(e: DatabaseError) -> ApiError {
         DatabaseError::Diesel(diesel::result::Error::DatabaseError(
             diesel::result::DatabaseErrorKind::UniqueViolation,
             _,
-        )) => ApiError::Conflict(
-            "A sibling place with that name already exists".to_string(),
-        ),
+        )) => ApiError::Conflict("A sibling place with that name already exists".to_string()),
         DatabaseError::Diesel(diesel::result::Error::DatabaseError(
             diesel::result::DatabaseErrorKind::ForeignKeyViolation,
             _,
@@ -278,10 +271,7 @@ async fn create_place(
         }),
     );
 
-    Ok((
-        StatusCode::CREATED,
-        Json(ApiResponse::success(created)),
-    ))
+    Ok((StatusCode::CREATED, Json(ApiResponse::success(created))))
 }
 
 async fn update_place(

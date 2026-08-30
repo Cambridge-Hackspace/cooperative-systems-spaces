@@ -1,26 +1,20 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    api::{
-        errors::ApiError,
-        responses::ApiResponse,
-    },
+    api::{errors::ApiError, responses::ApiResponse},
     auth::{AuthUser, StaffUser},
     models::{
-        TrainingStep, NewTrainingStep, UpdateTrainingStep,
-        TrainingPrerequisite, NewTrainingPrerequisite,
-        UserTrainingProgress, UpdateUserTrainingProgress,
-        TrainingInstructor, NewTrainingInstructor,
-        TrainingStepWithProgress, ToolTrainingOverview,
-        StartTrainingRequest, CompleteTrainingRequest,
-        TrainingStatus, AssessmentType, User,
+        AssessmentType, CompleteTrainingRequest, NewTrainingInstructor, NewTrainingPrerequisite,
+        NewTrainingStep, StartTrainingRequest, ToolTrainingOverview, TrainingInstructor,
+        TrainingPrerequisite, TrainingStatus, TrainingStep, TrainingStepWithProgress,
+        UpdateTrainingStep, UpdateUserTrainingProgress, User, UserTrainingProgress,
     },
     AppState,
 };
@@ -117,38 +111,62 @@ pub fn training_router() -> Router<AppState> {
         // Training Roster - Users available for training (Trainers and Staff)
         .route("/roster", get(get_training_roster))
         .route("/roster/{tool_id}", get(get_training_roster_for_tool))
-
         // Training History - Records of completed training (Trainers and Staff)
         .route("/history/{tool_id}", get(get_training_history_for_tool))
-
         // Training Steps Management (Staff only)
         .route("/steps", post(create_training_step).get(get_training_steps))
-        .route("/steps/{step_id}", get(get_training_step).put(update_training_step).delete(delete_training_step))
-        .route("/steps/{step_id}/position", put(update_training_step_position))
-        
-        // Prerequisites Management (Staff only) 
-        .route("/steps/{step_id}/prerequisites", post(add_prerequisite).get(get_prerequisites))
+        .route(
+            "/steps/{step_id}",
+            get(get_training_step)
+                .put(update_training_step)
+                .delete(delete_training_step),
+        )
+        .route(
+            "/steps/{step_id}/position",
+            put(update_training_step_position),
+        )
+        // Prerequisites Management (Staff only)
+        .route(
+            "/steps/{step_id}/prerequisites",
+            post(add_prerequisite).get(get_prerequisites),
+        )
         .route("/prerequisites/{prereq_id}", delete(remove_prerequisite))
-        
         // Tool Training Overview (All authenticated users)
         .route("/tools/{tool_id}/overview", get(get_tool_training_overview))
-        .route("/tools/{tool_id}/overview/me", get(get_my_tool_training_overview))
-        .route("/tools/{tool_id}/overview/{user_id}", get(get_user_tool_training_overview))
+        .route(
+            "/tools/{tool_id}/overview/me",
+            get(get_my_tool_training_overview),
+        )
+        .route(
+            "/tools/{tool_id}/overview/{user_id}",
+            get(get_user_tool_training_overview),
+        )
         .route("/tools/{tool_id}/steps", get(get_tool_training_steps))
-
         // User Training Progress (All authenticated users for self, staff for others)
         .route("/progress", get(get_user_training_progress))
-        .route("/progress/{user_id}", get(get_user_training_progress_by_user))
-        .route("/progress/{user_id}/{step_id}", get(get_specific_progress).put(update_training_progress))
-        
+        .route(
+            "/progress/{user_id}",
+            get(get_user_training_progress_by_user),
+        )
+        .route(
+            "/progress/{user_id}/{step_id}",
+            get(get_specific_progress).put(update_training_progress),
+        )
         // Training Session Management
         .route("/progress/{user_id}/start", post(start_training_session))
-        .route("/progress/{user_id}/complete", post(complete_training_session))
-        
+        .route(
+            "/progress/{user_id}/complete",
+            post(complete_training_session),
+        )
         // Instructor Certification (Staff only)
-        .route("/instructors", post(certify_instructor).get(get_instructors))
-        .route("/instructors/{instructor_id}", delete(revoke_instructor_certification))
-        
+        .route(
+            "/instructors",
+            post(certify_instructor).get(get_instructors),
+        )
+        .route(
+            "/instructors/{instructor_id}",
+            delete(revoke_instructor_certification),
+        )
         // Tool Access Validation
         .route("/access/{tool_id}/{user_id}", get(check_tool_access))
         .route("/access/{tool_id}", get(check_my_tool_access))
@@ -163,15 +181,16 @@ async fn get_training_roster(
 ) -> Result<Json<ApiResponse<Vec<User>>>, ApiError> {
     // Check if user is either staff or a trainer for any tool
     if !user.0.role.can_access_staff() && !is_user_a_trainer(&state, user.0.id).await? {
-        return Err(ApiError::Forbidden("Must be a trainer or staff to access training roster".to_string()));
+        return Err(ApiError::Forbidden(
+            "Must be a trainer or staff to access training roster".to_string(),
+        ));
     }
 
     // Get all active users
-    let users = state.db.get_all_active_users()
-        .map_err(|e| {
-            tracing::error!("Failed to get training roster: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training roster".to_string())
-        })?;
+    let users = state
+        .db
+        .get_all_active_users()
+        .map_err(|e| ApiError::from_db("Failed to get training roster", e))?;
 
     Ok(Json(ApiResponse::success(users)))
 }
@@ -183,14 +202,15 @@ async fn get_training_roster_for_tool(
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Vec<User>>>, ApiError> {
     // Check if user is either staff or a trainer for this specific tool
-    let is_trainer_for_tool = state.db.is_user_trainer_for_tool(user.0.id, tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check trainer status: {}", e);
-            ApiError::InternalServerError("Failed to verify trainer permissions".to_string())
-        })?;
+    let is_trainer_for_tool = state
+        .db
+        .is_user_trainer_for_tool(user.0.id, tool_id)
+        .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
     if !user.0.role.can_access_staff() && !is_trainer_for_tool {
-        return Err(ApiError::Forbidden("Must be a trainer for this tool or staff to access tool training roster".to_string()));
+        return Err(ApiError::Forbidden(
+            "Must be a trainer for this tool or staff to access tool training roster".to_string(),
+        ));
     }
 
     // Get all active users - for now, all trainers can see all users
@@ -199,22 +219,20 @@ async fn get_training_roster_for_tool(
     // - Training prerequisites
     // - Age restrictions
     // - Certification requirements, etc.
-    let users = state.db.get_all_active_users()
-        .map_err(|e| {
-            tracing::error!("Failed to get tool training roster: {}", e);
-            ApiError::InternalServerError("Failed to retrieve tool training roster".to_string())
-        })?;
+    let users = state
+        .db
+        .get_all_active_users()
+        .map_err(|e| ApiError::from_db("Failed to get tool training roster", e))?;
 
     Ok(Json(ApiResponse::success(users)))
 }
 
 /// Helper function to check if user is a trainer for any tool
 async fn is_user_a_trainer(state: &AppState, user_id: Uuid) -> Result<bool, ApiError> {
-    state.db.is_user_trainer_for_any_tool(user_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check if user is trainer: {}", e);
-            ApiError::InternalServerError("Failed to verify trainer status".to_string())
-        })
+    state
+        .db
+        .is_user_trainer_for_any_tool(user_id)
+        .map_err(|e| ApiError::from_db("Failed to check if user is trainer", e))
 }
 
 // ==================== TRAINING HISTORY ====================
@@ -227,22 +245,22 @@ async fn get_training_history_for_tool(
     Query(query): Query<TrainingHistoryQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrainingHistoryRecord>>>, ApiError> {
     // Check if user is either staff or a trainer for this specific tool
-    let is_trainer_for_tool = state.db.is_user_trainer_for_tool(user.0.id, tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check trainer status: {}", e);
-            ApiError::InternalServerError("Failed to verify trainer permissions".to_string())
-        })?;
+    let is_trainer_for_tool = state
+        .db
+        .is_user_trainer_for_tool(user.0.id, tool_id)
+        .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
     if !user.0.role.can_access_staff() && !is_trainer_for_tool {
-        return Err(ApiError::Forbidden("Must be a trainer for this tool or staff to access training history".to_string()));
+        return Err(ApiError::Forbidden(
+            "Must be a trainer for this tool or staff to access training history".to_string(),
+        ));
     }
 
     // Get training history for this tool
-    let history = state.db.get_training_history_for_tool(tool_id, &query)
-        .map_err(|e| {
-            tracing::error!("Failed to get training history: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training history".to_string())
-        })?;
+    let history = state
+        .db
+        .get_training_history_for_tool(tool_id, &query)
+        .map_err(|e| ApiError::from_db("Failed to get training history", e))?;
 
     Ok(Json(ApiResponse::success(history)))
 }
@@ -271,28 +289,31 @@ async fn create_training_step(
     let step_name = payload.step_name.clone();
     let description = payload.description.clone();
 
-    let step = state.db.create_training_step(&new_step)
-        .map_err(|e| {
-            tracing::error!("Failed to create training step: {}", e);
-            ApiError::InternalServerError("Failed to create training step".to_string())
-        })?;
+    let step = state
+        .db
+        .create_training_step(&new_step)
+        .map_err(|e| ApiError::from_db("Failed to create training step", e))?;
 
     // Log the training step creation to audit logs
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::TrainingStepCreated,
-        None,
-        Some(_staff.0.id),
-        serde_json::json!({
-            "tool_id": payload.tool_id,
-            "step_id": step.id,
-            "step_number": payload.step_number,
-            "step_name": step_name,
-            "description": description,
-            "requires_assessment": payload.requires_assessment
-        }),
-        Some(payload.tool_id.to_string()),
-        Some(format!("Training step '{}' created", step_name)),
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::TrainingStepCreated,
+            None,
+            Some(_staff.0.id),
+            serde_json::json!({
+                "tool_id": payload.tool_id,
+                "step_id": step.id,
+                "step_number": payload.step_number,
+                "step_name": step_name,
+                "description": description,
+                "requires_assessment": payload.requires_assessment
+            }),
+            Some(payload.tool_id.to_string()),
+            Some(format!("Training step '{}' created", step_name)),
+        )
+        .await
+    {
         tracing::warn!("Failed to log training step creation to audit: {}", e);
     }
 
@@ -305,11 +326,10 @@ async fn get_training_steps(
     _user: AuthUser,
     Query(query): Query<TrainingQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrainingStep>>>, ApiError> {
-    let steps = state.db.get_training_steps(&query)
-        .map_err(|e| {
-            tracing::error!("Failed to get training steps: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training steps".to_string())
-        })?;
+    let steps = state
+        .db
+        .get_training_steps(&query)
+        .map_err(|e| ApiError::from_db("Failed to get training steps", e))?;
 
     Ok(Json(ApiResponse::success(steps)))
 }
@@ -320,11 +340,10 @@ async fn get_training_step(
     _user: AuthUser,
     Path(step_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<TrainingStep>>, ApiError> {
-    let step = state.db.get_training_step_by_id(step_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get training step: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training step".to_string())
-        })?
+    let step = state
+        .db
+        .get_training_step_by_id(step_id)
+        .map_err(|e| ApiError::from_db("Failed to get training step", e))?
         .ok_or_else(|| ApiError::NotFound("Training step not found".to_string()))?;
 
     Ok(Json(ApiResponse::success(step)))
@@ -347,10 +366,14 @@ async fn update_training_step(
         expires_after_days: payload.expires_after_days,
     };
 
-    let updated_step = state.db.update_training_step(step_id, &update_step)
+    let updated_step = state
+        .db
+        .update_training_step(step_id, &update_step)
         .map_err(|e| {
-            tracing::error!("Failed to update training step: {}", e);
-            ApiError::InternalServerError("Failed to update training step".to_string())
+            // Logged, then converted. See update_tool: a blanket 500 tells the
+            // caller the server broke when the row they named does not exist.
+            tracing::warn!("update_training_step({step_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(updated_step)))
@@ -363,45 +386,48 @@ async fn delete_training_step(
     Path(step_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     // Check if any users have progress on this step
-    let has_progress = state.db.has_user_progress_for_step(step_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check training step usage: {}", e);
-            ApiError::InternalServerError("Failed to check training step usage".to_string())
-        })?;
+    let has_progress = state
+        .db
+        .has_user_progress_for_step(step_id)
+        .map_err(|e| ApiError::from_db("Failed to check training step usage", e))?;
 
     if has_progress {
-        return Err(ApiError::BadRequest("Cannot delete training step with existing user progress".to_string()));
+        return Err(ApiError::BadRequest(
+            "Cannot delete training step with existing user progress".to_string(),
+        ));
     }
 
     // Get step info for audit log before deletion
-    let step = state.db.get_training_step_by_id(step_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get training step: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training step".to_string())
-        })?
+    let step = state
+        .db
+        .get_training_step_by_id(step_id)
+        .map_err(|e| ApiError::from_db("Failed to get training step", e))?
         .ok_or_else(|| ApiError::NotFound("Training step not found".to_string()))?;
 
-    state.db.delete_training_step(step_id)
-        .map_err(|e| {
-            tracing::error!("Failed to delete training step: {}", e);
-            ApiError::InternalServerError("Failed to delete training step".to_string())
-        })?;
+    state
+        .db
+        .delete_training_step(step_id)
+        .map_err(|e| ApiError::from_db("Failed to delete training step", e))?;
 
     // Log the training step deletion to audit logs
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::TrainingStepDeleted,
-        None,
-        Some(_staff.0.id),
-        serde_json::json!({
-            "tool_id": step.tool_id,
-            "step_id": step_id,
-            "step_number": step.step_number,
-            "step_name": step.step_name,
-            "description": step.description
-        }),
-        Some(step.tool_id.to_string()),
-        Some(format!("Training step '{}' deleted", step.step_name)),
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::TrainingStepDeleted,
+            None,
+            Some(_staff.0.id),
+            serde_json::json!({
+                "tool_id": step.tool_id,
+                "step_id": step_id,
+                "step_number": step.step_number,
+                "step_name": step.step_name,
+                "description": step.description
+            }),
+            Some(step.tool_id.to_string()),
+            Some(format!("Training step '{}' deleted", step.step_name)),
+        )
+        .await
+    {
         tracing::warn!("Failed to log training step deletion to audit: {}", e);
     }
 
@@ -420,10 +446,14 @@ async fn update_training_step_position(
     Path(step_id): Path<Uuid>,
     Json(payload): Json<UpdateStepPositionRequest>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
-    state.db.update_training_step_position(step_id, payload.step_number)
+    state
+        .db
+        .update_training_step_position(step_id, payload.step_number)
         .map_err(|e| {
-            tracing::error!("Failed to update training step position: {}", e);
-            ApiError::InternalServerError("Failed to update training step position".to_string())
+            // Logged, then converted. See update_tool: a blanket 500 tells the
+            // caller the server broke when the row they named does not exist.
+            tracing::warn!("update_training_step_position({step_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(())))
@@ -443,10 +473,17 @@ async fn add_prerequisite(
         prerequisite_step_id,
     };
 
-    let prerequisite = state.db.add_training_prerequisite(&new_prereq)
+    let prerequisite = state
+        .db
+        .add_training_prerequisite(&new_prereq)
         .map_err(|e| {
-            tracing::error!("Failed to add prerequisite: {}", e);
-            ApiError::InternalServerError("Failed to add prerequisite".to_string())
+            // Was a blanket 500. Naming a training step that does not exist is
+            // the caller's mistake: Postgres rejects it on
+            // training_prerequisites_training_step_id_fkey, and answering 500
+            // told the caller the server had broken. `From` classifies a
+            // foreign-key violation as a conflict, which is the truth.
+            tracing::warn!("add_training_prerequisite({step_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(prerequisite)))
@@ -458,11 +495,10 @@ async fn get_prerequisites(
     _user: AuthUser,
     Path(step_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Vec<TrainingStep>>>, ApiError> {
-    let prerequisites = state.db.get_training_prerequisites(step_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get prerequisites: {}", e);
-            ApiError::InternalServerError("Failed to retrieve prerequisites".to_string())
-        })?;
+    let prerequisites = state
+        .db
+        .get_training_prerequisites(step_id)
+        .map_err(|e| ApiError::from_db("Failed to get prerequisites", e))?;
 
     Ok(Json(ApiResponse::success(prerequisites)))
 }
@@ -473,11 +509,10 @@ async fn remove_prerequisite(
     _staff: StaffUser,
     Path(prereq_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
-    state.db.remove_training_prerequisite(prereq_id)
-        .map_err(|e| {
-            tracing::error!("Failed to remove prerequisite: {}", e);
-            ApiError::InternalServerError("Failed to remove prerequisite".to_string())
-        })?;
+    state
+        .db
+        .remove_training_prerequisite(prereq_id)
+        .map_err(|e| ApiError::from_db("Failed to remove prerequisite", e))?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -490,10 +525,14 @@ async fn get_tool_training_overview(
     user: AuthUser,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<ToolTrainingOverview>>, ApiError> {
-    let overview = state.db.get_tool_training_overview(tool_id, user.0.id)
+    let overview = state
+        .db
+        .get_tool_training_overview(tool_id, user.0.id)
         .map_err(|e| {
-            tracing::error!("Failed to get training overview: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training overview".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("get_tool_training_overview({tool_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(overview)))
@@ -505,10 +544,14 @@ async fn get_my_tool_training_overview(
     user: AuthUser,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<ToolTrainingOverview>>, ApiError> {
-    let overview = state.db.get_tool_training_overview(tool_id, user.0.id)
+    let overview = state
+        .db
+        .get_tool_training_overview(tool_id, user.0.id)
         .map_err(|e| {
-            tracing::error!("Failed to get training overview: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training overview".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("get_tool_training_overview({tool_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(overview)))
@@ -522,13 +565,19 @@ async fn get_user_tool_training_overview(
 ) -> Result<Json<ApiResponse<ToolTrainingOverview>>, ApiError> {
     // Users can view their own overview, staff can view anyone's
     if user.0.id != target_user_id && !user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("Cannot view other users' training overview".to_string()));
+        return Err(ApiError::Forbidden(
+            "Cannot view other users' training overview".to_string(),
+        ));
     }
 
-    let overview = state.db.get_tool_training_overview(tool_id, target_user_id)
+    let overview = state
+        .db
+        .get_tool_training_overview(tool_id, target_user_id)
         .map_err(|e| {
-            tracing::error!("Failed to get training overview: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training overview".to_string())
+            // Logged, then converted. A blanket 500 here told the caller the
+            // server broke when the row they named simply does not exist.
+            tracing::warn!("get_tool_training_overview({tool_id}) failed: {e}");
+            ApiError::from(e)
         })?;
 
     Ok(Json(ApiResponse::success(overview)))
@@ -540,11 +589,10 @@ async fn get_tool_training_steps(
     user: AuthUser,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Vec<TrainingStepWithProgress>>>, ApiError> {
-    let steps = state.db.get_tool_training_steps_with_progress(tool_id, user.0.id)
-        .map_err(|e| {
-            tracing::error!("Failed to get training steps: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training steps".to_string())
-        })?;
+    let steps = state
+        .db
+        .get_tool_training_steps_with_progress(tool_id, user.0.id)
+        .map_err(|e| ApiError::from_db("Failed to get training steps", e))?;
 
     Ok(Json(ApiResponse::success(steps)))
 }
@@ -557,11 +605,10 @@ async fn get_user_training_progress(
     user: AuthUser,
     Query(query): Query<TrainingQuery>,
 ) -> Result<Json<ApiResponse<Vec<UserTrainingProgress>>>, ApiError> {
-    let progress = state.db.get_user_training_progress(user.0.id, &query)
-        .map_err(|e| {
-            tracing::error!("Failed to get training progress: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training progress".to_string())
-        })?;
+    let progress = state
+        .db
+        .get_user_training_progress(user.0.id, &query)
+        .map_err(|e| ApiError::from_db("Failed to get training progress", e))?;
 
     Ok(Json(ApiResponse::success(progress)))
 }
@@ -575,14 +622,15 @@ async fn get_user_training_progress_by_user(
 ) -> Result<Json<ApiResponse<Vec<UserTrainingProgress>>>, ApiError> {
     // Users can view their own progress, staff can view anyone's
     if user.0.id != target_user_id && !user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("Cannot view other users' training progress".to_string()));
+        return Err(ApiError::Forbidden(
+            "Cannot view other users' training progress".to_string(),
+        ));
     }
 
-    let progress = state.db.get_user_training_progress(target_user_id, &query)
-        .map_err(|e| {
-            tracing::error!("Failed to get training progress: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training progress".to_string())
-        })?;
+    let progress = state
+        .db
+        .get_user_training_progress(target_user_id, &query)
+        .map_err(|e| ApiError::from_db("Failed to get training progress", e))?;
 
     Ok(Json(ApiResponse::success(progress)))
 }
@@ -595,14 +643,15 @@ async fn get_specific_progress(
 ) -> Result<Json<ApiResponse<Option<UserTrainingProgress>>>, ApiError> {
     // Users can view their own progress, staff can view anyone's
     if user.0.id != target_user_id && !user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("Cannot view other users' training progress".to_string()));
+        return Err(ApiError::Forbidden(
+            "Cannot view other users' training progress".to_string(),
+        ));
     }
 
-    let progress = state.db.get_user_training_progress_for_step(target_user_id, step_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get training progress: {}", e);
-            ApiError::InternalServerError("Failed to retrieve training progress".to_string())
-        })?;
+    let progress = state
+        .db
+        .get_user_training_progress_for_step(target_user_id, step_id)
+        .map_err(|e| ApiError::from_db("Failed to get training progress", e))?;
 
     Ok(Json(ApiResponse::success(progress)))
 }
@@ -615,15 +664,16 @@ async fn update_training_progress(
     Json(payload): Json<UpdateProgressRequest>,
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
     // Check if user can update this progress
-    let can_update = user.0.role.can_access_staff() ||
-        state.db.is_certified_instructor(user.0.id, step_id)
-            .map_err(|e| {
-                tracing::error!("Failed to check instructor status: {}", e);
-                ApiError::InternalServerError("Failed to verify permissions".to_string())
-            })?;
+    let can_update = user.0.role.can_access_staff()
+        || state
+            .db
+            .is_certified_instructor(user.0.id, step_id)
+            .map_err(|e| ApiError::from_db("Failed to check instructor status", e))?;
 
     if !can_update {
-        return Err(ApiError::Forbidden("Cannot update training progress".to_string()));
+        return Err(ApiError::Forbidden(
+            "Cannot update training progress".to_string(),
+        ));
     }
 
     let update_progress = UpdateUserTrainingProgress {
@@ -633,11 +683,10 @@ async fn update_training_progress(
         ..Default::default()
     };
 
-    let updated_progress = state.db.update_user_training_progress(target_user_id, step_id, &update_progress)
-        .map_err(|e| {
-            tracing::error!("Failed to update training progress: {}", e);
-            ApiError::InternalServerError("Failed to update training progress".to_string())
-        })?;
+    let updated_progress = state
+        .db
+        .update_user_training_progress(target_user_id, step_id, &update_progress)
+        .map_err(|e| ApiError::from_db("Failed to update training progress", e))?;
 
     Ok(Json(ApiResponse::success(updated_progress)))
 }
@@ -654,31 +703,39 @@ async fn start_training_session(
     // Users can start their own training; staff can start it for someone
     // else (instructor-led sessions).
     if user.0.id != target_user_id && !user.0.role.can_access_staff() {
-        return Err(ApiError::Forbidden("Cannot start training for another user".to_string()));
+        return Err(ApiError::Forbidden(
+            "Cannot start training for another user".to_string(),
+        ));
     }
 
     // Prerequisites removed - all training steps are available by default
     // Users can start any training step without prerequisite validation
 
-    let progress = state.db.start_training_session(target_user_id, &payload)
-        .map_err(|e| {
-            tracing::error!("Failed to start training session: {}", e);
-            ApiError::InternalServerError("Failed to start training session".to_string())
-        })?;
+    let progress = state
+        .db
+        .start_training_session(target_user_id, &payload)
+        .map_err(|e| ApiError::from_db("Failed to start training session", e))?;
 
     // Log the training session start to audit logs
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::TrainingSessionStarted,
-        Some(target_user_id),
-        Some(user.0.id),
-        serde_json::json!({
-            "training_step_id": payload.training_step_id,
-            "progress_id": progress.id,
-            "started_by_user": user.0.id
-        }),
-        None,
-        Some(format!("Training session started")),
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::TrainingSessionStarted,
+            // Subject is whose training it is; actor is who started it. They
+            // differ for an instructor-led session, which is the whole reason
+            // this endpoint takes a target user.
+            Some(target_user_id),
+            Some(user.0.id),
+            serde_json::json!({
+                "training_step_id": payload.training_step_id,
+                "progress_id": progress.id,
+                "started_by_user": user.0.id
+            }),
+            None,
+            Some("Training session started".to_string()),
+        )
+        .await
+    {
         tracing::warn!("Failed to log training session start to audit: {}", e);
     }
 
@@ -693,38 +750,45 @@ async fn complete_training_session(
     Json(payload): Json<CompleteTrainingRequest>,
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
     // Validate that user can complete this training
-    let can_complete = user.0.role.can_access_staff() ||
-        state.db.is_certified_instructor(user.0.id, payload.training_step_id)
-            .map_err(|e| {
-                tracing::error!("Failed to check instructor status: {}", e);
-                ApiError::InternalServerError("Failed to verify permissions".to_string())
-            })?;
+    let can_complete = user.0.role.can_access_staff()
+        || state
+            .db
+            .is_certified_instructor(user.0.id, payload.training_step_id)
+            .map_err(|e| ApiError::from_db("Failed to check instructor status", e))?;
 
     if !can_complete {
-        return Err(ApiError::Forbidden("Cannot complete training session".to_string()));
+        return Err(ApiError::Forbidden(
+            "Cannot complete training session".to_string(),
+        ));
     }
 
-    let progress = state.db.complete_training_session(target_user_id, &payload)
-        .map_err(|e| {
-            tracing::error!("Failed to complete training session: {}", e);
-            ApiError::InternalServerError("Failed to complete training session".to_string())
-        })?;
+    let progress = state
+        .db
+        .complete_training_session(target_user_id, &payload)
+        .map_err(|e| ApiError::from_db("Failed to complete training session", e))?;
 
     // Log the training session completion to audit logs
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::TrainingSessionCompleted,
-        Some(target_user_id),
-        Some(user.0.id),
-        serde_json::json!({
-            "training_step_id": payload.training_step_id,
-            "instructor_id": user.0.id,
-            "assessment_score": payload.assessment_score,
-            "passed": payload.passed,
-            "notes": payload.notes.clone()
-        }),
-        None,
-        Some(format!("Training session completed with status: {:?}", payload.passed)),
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::TrainingSessionCompleted,
+            Some(target_user_id),
+            Some(user.0.id),
+            serde_json::json!({
+                "training_step_id": payload.training_step_id,
+                "instructor_id": user.0.id,
+                "assessment_score": payload.assessment_score,
+                "passed": payload.passed,
+                "notes": payload.notes.clone()
+            }),
+            None,
+            Some(format!(
+                "Training session completed with status: {:?}",
+                payload.passed
+            )),
+        )
+        .await
+    {
         tracing::warn!("Failed to log training session completion to audit: {}", e);
     }
 
@@ -752,26 +816,29 @@ async fn certify_instructor(
         notes: payload.notes,
     };
 
-    let instructor = state.db.certify_instructor(&new_instructor)
-        .map_err(|e| {
-            tracing::error!("Failed to certify instructor: {}", e);
-            ApiError::InternalServerError("Failed to certify instructor".to_string())
-        })?;
+    let instructor = state
+        .db
+        .certify_instructor(&new_instructor)
+        .map_err(|e| ApiError::from_db("Failed to certify instructor", e))?;
 
     // Log the instructor certification to audit logs
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::InstructorCertified,
-        Some(payload.user_id),
-        Some(staff.0.id),
-        serde_json::json!({
-            "training_step_id": payload.training_step_id,
-            "certified_user_id": payload.user_id,
-            "expires_at": payload.expires_at,
-            "notes": notes
-        }),
-        None,
-        Some(format!("User certified as instructor")),
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::InstructorCertified,
+            Some(payload.user_id),
+            Some(staff.0.id),
+            serde_json::json!({
+                "training_step_id": payload.training_step_id,
+                "certified_user_id": payload.user_id,
+                "expires_at": payload.expires_at,
+                "notes": notes
+            }),
+            None,
+            Some(format!("User certified as instructor")),
+        )
+        .await
+    {
         tracing::warn!("Failed to log instructor certification to audit: {}", e);
     }
 
@@ -784,11 +851,10 @@ async fn get_instructors(
     _user: AuthUser,
     Query(query): Query<TrainingQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrainingInstructor>>>, ApiError> {
-    let instructors = state.db.get_training_instructors(&query)
-        .map_err(|e| {
-            tracing::error!("Failed to get instructors: {}", e);
-            ApiError::InternalServerError("Failed to retrieve instructors".to_string())
-        })?;
+    let instructors = state
+        .db
+        .get_training_instructors(&query)
+        .map_err(|e| ApiError::from_db("Failed to get instructors", e))?;
 
     Ok(Json(ApiResponse::success(instructors)))
 }
@@ -800,23 +866,26 @@ async fn revoke_instructor_certification(
     Path(instructor_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     // Get instructor info for audit log before revocation
-    state.db.revoke_instructor_certification(instructor_id)
-        .map_err(|e| {
-            tracing::error!("Failed to revoke instructor certification: {}", e);
-            ApiError::InternalServerError("Failed to revoke instructor certification".to_string())
-        })?;
+    state
+        .db
+        .revoke_instructor_certification(instructor_id)
+        .map_err(|e| ApiError::from_db("Failed to revoke instructor certification", e))?;
 
     // Log the instructor revocation to audit logs
-    if let Err(e) = state.audit_logger.log_event(
-        crate::models::AuditEventType::InstructorRevoked,
-        None,
-        Some(_staff.0.id),
-        serde_json::json!({
-            "instructor_id": instructor_id,
-        }),
-        None,
-        Some(format!("Instructor certification revoked")),
-    ).await {
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::InstructorRevoked,
+            None,
+            Some(_staff.0.id),
+            serde_json::json!({
+                "instructor_id": instructor_id,
+            }),
+            None,
+            Some(format!("Instructor certification revoked")),
+        )
+        .await
+    {
         tracing::warn!("Failed to log instructor revocation to audit: {}", e);
     }
 
@@ -831,11 +900,12 @@ async fn check_tool_access(
     _staff: StaffUser,
     Path((tool_id, user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
-    let can_access = state.db.can_access_tool(user_id, tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check tool access: {}", e);
-            ApiError::InternalServerError("Failed to check tool access".to_string())
-        })?;
+    let can_access = state.db.can_access_tool(user_id, tool_id).map_err(|e| {
+        // See the note in update_tool. A tool or user that does not exist is a
+        // 404, not a server fault.
+        tracing::warn!("can_access_tool({user_id}, {tool_id}) failed: {e}");
+        ApiError::from(e)
+    })?;
 
     Ok(Json(ApiResponse::success(can_access)))
 }
@@ -846,11 +916,13 @@ async fn check_my_tool_access(
     user: AuthUser,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
-    let can_access = state.db.can_access_tool(user.0.id, tool_id)
-        .map_err(|e| {
-            tracing::error!("Failed to check tool access: {}", e);
-            ApiError::InternalServerError("Failed to check tool access".to_string())
-        })?;
+    let can_access = state.db.can_access_tool(user.0.id, tool_id).map_err(|e| {
+        // The sibling of check_tool_access, and it had the same blanket 500.
+        // Converting one and not the other is how "the same request answers
+        // differently depending on which endpoint you used" happens.
+        tracing::warn!("can_access_tool({}, {tool_id}) failed: {e}", user.0.id);
+        ApiError::from(e)
+    })?;
 
     Ok(Json(ApiResponse::success(can_access)))
 }

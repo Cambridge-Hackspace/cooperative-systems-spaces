@@ -1,7 +1,7 @@
 //! Weekly-window schedule helpers — validation and "is now within the
 //! window?" evaluation in the configured site time zone.
 
-use chrono::{Datelike, NaiveTime, Timelike, Weekday};
+use chrono::{Datelike, NaiveTime, Weekday};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +110,10 @@ pub fn resolve_tz(name: &str) -> Tz {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Needed for `.hour()` below. It used to come in through the top-level
+    // import, which was unused in a non-test build and therefore warned --
+    // removing it there and adding it here is what makes both builds clean.
+    use chrono::Timelike;
     use chrono::{TimeZone, Utc};
 
     fn iv(day: DayOfWeek, s: &str, e: &str) -> ScheduleInterval {

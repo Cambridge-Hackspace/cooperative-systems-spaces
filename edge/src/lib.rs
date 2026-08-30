@@ -1,49 +1,25 @@
-use std::convert::Infallible;
-use std::task::{Context, Poll};
-use axum::body::Body;
-use axum::extract::Request;
-use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
-use include_dir::Dir;
-use mime_guess::from_path;
-use tower::Service;
-use tracing::warn;
+//! `css-edge` — the on-site agent that talks to the CSS server and to local
+//! hardware (RFID readers, tool relays, kiosks).
+//!
+//! Everything lives in the library and the binary is a thin shim over it. That
+//! is not cosmetic: until this split, all ten modules were declared in
+//! `main.rs`, so nothing here could be reached from `edge/tests/` and the only
+//! testable surface was whatever a module could assert about itself from the
+//! inside. It also meant a large amount of genuinely-live code —
+//! [`toolguard::ToolGuardState::has_state`], [`doors::DoorsState::len`],
+//! [`config::ConfigManager`] — was reported as dead, because a binary's private
+//! items are dead unless the binary itself calls them.
 
-#[cfg(not(test))]
-use include_dir::include_dir;
-#[cfg(not(test))]
-static ASSETS_DIR_EDGE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../frontend_edge/dist");
+pub mod calendar;
+pub mod config;
+pub mod doors;
+pub mod edge_inbound;
+pub mod mqtt;
+pub mod registration;
+pub mod static_files;
+pub mod system_info;
+pub mod toolguard;
+pub mod web_server;
+pub mod ws;
 
-// In test mode, use an empty directory since we don't need the assets for tests
-#[cfg(test)]
-static ASSETS_DIR_EDGE: Dir<'_> = Dir::new("/", &[]);
-
-// static ASSETS_DIR_SERVER: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/frontend/dist");
-#[derive(Clone)]
-pub struct StaticFileServiceEdge;
-impl Service<Request<Body>> for StaticFileServiceEdge {
-    type Response = Response<Body>;
-    type Error = Infallible;
-    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let path = req.uri().path().trim_start_matches('/');
-
-        let response = if let Some(file) = ASSETS_DIR_EDGE.get_file(path) {
-            let mime_type = from_path(path).first_or_octet_stream();
-            warn!("{:?}", mime_type);
-            Response::builder()
-                .header(header::CONTENT_TYPE, mime_type.as_ref())
-                .body(Body::from(file.contents().to_vec()))
-                .unwrap()
-        } else {
-            StatusCode::NOT_FOUND.into_response()
-        };
-
-        std::future::ready(Ok(response))
-    }
-}
+pub use static_files::StaticFileServiceEdge;

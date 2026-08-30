@@ -12,17 +12,15 @@
       <div>
         <h1 class="text-3xl font-bold mb-1">Homepage links</h1>
         <p class="text-base-content/70">
-          Curated links shown on the public home page. Each link picks an
-          audience &mdash; <code class="text-xs bg-base-300 px-1 rounded">everyone</code>,
+          Curated links shown on the public home page. Each link picks an audience &mdash;
+          <code class="text-xs bg-base-300 px-1 rounded">everyone</code>,
           <code class="text-xs bg-base-300 px-1 rounded">anonymous</code> (signed-out only),
           <code class="text-xs bg-base-300 px-1 rounded">logged-in</code>,
           <code class="text-xs bg-base-300 px-1 rounded">member</code>, or
           <code class="text-xs bg-base-300 px-1 rounded">staff</code>.
         </p>
       </div>
-      <button class="btn btn-primary btn-sm whitespace-nowrap" @click="openNew">
-        + New link
-      </button>
+      <button class="btn btn-primary btn-sm whitespace-nowrap" @click="openNew">+ New link</button>
     </div>
 
     <div v-if="flash" class="alert mb-4" :class="flashOk ? 'alert-success' : 'alert-error'">
@@ -54,9 +52,12 @@
             <td class="font-mono text-xs">{{ l.sort_order }}</td>
             <td>
               <div class="font-medium">
-                <span v-if="l.icon" class="mr-1">{{ l.icon }}</span>{{ l.label }}
+                <span v-if="l.icon" class="mr-1">{{ l.icon }}</span
+                >{{ l.label }}
               </div>
-              <div v-if="l.description" class="text-xs text-base-content/60">{{ l.description }}</div>
+              <div v-if="l.description" class="text-xs text-base-content/60">
+                {{ l.description }}
+              </div>
             </td>
             <td class="font-mono text-xs max-w-xs truncate">{{ l.url }}</td>
             <td>
@@ -71,7 +72,9 @@
             </td>
             <td class="text-xs">
               <span v-if="!l.expires_at" class="text-base-content/50">—</span>
-              <span v-else-if="isExpired(l.expires_at)" class="badge badge-error badge-sm">Expired</span>
+              <span v-else-if="isExpired(l.expires_at)" class="badge badge-error badge-sm"
+                >Expired</span
+              >
               <span v-else class="text-base-content/80" :title="formatAbs(l.expires_at)">
                 {{ formatRel(l.expires_at) }}
               </span>
@@ -99,13 +102,24 @@
 
         <div class="form-control mb-3">
           <label class="label py-1"><span class="label-text">URL</span></label>
-          <input v-model="form.url" type="text" class="input input-bordered font-mono text-sm" placeholder="https://wiki.example.org" />
+          <input
+            v-model="form.url"
+            type="text"
+            class="input input-bordered font-mono text-sm"
+            placeholder="https://wiki.example.org"
+          />
         </div>
 
         <div class="grid grid-cols-2 gap-3 mb-3">
           <div class="form-control">
             <label class="label py-1"><span class="label-text">Icon (emoji or text)</span></label>
-            <input v-model="form.icon" type="text" class="input input-bordered" placeholder="📚" maxlength="60" />
+            <input
+              v-model="form.icon"
+              type="text"
+              class="input input-bordered"
+              placeholder="📚"
+              maxlength="60"
+            />
           </div>
           <div class="form-control">
             <label class="label py-1"><span class="label-text">Sort order</span></label>
@@ -143,14 +157,15 @@
               v-if="form.expires_at_local"
               type="button"
               class="btn btn-ghost btn-sm"
-              @click="form.expires_at_local = ''"
               title="Clear expiry"
-            >Clear</button>
+              @click="form.expires_at_local = ''"
+            >
+              Clear
+            </button>
           </div>
           <span class="label-text-alt mt-1 text-base-content/60">
-            Useful for announcements. Once this moment passes the link disappears
-            from the public home page; admins still see it (marked Expired) until
-            they delete it.
+            Useful for announcements. Once this moment passes the link disappears from the public
+            home page; admins still see it (marked Expired) until they delete it.
           </span>
         </div>
 
@@ -176,6 +191,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { homeLinksApi } from '@/utils/api'
+import { ALLOWED_LINK_SCHEMES, isSafeLinkUrl } from '@/lib/urls'
 import type { HomeLink, HomeLinkAudience } from '@/types'
 
 const loading = ref(false)
@@ -214,7 +230,9 @@ const canSave = computed(() => form.value.label.trim() && form.value.url.trim())
 function notify(msg: string, ok = true) {
   flash.value = msg
   flashOk.value = ok
-  setTimeout(() => { if (flash.value === msg) flash.value = '' }, 5000)
+  setTimeout(() => {
+    if (flash.value === msg) flash.value = ''
+  }, 5000)
 }
 
 function audienceLabel(a: HomeLinkAudience): string {
@@ -244,7 +262,7 @@ function openNew() {
     description: null,
     icon: null,
     audience: 'everyone',
-    sort_order: links.value.length ? Math.max(...links.value.map(l => l.sort_order)) + 10 : 0,
+    sort_order: links.value.length ? Math.max(...links.value.map((l) => l.sort_order)) + 10 : 0,
     enabled: true,
     expires_at_local: '',
   }
@@ -304,13 +322,33 @@ function formatRel(iso: string): string {
 
 async function load() {
   loading.value = true
-  const r = await homeLinksApi.list()
-  loading.value = false
-  if (r.success && r.data) links.value = r.data
+  try {
+    const r = await homeLinksApi.list()
+    if (r.success && r.data) links.value = r.data
+    else notify(r.error || 'Could not load the homepage links', false)
+  } catch (e) {
+    // Without this the rejection escaped to `app.config.errorHandler`, which
+    // `src/main.ts` never sets -- so it reached the browser console and nowhere
+    // else, and the spinner never cleared because the line that cleared it was
+    // after the await.
+    notify(e instanceof Error ? e.message : 'Could not load the homepage links', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function save() {
   if (!canSave.value) return
+
+  // The URL ends up in `:href` on the public home page, and Vue does not
+  // sanitise an href binding. See lib/urls.ts.
+  if (!isSafeLinkUrl(form.value.url)) {
+    notify(
+      `That URL cannot be used as a link. Permitted: ${ALLOWED_LINK_SCHEMES.join(', ')} or a path on this site.`,
+      false
+    )
+    return
+  }
   saving.value = true
   // `null` clears an existing expiry on update; on create it just means "no expiry".
   const body = {
@@ -323,22 +361,31 @@ async function save() {
     enabled: form.value.enabled,
     expires_at: localInputToIso(form.value.expires_at_local),
   }
-  const res = editing.value
-    ? await homeLinksApi.update(editing.value.id, body)
-    : await homeLinksApi.create(body)
-  saving.value = false
-  if (res.success) {
-    notify(editing.value ? 'Link saved' : 'Link created')
-    showForm.value = false
-    await load()
-  } else notify(res.error || 'Failed to save', false)
+  try {
+    const res = editing.value
+      ? await homeLinksApi.update(editing.value.id, body)
+      : await homeLinksApi.create(body)
+    if (res.success) {
+      notify(editing.value ? 'Link saved' : 'Link created')
+      showForm.value = false
+      await load()
+    } else notify(res.error || 'Failed to save', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save', false)
+  } finally {
+    // In a `finally`, so a rejection cannot strand the button disabled and the
+    // modal open with no way to retry.
+    saving.value = false
+  }
 }
 
 async function onDelete(l: HomeLink) {
   if (!confirm(`Delete "${l.label}"?`)) return
   const r = await homeLinksApi.remove(l.id)
-  if (r.success) { notify('Link deleted'); await load() }
-  else notify(r.error || 'Failed to delete', false)
+  if (r.success) {
+    notify('Link deleted')
+    await load()
+  } else notify(r.error || 'Failed to delete', false)
 }
 
 onMounted(load)

@@ -3,7 +3,7 @@
     <div class="modal" @click.stop>
       <div class="modal-header">
         <h3>Assign Trainer to {{ tool.name }}</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -11,26 +11,17 @@
           <div class="spinner"></div>
           <p>Loading users...</p>
         </div>
-        
+
         <div v-else-if="availableUsers.length === 0" class="no-users">
           <p>No available users to assign as trainers.</p>
         </div>
-        
+
         <form @submit.prevent="submitForm">
           <div class="form-group">
             <label for="user">Select User</label>
-            <select 
-              id="user"
-              v-model="formData.user_id"
-              class="form-control"
-              required
-            >
+            <select id="user" v-model="formData.user_id" class="form-control" required>
               <option value="">Choose a user...</option>
-              <option 
-                v-for="user in availableUsers" 
-                :key="user.id"
-                :value="user.id"
-              >
+              <option v-for="user in availableUsers" :key="user.id" :value="user.id">
                 {{ user.full_name || user.username }} ({{ user.email }})
               </option>
             </select>
@@ -38,7 +29,7 @@
 
           <div class="form-group">
             <label for="expires_at">Expiration Date (Optional)</label>
-            <input 
+            <input
               id="expires_at"
               v-model="formData.expires_at"
               type="date"
@@ -50,7 +41,7 @@
 
           <div class="form-group">
             <label for="notes">Notes (Optional)</label>
-            <textarea 
+            <textarea
               id="notes"
               v-model="formData.notes"
               class="form-control"
@@ -62,9 +53,7 @@
           <div v-if="error" class="error">{{ error }}</div>
 
           <div class="modal-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="submitting" class="btn btn-primary">
               {{ submitting ? 'Assigning...' : 'Assign Trainer' }}
             </button>
@@ -79,6 +68,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { trainerApi, userApi } from '../utils/api'
 import type { Tool, AssignTrainerRequest, User } from '../types'
+import { localDate } from '@/lib/dates'
 
 interface Props {
   tool: Tool
@@ -87,8 +77,8 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
-  'close': []
-  'assigned': []
+  close: []
+  assigned: []
 }>()
 
 // State
@@ -98,21 +88,17 @@ const submitting = ref(false)
 const error = ref('')
 
 const formData = ref({
-  user_id: '' as string,
+  user_id: '',
   notes: '',
-  expires_at: ''
+  expires_at: '',
 })
 
 // Computed
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// See EditTrainerModal: `toISOString()` is the UTC date, not the user's.
+const today = computed(() => localDate())
 
 const availableUsers = computed(() => {
-  return users.value.filter(user => 
-    user.is_active && 
-    !props.existingTrainers.includes(user.id)
-  )
+  return users.value.filter((user) => user.is_active && !props.existingTrainers.includes(user.id))
 })
 
 // Methods
@@ -120,10 +106,9 @@ const loadUsers = async () => {
   try {
     loading.value = true
     error.value = ''
-    
-    
+
     const response = await userApi.getAllUsers()
-    
+
     if (response.success && response.data?.items) {
       users.value = response.data.items
       console.log('Loaded users:', users.value.length)
@@ -149,20 +134,22 @@ const submitForm = async () => {
       user_id: formData.value.user_id,
       tool_id: props.tool.id,
       notes: formData.value.notes || undefined,
-      expires_at: formData.value.expires_at || undefined
+      expires_at: formData.value.expires_at || undefined,
     }
 
     const response = await trainerApi.assignToolTrainer(requestData)
-    
+
+    // Was `console.log('Loaded users:', users.value.length)` on success and
+    // 'Failed to load users' on failure -- both copied from `loadUsers` and
+    // never adapted. Nothing was emitted, so the parent never refreshed and an
+    // assignment looked exactly like the button not working.
     if (response.success) {
-      console.log('Loaded users:', users.value.length)
+      emit('assigned')
     } else {
-      error.value = response.error || 'Failed to load users'
-      console.error('Failed to load users:', response)
+      error.value = response.error || 'Failed to assign trainer'
     }
   } catch (err: any) {
-    error.value = err.message || 'Failed to load users'
-    console.error('Error loading users:', err)
+    error.value = err?.response?.data?.error || err.message || 'Failed to assign trainer'
   } finally {
     submitting.value = false
   }
@@ -170,7 +157,7 @@ const submitForm = async () => {
 
 // Lifecycle
 onMounted(() => {
-  loadUsers()
+  void loadUsers()
 })
 </script>
 
@@ -186,8 +173,12 @@ onMounted(() => {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .loading {
@@ -205,7 +196,7 @@ onMounted(() => {
   text-align: center;
   padding: 2rem;
   color: #6c757d;
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   border-radius: 4px;
   margin-bottom: 1rem;
 }
@@ -214,8 +205,7 @@ onMounted(() => {
   margin: 0;
 }
 
-<style scoped>
-.modal-overlay {
+<style scoped > .modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -229,7 +219,7 @@ onMounted(() => {
 }
 
 .modal {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   width: 90%;
@@ -242,16 +232,16 @@ onMounted(() => {
 
 .modal-header {
   padding: 1.5rem;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
 }
 
 .modal-header h3 {
   margin: 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   font-size: 1.25rem;
 }
 
@@ -272,7 +262,7 @@ onMounted(() => {
 }
 
 .close-btn:hover {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   color: #495057;
 }
 
@@ -293,13 +283,13 @@ label {
   display: block;
   margin-bottom: 0.5rem;
   font-weight: 500;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .form-control {
   width: 100%;
   padding: 0.75rem;
-  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 1rem;
   transition: border-color 0.2s;
@@ -332,7 +322,7 @@ label {
   justify-content: flex-end;
   margin-top: 1.5rem;
   padding-top: 1rem;
-  border-top: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-top: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .btn {
@@ -389,16 +379,16 @@ textarea.form-control {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .modal-header,
   .modal-body {
     padding: 1rem;
   }
-  
+
   .modal-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

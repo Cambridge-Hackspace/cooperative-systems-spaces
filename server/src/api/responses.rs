@@ -1,7 +1,7 @@
 use axum::{response::IntoResponse, Json};
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::NaiveDateTime;
 
 use crate::models::UserRole;
 

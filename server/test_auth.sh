@@ -10,8 +10,8 @@ echo
 # Test 1: Register a new user
 echo "1. Registering a new user..."
 REGISTER_RESPONSE=$(curl -s -X POST "${API_BASE}/auth/register" \
-    -H "Content-Type: application/json" \
-    -d '{
+  -H "Content-Type: application/json" \
+  -d '{
         "username": "testuser",
         "email": "test@example.com",
         "password": "testpassword123",
@@ -24,8 +24,8 @@ echo
 # Test 2: Login with the new user
 echo "2. Logging in with the new user..."
 LOGIN_RESPONSE=$(curl -s -X POST "${API_BASE}/auth/login" \
-    -H "Content-Type: application/json" \
-    -d '{
+  -H "Content-Type: application/json" \
+  -d '{
         "username_or_email": "testuser",
         "password": "testpassword123"
     }')
@@ -34,41 +34,41 @@ echo "Login response: $LOGIN_RESPONSE"
 echo
 
 # Extract token from login response
-TOKEN=$(echo $LOGIN_RESPONSE | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
 echo "Extracted token: $TOKEN"
 echo
 
-if [ ! -z "$TOKEN" ]; then
-    # Test 3: Access protected route with token
-    echo "3. Accessing user profile with valid token..."
-    PROFILE_RESPONSE=$(curl -s -X GET "${API_BASE}/users/profile" \
-        -H "Authorization: Bearer $TOKEN")
-    
-    echo "Profile response: $PROFILE_RESPONSE"
-    echo
-    
-    # Test 4: Check user role in response
-    echo "4. Checking user role in response..."
-    USER_ROLE=$(echo $LOGIN_RESPONSE | grep -o '"role":"[^"]*"' | cut -d'"' -f4)
-    echo "User role: $USER_ROLE"
-    echo
-    
-    # Test 5: Try to access admin route (should fail)
-    echo "5. Trying to access admin-only route (should fail)..."
-    ADMIN_RESPONSE=$(curl -s -X GET "${API_BASE}/users/" \
-        -H "Authorization: Bearer $TOKEN")
-    
-    echo "Admin route response: $ADMIN_RESPONSE"
-    echo
+if [ -n "$TOKEN" ]; then
+  # Test 3: Access protected route with token
+  echo "3. Accessing user profile with valid token..."
+  PROFILE_RESPONSE=$(curl -s -X GET "${API_BASE}/users/profile" \
+    -H "Authorization: Bearer $TOKEN")
+
+  echo "Profile response: $PROFILE_RESPONSE"
+  echo
+
+  # Test 4: Check user role in response
+  echo "4. Checking user role in response..."
+  USER_ROLE=$(echo "$LOGIN_RESPONSE" | grep -o '"role":"[^"]*"' | cut -d'"' -f4)
+  echo "User role: $USER_ROLE"
+  echo
+
+  # Test 5: Try to access admin route (should fail)
+  echo "5. Trying to access admin-only route (should fail)..."
+  ADMIN_RESPONSE=$(curl -s -X GET "${API_BASE}/users/" \
+    -H "Authorization: Bearer $TOKEN")
+
+  echo "Admin route response: $ADMIN_RESPONSE"
+  echo
 else
-    echo "No token received, skipping authenticated tests"
+  echo "No token received, skipping authenticated tests"
 fi
 
 # Test 6: Test invalid login
 echo "6. Testing invalid login..."
 INVALID_LOGIN=$(curl -s -X POST "${API_BASE}/auth/login" \
-    -H "Content-Type: application/json" \
-    -d '{
+  -H "Content-Type: application/json" \
+  -d '{
         "username_or_email": "nonexistent",
         "password": "wrongpassword"
     }')

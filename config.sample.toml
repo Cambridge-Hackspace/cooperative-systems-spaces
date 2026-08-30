@@ -326,3 +326,62 @@ label = "Other"
 [toolguard]
 enabled = true
 profile_field = "card_id"
+
+# Calendar Configuration
+# Pulls iCal/ICS feeds onto the home page.
+[calendar]
+# Enable calendar display on the home page
+enabled = false
+# Cache duration in minutes
+cache_duration_minutes = 15
+# Maximum number of events to display
+max_events_display = 10
+# Number of days to look ahead for events
+lookahead_days = 30
+# One [[calendar.calendars]] block per feed. The list must be present even when
+# it is empty -- it has no default, and a missing one is a load error.
+calendars = []
+
+# Wiki / Site / User Pages Configuration
+# Each repository is cloned at startup, so leaving wiki_repo and site_repo unset
+# is deliberate: a fresh deployment should not start pulling somebody else's
+# repositories before anyone has configured it.
+[pages]
+# wiki_repo = "https://github.com/your-org/your-wiki"
+# Where the wiki appears: "None", "Nav", "Footer" or "Both"
+# LinkLocation is Navigation | HomePage | Both -- there is no "off". With no
+# repository configured the link has nothing to point at, so the value here is
+# only about where it would appear if one were.
+wiki_link = "Navigation"
+# Poll the wiki repository for changes
+wiki_auto_enabled = false
+# Seconds between polls
+wiki_period = 600
+# Include the repository's README.md in the wiki
+wiki_readme = false
+# site_repo = "https://github.com/your-org/your-site"
+site_link = "Navigation"
+site_auto_enabled = false
+site_period = 600
+# Which file from the site repository is embedded in the index page
+site_embed_index = "INDEX.md"
+site_readme = false
+# Per-user pages, sourced from a repository named in each user's profile
+users_pages_enabled = false
+user_profile_field = "user_page_repository"
+user_period = 900
+user_readme = true
+
+# Edge Configuration
+# The MQTT link to css-edge devices (doors, tool guards, kiosks).
+[edge]
+# With this enabled the server will not start unless the broker is reachable:
+# MqttService::new connects during boot and the failure is propagated.
+edge_enabled = false
+
+# [edge.edge_mqtt_config]
+# mqtt_instance_url = "tcp://127.0.0.1:1883"
+# mqtt_client_id = "css-server"
+# mqtt_namespace = "css"
+# mqtt_username = "..."
+# mqtt_password = "..."

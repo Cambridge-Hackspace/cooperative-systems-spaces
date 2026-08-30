@@ -5,13 +5,27 @@
         {{ field.label }}
         <span v-if="field.required" class="text-error">*</span>
       </span>
-      <span v-if="field.help_text" class="label-text-alt tooltip tooltip-left" :data-tip="field.help_text">
-        <svg class="w-4 h-4 text-base-content/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      <span
+        v-if="field.help_text"
+        class="label-text-alt tooltip tooltip-left"
+        :data-tip="field.help_text"
+      >
+        <svg
+          class="w-4 h-4 text-base-content/70"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
       </span>
     </label>
-    
+
     <!-- Text Field -->
     <input
       v-if="fieldType === 'Text'"
@@ -31,11 +45,7 @@
       :class="{ 'input-error': hasError, 'opacity-60': disabled }"
       @click="focusTagInput"
     >
-      <span
-        v-for="(tag, i) in tagValues"
-        :key="`${tag}-${i}`"
-        class="badge badge-neutral gap-1"
-      >
+      <span v-for="(tag, i) in tagValues" :key="`${tag}-${i}`" class="badge badge-neutral gap-1">
         {{ tag }}
         <button
           type="button"
@@ -43,21 +53,23 @@
           :disabled="disabled"
           aria-label="Remove"
           @click.stop="removeTag(i)"
-        >&times;</button>
+        >
+          &times;
+        </button>
       </span>
       <input
         ref="tagInputRef"
         v-model="pendingTag"
         type="text"
         class="flex-1 min-w-[8rem] bg-transparent outline-none border-0 p-0 focus:ring-0"
-        :placeholder="tagValues.length ? '' : (field.help_text || 'type and press Enter')"
+        :placeholder="tagValues.length ? '' : field.help_text || 'type and press Enter'"
         :disabled="disabled"
         @keydown.enter.prevent="commitTag()"
         @keydown="onTagKeydown"
         @blur="onTagBlur"
       />
     </div>
-    
+
     <!-- Email Field -->
     <input
       v-else-if="fieldType === 'Email'"
@@ -69,7 +81,7 @@
       :disabled="disabled"
       @blur="$emit('blur')"
     />
-    
+
     <!-- Phone Field -->
     <input
       v-else-if="fieldType === 'Phone'"
@@ -81,7 +93,7 @@
       :disabled="disabled"
       @blur="$emit('blur')"
     />
-    
+
     <!-- Number Field -->
     <input
       v-else-if="fieldType === 'Number'"
@@ -94,7 +106,7 @@
       @input="updateNumberValue"
       @blur="$emit('blur')"
     />
-    
+
     <!-- Date Field -->
     <input
       v-else-if="fieldType === 'Date'"
@@ -105,7 +117,7 @@
       :disabled="disabled"
       @blur="$emit('blur')"
     />
-    
+
     <!-- Boolean Field -->
     <div v-else-if="fieldType === 'Boolean'" class="form-control">
       <label class="label cursor-pointer justify-start gap-4">
@@ -120,7 +132,7 @@
         <span class="label-text">{{ field.label }}</span>
       </label>
     </div>
-    
+
     <!-- Select Field -->
     <select
       v-else-if="fieldType === 'Select'"
@@ -131,15 +143,11 @@
       @blur="$emit('blur')"
     >
       <option value="">Select {{ field.label }}</option>
-      <option 
-        v-for="option in selectOptions" 
-        :key="option" 
-        :value="option"
-      >
+      <option v-for="option in selectOptions" :key="option" :value="option">
         {{ option }}
       </option>
     </select>
-    
+
     <!-- Textarea for long text fields -->
     <textarea
       v-else
@@ -150,7 +158,7 @@
       :disabled="disabled"
       @blur="$emit('blur')"
     ></textarea>
-    
+
     <!-- Error Message -->
     <label v-if="errorMessage" class="label">
       <span class="label-text-alt text-error">{{ errorMessage }}</span>
@@ -203,7 +211,9 @@ const hasError = computed(() => {
 
 const numberValue = computed(() => {
   if (fieldType.value === 'Number') {
-    return props.modelValue === null || props.modelValue === undefined ? '' : String(props.modelValue)
+    return props.modelValue === null || props.modelValue === undefined
+      ? ''
+      : String(props.modelValue)
   }
   return ''
 })
@@ -214,7 +224,7 @@ const internalValue = computed({
     if (fieldType.value === 'Boolean') {
       return !!props.modelValue
     }
-    
+
     // Skip number fields - they use their own handler
     if (fieldType.value === 'Number') {
       return ''
@@ -231,9 +241,9 @@ const internalValue = computed({
     } else if (fieldType.value === 'Date' && value === '') {
       processedValue = null
     }
-    
+
     emit('update:modelValue', processedValue)
-  }
+  },
 })
 
 function updateNumberValue(event: Event) {

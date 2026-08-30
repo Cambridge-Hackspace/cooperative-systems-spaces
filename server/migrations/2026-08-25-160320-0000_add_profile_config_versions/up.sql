@@ -14,7 +14,7 @@ CREATE TABLE profile_config_versions (
 -- Redundant on Postgres specifically: UNIQUE(version) already creates a
 -- unique btree index, and Postgres can scan a single-column btree backward
 -- just as cheaply as forward, so this adds a little write/space overhead
--- here for no query benefit. Kept for portability — engines without
+-- here for no query benefit. Kept for portability -- engines without
 -- Postgres's bidirectional scan (e.g. MySQL/InnoDB before 8.0) would
 -- actually need this to serve `ORDER BY version DESC` efficiently.
 CREATE INDEX profile_config_versions_version_idx ON profile_config_versions (version DESC);

@@ -2,10 +2,10 @@
   <div>
     <div class="flex items-start justify-between mb-3 gap-4">
       <p class="text-base-content/70 text-sm">
-        Places shown as nodes, doors as edges. Hierarchy lines are dashed;
-        disabled doors are dotted; operator-defined
-        <span class="badge badge-warning badge-sm">special</span> places (Outside,
-        Common Area, …) are amber; doors with an unassigned side land on a small
+        Places shown as nodes, doors as edges. Hierarchy lines are dashed; disabled doors are
+        dotted; operator-defined
+        <span class="badge badge-warning badge-sm">special</span> places (Outside, Common Area, …)
+        are amber; doors with an unassigned side land on a small
         <span class="badge badge-ghost badge-sm">(unset)</span> placeholder.
       </p>
       <div class="flex items-center gap-2 whitespace-nowrap">
@@ -19,8 +19,15 @@
       </div>
     </div>
 
-    <div v-if="loading" class="h-[600px] flex items-center justify-center bg-base-100 border border-base-300 rounded">
+    <div
+      v-if="loading"
+      class="h-[600px] flex items-center justify-center bg-base-100 border border-base-300 rounded"
+    >
       <span class="loading loading-spinner loading-lg"></span>
+    </div>
+    <div v-else-if="error" class="alert alert-error">
+      <span>{{ error }}</span>
+      <button class="btn btn-sm" @click="load">Retry</button>
     </div>
     <div
       v-else-if="!places.length && !doors.length"
@@ -40,7 +47,9 @@
         <div class="text-sm flex items-center gap-2">
           <span class="badge" :class="selected.kindBadge">{{ selected.kindLabel }}</span>
           <strong>{{ selected.label }}</strong>
-          <span v-if="selected.subtitle" class="text-base-content/60">— {{ selected.subtitle }}</span>
+          <span v-if="selected.subtitle" class="text-base-content/60"
+            >— {{ selected.subtitle }}</span
+          >
         </div>
       </div>
     </div>
@@ -57,6 +66,7 @@ type LayoutName = 'cose' | 'breadthfirst' | 'concentric' | 'grid'
 
 const cyContainer = ref<HTMLDivElement | null>(null)
 const loading = ref(false)
+const error = ref('')
 const places = ref<Place[]>([])
 const doors = ref<Door[]>([])
 const layoutName = ref<LayoutName>('cose')
@@ -70,10 +80,22 @@ let cy: Core | null = null
 
 async function load() {
   loading.value = true
-  const [p, d] = await Promise.all([placesApi.list(), doorsApi.list()])
-  if (p.success && p.data) places.value = p.data
-  if (d.success && d.data) doors.value = d.data
-  loading.value = false
+  error.value = ''
+  try {
+    const [p, d] = await Promise.all([placesApi.list(), doorsApi.list()])
+    if (p.success && p.data) places.value = p.data
+    else error.value = p.error || 'Could not load the places'
+    if (d.success && d.data) doors.value = d.data
+    else error.value = d.error || 'Could not load the doors'
+  } catch (e) {
+    // This component had no error surface at all, so a rejected load left the
+    // spinner up forever and the rejection went to an
+    // `app.config.errorHandler` that `src/main.ts` never sets -- reaching the
+    // browser console and nowhere else.
+    error.value = e instanceof Error ? e.message : 'Could not load the graph'
+  } finally {
+    loading.value = false
+  }
   await nextTick()
   rebuild()
 }
@@ -132,7 +154,10 @@ function buildElements(): ElementDefinition[] {
 
 function rebuild() {
   if (!cyContainer.value) return
-  if (cy) { cy.destroy(); cy = null }
+  if (cy) {
+    cy.destroy()
+    cy = null
+  }
 
   cy = cytoscape({
     container: cyContainer.value,
@@ -140,20 +165,20 @@ function rebuild() {
     // Cytoscape's strict TS types disagree with itself on string-vs-number
     // for several style props; the runtime accepts both. Cast the whole
     // stylesheet to keep the source readable.
-    style: ([
+    style: [
       {
         selector: 'node',
         style: {
           'background-color': '#3b82f6',
-          'label': 'data(label)',
-          'color': '#ffffff',
+          label: 'data(label)',
+          color: '#ffffff',
           'text-valign': 'center',
           'text-halign': 'center',
           'font-size': 11,
-          'padding': '8px',
-          'width': 'label' as any,
-          'height': 'label' as any,
-          'shape': 'round-rectangle',
+          padding: '8px',
+          width: 'label' as any,
+          height: 'label' as any,
+          shape: 'round-rectangle',
           'text-wrap': 'wrap',
           'text-max-width': '140px',
         },
@@ -161,15 +186,15 @@ function rebuild() {
       {
         // Operator-defined special places (Outside, Common Area, Parking, …)
         selector: 'node.special',
-        style: { 'background-color': '#f59e0b', 'color': '#000' },
+        style: { 'background-color': '#f59e0b', color: '#000' },
       },
       {
         // Loose-end placeholder for doors with one side unset.
         selector: 'node.unset',
         style: {
           'background-color': '#e5e7eb',
-          'color': '#374151',
-          'shape': 'ellipse',
+          color: '#374151',
+          shape: 'ellipse',
           'font-size': 10,
         },
       },
@@ -185,22 +210,22 @@ function rebuild() {
           'target-arrow-color': '#9ca3af',
           'target-arrow-shape': 'triangle',
           'curve-style': 'bezier',
-          'width': 1,
-          'opacity': 0.7,
+          width: 1,
+          opacity: 0.7,
         },
       },
       {
         selector: 'edge.door',
         style: {
-          'label': 'data(label)',
+          label: 'data(label)',
           'font-size': 10,
-          'color': '#1f2937',
+          color: '#1f2937',
           'text-background-color': '#ffffff',
           'text-background-opacity': 0.8,
           'text-background-padding': 2,
           'text-rotation': 'autorotate' as any,
           'curve-style': 'bezier',
-          'width': 2,
+          width: 2,
         },
       },
       { selector: 'edge.door-enabled', style: { 'line-color': '#22c55e' } },
@@ -210,9 +235,9 @@ function rebuild() {
       },
       {
         selector: 'edge:selected',
-        style: { 'width': 4, 'line-color': '#fbbf24' },
+        style: { width: 4, 'line-color': '#fbbf24' },
       },
-    ] as any),
+    ] as any,
     layout: layoutOptions(layoutName.value),
     wheelSensitivity: 0.2,
   })
@@ -241,8 +266,8 @@ function rebuild() {
   cy.on('tap', 'edge', (evt) => {
     const e = evt.target
     if (e.data('kind') === 'door') {
-      const a = cy!.getElementById(e.data('source')).data('label')
-      const b = cy!.getElementById(e.data('target')).data('label')
+      const a = cy.getElementById(e.data('source')).data('label')
+      const b = cy.getElementById(e.data('target')).data('label')
       selected.value = {
         label: e.data('label'),
         subtitle: `${a} ↔ ${b} · ${e.data('enabled') ? 'enabled' : 'disabled'}`,
@@ -252,7 +277,7 @@ function rebuild() {
     } else {
       selected.value = {
         label: 'hierarchy',
-        subtitle: `${cy!.getElementById(e.data('source')).data('label')} → ${cy!.getElementById(e.data('target')).data('label')}`,
+        subtitle: `${cy.getElementById(e.data('source')).data('label')} → ${cy.getElementById(e.data('target')).data('label')}`,
         kindLabel: 'parent',
         kindBadge: 'badge-ghost',
       }
@@ -281,8 +306,7 @@ function layoutOptions(name: LayoutName) {
         animate: true,
         // Special places ring the outside; loose-end placeholders sit on the
         // outermost ring; ordinary places fill the inside.
-        concentric: (n: any) =>
-          n.hasClass('special') ? 100 : (n.hasClass('unset') ? 200 : 1),
+        concentric: (n: any) => (n.hasClass('special') ? 100 : n.hasClass('unset') ? 200 : 1),
         levelWidth: () => 1,
       } as any
     case 'grid':
@@ -305,5 +329,10 @@ watch(layoutName, () => {
 })
 
 onMounted(load)
-onBeforeUnmount(() => { if (cy) { cy.destroy(); cy = null } })
+onBeforeUnmount(() => {
+  if (cy) {
+    cy.destroy()
+    cy = null
+  }
+})
 </script>

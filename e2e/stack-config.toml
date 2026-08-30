@@ -1,0 +1,244 @@
+# The stack battery's server configuration.
+#
+# A template, not a heredoc, and the reason is that the first stack bring-up
+# failed on a missing [calendar] field after a 120-second boot timeout, four
+# stages deep, with the cause visible only in a container log. As a file it can
+# be parsed by server/tests/stack_config_parses.rs, which turns the same
+# mistake into a build failure thirty seconds in, with the field named.
+#
+# Placeholders are at-sign delimited names rather than shell expansions, so that
+# the test can substitute them without knowing anything about the shell and the
+# shell can substitute them without knowing anything about TOML. e2e/stack.sh
+# substitutes with sed; the test substitutes with a string replace, from the
+# same list -- and both assert that no placeholder survives, so one added on one
+# side and not the other fails rather than reaching a running server as literal
+# text.
+#
+# The file is deliberately NOT valid TOML before substitution: `port` is an
+# integer, so its placeholder cannot be quoted. Anything reading this file has
+# to substitute first, which is exactly what both readers do.
+#
+# Written in full rather than derived from server/config.toml, which is
+# somebody's working configuration: a suite that inherits it reports different
+# results on different checkouts.
+
+[site]
+site_name = "CSS E2E"
+site_url = "http://127.0.0.1:@SERVER_PORT@"
+admin_url = "http://127.0.0.1:@SERVER_PORT@/admin"
+timezone = "@STACK_TZ@"
+max_session_age = 1440
+debug = false
+secret_key = "e2e-secret-key-not-a-production-value"
+https = false
+
+[email]
+host = "localhost"
+port = 587
+username = ""
+password = ""
+use_tls = false
+use_ssl = false
+from_email = "noreply@example.invalid"
+from_name = "CSS E2E"
+enabled = false
+
+[theme]
+primary_color = "#007bff"
+secondary_color = "#6c757d"
+accent_color = "#28a745"
+background_color = "#ffffff"
+text_color = "#212529"
+dark_mode_enabled = true
+
+[stripe]
+publishable_key = ""
+secret_key = ""
+webhook_secret = ""
+enabled = false
+currency = "USD"
+test_mode = true
+
+[reports]
+usage_reports_enabled = true
+member_reports_enabled = true
+financial_reports_enabled = false
+generation_frequency_hours = 24
+max_reports_retained = 30
+default_export_format = "csv"
+email_reports = false
+
+[space_directory]
+enabled = true
+coordinate_format = "decimal"
+max_spaces_per_directory = 1000
+search_enabled = true
+filtering_enabled = true
+default_visibility = "public"
+allow_anonymous_viewing = true
+
+[sentry]
+environment = "e2e"
+traces_sample_rate = 0.0
+enabled = false
+performance_monitoring = false
+
+[database]
+url = "postgresql://@PG_USER@:@PG_PASS@@127.0.0.1:@PG_PORT@/@PG_DB@"
+host = "127.0.0.1"
+port = @PG_PORT@
+database = "@PG_DB@"
+username = "@PG_USER@"
+password = "@PG_PASS@"
+# Above the concurrency tier's fan-out on purpose. A pool smaller than the
+# number of concurrent requests serializes them, which makes a race disappear
+# and the tier report a pass it did not earn.
+max_connections = 64
+min_connections = 2
+connect_timeout_seconds = 30
+idle_timeout_seconds = 600
+log_statements = false
+auto_migrate = true
+
+[server]
+bind_address = "127.0.0.1:@SERVER_PORT@"
+log_requests = true
+request_timeout_seconds = 30
+max_request_body_size = 16777216
+cors_enabled = true
+cors_origins = ["http://127.0.0.1:@SERVER_PORT@"]
+
+[auth]
+jwt_secret = "e2e-jwt-secret-not-a-production-value"
+jwt_expiration_hours = 24
+allow_registration = true
+require_email_verification = false
+password_min_length = 8
+session_timeout_minutes = 1440
+password_reset_enabled = true
+
+[registration_challenge]
+enabled = false
+hint = ""
+phrase = ""
+# Off, and the reason is a property of the tiers rather than convenience: the
+# fuzz and journey tiers register hundreds of accounts from one address space,
+# and a throttle would turn their findings into 429s that look like defects.
+# The throttle itself is covered by its own unit tests and by a dedicated case
+# in the accounts stage, which turns it on for the length of that case.
+throttle_enabled = false
+throttle_attempts = 3
+throttle_seconds = 180
+terms_of_service_checkbox = false
+terms_of_service_md = ""
+recaptcha_enabled = false
+recaptcha_site_key = ""
+recaptcha_secret_key = ""
+
+[initial_setup]
+setup_enabled = true
+setup_admin_email = "admin@e2e.invalid"
+
+[user]
+# `*_seed`, not the old names. These now seed the `profile_config_versions`
+# table on first boot and are ignored afterwards -- the database is the source
+# of truth for the field schema. The rename is why this file stopped parsing:
+# neither field has a serde default, so the old names are a missing-field
+# error, which `AppConfig::from_file` answers by rewriting the file and
+# refusing to boot.
+profiles_enabled_seed = true
+
+[[user.profile_fields_seed]]
+key = "card_id"
+label = "Access Card"
+field_type = "Text"
+required = false
+help_text = "RFID card identifier"
+
+[[user.profile_fields_seed]]
+key = "bio"
+label = "Bio"
+field_type = "Text"
+required = false
+help_text = "Tell us about yourself"
+
+[[user.profile_fields_seed]]
+key = "phone"
+label = "Phone Number"
+field_type = "Phone"
+required = false
+help_text = "Contact number"
+
+[tools]
+
+[[tools.tool_categories]]
+value = "saw"
+label = "Saw"
+
+[[tools.tool_categories]]
+value = "powertool"
+label = "Power Tools"
+
+[[tools.tool_categories]]
+value = "other"
+label = "Other"
+
+[toolguard]
+enabled = true
+profile_field = "card_id"
+
+[calendar]
+enabled = false
+# Not omitted. `calendars` is a Vec with no #[serde(default)], so leaving it
+# out is a missing-field error -- which AppConfig::from_file responds to by
+# rewriting the file and refusing to boot. The first stack run found that the
+# hard way, and found the exit(0) behind it at the same time.
+calendars = []
+cache_duration_minutes = 15
+max_events_display = 10
+lookahead_days = 30
+
+[pages]
+# Null on purpose, and asserted null by the schema stage. PagesService::new
+# git-clones whatever is here into a hardcoded /tmp path at boot; a stack that
+# inherited the tracked config would clone two GitHub repositories on every
+# bring-up and fail closed the moment the network did.
+# LinkLocation is Navigation | HomePage | Both -- there is no "off". With no
+# repository configured the link has nothing to point at, so the value here is
+# only about where it would appear if one were.
+wiki_link = "Navigation"
+wiki_auto_enabled = false
+wiki_period = 600
+wiki_readme = false
+site_link = "Navigation"
+site_auto_enabled = false
+site_period = 600
+site_embed_index = "INDEX.md"
+site_readme = false
+users_pages_enabled = false
+user_profile_field = "user_page_repository"
+user_period = 900
+user_readme = false
+
+# Enabled, because the suite tests doors and a door requires two places.
+#
+# PlaceConfig::default() has `enabled = false`, and this file previously had no
+# [place] section at all -- so every POST /api/admin/places answered 403 and the
+# Tier 9 door-rule invariant had nothing to judge. A suite whose configuration
+# switches off a module it then tests reports a pass for a tier that ran
+# nothing.
+#
+# The type list is the default one, stated here rather than inherited, so a
+# change to the default is a change to this file rather than a silent change to
+# what the suite exercises.
+[place]
+enabled = true
+types = ["Room", "Spot"]
+
+[edge]
+edge_enabled = true
+
+[edge.edge_mqtt_config]
+mqtt_instance_url = "tcp://127.0.0.1:@MQTT_PORT@"
+mqtt_client_id = "css-e2e-server"
+mqtt_namespace = "css-e2e"

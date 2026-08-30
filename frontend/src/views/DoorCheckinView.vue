@@ -28,9 +28,15 @@
             <span>You are authorized.</span>
           </div>
 
-          <div v-if="result" class="alert mt-3 text-left" :class="result.unlocked ? 'alert-success' : 'alert-error'">
+          <div
+            v-if="result"
+            class="alert mt-3 text-left"
+            :class="result.unlocked ? 'alert-success' : 'alert-error'"
+          >
             <div>
-              <div class="font-bold">{{ result.unlocked ? 'Door unlocked' : 'Did not unlock' }}</div>
+              <div class="font-bold">
+                {{ result.unlocked ? 'Door unlocked' : 'Did not unlock' }}
+              </div>
               <div v-if="result.reason" class="text-xs">{{ result.reason }}</div>
             </div>
           </div>

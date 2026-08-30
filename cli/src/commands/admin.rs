@@ -25,12 +25,12 @@ async fn handle_reload_config(client: &ApiClient, config: &CliConfig) -> Result<
     println!("Reloading server configuration...");
 
     let response: ApiResponse<serde_json::Value> = client
-        .post("/admin/reload-config", &serde_json::json!({}))
+        .post("/api/admin/reload-config", &serde_json::json!({}))
         .await?;
 
     if response.success {
         output::print_success("Configuration reloaded successfully!");
-        
+
         if let Some(data) = response.data {
             match config.output_format.as_str() {
                 "json" => {
@@ -48,24 +48,42 @@ async fn handle_reload_config(client: &ApiClient, config: &CliConfig) -> Result<
                         println!("  Debug mode: {}", debug_mode.as_bool().unwrap_or(false));
                     }
                     if let Some(setup_enabled) = data.get("initial_setup_enabled") {
-                        println!("  Initial setup: {}", 
-                            if setup_enabled.as_bool().unwrap_or(false) { "enabled" } else { "disabled" }
+                        println!(
+                            "  Initial setup: {}",
+                            if setup_enabled.as_bool().unwrap_or(false) {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
                         );
                     }
                     if let Some(auth_config) = data.get("auth_config") {
                         println!("  Authentication:");
                         if let Some(allow_reg) = auth_config.get("allow_registration") {
-                            println!("    Registration: {}", 
-                                if allow_reg.as_bool().unwrap_or(false) { "enabled" } else { "disabled" }
+                            println!(
+                                "    Registration: {}",
+                                if allow_reg.as_bool().unwrap_or(false) {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                }
                             );
                         }
                         if let Some(email_verify) = auth_config.get("require_email_verification") {
-                            println!("    Email verification: {}", 
-                                if email_verify.as_bool().unwrap_or(false) { "required" } else { "not required" }
+                            println!(
+                                "    Email verification: {}",
+                                if email_verify.as_bool().unwrap_or(false) {
+                                    "required"
+                                } else {
+                                    "not required"
+                                }
                             );
                         }
                         if let Some(min_length) = auth_config.get("password_min_length") {
-                            println!("    Min password length: {}", min_length.as_u64().unwrap_or(8));
+                            println!(
+                                "    Min password length: {}",
+                                min_length.as_u64().unwrap_or(8)
+                            );
                         }
                     }
                 }

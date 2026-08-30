@@ -1,7 +1,51 @@
+# Rust
 /target
+**/*.rs.bk
+
+# Node
 /frontend/node_modules
 /frontend/dist
 /frontend_edge/node_modules
 /frontend_edge/dist
-/server/config.toml
+
+# Coverage and test output
+/frontend/coverage
+/frontend/test-results
+/frontend/playwright-report
+/frontend_edge/coverage
+
+# reaper collects run results here. It must never be committed: `reaper test`
+# clears it at the start of every loop and the backward sync never deletes, so
+# a tracked out/ would mix one run's artifacts with the next one's.
+/out/
+
+# Stack battery artifacts: stage logs, transcripts, screenshots, built binaries,
+# and the checksum-pinned Node bootstrap.
+/e2e/out/
+/e2e/artifacts/
+/e2e/.node/
+/e2e/.npm/
+# e2e/build.sh sets CARGO_HOME to ${REAPER_CACHE_CARGO:-${ROOT}/e2e/.cargo}, so
+# the fallback fires wherever that variable is unset -- CI, and anyone running
+# the build verb by hand. A cargo registry is hundreds of megabytes, and an
+# untracked one defeats preflight's artifacts/commit-matches-tree check by
+# making every tree look dirty.
+/e2e/.cargo/
+
+# AppConfig::from_file rewrites config in place on a missing-field error and
+# leaves the original beside it as <path>.<unixtime>.backup.
 *.backup
+
+# e2e/acceptance.sh leaves this behind while the four fixes are reverted, so a
+# tree left broken by an interrupted acceptance run announces itself rather than
+# being discovered as a mysterious wall of failures.
+.acceptance-broken
+
+# The Playwright browsers, if a browser tier is ever added here rather than run
+# out of the pinned image.
+/frontend/.playwright/
+
+# `fcf70d2` on dev stopped tracking this: it carries secret_key, jwt_secret,
+# stripe.secret_key, webhook_secret and database passwords. TESTING.md recorded
+# the hazard; dev removed it.
+/server/config.toml

@@ -1,7 +1,7 @@
 use crate::{
-    config::{ProfileFieldType, ProfileField},
-    models::{AuditEventType, NewAuditLog},
+    config::{ProfileField, ProfileFieldType},
     database::DatabaseManager,
+    models::{AuditEventType, NewAuditLog},
 };
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -27,7 +27,8 @@ impl ProfileValidator {
 
     /// Validate a complete profile object
     pub fn validate_profile(&self, profile: &Value) -> Result<()> {
-        let profile_obj = profile.as_object()
+        let profile_obj = profile
+            .as_object()
             .ok_or_else(|| anyhow!("Profile must be a JSON object"))?;
 
         // Check for unknown fields
@@ -50,17 +51,23 @@ impl ProfileValidator {
     }
 
     /// Validate a single field value
-    fn validate_field(&self, field_name: &str, value: &Value, field_def: &ProfileField) -> Result<()> {
+    fn validate_field(
+        &self,
+        field_name: &str,
+        value: &Value,
+        field_def: &ProfileField,
+    ) -> Result<()> {
         match &field_def.field_type {
             ProfileFieldType::Text => {
-                let _string_val = value.as_str()
+                let _string_val = value
+                    .as_str()
                     .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
             }
 
             ProfileFieldType::TextArray => {
-                let arr = value.as_array().ok_or_else(|| {
-                    anyhow!("Field '{}' must be an array of strings", field_name)
-                })?;
+                let arr = value
+                    .as_array()
+                    .ok_or_else(|| anyhow!("Field '{}' must be an array of strings", field_name))?;
                 for (i, item) in arr.iter().enumerate() {
                     if !item.is_string() {
                         return Err(anyhow!(
@@ -73,50 +80,69 @@ impl ProfileValidator {
             }
 
             ProfileFieldType::Email => {
-                let email_str = value.as_str()
+                let email_str = value
+                    .as_str()
                     .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
 
                 if !email_str.contains('@') || !email_str.contains('.') {
-                    return Err(anyhow!("Field '{}' must be a valid email address", field_name));
+                    return Err(anyhow!(
+                        "Field '{}' must be a valid email address",
+                        field_name
+                    ));
                 }
             }
 
             ProfileFieldType::Phone => {
-                let phone_str = value.as_str()
+                let phone_str = value
+                    .as_str()
                     .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
 
                 // Basic phone validation
                 if phone_str.is_empty() || phone_str.len() < 7 {
-                    return Err(anyhow!("Field '{}' must be a valid phone number", field_name));
+                    return Err(anyhow!(
+                        "Field '{}' must be a valid phone number",
+                        field_name
+                    ));
                 }
             }
 
             ProfileFieldType::Number => {
-                let _number_val = value.as_f64()
+                let _number_val = value
+                    .as_f64()
                     .ok_or_else(|| anyhow!("Field '{}' must be a number", field_name))?;
             }
 
             ProfileFieldType::Date => {
-                let date_str = value.as_str()
+                let date_str = value
+                    .as_str()
                     .ok_or_else(|| anyhow!("Field '{}' must be a date string", field_name))?;
 
                 // Basic date format validation (YYYY-MM-DD)
                 if !date_str.matches('-').count() == 2 || date_str.len() != 10 {
-                    return Err(anyhow!("Field '{}' must be in YYYY-MM-DD format", field_name));
+                    return Err(anyhow!(
+                        "Field '{}' must be in YYYY-MM-DD format",
+                        field_name
+                    ));
                 }
             }
 
             ProfileFieldType::Boolean => {
-                let _bool_val = value.as_bool()
+                let _bool_val = value
+                    .as_bool()
                     .ok_or_else(|| anyhow!("Field '{}' must be a boolean", field_name))?;
             }
 
             ProfileFieldType::Select { options } => {
-                let select_val = value.as_str()
+                let select_val = value
+                    .as_str()
                     .ok_or_else(|| anyhow!("Field '{}' must be a string", field_name))?;
 
                 if !options.contains(&select_val.to_string()) {
-                    return Err(anyhow!("Field '{}' must be one of: {:?}", field_name, options));
+                    return Err(anyhow!(
+                        "Field '{}' must be one of: {:?}",
+                        field_name,
+                        options
+                    ));
                 }
             }
         }
@@ -206,7 +232,8 @@ impl AuditLogger {
             event_data,
             ip_address,
             _user_agent,
-        ).await
+        )
+        .await
     }
 
     /// Log profile update event
@@ -232,6 +259,7 @@ impl AuditLogger {
             event_data,
             ip_address,
             _user_agent,
-        ).await
+        )
+        .await
     }
 }

@@ -3,7 +3,7 @@
     <div class="modal-content" @click.stop>
       <div class="modal-header">
         <h3>Start Training Session</h3>
-        <button @click="$emit('close')" class="close-btn">&times;</button>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="modal-body">
@@ -23,25 +23,21 @@
         <form @submit.prevent="startTraining">
           <div class="form-group">
             <label for="instructor">Select Instructor (Optional):</label>
-            <select 
-              id="instructor" 
-              v-model="form.instructor_id"
-              class="form-control"
-            >
-            <option value="">Self-study (No instructor)</option>
-            <option 
-              v-for="instructor in availableInstructors" 
-              :key="instructor.id"
-              :value="instructor.id"
-            >
-              {{ instructor.full_name || instructor.username }}
-            </option>
+            <select id="instructor" v-model="form.instructor_id" class="form-control">
+              <option value="">Self-study (No instructor)</option>
+              <option
+                v-for="instructor in availableInstructors"
+                :key="instructor.id"
+                :value="instructor.id"
+              >
+                {{ instructor.full_name || instructor.username }}
+              </option>
             </select>
           </div>
 
           <div class="form-group">
             <label for="notes">Notes (Optional):</label>
-            <textarea 
+            <textarea
               id="notes"
               v-model="form.notes"
               class="form-control"
@@ -51,9 +47,7 @@
           </div>
 
           <div class="form-actions">
-            <button type="button" @click="$emit('close')" class="btn btn-secondary">
-              Cancel
-            </button>
+            <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button type="submit" :disabled="loading" class="btn btn-primary">
               {{ loading ? 'Starting...' : 'Start Training' }}
             </button>
@@ -71,12 +65,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { trainingApi, userApi } from '../utils/api'
-import type {
-  TrainingStep,
-  StartTrainingRequest,
-  AssessmentType,
-  User
-} from '../types'
+import type { TrainingStep, StartTrainingRequest, AssessmentType, User } from '../types'
 
 interface Props {
   step: TrainingStep
@@ -98,7 +87,7 @@ const availableInstructors = ref<User[]>([])
 const form = ref<StartTrainingRequest>({
   training_step_id: props.step.id,
   instructor_id: undefined,
-  notes: ''
+  notes: '',
 })
 
 // Methods
@@ -107,14 +96,12 @@ const loadInstructors = async () => {
     // In a real implementation, you'd have an endpoint to get certified instructors
     // For now, we'll get staff/admin users as potential instructors
     const response = await userApi.getAllUsers()
-    
+
     if (response.success && response.data?.items) {
-      availableInstructors.value = response.data.items.filter(
-        (user: User) => {
-          const role = user.role?.toLowerCase()
-          return role === 'staff' || role === 'admin'
-        }
-      )
+      availableInstructors.value = response.data.items.filter((user: User) => {
+        const role = user.role?.toLowerCase()
+        return role === 'staff' || role === 'admin'
+      })
     }
   } catch (err) {
     console.error('Error loading instructors:', err)
@@ -124,9 +111,9 @@ const loadInstructors = async () => {
 const formatAssessmentType = (type: AssessmentType): string => {
   const types = {
     practical: 'Practical Assessment',
-    written: 'Written Test', 
+    written: 'Written Test',
     both: 'Practical + Written',
-    observation_only: 'Observation Only'
+    observation_only: 'Observation Only',
   }
   return types[type] || type
 }
@@ -137,7 +124,7 @@ const startTraining = async () => {
     error.value = ''
 
     const response = await trainingApi.startTrainingSession(props.user.id, form.value)
-    
+
     if (response.success) {
       emit('started')
     } else {
@@ -152,7 +139,7 @@ const startTraining = async () => {
 
 // Lifecycle
 onMounted(() => {
-  loadInstructors()
+  void loadInstructors()
 })
 </script>
 
@@ -171,7 +158,7 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: var(--fallback-b1,oklch(var(--b1)/1));
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   max-width: 500px;
   width: 90%;
@@ -184,12 +171,12 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .modal-header h3 {
   margin: 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .close-btn {
@@ -207,7 +194,7 @@ onMounted(() => {
 }
 
 .close-btn:hover {
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .modal-body {
@@ -215,7 +202,7 @@ onMounted(() => {
 }
 
 .step-info {
-  background: var(--fallback-b2,oklch(var(--b2)/1));
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   padding: 1rem;
   border-radius: 6px;
   margin-bottom: 1.5rem;
@@ -223,7 +210,7 @@ onMounted(() => {
 
 .step-info h4 {
   margin: 0 0 0.5rem 0;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .step-info p {
@@ -246,14 +233,14 @@ onMounted(() => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: var(--fallback-bc,oklch(var(--bc)/1));
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   font-weight: 500;
 }
 
 .form-control {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid var(--fallback-b3,oklch(var(--b3)/1));
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 0.9rem;
 }
@@ -321,11 +308,11 @@ onMounted(() => {
     width: 95%;
     margin: 1rem;
   }
-  
+
   .form-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }

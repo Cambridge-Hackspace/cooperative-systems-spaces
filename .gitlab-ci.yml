@@ -1,4 +1,12 @@
 
+# The GitHub workflow is the gate; see TESTING.md §3. This file exists because
+# the project is mirrored, and it is kept aligned rather than left to rot -- a
+# second CI that fails for its own reasons trains people to ignore a red build.
+#
+# It is deliberately narrower than the GitHub one: no stack battery, because
+# that needs a Postgres service and a broker this file does not provision, and
+# no e2e/lint.sh, because shellcheck and shfmt are not in these images.
+# TESTING.md §3 says which environment runs what.
 image: docker:latest
 
 stages:
@@ -15,11 +23,18 @@ variables:
 # Frontend checks
 frontend-check:
   stage: check
-  image: node:20-alpine
+  image: node:24-alpine
   before_script:
     - cd frontend
     - npm ci
   script:
+    - npm run format:check
+    - npm run lint
+    - npm run type-check
+    # The strictness ratchet. Shrinking tsconfig.strict.json's include list is
+    # a narrowing and needs a stated reason; growing it is the unit of work.
+    - npm run type-check:strict
+    - npm test
     - npm run build
   cache:
     key: ${CI_COMMIT_REF_SLUG}-frontend
@@ -38,20 +53,19 @@ frontend-check:
 # Frontend checks
 frontend-edge-check:
   stage: check
-  image: node:20-alpine
+  image: node:24-alpine
   before_script:
     - cd frontend_edge
     - npm ci
   script:
     - npm run build
   cache:
-    key: ${CI_COMMIT_REF_SLUG}-frontend
+    # Was keyed and pathed at frontend/node_modules while building
+    # frontend_edge, so this job never had a warm cache and shared a key with a
+    # job whose dependency tree is different.
+    key: ${CI_COMMIT_REF_SLUG}-frontend-edge
     paths:
-      - frontend/node_modules/
-  #  artifacts:
-  #    paths:
-  #      - frontend/dist/
-  #    expire_in: 1 hour
+      - frontend_edge/node_modules/
   only:
     - merge_requests
     - master
@@ -60,15 +74,31 @@ frontend-edge-check:
 # All-Rust checks
 rust-check:
   stage: check
-  image: rust:1.90.0
+  image: rust:1.97-bookworm
   before_script:
-    - mkdir -p /builds/neiam/cooperative-systems-spaces/edge/../frontend_edge/dist
-    - apt-get update && apt-get install -y libpq-dev cmake build-essential
+    # The `mkdir -p /builds/neiam/...` that used to be here hardcoded one
+    # runner's checkout path and produced an *empty* frontend_edge/dist, i.e. a
+    # binary that compiles and serves 404 for its own UI. edge/build.rs now
+    # creates a placeholder portably, and the GitHub workflow builds the real
+    # bundle and passes it between jobs as an artifact.
+    #
+    # This job therefore compiles css-edge with the *placeholder* embedded. That
+    # is fine for `cargo test`, which never opens it, and it is why the
+    # assertion that the embedding is real lives in the stack battery's devices
+    # stage rather than in a unit test -- a unit test would pass here and say
+    # nothing.
+    - apt-get update && apt-get install -y libpq-dev cmake build-essential libasound2-dev libudev-dev
   script:
-    - cargo test --all
-    # Uncomment when ready:
-    # - cargo fmt --all -- --check
-    # - cargo clippy --all-targets --all-features -- -D warnings
+    - rustup component add rustfmt
+    - cargo fmt --all -- --check
+    # Two commands, matching the GitHub workflow. `--workspace` pulls in kiosk
+    # and the two toolguard UIs, which drag bevy and egui and are outside
+    # default-members on purpose (d78227d). Compile-checking them stops them
+    # rotting without paying to link them; running their tests here would
+    # double the job for no coverage.
+    - cargo test --locked --all-targets
+    - cargo test --locked --doc
+    - cargo check --locked --workspace --all-targets
   cache:
     key: ${CI_COMMIT_REF_SLUG}-all
     paths:
@@ -83,7 +113,7 @@ rust-check:
 ## Server checks
 #server-check:
 #  stage: check
-#  image: rust:1.90.0
+#  image: rust:1.97-bookworm
 #  before_script:
 #    - cd server
 #    - apt-get update && apt-get install -y libpq-dev cmake build-essential
@@ -106,7 +136,7 @@ rust-check:
 ## CLI checks
 #cli-check:
 #  stage: check
-#  image: rust:1.90.0
+#  image: rust:1.97-bookworm
 #  before_script:
 #    - cd cli
 #    - apt-get update && apt-get install -y libpq-dev cmake build-essential
@@ -129,7 +159,7 @@ rust-check:
 ## Edge checks
 #edge-check:
 #  stage: check
-#  image: rust:1.90.0
+#  image: rust:1.97-bookworm
 #  before_script:
 #    - cd edge
 #    - apt-get update && apt-get install -y libpq-dev cmake build-essential

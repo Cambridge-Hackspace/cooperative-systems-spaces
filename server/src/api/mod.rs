@@ -1,27 +1,27 @@
+pub mod admin;
 pub mod auth;
 pub mod calendar;
 pub mod config;
-pub mod pages;
-pub mod errors;
-pub mod responses;
-pub mod users;
-pub mod admin;
-pub mod profiles;
-pub mod tools;
-pub mod training;
-pub mod trainers;
-pub mod toolguard;
 pub mod devices;
-pub mod webhooks;
-pub mod mfa;
 pub mod doors;
-pub mod places;
-pub mod schedules;
+pub mod errors;
 pub mod home_links;
 pub mod instance;
+pub mod mfa;
+pub mod pages;
+pub mod places;
+pub mod profiles;
+pub mod responses;
+pub mod schedules;
+pub mod toolguard;
+pub mod tools;
+pub mod trainers;
+pub mod training;
+pub mod users;
+pub mod webhooks;
 
-use axum::Router;
 use crate::AppState;
+use axum::Router;
 
 pub fn api_routes() -> Router<AppState> {
     Router::new()
@@ -43,4 +43,31 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/public", schedules::public_routes())
         .nest("/public", home_links::public_routes())
         .nest("/instance", instance::instance_routes())
+        // The API's own 404, and it belongs here rather than at the composition
+        // site.
+        //
+        // `main.rs` mounts this router under a `fallback_service` that serves
+        // the single-page application. Without a fallback of its own, an
+        // unmatched /api path falls through to that -- so `/api/typo` answers
+        // 200 with index.html, and a frontend calling a route that does not
+        // exist gets a successful-looking HTML response whose `data` is a
+        // string of markup that fails to destructure somewhere far away.
+        //
+        // Here rather than in main.rs because the contract tier builds its
+        // router from this function. A fallback added at the composition site
+        // would be absent from the 991-pair matrix, which asserts
+        // `assert_ne!(status, 404)` on every route precisely because a mistyped
+        // path 404s uniformly and looks reassuringly consistent -- an assertion
+        // that means nothing if the router under test answers differently from
+        // the one that ships.
+        .fallback(api_not_found)
+}
+
+/// The 404 for an unmatched path under `/api`.
+///
+/// Answers in the same envelope as every other error. A mistyped endpoint is
+/// the case most likely to be hit by code rather than by a person, so it is the
+/// one where a consistent shape matters most.
+async fn api_not_found(uri: axum::http::Uri) -> errors::ApiError {
+    errors::ApiError::NotFound(format!("No such endpoint: {}", uri.path()))
 }

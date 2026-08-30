@@ -5,7 +5,7 @@ import { apiClient } from '@/utils/api'
 export enum LinkLocation {
   Navigation = 'Navigation',
   HomePage = 'HomePage',
-  Both = 'Both'
+  Both = 'Both',
 }
 
 export interface PublicPagesConfig {
@@ -72,13 +72,13 @@ export const useConfigStore = defineStore('config', () => {
   async function fetchConfig() {
     loading.value = true
     error.value = null
-    
+
     try {
       console.log('Fetching config from /config/public...')
       const response = await apiClient.get<PublicConfig>('/config/public')
       console.log('Raw API response:', response)
       console.log('Response data:', response.data)
-      
+
       // Check if data is wrapped in ApiResponse structure
       if (response.success && response.data) {
         // Wrapped response: { success: true, data: { ... } }
@@ -89,12 +89,12 @@ export const useConfigStore = defineStore('config', () => {
           console.error('API returned unsuccessful response:', response)
           throw new Error(response.error || 'Failed to fetch config')
         }
-        
+
         // This shouldn't happen, but handle it just in case
         console.error('Invalid response structure:', response)
         throw new Error('Failed to fetch config - no data in response')
       }
-      
+
       console.log('Config loaded successfully:', config.value)
       console.log('Pages config:', config.value.pages)
       console.log('Wiki enabled:', config.value.pages?.wiki_enabled)
@@ -111,35 +111,55 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   // Helper computed values
+  // `?.` on `pages` as well as on `config`, and the difference is the whole
+  // application.
+  //
+  // These four guards used to read `config.value?.pages.wiki_enabled`: the
+  // optional chain covered `config` and stopped there. A config object whose
+  // `pages` block is absent therefore threw
+  // `Cannot read properties of undefined` -- inside a computed, during render.
+  //
+  // Vue stops patching a component whose render function throws. So App.vue
+  // froze on whatever it had last rendered, which is the full-screen
+  // `fixed inset-0 ... z-50` loading overlay: the application drew itself
+  // correctly and then accepted no input at all, with no error visible anywhere
+  // except the console.
+  //
+  // The type's own comment says feature blocks "default to false on older
+  // servers that don't yet emit these blocks" -- so a server that omits one is
+  // an expected case, and the guard was one level too shallow to survive it.
+  //
+  // Found by the browser tier, whose fake happened to serve a config without
+  // `pages`. The fake was wrong; that is what made it a good test.
   function shouldShowWikiInNav(): boolean {
-    if (!config.value?.pages.wiki_enabled) {
+    if (!config.value?.pages?.wiki_enabled) {
       console.log('Wiki not enabled:', config.value?.pages)
       return false
     }
-    const link = config.value.pages.wiki_link
+    const link = config.value?.pages?.wiki_link
     console.log('Wiki link location:', link)
     return link === 'Navigation' || link === 'Both'
   }
 
   function shouldShowSiteInNav(): boolean {
-    if (!config.value?.pages.site_enabled) {
+    if (!config.value?.pages?.site_enabled) {
       console.log('Site not enabled:', config.value?.pages)
       return false
     }
-    const link = config.value.pages.site_link
+    const link = config.value?.pages?.site_link
     console.log('Site link location:', link)
     return link === 'Navigation' || link === 'Both'
   }
 
   function shouldShowWikiOnHomePage(): boolean {
-    if (!config.value?.pages.wiki_enabled) return false
-    const link = config.value.pages.wiki_link
+    if (!config.value?.pages?.wiki_enabled) return false
+    const link = config.value?.pages?.wiki_link
     return link === 'HomePage' || link === 'Both'
   }
 
   function shouldShowSiteOnHomePage(): boolean {
-    if (!config.value?.pages.site_enabled) return false
-    const link = config.value.pages.site_link
+    if (!config.value?.pages?.site_enabled) return false
+    const link = config.value?.pages?.site_link
     return link === 'HomePage' || link === 'Both'
   }
 
@@ -173,6 +193,6 @@ export const useConfigStore = defineStore('config', () => {
     doorsEnabled,
     calendarEnabled,
     toolguardEnabled,
-    cardIdField
+    cardIdField,
   }
 })

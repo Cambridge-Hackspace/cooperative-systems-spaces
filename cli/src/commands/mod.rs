@@ -1,4 +1,4 @@
-pub mod users;
+pub mod admin;
 pub mod health;
 pub mod info;
-pub mod admin;
+pub mod users;

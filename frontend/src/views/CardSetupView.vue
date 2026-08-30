@@ -10,8 +10,8 @@
 
     <h1 class="text-3xl font-bold mb-2">{{ fieldLabel }}</h1>
     <p class="text-base-content/70 mb-6">
-      This is the ID your card presents to door readers and ToolGuard. Scan your card with a
-      phone that supports Web NFC, or enter the ID manually if you already know it.
+      This is the ID your card presents to door readers and ToolGuard. Scan your card with a phone
+      that supports Web NFC, or enter the ID manually if you already know it.
     </p>
 
     <div v-if="flash" class="alert mb-4" :class="flashOk ? 'alert-success' : 'alert-error'">
@@ -31,19 +31,11 @@
           <p class="text-sm text-base-content/70 mb-2">
             Tap "Scan Card", then hold your card against the back of your phone.
           </p>
-          <button
-            class="btn btn-primary btn-sm w-fit"
-            :disabled="scanning"
-            @click="scanCard"
-          >
+          <button class="btn btn-primary btn-sm w-fit" :disabled="scanning" @click="scanCard">
             <span v-if="scanning" class="loading loading-spinner loading-xs"></span>
             {{ scanning ? 'Waiting for card…' : 'Scan Card' }}
           </button>
-          <button
-            v-if="scanning"
-            class="btn btn-ghost btn-sm w-fit ml-2"
-            @click="stopScan"
-          >
+          <button v-if="scanning" class="btn btn-ghost btn-sm w-fit ml-2" @click="stopScan">
             Cancel
           </button>
           <p v-if="scanError" class="text-sm text-error mt-2">{{ scanError }}</p>
@@ -51,14 +43,16 @@
 
         <div v-else class="alert alert-info">
           <span>
-            Web NFC isn't available on this browser or device — it currently only works in
-            Chrome on Android over HTTPS. Enter the card ID manually below instead.
+            Web NFC isn't available on this browser or device — it currently only works in Chrome on
+            Android over HTTPS. Enter the card ID manually below instead.
           </span>
         </div>
 
         <div class="divider">or enter manually</div>
 
-        <label class="label"><span class="label-text">{{ fieldLabel }}</span></label>
+        <label class="label"
+          ><span class="label-text">{{ fieldLabel }}</span></label
+        >
         <input
           v-model="cardId"
           type="text"
@@ -161,7 +155,7 @@ async function loadProfile() {
       cardId.value = existingProfile.value[fieldKey.value] || ''
     }
     if (configRes.success && configRes.data) {
-      fieldMeta.value = configRes.data.profile_fields.find(f => f.key === fieldKey.value) || null
+      fieldMeta.value = configRes.data.profile_fields.find((f) => f.key === fieldKey.value) || null
     }
   } catch (err: any) {
     flashOk.value = false

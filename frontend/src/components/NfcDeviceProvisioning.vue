@@ -20,21 +20,53 @@
               </tr>
             </thead>
             <tbody>
-              <tr><td>SCK</td><td>GPIO 10</td><td>shared by both readers</td></tr>
-              <tr><td>MOSI (SDA/MOSI)</td><td>GPIO 5</td><td>shared</td></tr>
-              <tr><td>MISO</td><td>GPIO 7</td><td>shared</td></tr>
-              <tr><td>SS / SDA (CS) — reader 0</td><td>GPIO 6</td><td>channel 0</td></tr>
-              <tr><td>SS / SDA (CS) — reader 1</td><td>GPIO 4</td><td>channel 1 (optional)</td></tr>
-              <tr><td>RST</td><td>GPIO 9</td><td>driven high at boot to enable the reader</td></tr>
-              <tr><td>3.3V</td><td>3V3</td><td>do not use 5V</td></tr>
-              <tr><td>GND</td><td>GND</td><td>shared</td></tr>
+              <tr>
+                <td>SCK</td>
+                <td>GPIO 10</td>
+                <td>shared by both readers</td>
+              </tr>
+              <tr>
+                <td>MOSI (SDA/MOSI)</td>
+                <td>GPIO 5</td>
+                <td>shared</td>
+              </tr>
+              <tr>
+                <td>MISO</td>
+                <td>GPIO 7</td>
+                <td>shared</td>
+              </tr>
+              <tr>
+                <td>SS / SDA (CS) — reader 0</td>
+                <td>GPIO 6</td>
+                <td>channel 0</td>
+              </tr>
+              <tr>
+                <td>SS / SDA (CS) — reader 1</td>
+                <td>GPIO 4</td>
+                <td>channel 1 (optional)</td>
+              </tr>
+              <tr>
+                <td>RST</td>
+                <td>GPIO 9</td>
+                <td>driven high at boot to enable the reader</td>
+              </tr>
+              <tr>
+                <td>3.3V</td>
+                <td>3V3</td>
+                <td>do not use 5V</td>
+              </tr>
+              <tr>
+                <td>GND</td>
+                <td>GND</td>
+                <td>shared</td>
+              </tr>
             </tbody>
           </table>
         </div>
         <p class="text-sm text-base-content/70 mt-2">
-          Single-reader build: wire only reader 0 to the channel-0 CS (GPIO 6); channel 1
-          stays idle. The reader's IRQ pin doesn't need to be wired — the firmware polls
-          instead of using interrupts.
+          Single-reader build: wire only reader 0 to the channel-0 CS (GPIO 6); channel 1 stays
+          idle. The reader's IRQ pin doesn't need to be wired — the firmware polls instead of using
+          interrupts.
         </p>
       </div>
     </section>
@@ -44,8 +76,8 @@
       <div class="card-body">
         <h2 class="card-title">2. Flash firmware</h2>
         <p class="text-sm text-base-content/70 mb-2">
-          Download the generic reader firmware, then flash it onto the device using
-          ESPHome Web (a browser-based flashing tool) over USB.
+          Download the generic reader firmware, then flash it onto the device using ESPHome Web (a
+          browser-based flashing tool) over USB.
         </p>
         <ol class="list-decimal list-inside space-y-2 text-sm">
           <li>
@@ -55,14 +87,19 @@
           </li>
           <li>
             Open
-            <a href="https://web.esphome.io/" target="_blank" rel="noopener" class="link link-primary">
+            <a
+              href="https://web.esphome.io/"
+              target="_blank"
+              rel="noopener"
+              class="link link-primary"
+            >
               ESPHome Web
             </a>
             and click <strong>Connect</strong>, then select the device over USB.
           </li>
           <li>
-            Choose the option to install a custom firmware file and select the file you
-            just downloaded.
+            Choose the option to install a custom firmware file and select the file you just
+            downloaded.
           </li>
         </ol>
       </div>
@@ -73,26 +110,21 @@
       <div class="card-body">
         <h2 class="card-title">3. Configure settings</h2>
         <p class="text-sm text-base-content/70 mb-4">
-          Once flashed, the device is ready to be configured over the same USB
-          connection — no need to join its temporary Wi-Fi network.
+          Once flashed, the device is ready to be configured over the same USB connection — no need
+          to join its temporary Wi-Fi network.
         </p>
 
         <div v-if="!serialSupported" class="alert alert-warning text-sm">
           <span>
-            This browser doesn't support the Web Serial API. Use Chrome or Edge to
-            configure the device from this page — or join the device's own
-            <code>scan-setup-&lt;id&gt;</code> Wi-Fi network and use its captive portal
-            instead.
+            This browser doesn't support the Web Serial API. Use Chrome or Edge to configure the
+            device from this page — or join the device's own
+            <code>scan-setup-&lt;id&gt;</code> Wi-Fi network and use its captive portal instead.
           </span>
         </div>
 
         <template v-else>
           <div v-if="!connected" class="flex flex-col items-start gap-2">
-            <button
-              @click="connectSerial"
-              :disabled="connecting"
-              class="btn btn-primary btn-sm"
-            >
+            <button :disabled="connecting" class="btn btn-primary btn-sm" @click="connectSerial">
               <span v-if="connecting" class="loading loading-spinner loading-xs"></span>
               {{ connecting ? 'Connecting…' : 'Connect to Device' }}
             </button>
@@ -102,12 +134,10 @@
           <div v-else>
             <p class="flex items-center gap-3 mb-4 text-sm">
               Connected to device
-              <code class="font-mono bg-base-200 px-2 py-1 rounded">{{ deviceId || 'unknown' }}</code>
-              <button
-                @click="toggleLed"
-                :disabled="togglingLed"
-                class="btn btn-secondary btn-xs"
-              >
+              <code class="font-mono bg-base-200 px-2 py-1 rounded">{{
+                deviceId || 'unknown'
+              }}</code>
+              <button :disabled="togglingLed" class="btn btn-secondary btn-xs" @click="toggleLed">
                 💡 Toggle LED
               </button>
             </p>
@@ -115,7 +145,9 @@
 
             <p v-if="existingConfig?.fw_version" class="text-sm mb-4">
               Firmware version:
-              <code class="font-mono bg-base-200 px-2 py-1 rounded">{{ existingConfig.fw_version }}</code>
+              <code class="font-mono bg-base-200 px-2 py-1 rounded">{{
+                existingConfig.fw_version
+              }}</code>
             </p>
 
             <div v-if="loadingExisting" class="text-sm text-base-content/70 mb-4">
@@ -127,13 +159,15 @@
                 This device is already configured — connected to Wi-Fi network
                 <strong>{{ existingConfig.wifi_ssid }}</strong> and MQTT broker
                 <strong>{{ existingConfig.mqtt_host }}:{{ existingConfig.mqtt_port }}</strong
-                >. Passwords aren't shown or prefilled; leave a password field blank to keep
-                it unchanged, or enter a new one to replace it.
+                >. Passwords aren't shown or prefilled; leave a password field blank to keep it
+                unchanged, or enter a new one to replace it.
               </span>
             </div>
 
             <div class="form-control mb-3">
-              <label class="label" for="wifi_ssid"><span class="label-text">Wi-Fi SSID</span></label>
+              <label class="label" for="wifi_ssid"
+                ><span class="label-text">Wi-Fi SSID</span></label
+              >
               <input
                 id="wifi_ssid"
                 v-model="form.wifi_ssid"
@@ -156,7 +190,9 @@
               />
             </div>
             <div class="form-control mb-3">
-              <label class="label" for="mqtt_host"><span class="label-text">MQTT Broker Host</span></label>
+              <label class="label" for="mqtt_host"
+                ><span class="label-text">MQTT Broker Host</span></label
+              >
               <input
                 id="mqtt_host"
                 v-model="form.mqtt_host"
@@ -210,7 +246,9 @@
               </label>
             </div>
             <div class="form-control mb-3">
-              <label class="label" for="topic_root"><span class="label-text">Topic Root</span></label>
+              <label class="label" for="topic_root"
+                ><span class="label-text">Topic Root</span></label
+              >
               <input
                 id="topic_root"
                 v-model="form.topic_root"
@@ -220,11 +258,7 @@
             </div>
 
             <div class="flex gap-2 mt-4">
-              <button
-                @click="saveConfig"
-                :disabled="saving"
-                class="btn btn-primary btn-sm"
-              >
+              <button :disabled="saving" class="btn btn-primary btn-sm" @click="saveConfig">
                 <span v-if="saving" class="loading loading-spinner loading-xs"></span>
                 {{ saving ? 'Saving…' : 'Save Configuration' }}
               </button>
@@ -310,7 +344,6 @@ async function readLoop() {
   if (!reader) return
   let buffer = ''
   try {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
@@ -330,10 +363,7 @@ async function readLoop() {
   }
 }
 
-function waitForLine(
-  predicate: (rest: string) => boolean,
-  timeoutMs = 5000
-): Promise<string> {
+function waitForLine(predicate: (rest: string) => boolean, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     const listener = (rest: string) => {
       if (!predicate(rest)) return
@@ -365,7 +395,7 @@ async function connectSerial() {
     const textDecoder = new TextDecoderStream()
     port.readable.pipeTo(textDecoder.writable).catch(() => {})
     reader = textDecoder.readable.getReader()
-    readLoop()
+    void readLoop()
 
     const textEncoder = new TextEncoderStream()
     textEncoder.readable.pipeTo(port.writable).catch(() => {})
@@ -375,13 +405,9 @@ async function connectSerial() {
 
     // The device announces itself once with READY on boot; if we connected
     // after that already printed, fall back to a PING/PONG probe.
-    const readyPromise = waitForLine((rest) => rest.startsWith('READY '), 3000).catch(
-      () => null
-    )
+    const readyPromise = waitForLine((rest) => rest.startsWith('READY '), 3000).catch(() => null)
     await writer.write('NFC522:PING\n')
-    const pongPromise = waitForLine((rest) => rest.startsWith('PONG '), 3000).catch(
-      () => null
-    )
+    const pongPromise = waitForLine((rest) => rest.startsWith('PONG '), 3000).catch(() => null)
     const rest = (await readyPromise) ?? (await pongPromise)
     if (rest) {
       deviceId.value = rest.split(' ')[1] || null
@@ -462,10 +488,7 @@ async function saveConfig() {
       mqtt_use_tls: form.mqtt_use_tls,
       topic_root: form.topic_root || 'neiam',
     }
-    const resultPromise = waitForLine(
-      (rest) => rest === 'OK' || rest.startsWith('ERR '),
-      5000
-    )
+    const resultPromise = waitForLine((rest) => rest === 'OK' || rest.startsWith('ERR '), 5000)
     await writer.write(`NFC522:SET ${JSON.stringify(cfg)}\n`)
     const rest = await resultPromise
     if (rest === 'OK') {
@@ -502,6 +525,6 @@ async function disconnectSerial() {
 }
 
 onBeforeUnmount(() => {
-  disconnectSerial()
+  void disconnectSerial()
 })
 </script>

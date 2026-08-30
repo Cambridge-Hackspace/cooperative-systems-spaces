@@ -1,0 +1,197 @@
+{
+  "_comment": [
+    "Golden vectors for door access. Three implementations must agree:",
+    "  server/src/doors.rs::expand_rules_at  compiles rules into card sets,",
+    "  server/src/doors.rs::evaluate         decides the QR check-in path,",
+    "  edge/src/doors.rs::DoorsState::decide decides an RFID scan locally.",
+    "",
+    "None of them is the oracle; this file is. The edge test builds its",
+    "snapshot from `expect.server_compiled` rather than from its own idea of",
+    "what the rules mean, so the producer/consumer contract is pinned even if",
+    "the producer is rewritten.",
+    "",
+    "`now` is fixed so schedule-gated cases are deterministic. Times are UTC;",
+    "`tz` is the site zone the intervals are interpreted in."
+  ],
+  "profile_field": "rfid_card",
+  "cases": [
+    {
+      "name": "a card rule allows exactly that card",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [],
+      "schedules": [],
+      "rules": [{ "kind": "card", "value": "A1", "effect": "allow", "schedule_id": null }],
+      "expect": {
+        "server_compiled": { "allow": ["A1"], "deny": [] },
+        "edge_decisions": [
+          { "card": "A1", "granted": true },
+          { "card": "B2", "granted": false }
+        ]
+      }
+    },
+    {
+      "name": "deny beats allow for the same card",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [],
+      "schedules": [],
+      "rules": [
+        { "kind": "card", "value": "A1", "effect": "allow", "schedule_id": null },
+        { "kind": "card", "value": "A1", "effect": "deny", "schedule_id": null }
+      ],
+      "expect": {
+        "server_compiled": { "allow": ["A1"], "deny": ["A1"] },
+        "edge_decisions": [{ "card": "A1", "granted": false }]
+      }
+    },
+    {
+      "name": "a role rule expands to every card held at or above that role",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [
+        { "id": "11111111-1111-4111-8111-111111111111", "role": "newbie", "is_active": true, "cards": ["N1"] },
+        { "id": "22222222-2222-4222-8222-222222222222", "role": "member", "is_active": true, "cards": ["M1"] },
+        { "id": "33333333-3333-4333-8333-333333333333", "role": "admin",  "is_active": true, "cards": ["AD1"] }
+      ],
+      "schedules": [],
+      "rules": [{ "kind": "role", "value": "member", "effect": "allow", "schedule_id": null }],
+      "expect": {
+        "server_compiled": { "allow": ["AD1", "M1"], "deny": [] },
+        "edge_decisions": [
+          { "card": "M1", "granted": true },
+          { "card": "AD1", "granted": true },
+          { "card": "N1", "granted": false }
+        ]
+      }
+    },
+    {
+      "name": "a user rule expands to every card in that user's profile",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [
+        { "id": "22222222-2222-4222-8222-222222222222", "role": "member", "is_active": true, "cards": ["M1", "M2"] }
+      ],
+      "schedules": [],
+      "rules": [
+        { "kind": "user", "value": "22222222-2222-4222-8222-222222222222", "effect": "allow", "schedule_id": null }
+      ],
+      "expect": {
+        "server_compiled": { "allow": ["M1", "M2"], "deny": [] },
+        "edge_decisions": [{ "card": "M2", "granted": true }]
+      }
+    },
+    {
+      "name": "an unrecognized effect is skipped, not treated as allow",
+      "_why": "This was a fail-open. A typo in a rule's effect column silently granted access to whatever the rule named, on a physical door.",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [],
+      "schedules": [],
+      "rules": [{ "kind": "card", "value": "A1", "effect": "permit", "schedule_id": null }],
+      "expect": {
+        "server_compiled": { "allow": [], "deny": [] },
+        "edge_decisions": [{ "card": "A1", "granted": false }]
+      }
+    },
+    {
+      "name": "an unrecognized kind is skipped",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [],
+      "schedules": [],
+      "rules": [{ "kind": "badge", "value": "A1", "effect": "allow", "schedule_id": null }],
+      "expect": {
+        "server_compiled": { "allow": [], "deny": [] },
+        "edge_decisions": [{ "card": "A1", "granted": false }]
+      }
+    },
+    {
+      "name": "a user rule with a non-UUID value contributes nothing",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [
+        { "id": "22222222-2222-4222-8222-222222222222", "role": "member", "is_active": true, "cards": ["M1"] }
+      ],
+      "schedules": [],
+      "rules": [{ "kind": "user", "value": "not-a-uuid", "effect": "allow", "schedule_id": null }],
+      "expect": {
+        "server_compiled": { "allow": [], "deny": [] },
+        "edge_decisions": [{ "card": "M1", "granted": false }]
+      }
+    },
+    {
+      "name": "a schedule-gated rule is silent while its window is shut",
+      "_why": "14:00 UTC is 09:00 in Chicago on 2026-05-28, a Thursday, and the window is Thu 10:00-11:00.",
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [],
+      "schedules": [
+        {
+          "id": "99999999-9999-4999-8999-999999999999",
+          "intervals": [{ "day": "thu", "start": "10:00", "end": "11:00" }]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "card",
+          "value": "A1",
+          "effect": "allow",
+          "schedule_id": "99999999-9999-4999-8999-999999999999"
+        }
+      ],
+      "expect": {
+        "server_compiled": { "allow": [], "deny": [] },
+        "edge_decisions": [{ "card": "A1", "granted": false }]
+      }
+    },
+    {
+      "name": "the same rule contributes while its window is open",
+      "_why": "15:30 UTC is 10:30 in Chicago, inside Thu 10:00-11:00.",
+      "now": "2026-05-28T15:30:00Z",
+      "tz": "America/Chicago",
+      "users": [],
+      "schedules": [
+        {
+          "id": "99999999-9999-4999-8999-999999999999",
+          "intervals": [{ "day": "thu", "start": "10:00", "end": "11:00" }]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "card",
+          "value": "A1",
+          "effect": "allow",
+          "schedule_id": "99999999-9999-4999-8999-999999999999"
+        }
+      ],
+      "expect": {
+        "server_compiled": { "allow": ["A1"], "deny": [] },
+        "edge_decisions": [{ "card": "A1", "granted": true }]
+      }
+    },
+    {
+      "name": "an inactive member's card is still compiled by an explicit card rule",
+      "_why": [
+        "This is the divergence the vectors exist to settle, and it is asserted as-is rather than fixed.",
+        "compile_state_for only ever sees list_active_users(), so role and user rules cannot reach a",
+        "deactivated member. A kind=card rule is not user-scoped, so their card stays in allow_cards and",
+        "the edge opens the door -- while DoorService::evaluate short-circuits on !user.is_active and the",
+        "QR path refuses the same person. Two doors, two answers, for one deactivation.",
+        "The fix is a product decision (does deactivating a member revoke card rules naming their card?)",
+        "and belongs with whoever owns that policy."
+      ],
+      "now": "2026-05-28T14:00:00Z",
+      "tz": "America/Chicago",
+      "users": [
+        { "id": "44444444-4444-4444-8444-444444444444", "role": "member", "is_active": false, "cards": ["X9"] }
+      ],
+      "schedules": [],
+      "rules": [{ "kind": "card", "value": "X9", "effect": "allow", "schedule_id": null }],
+      "expect": {
+        "server_compiled": { "allow": ["X9"], "deny": [] },
+        "edge_decisions": [{ "card": "X9", "granted": true }]
+      }
+    }
+  ]
+}

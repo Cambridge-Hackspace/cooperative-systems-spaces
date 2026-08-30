@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 /// Represents a throttle entry for tracking failed attempts
@@ -26,10 +26,15 @@ impl RegistrationThrottleService {
 
     /// Check if a registration attempt is allowed for the given identifier
     /// Returns Ok(()) if allowed, Err with remaining seconds if blocked
-    pub fn check_attempt(&self, identifier: &str, max_attempts: u32, lockout_seconds: u32) -> Result<(), u32> {
+    pub fn check_attempt(
+        &self,
+        identifier: &str,
+        max_attempts: u32,
+        lockout_seconds: u32,
+    ) -> Result<(), u32> {
         let mut attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
-        
+
         // Clean up old entries periodically
         self.cleanup_old_entries(&mut attempts, now, lockout_seconds);
 
@@ -38,7 +43,10 @@ impl RegistrationThrottleService {
             if let Some(locked_until) = entry.locked_until {
                 if now < locked_until {
                     let remaining = locked_until.duration_since(now).as_secs() as u32;
-                    debug!("Registration attempt blocked for {}: {} seconds remaining", identifier, remaining);
+                    debug!(
+                        "Registration attempt blocked for {}: {} seconds remaining",
+                        identifier, remaining
+                    );
                     return Err(remaining);
                 }
             }
@@ -47,16 +55,22 @@ impl RegistrationThrottleService {
             if entry.attempts >= max_attempts {
                 let lockout_duration = Duration::from_secs(lockout_seconds as u64);
                 let locked_until = entry.last_attempt + lockout_duration;
-                
+
                 if now < locked_until {
                     let remaining = locked_until.duration_since(now).as_secs() as u32;
                     // Update the entry to mark it as locked
-                    attempts.insert(identifier.to_string(), ThrottleEntry {
-                        attempts: entry.attempts,
-                        last_attempt: entry.last_attempt,
-                        locked_until: Some(locked_until),
-                    });
-                    debug!("Registration attempts exceeded for {}: {} seconds lockout", identifier, remaining);
+                    attempts.insert(
+                        identifier.to_string(),
+                        ThrottleEntry {
+                            attempts: entry.attempts,
+                            last_attempt: entry.last_attempt,
+                            locked_until: Some(locked_until),
+                        },
+                    );
+                    debug!(
+                        "Registration attempts exceeded for {}: {} seconds lockout",
+                        identifier, remaining
+                    );
                     return Err(remaining);
                 }
             }
@@ -71,24 +85,30 @@ impl RegistrationThrottleService {
         let mut attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
 
-        let entry = attempts.entry(identifier.to_string()).or_insert(ThrottleEntry {
-            attempts: 0,
-            last_attempt: now,
-            locked_until: None,
-        });
+        let entry = attempts
+            .entry(identifier.to_string())
+            .or_insert(ThrottleEntry {
+                attempts: 0,
+                last_attempt: now,
+                locked_until: None,
+            });
 
         entry.attempts += 1;
         entry.last_attempt = now;
-        
+
         // If we've reached the max attempts, set the lockout
         if entry.attempts >= max_attempts {
             let lockout_duration = Duration::from_secs(lockout_seconds as u64);
             entry.locked_until = Some(now + lockout_duration);
-            debug!("Registration lockout triggered for {}: {} attempts, locked for {} seconds", 
-                   identifier, entry.attempts, lockout_seconds);
+            debug!(
+                "Registration lockout triggered for {}: {} attempts, locked for {} seconds",
+                identifier, entry.attempts, lockout_seconds
+            );
         } else {
-            debug!("Registration failed attempt recorded for {}: {}/{} attempts", 
-                   identifier, entry.attempts, max_attempts);
+            debug!(
+                "Registration failed attempt recorded for {}: {}/{} attempts",
+                identifier, entry.attempts, max_attempts
+            );
         }
     }
 
@@ -96,7 +116,10 @@ impl RegistrationThrottleService {
     pub fn record_successful_attempt(&self, identifier: &str) {
         let mut attempts = self.attempts.lock().unwrap();
         attempts.remove(identifier);
-        debug!("Registration throttle cleared for successful attempt: {}", identifier);
+        debug!(
+            "Registration throttle cleared for successful attempt: {}",
+            identifier
+        );
     }
 
     /// Get current attempt count for an identifier
@@ -106,7 +129,12 @@ impl RegistrationThrottleService {
     }
 
     /// Clean up old entries to prevent memory bloat
-    fn cleanup_old_entries(&self, attempts: &mut HashMap<String, ThrottleEntry>, now: Instant, lockout_seconds: u32) {
+    fn cleanup_old_entries(
+        &self,
+        attempts: &mut HashMap<String, ThrottleEntry>,
+        now: Instant,
+        lockout_seconds: u32,
+    ) {
         let cleanup_threshold = Duration::from_secs(lockout_seconds as u64 * 2); // Keep entries for 2x lockout period
         attempts.retain(|_, entry| {
             // Remove entries that are old and not locked
@@ -114,7 +142,9 @@ impl RegistrationThrottleService {
                 now.duration_since(entry.last_attempt) < cleanup_threshold
             } else {
                 // Keep locked entries until they expire
-                entry.locked_until.map_or(false, |locked_until| now < locked_until)
+                entry
+                    .locked_until
+                    .map_or(false, |locked_until| now < locked_until)
             }
         });
     }
@@ -123,7 +153,7 @@ impl RegistrationThrottleService {
     pub fn get_remaining_lockout(&self, identifier: &str) -> Option<u32> {
         let attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
-        
+
         if let Some(entry) = attempts.get(identifier) {
             if let Some(locked_until) = entry.locked_until {
                 if now < locked_until {
@@ -144,7 +174,6 @@ impl Default for RegistrationThrottleService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread::sleep;
 
     #[test]
     fn test_throttle_basic_functionality() {
@@ -154,15 +183,21 @@ mod tests {
         let lockout_seconds = 60;
 
         // First few attempts should be allowed
-        assert!(service.check_attempt(identifier, max_attempts, lockout_seconds).is_ok());
+        assert!(service
+            .check_attempt(identifier, max_attempts, lockout_seconds)
+            .is_ok());
         service.record_failed_attempt(identifier, max_attempts, lockout_seconds);
         assert_eq!(service.get_attempt_count(identifier), 1);
 
-        assert!(service.check_attempt(identifier, max_attempts, lockout_seconds).is_ok());
+        assert!(service
+            .check_attempt(identifier, max_attempts, lockout_seconds)
+            .is_ok());
         service.record_failed_attempt(identifier, max_attempts, lockout_seconds);
         assert_eq!(service.get_attempt_count(identifier), 2);
 
-        assert!(service.check_attempt(identifier, max_attempts, lockout_seconds).is_ok());
+        assert!(service
+            .check_attempt(identifier, max_attempts, lockout_seconds)
+            .is_ok());
         service.record_failed_attempt(identifier, max_attempts, lockout_seconds);
         assert_eq!(service.get_attempt_count(identifier), 3);
 

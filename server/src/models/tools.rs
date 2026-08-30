@@ -1,11 +1,13 @@
+use bigdecimal::BigDecimal;
+use chrono::{DateTime, NaiveDate, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, NaiveDate, Utc};
-use bigdecimal::BigDecimal;
 
 /// Tool status enum matching the database enum
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = crate::schema::sql_types::ToolStatus)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
@@ -18,7 +20,9 @@ pub enum ToolStatus {
 }
 
 /// Tool category enum matching the database enum
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = crate::schema::sql_types::ToolCategory)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCategory {
@@ -74,7 +78,10 @@ impl ToolCategory {
 
 // Diesel serialization implementations for ToolStatus
 impl diesel::serialize::ToSql<crate::schema::sql_types::ToolStatus, diesel::pg::Pg> for ToolStatus {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         use std::io::Write;
         match self {
             ToolStatus::Idle => out.write_all(b"idle")?,
@@ -88,7 +95,9 @@ impl diesel::serialize::ToSql<crate::schema::sql_types::ToolStatus, diesel::pg::
     }
 }
 
-impl diesel::deserialize::FromSql<crate::schema::sql_types::ToolStatus, diesel::pg::Pg> for ToolStatus {
+impl diesel::deserialize::FromSql<crate::schema::sql_types::ToolStatus, diesel::pg::Pg>
+    for ToolStatus
+{
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
         match bytes.as_bytes() {
             b"idle" => Ok(ToolStatus::Idle),
@@ -103,8 +112,13 @@ impl diesel::deserialize::FromSql<crate::schema::sql_types::ToolStatus, diesel::
 }
 
 // Diesel serialization implementations for ToolCategory
-impl diesel::serialize::ToSql<crate::schema::sql_types::ToolCategory, diesel::pg::Pg> for ToolCategory {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+impl diesel::serialize::ToSql<crate::schema::sql_types::ToolCategory, diesel::pg::Pg>
+    for ToolCategory
+{
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         use std::io::Write;
         match self {
             ToolCategory::Saw => out.write_all(b"saw")?,
@@ -124,7 +138,9 @@ impl diesel::serialize::ToSql<crate::schema::sql_types::ToolCategory, diesel::pg
     }
 }
 
-impl diesel::deserialize::FromSql<crate::schema::sql_types::ToolCategory, diesel::pg::Pg> for ToolCategory {
+impl diesel::deserialize::FromSql<crate::schema::sql_types::ToolCategory, diesel::pg::Pg>
+    for ToolCategory
+{
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
         match bytes.as_bytes() {
             b"saw" => Ok(ToolCategory::Saw),

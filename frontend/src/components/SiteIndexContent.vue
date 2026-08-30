@@ -1,5 +1,7 @@
 <template>
   <div v-if="content" class="site-index-content bg-base-300 text-base-content">
+    <!-- Deliberate and narrow: as PageViewer: server-rendered by comrak with raw HTML escaping on. -->
+    <!-- eslint-disable-next-line vue/no-v-html -->
     <div class="markdown-content" v-html="content.html_content"></div>
   </div>
   <div v-else-if="loading" class="loading-state">
@@ -21,7 +23,7 @@ const content = ref<SiteIndex | null>(null)
 const loading = ref(false)
 
 onMounted(() => {
-  fetchSiteIndex()
+  void fetchSiteIndex()
 })
 
 async function fetchSiteIndex() {
@@ -29,7 +31,7 @@ async function fetchSiteIndex() {
 
   try {
     const response = await fetch('/api/pages/page/index')
-    
+
     if (response.ok) {
       content.value = await response.json()
     }
@@ -64,8 +66,12 @@ async function fetchSiteIndex() {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 /* Markdown content styling */

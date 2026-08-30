@@ -3,26 +3,41 @@
     <div class="card-body">
       <h2 class="card-title text-2xl mb-4">
         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+          />
         </svg>
         Change Password
       </h2>
 
       <div v-if="successMessage" class="alert alert-success mb-4">
         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <span>{{ successMessage }}</span>
       </div>
 
       <div v-if="errorMessage" class="alert alert-error mb-4">
         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <span>{{ errorMessage }}</span>
       </div>
 
-      <form @submit.prevent="submit" class="space-y-4 max-w-sm">
+      <form class="space-y-4 max-w-sm" @submit.prevent="submit">
         <div class="form-control">
           <label class="label"><span class="label-text">Current password</span></label>
           <input
@@ -63,7 +78,9 @@
         <button
           type="submit"
           class="btn btn-primary"
-          :disabled="submitting || !currentPassword || !newPassword || newPassword !== confirmPassword"
+          :disabled="
+            submitting || !currentPassword || !newPassword || newPassword !== confirmPassword
+          "
         >
           <span v-if="submitting" class="loading loading-spinner loading-sm"></span>
           Update password

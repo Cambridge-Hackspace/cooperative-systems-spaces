@@ -78,6 +78,7 @@ The frontend expects these API endpoints from the edge apparatus:
 To deploy to the edge apparatus:
 
 1. Build the frontend:
+
    ```bash
    npm run build
    ```

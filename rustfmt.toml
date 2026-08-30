@@ -1,0 +1,19 @@
+# Deliberately small, and worth saying why rather than leaving it looking
+# unfinished.
+#
+# rustfmt is a black-equivalent in the way that matters most: it is total and
+# non-negotiable, it formats every file it can parse, and it has no per-line
+# opt-out. What it is not is configurable in scope. `imports_granularity`,
+# `group_imports`, `wrap_comments`, `normalize_comments` and
+# `format_code_in_doc_comments` are all nightly-only, and on stable they are
+# **silently ignored** -- so a config full of them looks like a policy and is
+# not one. Everything below is honoured by stable rustfmt.
+#
+# No `edition` key on purpose. This workspace mixes editions -- css_lib is 2024
+# and the rest are 2021 -- and `cargo fmt` passes each package its own from the
+# manifest. A global edition here would make rustfmt mis-parse css_lib.
+
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_small_heuristics = "Default"

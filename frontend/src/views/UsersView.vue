@@ -9,15 +9,18 @@
 
     <div class="mb-8">
       <h1 class="text-3xl font-bold mb-2">User Management</h1>
-      <p class="text-base-content/70">
-        View and manage user accounts.
-      </p>
+      <p class="text-base-content/70">View and manage user accounts.</p>
     </div>
 
     <!-- Access Control -->
     <div v-if="!canAccessUsers" class="alert alert-error mb-8">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
       </svg>
       <div>
         <h3 class="font-bold">Access Denied</h3>
@@ -29,7 +32,7 @@
     <div v-if="canAccessUsers" class="card bg-base-100 shadow-xl">
       <div class="card-body">
         <h2 class="card-title mb-4">Users</h2>
-        
+
         <!-- Loading State -->
         <div v-if="loading" class="flex items-center justify-center py-12">
           <div class="loading loading-spinner loading-lg"></div>
@@ -39,13 +42,18 @@
         <!-- Error State -->
         <div v-else-if="error" class="alert alert-error">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
           </svg>
           <div>
             <h3 class="font-bold">Error loading users</h3>
             <div class="text-xs">{{ error }}</div>
           </div>
-          <button @click="loadUsers" class="btn btn-sm">Retry</button>
+          <button class="btn btn-sm" @click="loadUsers">Retry</button>
         </div>
 
         <!-- Users Table -->
@@ -89,10 +97,7 @@
                 <td>{{ formatDate(user.created_at) }}</td>
                 <td>
                   <div class="flex gap-2">
-                    <router-link 
-                      :to="`/profile/${user.id}`"
-                      class="btn btn-ghost btn-xs"
-                    >
+                    <router-link :to="`/profile/${user.id}`" class="btn btn-ghost btn-xs">
                       View Profile
                     </router-link>
                   </div>
@@ -104,8 +109,18 @@
 
         <!-- No Users State -->
         <div v-else class="text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0z"/>
+          <svg
+            class="w-16 h-16 mx-auto text-base-content/30 mb-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0z"
+            />
           </svg>
           <h3 class="text-lg font-medium text-base-content/70 mb-2">No Users Found</h3>
           <p class="text-base-content/50">No users are currently registered.</p>
@@ -145,7 +160,7 @@ async function loadUsers() {
   try {
     const response = await apiClient.get<PaginatedResponse<User>>('/users', {
       page: 1,
-      per_page: 50
+      per_page: 50,
     })
 
     if (response.success && response.data) {
@@ -162,11 +177,16 @@ async function loadUsers() {
 
 function getRoleBadgeClass(role: string) {
   switch (role) {
-    case 'admin': return 'badge-error'
-    case 'staff': return 'badge-warning'
-    case 'member': return 'badge-info'
-    case 'newbie': return 'badge-success'
-    default: return 'badge-ghost'
+    case 'admin':
+      return 'badge-error'
+    case 'staff':
+      return 'badge-warning'
+    case 'member':
+      return 'badge-info'
+    case 'newbie':
+      return 'badge-success'
+    default:
+      return 'badge-ghost'
   }
 }
 

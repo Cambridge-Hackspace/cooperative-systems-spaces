@@ -123,8 +123,31 @@ pub async fn create_device_invite(
         .values(&new_invite)
         .get_result(conn)
         .map_err(|e| {
+            // The one place the generic classification is wrong, and it is
+            // wrong in a way worth stating rather than living with.
+            //
+            // `ApiError::from` classifies text the database cannot represent as
+            // a 400, which is right nearly everywhere: the caller sent
+            // something unstorable and only they can change it. Here the caller
+            // sent nothing at all -- `new_device_code()` generated the value,
+            // eight characters drawn from a 242-entry emoji alphabet of which
+            // LATIN1 can store exactly none. Answering 400 tells an
+            // administrator their input was bad when they supplied no input,
+            // which is a worse answer than the vague 500 it replaced, because
+            // it is confidently wrong instead of merely unhelpful.
+            //
+            // So this route overrides the default: it is the server that cannot
+            // do the job, and the fix is a database encoding no API caller can
+            // reach. 500 with a message naming the actual cause.
             tracing::error!("Failed to insert device invite: {}", e);
-            ApiError::from(e)
+            match ApiError::from(e) {
+                ApiError::BadRequest(_) => ApiError::InternalServerError(
+                    "This deployment's database cannot store device invite codes. \
+                     Device codes are emoji and require a UTF-8 database."
+                        .to_string(),
+                ),
+                other => other,
+            }
         })?;
 
     // Create audit log
@@ -157,7 +180,11 @@ pub async fn register_device(
     State(state): State<AppState>,
     Json(req): Json<RegisterDeviceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    tracing::info!("register_device called for device: {} ({})", req.name, req.kind);
+    tracing::info!(
+        "register_device called for device: {} ({})",
+        req.name,
+        req.kind
+    );
 
     let conn = &mut state.db.pool().get().map_err(|e| {
         tracing::error!("Failed to get database connection: {}", e);
@@ -170,7 +197,8 @@ pub async fn register_device(
         .first(conn)
         .map_err(|_| ApiError::BadRequest("Invalid device code".to_string()))?;
 
-    // Check if already used
+    // An early-out for the ordinary case, and only that. It is NOT what makes
+    // the invite single-use -- see the claim below.
     if invite.used_at.is_some() {
         return Err(ApiError::BadRequest(
             "Device code has already been used".to_string(),
@@ -196,6 +224,36 @@ pub async fn register_device(
         "other" => crate::models::SpaceDevicePlatform::Other,
         _ => return Err(ApiError::BadRequest("Invalid platform".to_string())),
     };
+
+    // Claim the invite before creating anything, with the condition in the
+    // statement rather than in a preceding `if`.
+    //
+    // The check above reads `used_at`, and the update at the end used to set it
+    // -- two statements, no transaction, nothing between them stopping a second
+    // request from reading the same NULL. The concurrency tier redeemed one
+    // invite eight ways and got two devices, each with its own standing auth
+    // token. That is a permanent credential minted from a code its issuer
+    // believed was spent.
+    //
+    // `WHERE used_at IS NULL` plus the affected-row count is what fixes it, and
+    // it is sufficient without a transaction: the losing UPDATE blocks on the
+    // row lock, then re-evaluates its predicate against the committed row under
+    // READ COMMITTED, sees a non-NULL `used_at`, and reports zero rows.
+    //
+    // Claiming first means a redemption that fails later burns the invite. That
+    // is the right way round: an invite that has to be reissued is an
+    // inconvenience, and a second device holding a valid token is not.
+    let claimed = diesel::update(space_device_auth_requests::table)
+        .filter(space_device_auth_requests::id.eq(invite.id))
+        .filter(space_device_auth_requests::used_at.is_null())
+        .set(space_device_auth_requests::used_at.eq(Some(Utc::now())))
+        .execute(conn)?;
+
+    if claimed == 0 {
+        return Err(ApiError::BadRequest(
+            "Device code has already been used".to_string(),
+        ));
+    }
 
     // Create the device
     let new_device = NewSpaceDevice {
@@ -224,12 +282,6 @@ pub async fn register_device(
 
     diesel::insert_into(space_device_auth::table)
         .values(&new_auth)
-        .execute(conn)?;
-
-    // Mark invite as used
-    diesel::update(space_device_auth_requests::table)
-        .filter(space_device_auth_requests::id.eq(invite.id))
-        .set(space_device_auth_requests::used_at.eq(Some(Utc::now())))
         .execute(conn)?;
 
     // Create audit logs
@@ -266,14 +318,18 @@ pub async fn register_device(
 
     // Get MQTT configuration from server config
     let config = state.config_manager.get_config();
-    
-    tracing::info!("Checking MQTT config availability: edge_enabled={}, edge_mqtt_config={:?}", 
+
+    tracing::info!(
+        "Checking MQTT config availability: edge_enabled={}, edge_mqtt_config={:?}",
         config.edge.edge_enabled,
         config.edge.edge_mqtt_config.is_some()
     );
-    
+
     let mqtt_config = config.edge.edge_mqtt_config.map(|mqtt| {
-        tracing::info!("Providing MQTT config to device: url={}", mqtt.mqtt_instance_url);
+        tracing::info!(
+            "Providing MQTT config to device: url={}",
+            mqtt.mqtt_instance_url
+        );
         EdgeMqttConfig {
             mqtt_instance_url: mqtt.mqtt_instance_url,
             mqtt_username: mqtt.mqtt_username,
@@ -281,7 +337,7 @@ pub async fn register_device(
             mqtt_namespace: mqtt.mqtt_namespace,
         }
     });
-    
+
     if mqtt_config.is_none() {
         tracing::warn!("No MQTT configuration found in server config for edge apparatuss");
     }
@@ -397,7 +453,9 @@ pub async fn expire_device_invite(
         .execute(conn)?;
 
     if updated == 0 {
-        return Err(ApiError::NotFound("Device invite not found or already used".to_string()));
+        return Err(ApiError::NotFound(
+            "Device invite not found or already used".to_string(),
+        ));
     }
 
     // Create audit log
@@ -672,7 +730,9 @@ pub async fn set_device_place(
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate the target place exists if provided.
     if let Some(place_id) = req.place_id {
-        let _ = state.db.get_place(place_id)
+        let _ = state
+            .db
+            .get_place(place_id)
             .map_err(|_| ApiError::NotFound("place_id does not exist".to_string()))?;
     }
     let rows = state.db.set_space_device_place(id, req.place_id)?;

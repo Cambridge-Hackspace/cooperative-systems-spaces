@@ -1,36 +1,42 @@
-mod tools;
-mod training;
-pub(crate) mod trainers;
 mod devices;
-mod webhooks;
-mod mfa;
 mod doors;
-mod places;
-mod schedules;
 mod home_links;
+mod mfa;
+mod places;
 mod profile_config;
+mod schedules;
+mod tools;
+// `pub`, not `pub(crate)`: these types appear in the public signatures of
+// handlers and models reachable through AppState, and a public item exposing a
+// crate-private type trips `private_interfaces`, which is a hard error under
+// -D warnings. It also has to be reachable from server/tests/.
+pub mod trainers;
+mod training;
+mod webhooks;
 
-pub use tools::*;
-pub use training::*;
-pub use trainers::*;
 pub use devices::*;
-pub use webhooks::*;
-pub use mfa::*;
 pub use doors::*;
-pub use places::*;
-pub use schedules::*;
 pub use home_links::*;
+pub use mfa::*;
+pub use places::*;
 pub use profile_config::*;
+pub use schedules::*;
+pub use tools::*;
+pub use trainers::*;
+pub use training::*;
+pub use webhooks::*;
 
-use std::io::Write;
-use crate::schema::{users, audit_logs, sql_types};
+use crate::schema::{audit_logs, sql_types, users};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use uuid::Uuid;
 
 /// User role enum for granular permissions
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = sql_types::UserRole)]
 pub enum UserRole {
     /// User status unknown (default for security)
@@ -47,7 +53,10 @@ pub enum UserRole {
 
 // Implement Diesel traits for UserRole enum
 impl diesel::serialize::ToSql<sql_types::UserRole, diesel::pg::Pg> for UserRole {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         match self {
             UserRole::Unknown => out.write_all(b"unknown")?,
             UserRole::Newbie => out.write_all(b"newbie")?,
@@ -162,7 +171,13 @@ impl NewUser {
         }
     }
 
-    pub fn with_role(username: String, email: String, password_hash: String, full_name: String, role: UserRole) -> Self {
+    pub fn with_role(
+        username: String,
+        email: String,
+        password_hash: String,
+        full_name: String,
+        role: UserRole,
+    ) -> Self {
         Self {
             username,
             email,

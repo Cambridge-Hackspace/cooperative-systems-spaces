@@ -1,11 +1,15 @@
 <template>
   <div class="container mx-auto px-4 py-8">
     <!-- Announcement banners -->
-    <div class="alert mb-8 flex justify-center text-center" style="background-color:#d9edf7; color:#31708f;">
+    <div
+      class="alert mb-8 flex justify-center text-center"
+      style="background-color: #d9edf7; color: #31708f"
+    >
       <span>
         Interested in joining our community?
-        <router-link to="/join" class="underline font-semibold">Checkout our memberships</router-link>,
-        and see what we have to offer!
+        <router-link to="/join" class="underline font-semibold"
+          >Checkout our memberships</router-link
+        >, and see what we have to offer!
       </span>
     </div>
 
@@ -22,9 +26,10 @@
           <img src="/images/index_red.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
           <h3 class="text-xl font-bold mb-2">what</h3>
           <p class="text-sm text-base-content/70">
-            We are a 501(c)(3) makerspace in the center of Somerville, MA. We have a 1200sqft workshop catering to enthusiastic makers,
-            and hold weekly meetings where we get together and make things.
-            We have a Laser cutter, CNCs, 3D printers, and a range of other tools for our members to use.
+            We are a 501(c)(3) makerspace in the center of Somerville, MA. We have a 1200sqft
+            workshop catering to enthusiastic makers, and hold weekly meetings where we get together
+            and make things. We have a Laser cutter, CNCs, 3D printers, and a range of other tools
+            for our members to use.
           </p>
         </div>
 
@@ -32,9 +37,10 @@
           <img src="/images/index_blue.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
           <h3 class="text-xl font-bold mb-2">why</h3>
           <p class="text-sm text-base-content/70">
-            We've started the Cambridge Hackspace to provide a physical space where people can gather and work on their projects,
-            have access to larger or expensive tools (like the 3D printers, and laser cutter),
-            and provide a place where the community can share their knowledge.
+            We've started the Cambridge Hackspace to provide a physical space where people can
+            gather and work on their projects, have access to larger or expensive tools (like the 3D
+            printers, and laser cutter), and provide a place where the community can share their
+            knowledge.
           </p>
         </div>
 
@@ -42,9 +48,9 @@
           <img src="/images/index_yellow.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
           <h3 class="text-xl font-bold mb-2">who</h3>
           <p class="text-sm text-base-content/70">
-            Anyone and everyone is welcome. Whether your thing is software, electronics, woodwork, or knitting,
-            we provide a space where you can meet fellow makers, to learn, and be inspired.
-            We hold workshops every month so you can learn new skills.
+            Anyone and everyone is welcome. Whether your thing is software, electronics, woodwork,
+            or knitting, we provide a space where you can meet fellow makers, to learn, and be
+            inspired. We hold workshops every month so you can learn new skills.
           </p>
         </div>
 
@@ -52,13 +58,24 @@
           <img src="/images/index_green.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
           <h3 class="text-xl font-bold mb-2">where</h3>
           <p class="text-sm text-base-content/70">
-            We are located in Union Square, Somerville
-            (<router-link to="/contact" class="underline">address</router-link>).
-            We hold events every week, our next meeting is on Tuesday at 6.30pm — check our events page for future events.
-            You can also like our
-            <a href="https://www.facebook.com/CambridgeHackspace" target="_blank" rel="noopener" class="underline">Facebook page</a>
-            and follow us on Twitter
-            (<a href="https://twitter.com/hackcambridge" target="_blank" rel="noopener" class="underline">@HackCambridge</a>).
+            We are located in Union Square, Somerville (<router-link to="/contact" class="underline"
+              >address</router-link
+            >). We hold events every week, our next meeting is on Tuesday at 6.30pm — check our
+            events page for future events. You can also like our
+            <a
+              href="https://www.facebook.com/CambridgeHackspace"
+              target="_blank"
+              rel="noopener"
+              class="underline"
+              >Facebook page</a
+            >
+            and follow us on Twitter (<a
+              href="https://twitter.com/hackcambridge"
+              target="_blank"
+              rel="noopener"
+              class="underline"
+              >@HackCambridge</a
+            >).
           </p>
         </div>
       </div>
@@ -72,12 +89,15 @@
         <div>
           <template v-if="authStore.isAuthenticated">
             <h3 class="text-2xl font-bold mb-3">Welcome back!</h3>
-            <router-link to="/profile/me" class="btn btn-primary btn-lg">Visit your dashboard</router-link>
+            <router-link to="/profile/me" class="btn btn-primary btn-lg"
+              >Visit your dashboard</router-link
+            >
           </template>
           <template v-else>
             <h2 class="text-3xl font-bold mb-3">Join Cambridge Hackspace</h2>
             <p class="text-base-content/70 mb-4">
-              Become a Cambridge Hackspace member, join us and help support our efforts to get bigger and better.
+              Become a Cambridge Hackspace member, join us and help support our efforts to get
+              bigger and better.
             </p>
             <router-link to="/join" class="btn btn-primary btn-lg">Become a Member</router-link>
           </template>
@@ -89,7 +109,12 @@
           <h3 class="text-2xl font-bold mb-1">Next Event</h3>
           <h4 class="text-lg">Hackspace Project Night - Open to Everyone!</h4>
           <p class="text-base-content/70 mb-3">Tuesday @ 6.30pm</p>
-          <a href="https://www.meetup.com/Cambridge-Hackspace/events/" target="_blank" rel="noopener" class="btn btn-info btn-lg">
+          <a
+            href="https://www.meetup.com/Cambridge-Hackspace/events/"
+            target="_blank"
+            rel="noopener"
+            class="btn btn-info btn-lg"
+          >
             Meetup Events
           </a>
         </div>
@@ -98,9 +123,18 @@
 
         <div>
           <h3 class="text-2xl font-bold mb-1">Donate</h3>
-          <p class="text-base-content/70">Support our mission of building a community that shares knowledge about making things.</p>
-          <p class="text-base-content/70 mb-3">The donate button goes to our payment processor, Stripe, to keep your payment secure.</p>
-          <a href="https://donate.stripe.com/3csg1z40seWLbcccMM" target="_blank" rel="noopener" class="btn btn-info btn-lg">
+          <p class="text-base-content/70">
+            Support our mission of building a community that shares knowledge about making things.
+          </p>
+          <p class="text-base-content/70 mb-3">
+            The donate button goes to our payment processor, Stripe, to keep your payment secure.
+          </p>
+          <a
+            href="https://donate.stripe.com/3csg1z40seWLbcccMM"
+            target="_blank"
+            rel="noopener"
+            class="btn btn-info btn-lg"
+          >
             Donate
           </a>
         </div>
@@ -110,7 +144,12 @@
         <div class="text-center md:text-left">
           <h3 class="text-2xl font-bold mb-1">See what we've been up to</h3>
           <p class="text-base-content/70 mb-3">Photos from project nights, builds, and events.</p>
-          <a href="https://www.instagram.com/hackcambridge/" target="_blank" rel="noopener" class="btn btn-secondary btn-lg">
+          <a
+            href="https://www.instagram.com/hackcambridge/"
+            target="_blank"
+            rel="noopener"
+            class="btn btn-secondary btn-lg"
+          >
             @hackcambridge on Instagram
           </a>
         </div>
@@ -129,24 +168,19 @@
           Posted hours for {{ todayLabel }}. Times are local to the space.
         </p>
         <div class="grid gap-3">
-          <div
-            v-for="row in scheduleRowsToday"
-            :key="row.id"
-            class="card bg-base-200 shadow-sm"
-          >
+          <div v-for="row in scheduleRowsToday" :key="row.id" class="card bg-base-200 shadow-sm">
             <div class="card-body py-4">
               <div class="flex items-center justify-between">
                 <h3 class="font-semibold">{{ row.name }}</h3>
-                <span
-                  class="badge badge-sm"
-                  :class="row.openNow ? 'badge-success' : 'badge-ghost'"
-                >
+                <span class="badge badge-sm" :class="row.openNow ? 'badge-success' : 'badge-ghost'">
                   {{ row.openNow ? 'Open now' : 'Closed' }}
                 </span>
               </div>
-              <p v-if="row.description" class="text-xs text-base-content/70">{{ row.description }}</p>
+              <p v-if="row.description" class="text-xs text-base-content/70">
+                {{ row.description }}
+              </p>
               <div v-if="row.windows.length" class="font-mono text-sm">
-                {{ row.windows.map(w => `${w.start}–${w.end}`).join(', ') }}
+                {{ row.windows.map((w) => `${w.start}–${w.end}`).join(', ') }}
               </div>
               <div v-else class="text-sm text-base-content/60 italic">Closed today</div>
             </div>
@@ -157,9 +191,7 @@
       <!-- Links (audience-gated by the server). -->
       <div v-if="homeLinks.length">
         <h2 class="text-2xl font-semibold mb-2">Links</h2>
-        <p class="text-sm text-base-content/70 mb-4">
-          Useful destinations curated by your admins.
-        </p>
+        <p class="text-sm text-base-content/70 mb-4">Useful destinations curated by your admins.</p>
         <div class="grid gap-3">
           <a
             v-for="l in homeLinks"
@@ -172,7 +204,8 @@
             <div class="card-body py-4">
               <div class="flex items-start justify-between gap-2">
                 <h3 class="font-semibold">
-                  <span v-if="l.icon" class="mr-1">{{ l.icon }}</span>{{ l.label }}
+                  <span v-if="l.icon" class="mr-1">{{ l.icon }}</span
+                  >{{ l.label }}
                 </h3>
                 <span
                   v-if="l.audience !== 'everyone'"
@@ -210,28 +243,39 @@ const authStore = useAuthStore()
 const publicSchedules = ref<Schedule[]>([])
 
 const dowMap: Record<number, DayOfWeek> = {
-  0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat',
+  0: 'sun',
+  1: 'mon',
+  2: 'tue',
+  3: 'wed',
+  4: 'thu',
+  5: 'fri',
+  6: 'sat',
 }
 const dowLabel: Record<DayOfWeek, string> = {
-  mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
-  fri: 'Friday', sat: 'Saturday', sun: 'Sunday',
+  mon: 'Monday',
+  tue: 'Tuesday',
+  wed: 'Wednesday',
+  thu: 'Thursday',
+  fri: 'Friday',
+  sat: 'Saturday',
+  sun: 'Sunday',
 }
 const today: DayOfWeek = dowMap[new Date().getDay()]
 const todayLabel = dowLabel[today]
 
 const scheduleRowsToday = computed(() =>
-  publicSchedules.value.map(s => {
+  publicSchedules.value.map((s) => {
     const windows = s.intervals
-      .filter(iv => iv.day === today)
+      .filter((iv) => iv.day === today)
       .sort((a, b) => a.start.localeCompare(b.start))
     return {
       id: s.id,
       name: s.name,
       description: s.description,
       windows,
-      openNow: windows.some(w => isNowBetween(w.start, w.end)),
+      openNow: windows.some((w) => isNowBetween(w.start, w.end)),
     }
-  }),
+  })
 )
 
 function isNowBetween(start: string, end: string): boolean {
@@ -240,7 +284,7 @@ function isNowBetween(start: string, end: string): boolean {
   return toMin(start) <= nowMin && nowMin < toMin(end)
 }
 function toMin(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map(n => parseInt(n, 10))
+  const [h, m] = hhmm.split(':').map((n) => parseInt(n, 10))
   return (h || 0) * 60 + (m || 0)
 }
 
@@ -294,7 +338,7 @@ function audienceTooltip(a: HomeLinkAudience): string {
 }
 
 onMounted(() => {
-  loadPublicSchedules()
-  loadHomeLinks()
+  void loadPublicSchedules()
+  void loadHomeLinks()
 })
 </script>

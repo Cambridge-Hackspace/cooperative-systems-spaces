@@ -75,9 +75,7 @@ impl MfaService {
             match build_webauthn(&config) {
                 Ok(w) => Some(w),
                 Err(e) => {
-                    tracing::error!(
-                        "WebAuthn disabled: failed to build instance from config: {e}"
-                    );
+                    tracing::error!("WebAuthn disabled: failed to build instance from config: {e}");
                     None
                 }
             }

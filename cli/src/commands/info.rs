@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 use serde_json::Value;
 
@@ -9,9 +9,11 @@ pub async fn handle_info_command(client: &ApiClient, config: &CliConfig) -> Resu
     println!("{}", style("Server Information").bold().underlined());
     println!();
 
-    // Get server info from the root endpoint
-    let response = client.request_raw(reqwest::Method::GET, "/").await;
-    
+    // `/status` is the JSON status handler (server/src/main.rs:87,308). `/` is
+    // served by the static-file fallback, so asking for it returned index.html
+    // and this function printed "Raw response: <!doctype html>...".
+    let response = client.request_raw(reqwest::Method::GET, "/status").await;
+
     match response {
         Ok(resp) => {
             if resp.status().is_success() {
@@ -46,7 +48,7 @@ pub async fn handle_info_command(client: &ApiClient, config: &CliConfig) -> Resu
     }
 
     println!();
-    
+
     // Show CLI information
     println!("{}", style("CLI Information").bold());
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
@@ -58,21 +60,28 @@ pub async fn handle_info_command(client: &ApiClient, config: &CliConfig) -> Resu
 
 fn print_server_info_formatted(json: &Value) {
     if let Some(status) = json.get("status") {
-        println!("Status: {}", 
-            if status == "ok" { 
-                style("OK").green() 
-            } else { 
-                style(status.as_str().unwrap_or("unknown")).red() 
+        println!(
+            "Status: {}",
+            if status == "ok" {
+                style("OK").green()
+            } else {
+                style(status.as_str().unwrap_or("unknown")).red()
             }
         );
     }
 
     if let Some(site_name) = json.get("site_name") {
-        println!("Site Name: {}", style(site_name.as_str().unwrap_or("unknown")).cyan());
+        println!(
+            "Site Name: {}",
+            style(site_name.as_str().unwrap_or("unknown")).cyan()
+        );
     }
 
     if let Some(version) = json.get("version") {
-        println!("Server Version: {}", style(version.as_str().unwrap_or("unknown")).yellow());
+        println!(
+            "Server Version: {}",
+            style(version.as_str().unwrap_or("unknown")).yellow()
+        );
     }
 
     if let Some(uptime) = json.get("uptime") {
@@ -94,12 +103,13 @@ fn print_server_info_formatted(json: &Value) {
         if let Some(features_obj) = features.as_object() {
             for (key, value) in features_obj {
                 let enabled = value.as_bool().unwrap_or(false);
-                println!("  {}: {}", 
+                println!(
+                    "  {}: {}",
                     key,
-                    if enabled { 
-                        style("enabled").green() 
-                    } else { 
-                        style("disabled").dim() 
+                    if enabled {
+                        style("enabled").green()
+                    } else {
+                        style("disabled").dim()
                     }
                 );
             }

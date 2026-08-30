@@ -1,21 +1,26 @@
+use crate::schema::{space_device_auth, space_device_auth_requests, space_devices, sql_types};
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 use diesel::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
-use crate::schema::{space_devices, space_device_auth, space_device_auth_requests, sql_types};
+use uuid::Uuid;
 
 /// Device kind enum - Edge or Kiosk
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = sql_types::SpaceDeviceKind)]
 pub enum SpaceDeviceKind {
     Edge,
-    Kiosk
+    Kiosk,
 }
 
 // Implement Diesel traits for SpaceDeviceKind enum
 impl diesel::serialize::ToSql<sql_types::SpaceDeviceKind, diesel::pg::Pg> for SpaceDeviceKind {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         match self {
             SpaceDeviceKind::Edge => out.write_all(b"edge")?,
             SpaceDeviceKind::Kiosk => out.write_all(b"kiosk")?,
@@ -35,7 +40,9 @@ impl diesel::deserialize::FromSql<sql_types::SpaceDeviceKind, diesel::pg::Pg> fo
 }
 
 /// Device platform enum
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
+)]
 #[diesel(sql_type = sql_types::SpaceDevicePlatform)]
 pub enum SpaceDevicePlatform {
     Windows,
@@ -45,8 +52,13 @@ pub enum SpaceDevicePlatform {
 }
 
 // Implement Diesel traits for SpaceDevicePlatform enum
-impl diesel::serialize::ToSql<sql_types::SpaceDevicePlatform, diesel::pg::Pg> for SpaceDevicePlatform {
-    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {
+impl diesel::serialize::ToSql<sql_types::SpaceDevicePlatform, diesel::pg::Pg>
+    for SpaceDevicePlatform
+{
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+    ) -> diesel::serialize::Result {
         match self {
             SpaceDevicePlatform::Windows => out.write_all(b"windows")?,
             SpaceDevicePlatform::Linux => out.write_all(b"linux")?,
@@ -57,7 +69,9 @@ impl diesel::serialize::ToSql<sql_types::SpaceDevicePlatform, diesel::pg::Pg> fo
     }
 }
 
-impl diesel::deserialize::FromSql<sql_types::SpaceDevicePlatform, diesel::pg::Pg> for SpaceDevicePlatform {
+impl diesel::deserialize::FromSql<sql_types::SpaceDevicePlatform, diesel::pg::Pg>
+    for SpaceDevicePlatform
+{
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
         match bytes.as_bytes() {
             b"windows" => Ok(SpaceDevicePlatform::Windows),
@@ -171,37 +185,27 @@ impl SpaceDeviceAuthRequest {
         use rand::seq::SliceRandom;
         let emojis = [
             // Space & Tech
-            "🚀", "🌟", "🎯", "🔥", "⚡", "🌈", "🎨", "🎪", "🎭", "🎸",
-            "🎺", "🎷", "🥳", "🤖", "👾", "💎", "🔮", "🎲", "🏆", "🎖️",
-            "🏅", "⭐", "💫", "✨", "🌙", "☀️", "🌊", "🏔️",
-
+            "🚀", "🌟", "🎯", "🔥", "⚡", "🌈", "🎨", "🎪", "🎭", "🎸", "🎺", "🎷", "🥳", "🤖",
+            "👾", "💎", "🔮", "🎲", "🏆", "🎖️", "🏅", "⭐", "💫", "✨", "🌙", "☀️", "🌊", "🏔️",
             // Animals
-            "🦄", "🐙", "🦋", "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻",
-            "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧",
-            "🐦", "🐤", "🐣", "🐥", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗",
-            "🐴", "🦓", "🦒", "🐘", "🦏", "🦛", "🐪", "🐫", "🦘", "🐊",
-            "🐢", "🦎", "🐍", "🐲", "🐉", "🦕", "🦖", "🐳", "🐋", "🐬",
-            "🐟", "🐠", "🐡", "🦈", "🐙", "🦑", "🦐", "🦞", "🦀", "🐚",
-            "🦗", "🐛", "🦋", "🐌", "🐞", "🐜", "🕷️", "🕸️", "🦂",
-
+            "🦄", "🐙", "🦋", "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁",
+            "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🐤", "🐣", "🐥", "🦆", "🦅", "🦉", "🦇",
+            "🐺", "🐗", "🐴", "🦓", "🦒", "🐘", "🦏", "🦛", "🐪", "🐫", "🦘", "🐊", "🐢", "🦎",
+            "🐍", "🐲", "🐉", "🦕", "🦖", "🐳", "🐋", "🐬", "🐟", "🐠", "🐡", "🦈", "🐙", "🦑",
+            "🦐", "🦞", "🦀", "🐚", "🦗", "🐛", "🦋", "🐌", "🐞", "🐜", "🕷️", "🕸️", "🦂",
             // Food & Drinks
-            "🍕", "🍔", "🍰", "🎂", "☕", "🍎", "🍊", "🍋", "🍌", "🍉",
-            "🍇", "🍓", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅",
-            "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️", "🌽", "🥕", "🧄", "🧅",
-            "🥔", "🍠", "🥐", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈",
-            "🥞", "🧇", "🥓", "🍗", "🍖", "🌭", "🍟", "🍝", "🍜", "🍲",
-            "🍛", "🍣", "🍱", "🥟", "🦪", "🍤", "🍙", "🍘", "🍥", "🥠",
-            "🥮", "🍢", "🍡", "🍧", "🍨", "🍦", "🥧", "🧁", "🍮", "🍭",
-            "🍬", "🍫", "🍿", "🍩", "🍪", "🌰", "🥜", "🍯", "🥛", "🍼",
-            "🫖", "🍵", "🧃", "🥤", "🧋", "🍶", "🍾", "🍷", "🍸", "🍹",
-            "🍺", "🍻", "🥂", "🥃", "🧊",
-
+            "🍕", "🍔", "🍰", "🎂", "☕", "🍎", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍈", "🍒",
+            "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️", "🌽", "🥕",
+            "🧄", "🧅", "🥔", "🍠", "🥐", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞", "🧇",
+            "🥓", "🍗", "🍖", "🌭", "🍟", "🍝", "🍜", "🍲", "🍛", "🍣", "🍱", "🥟", "🦪", "🍤",
+            "🍙", "🍘", "🍥", "🥠", "🥮", "🍢", "🍡", "🍧", "🍨", "🍦", "🥧", "🧁", "🍮", "🍭",
+            "🍬", "🍫", "🍿", "🍩", "🍪", "🌰", "🥜", "🍯", "🥛", "🍼", "🫖", "🍵", "🧃", "🥤",
+            "🧋", "🍶", "🍾", "🍷", "🍸", "🍹", "🍺", "🍻", "🥂", "🥃", "🧊",
             // Nature & Objects
-            "🌺", "🌸", "🌼", "🌻", "🌷", "🌹", "🥀", "🌾", "🌿", "🍀",
-            "🍃", "🌱", "🌲", "🌳", "🌴", "🌵", "🌶️", "🍄", "🌰", "🐚",
-            "🪨", "🌍", "🌎", "🌏", "🌕", "🌖", "🌗", "🌘", "🌑", "🌒",
-            "🌓", "🌔", "⭐", "🌟", "💫", "✨", "☄️", "☀️", "🌤️", "⛅",
-            "🌦️", "🌧️", "⛈️", "🌩️", "🌨️", "❄️", "☃️", "⛄", "🌬️", "💨"
+            "🌺", "🌸", "🌼", "🌻", "🌷", "🌹", "🥀", "🌾", "🌿", "🍀", "🍃", "🌱", "🌲", "🌳",
+            "🌴", "🌵", "🌶️", "🍄", "🌰", "🐚", "🪨", "🌍", "🌎", "🌏", "🌕", "🌖", "🌗", "🌘",
+            "🌑", "🌒", "🌓", "🌔", "⭐", "🌟", "💫", "✨", "☄️", "☀️", "🌤️", "⛅", "🌦️", "🌧️",
+            "⛈️", "🌩️", "🌨️", "❄️", "☃️", "⛄", "🌬️", "💨",
         ];
 
         let mut rng = rand::thread_rng();

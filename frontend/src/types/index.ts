@@ -1,6 +1,6 @@
 // Tool and training types for the frontend
-export * from './tools';
-export * from './training';
+export * from './tools'
+export * from './training'
 
 // API Response types
 export interface ApiResponse<T> {
@@ -24,7 +24,7 @@ export enum UserRole {
   Newbie = 'Newbie',
   Member = 'Member',
   Staff = 'Staff',
-  Admin = 'Admin'
+  Admin = 'Admin',
 }
 
 export interface User {
@@ -38,8 +38,8 @@ export interface User {
   updated_at: string
   /** Set when the user has at least one confirmed MFA method. */
   mfa_enrolled_at?: string | null
-  profile: Record<string, any>
-  meta: Record<string, any>
+  profile: Record<string, unknown>
+  meta: Record<string, unknown>
 }
 
 // Profile types
@@ -52,7 +52,7 @@ export enum ProfileFieldType {
   Number = 'Number',
   Date = 'Date',
   Boolean = 'Boolean',
-  Select = 'Select'
+  Select = 'Select',
 }
 
 export interface ProfileFieldSelectOptions {
@@ -74,11 +74,11 @@ export interface UserConfig {
 
 export interface ProfileResponse {
   user_id: string
-  profile: Record<string, any>
+  profile: Record<string, unknown>
 }
 
 export interface UpdateProfileRequest {
-  profile: Record<string, any>
+  profile: Record<string, unknown>
 }
 
 export interface ProfileConfigResponse {
@@ -117,7 +117,7 @@ export interface MfaChallenge {
 export type LoginOutcome = LoginResponse | MfaChallenge
 
 export function isMfaChallenge(x: unknown): x is MfaChallenge {
-  return !!x && typeof x === 'object' && (x as any).mfa_required === true
+  return !!x && typeof x === 'object' && (x as Record<string, unknown>).mfa_required === true
 }
 
 // ===== MFA =====
@@ -288,12 +288,7 @@ export interface PlaceDetail extends Place {
 
 // ===== Home links (admin-curated, audience-gated) =====
 
-export type HomeLinkAudience =
-  | 'everyone'
-  | 'anonymous'
-  | 'logged_in'
-  | 'member'
-  | 'staff'
+export type HomeLinkAudience = 'everyone' | 'anonymous' | 'logged_in' | 'member' | 'staff'
 
 export interface HomeLink {
   id: string
@@ -412,7 +407,7 @@ export interface UpdateUserRequest {
 export interface NavigationItem {
   name: string
   href: string
-  icon?: any
+  icon?: unknown
   current?: boolean
   requiresAuth?: boolean
   requiredRole?: UserRole
@@ -425,7 +420,7 @@ export interface AuditLog {
   event_type: string
   user_id: string | null
   actor_id: string | null
-  event_data: any
+  event_data: Record<string, unknown>
   ip_address: string | null
   user_agent: string | null
   created_at: string

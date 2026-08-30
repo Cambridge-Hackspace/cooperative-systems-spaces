@@ -71,13 +71,15 @@ pub struct PagesService {
 impl PagesService {
     /// Create a new pages service and start it with initial build and auto-updating
     pub async fn new(config: PagesConfig) -> Result<Self> {
-        let wiki_repo_path = config.wiki_repo().as_ref().map(|_| {
-            PathBuf::from("/tmp/css-wiki-repo")
-        });
-        let site_repo_path = config.site_repo().as_ref().map(|_| {
-            PathBuf::from("/tmp/css-site-repo")
-        });
-        
+        let wiki_repo_path = config
+            .wiki_repo()
+            .as_ref()
+            .map(|_| PathBuf::from("/tmp/css-wiki-repo"));
+        let site_repo_path = config
+            .site_repo()
+            .as_ref()
+            .map(|_| PathBuf::from("/tmp/css-site-repo"));
+
         let mut service = Self {
             config,
             store: Arc::new(RwLock::new(PageStore::default())),
@@ -100,12 +102,13 @@ impl PagesService {
             let config = service.config.clone();
             let wiki_repo_path = service.wiki_repo_path.clone();
             let period = service.config.wiki_period();
-            
+
             tokio::spawn(async move {
                 loop {
                     sleep(Duration::from_secs(period as u64)).await;
                     info!("Auto-updating wiki pages");
-                    if let Err(e) = Self::update_wiki_static(&config, &wiki_repo_path, &store).await {
+                    if let Err(e) = Self::update_wiki_static(&config, &wiki_repo_path, &store).await
+                    {
                         error!("Failed to update wiki: {}", e);
                     }
                 }
@@ -117,12 +120,13 @@ impl PagesService {
             let config = service.config.clone();
             let site_repo_path = service.site_repo_path.clone();
             let period = service.config.site_period();
-            
+
             tokio::spawn(async move {
                 loop {
                     sleep(Duration::from_secs(period as u64)).await;
                     info!("Auto-updating site pages");
-                    if let Err(e) = Self::update_site_static(&config, &site_repo_path, &store).await {
+                    if let Err(e) = Self::update_site_static(&config, &site_repo_path, &store).await
+                    {
                         error!("Failed to update site: {}", e);
                     }
                 }
@@ -186,16 +190,21 @@ impl PagesService {
 
     /// Trigger wiki pages update from repository (public for API use)
     pub async fn trigger_wiki_update(&mut self) -> Result<()> {
-        let repo_url = self.config.wiki_repo().as_ref()
+        let repo_url = self
+            .config
+            .wiki_repo()
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Wiki repo not configured"))?;
-        let repo_path = self.wiki_repo_path.as_ref()
+        let repo_path = self
+            .wiki_repo_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Wiki repo path not set"))?;
 
         Self::sync_repository_static(repo_url, repo_path).await?;
-        
+
         // Get the default branch after sync
         self.wiki_default_branch = Self::get_default_branch_static(repo_path).ok();
-        
+
         let pages = Self::build_pages_static(repo_path, PageType::Wiki, self.config.wiki_readme())?;
         let nav = Self::build_navigation_static(&pages);
 
@@ -213,9 +222,12 @@ impl PagesService {
         wiki_repo_path: &Option<PathBuf>,
         store: &Arc<RwLock<PageStore>>,
     ) -> Result<()> {
-        let repo_url = config.wiki_repo().as_ref()
+        let repo_url = config
+            .wiki_repo()
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Wiki repo not configured"))?;
-        let repo_path = wiki_repo_path.as_ref()
+        let repo_path = wiki_repo_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Wiki repo path not set"))?;
 
         Self::sync_repository_static(repo_url, repo_path).await?;
@@ -232,21 +244,29 @@ impl PagesService {
 
     /// Trigger site pages update from repository (public for API use)
     pub async fn trigger_site_update(&mut self) -> Result<()> {
-        let repo_url = self.config.site_repo().as_ref()
+        let repo_url = self
+            .config
+            .site_repo()
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Site repo not configured"))?;
-        let repo_path = self.site_repo_path.as_ref()
+        let repo_path = self
+            .site_repo_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Site repo path not set"))?;
 
         Self::sync_repository_static(repo_url, repo_path).await?;
-        
+
         // Get the default branch after sync
         self.site_default_branch = Self::get_default_branch_static(repo_path).ok();
-        
+
         let pages = Self::build_pages_static(repo_path, PageType::Site, self.config.site_readme())?;
         let nav = Self::build_navigation_static(&pages);
 
         // Handle the site index page
-        let site_index = pages.get(&Self::slug_from_filename_static(self.config.site_embed_index()))
+        let site_index = pages
+            .get(&Self::slug_from_filename_static(
+                self.config.site_embed_index(),
+            ))
             .cloned();
 
         let mut store = self.store.write().unwrap();
@@ -264,16 +284,20 @@ impl PagesService {
         site_repo_path: &Option<PathBuf>,
         store: &Arc<RwLock<PageStore>>,
     ) -> Result<()> {
-        let repo_url = config.site_repo().as_ref()
+        let repo_url = config
+            .site_repo()
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Site repo not configured"))?;
-        let repo_path = site_repo_path.as_ref()
+        let repo_path = site_repo_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Site repo path not set"))?;
 
         Self::sync_repository_static(repo_url, repo_path).await?;
         let pages = Self::build_pages_static(repo_path, PageType::Site, config.site_readme())?;
         let nav = Self::build_navigation_static(&pages);
 
-        let site_index = pages.get(&Self::slug_from_filename_static(config.site_embed_index()))
+        let site_index = pages
+            .get(&Self::slug_from_filename_static(config.site_embed_index()))
             .cloned();
 
         let mut store_guard = store.write().unwrap();
@@ -298,7 +322,10 @@ impl PagesService {
                 .context("Failed to execute git pull")?;
 
             if !output.status.success() {
-                warn!("Git pull failed: {}", String::from_utf8_lossy(&output.stderr));
+                warn!(
+                    "Git pull failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
                 // Try to reset and pull again
                 let reset_output = Command::new("git")
                     .arg("-C")
@@ -352,7 +379,11 @@ impl PagesService {
     }
 
     /// Static version of build_pages
-    fn build_pages_static(repo_path: &Path, page_type: PageType, include_readme: bool) -> Result<HashMap<String, Page>> {
+    fn build_pages_static(
+        repo_path: &Path,
+        page_type: PageType,
+        include_readme: bool,
+    ) -> Result<HashMap<String, Page>> {
         let mut pages = HashMap::new();
         Self::scan_directory_static(repo_path, repo_path, &mut pages, page_type, include_readme)?;
         Ok(pages)
@@ -380,7 +411,7 @@ impl PagesService {
                 if filename_str.starts_with('.') {
                     continue;
                 }
-                
+
                 // Skip README.md if not included
                 if !include_readme && filename_str.eq_ignore_ascii_case("readme.md") {
                     continue;
@@ -405,8 +436,7 @@ impl PagesService {
 
     /// Static version of build_page
     fn build_page_static(file_path: &Path, base_path: &Path, page_type: PageType) -> Result<Page> {
-        let raw_content = fs::read_to_string(file_path)
-            .context("Failed to read markdown file")?;
+        let raw_content = fs::read_to_string(file_path).context("Failed to read markdown file")?;
 
         // Convert markdown to HTML
         let mut html_content = markdown_to_html(&raw_content, &Options::default());
@@ -426,9 +456,7 @@ impl PagesService {
 
         let slug = Self::slug_from_path_static(&relative_path);
 
-        let modified = fs::metadata(file_path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        let modified = fs::metadata(file_path).ok().and_then(|m| m.modified().ok());
 
         Ok(Page {
             title,
@@ -445,38 +473,40 @@ impl PagesService {
     /// Also handles: <a href="./path/to/FILE.md">...</a> keeping folder structure
     fn fix_markdown_links(html: &str, page_type: PageType) -> String {
         use regex::Regex;
-        
+
         // Determine the route prefix based on page type
         let route_prefix = match page_type {
             PageType::Wiki => "/wiki",
             PageType::Site => "/page",
         };
-        
+
         // Match markdown file links: href="something.md" or href="./path/file.md"
         let re = Regex::new(r#"href="([^"]*\.md(?:arkdown)?)""#).unwrap();
-        
+
         re.replace_all(html, |caps: &regex::Captures| {
             let original_link = &caps[1];
-            
+
             // Skip external links (http://, https://, etc.)
-            if original_link.starts_with("http://") || 
-               original_link.starts_with("https://") ||
-               original_link.starts_with("//") {
+            if original_link.starts_with("http://")
+                || original_link.starts_with("https://")
+                || original_link.starts_with("//")
+            {
                 return caps[0].to_string();
             }
-            
+
             // Convert the markdown filename to a slug, preserving folder structure
             let slug = original_link
                 .trim_start_matches("./")
                 .trim_start_matches("../")
                 .trim_end_matches(".md")
                 .trim_end_matches(".markdown")
-                .replace('\\', "/")  // Normalize Windows paths
+                .replace('\\', "/") // Normalize Windows paths
                 .to_lowercase();
-            
+
             // Return the fixed link pointing to the appropriate route with folder structure
             format!(r#"href="{}/{}""#, route_prefix, slug)
-        }).to_string()
+        })
+        .to_string()
     }
 
     /// Static version of extract_title
@@ -502,9 +532,9 @@ impl PagesService {
         path.trim_start_matches('/')
             .trim_end_matches(".md")
             .trim_end_matches(".markdown")
-            .replace('\\', "/")  // Normalize Windows paths
+            .replace('\\', "/") // Normalize Windows paths
             .to_lowercase()
-            // Keep folder separators - don't replace / with -
+        // Keep folder separators - don't replace / with -
     }
 
     /// Static version of slug_from_filename
@@ -519,11 +549,12 @@ impl PagesService {
     fn build_navigation_static(pages: &HashMap<String, Page>) -> Vec<NavItem> {
         // First, collect all pages and organize them by their path components
         let mut root_items: Vec<NavItem> = Vec::new();
-        let mut folder_map: std::collections::HashMap<String, Vec<NavItem>> = std::collections::HashMap::new();
-        
+        let mut folder_map: std::collections::HashMap<String, Vec<NavItem>> =
+            std::collections::HashMap::new();
+
         for page in pages.values() {
             let slug_parts: Vec<&str> = page.slug.split('/').collect();
-            
+
             if slug_parts.len() == 1 {
                 // Root level page - add directly to root_items
                 root_items.push(NavItem {
@@ -541,13 +572,14 @@ impl PagesService {
                     path: page.relative_path.clone(),
                     children: vec![],
                 };
-                
-                folder_map.entry(parent_folder.clone())
+
+                folder_map
+                    .entry(parent_folder.clone())
                     .or_insert_with(Vec::new)
                     .push(child_item);
             }
         }
-        
+
         // Now attach children to their parent items
         for item in root_items.iter_mut() {
             if let Some(children) = folder_map.get(&item.slug) {
@@ -556,10 +588,10 @@ impl PagesService {
                 item.children.sort_by(|a, b| a.title.cmp(&b.title));
             }
         }
-        
+
         // Sort root items by title
         root_items.sort_by(|a, b| a.title.cmp(&b.title));
-        
+
         root_items
     }
 
@@ -625,7 +657,7 @@ impl PagesConfig {
     pub fn wiki_period(&self) -> usize {
         self.wiki_period
     }
-    
+
     pub fn wiki_readme(&self) -> bool {
         self.wiki_readme
     }
@@ -637,11 +669,11 @@ impl PagesConfig {
     pub fn site_period(&self) -> usize {
         self.site_period
     }
-    
+
     pub fn site_readme(&self) -> bool {
         self.site_readme
     }
-    
+
     pub fn user_readme(&self) -> bool {
         self.user_readme
     }

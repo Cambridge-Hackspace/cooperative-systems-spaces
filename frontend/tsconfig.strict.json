@@ -1,0 +1,54 @@
+{
+  // The type-strictness ratchet.
+  //
+  // The base tsconfig has "strict": false, and 24,000 lines were written under
+  // it. Flipping that flag produces hundreds of strictNullChecks errors at
+  // once, and the two ways that ends are both bad: an unreviewable diff, or a
+  // stream of `as any` that makes the flag mean nothing.
+  //
+  // So strictness is applied to an explicit list instead, and the list grows.
+  // GROWING IT IS THE UNIT OF WORK. Shrinking it is a narrowing and needs a
+  // stated reason, because every path removed is code that stops being checked.
+  //
+  // eslint.config.js reads the same idea: the type-aware `no-unsafe-*` family
+  // is enabled for exactly these paths and off elsewhere, so the two ratchets
+  // move together.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    // The flag that makes `roleHierarchy[roleString] || 0` type-check as
+    // written rather than by luck, and turns its `|| 0` fallback into a
+    // documented decision instead of an accident.
+    "noUncheckedIndexedAccess": true
+  },
+  // NARROWED, and the reason covers exactly what it narrows.
+  //
+  // `tests/**` used to be here in full. Adding tier-2 component specs changed
+  // what that means: mounting a component pulls its whole `.vue` file into this
+  // project, so the strict check started reporting ~30 `strictNullChecks`
+  // errors across nine components that no test touches directly and that were
+  // never in the ratchet's scope.
+  //
+  // Those errors are real and they are the ratchet's future work. Fixing them
+  // as a side effect of adding a test would be a large diff across nine
+  // components at the end of an unrelated change -- the giant unreviewable diff
+  // this ratchet exists to avoid.
+  //
+  // So the strict project covers the tests that import no component:
+  // `tests/unit` and `tests/structure`. `tests/components` and `tests/e2e` are
+  // still fully type-checked by `npm run type-check`, which is not strict --
+  // they lose `strictNullChecks`, not checking.
+  //
+  // **Growing this list is the unit of work.** The next step is one component
+  // at a time: add `src/components/<name>.vue` here, fix what it reports, and
+  // when nine are done put `tests/components/**` back.
+  "include": [
+    "src/types/**/*.ts",
+    "src/components/schedule_templates.ts",
+    "tests/unit/**/*.ts",
+    "tests/structure/**/*.ts"
+  ]
+}
