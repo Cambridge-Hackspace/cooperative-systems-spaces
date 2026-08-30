@@ -28,16 +28,52 @@ log() { printf '\n=== %s ===\n' "$*"; }
 # Paho C library with cmake; the edge crate's transitive GUI dependencies want
 # alsa and udev headers. Guarded, so after the first run this is one lookup.
 #
-# Two of these are for e2e/lint.sh rather than for the build: the shell linter
-# and its formatter. They are installed here because a gate that only exists in
-# CI is a gate you discover by pushing, then fixing, then pushing again.
+# One of these is for e2e/lint.sh rather than for the build: the shell linter.
+# It is installed here because a gate that only exists in CI is a gate you
+# discover by pushing, then fixing, then pushing again.
+#
+# The shell *formatter* is deliberately not from apt -- see the pinned bootstrap
+# below.
 if ! command -v cmake >/dev/null 2>&1 || [ ! -e /usr/include/postgresql/libpq-fe.h ] \
   || ! command -v shellcheck >/dev/null 2>&1; then
   log "installing system dependencies"
   apt-get -qq update
   apt-get -qq install -y --no-install-recommends \
-    libpq-dev cmake build-essential libasound2-dev libudev-dev shellcheck shfmt
+    libpq-dev cmake build-essential libasound2-dev libudev-dev shellcheck
 fi
+
+# ---------------------------------------------------------------------------
+# shfmt, pinned
+# ---------------------------------------------------------------------------
+# Version-pinned and checksum-verified, exactly like Node below, and for a
+# reason that cost a build to find: Debian bookworm ships shfmt 3.6.0, whose
+# `-s` rewrites `${VAR:-}` to `${VAR-}`. Those are not the same expression --
+# `:-` substitutes for unset *or empty*, `-` only for unset -- and later
+# versions stopped doing it. Running whatever the distribution happens to
+# package meant the formatter disagreed with itself across machines and
+# demanded a rewrite that changes shell semantics.
+#
+# A formatter is only "total and non-negotiable" if every machine runs the same
+# one. This is that.
+SHFMT_VERSION="v3.13.1"
+SHFMT_SHA256="fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1"
+
+SHFMT_ROOT="${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}/shfmt-${SHFMT_VERSION}"
+if [ ! -x "${SHFMT_ROOT}/shfmt" ]; then
+  log "bootstrapping shfmt ${SHFMT_VERSION}"
+  mkdir -p "${SHFMT_ROOT}"
+  curl -fsSL -o "${SHFMT_ROOT}/shfmt.download" \
+    "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
+  if ! printf '%s  %s\n' "${SHFMT_SHA256}" "shfmt.download" \
+    | (cd "${SHFMT_ROOT}" && sha256sum -c -); then
+    rm -f "${SHFMT_ROOT}/shfmt.download"
+    echo "shfmt checksum mismatch; refusing to install it" >&2
+    exit 1
+  fi
+  chmod +x "${SHFMT_ROOT}/shfmt.download"
+  mv "${SHFMT_ROOT}/shfmt.download" "${SHFMT_ROOT}/shfmt"
+fi
+export PATH="${SHFMT_ROOT}:${PATH}"
 
 # curl and xz are used by the Node bootstrap below. Both are in the Rust image;
 # checked rather than assumed, because the failure otherwise is a 127 in the

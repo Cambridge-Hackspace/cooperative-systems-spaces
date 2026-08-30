@@ -160,7 +160,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+      # Pinned, and to the same version `e2e/build.sh` pins. Unpinned this action
+      # installs whatever is latest, and a formatter that differs between two
+      # machines is a formatter that rejects a tree the other accepts. Debian
+      # bookworm's 3.6.0 rewrites `${VAR:-}` to `${VAR-}` -- not the same
+      # expression -- and later versions stopped doing it, which is how the
+      # disagreement was found. checks/tests/reaper_runs_what_ci_runs.rs asserts
+      # the two pins stay equal.
       - uses: mfinelli/setup-shfmt@v3
+        with:
+          version: '3.13.1'
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - run: ./e2e/lint.sh

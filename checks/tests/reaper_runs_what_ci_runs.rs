@@ -93,6 +93,38 @@ fn every_npm_script_ci_runs_is_also_run_before_a_push() {
     );
 }
 
+#[test]
+fn the_shell_formatter_is_pinned_to_one_version_everywhere() {
+    // A formatter is only "total and non-negotiable" if every machine runs the
+    // same one. Debian bookworm ships shfmt 3.6.0, whose `-s` rewrites
+    // `${VAR:-}` to `${VAR-}`; those differ for a set-but-empty variable and
+    // later versions stopped doing it. Left unpinned, the container demanded a
+    // rewrite that CI and this workstation both reject.
+    let build = read("e2e/build.sh");
+    let ci = workflow_text();
+
+    let pinned = build
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("SHFMT_VERSION=\"v"))
+        .and_then(|v| v.strip_suffix('"'))
+        .map(str::to_owned)
+        .expect("e2e/build.sh must pin SHFMT_VERSION as \"vX.Y.Z\"");
+
+    assert!(
+        ci.contains(&format!("version: '{pinned}'")),
+        "e2e/build.sh pins shfmt {pinned} and no workflow pins the same version. \
+         An unpinned `setup-shfmt` installs whatever is latest, so the two drift \
+         and the tree becomes unformattable to one of them."
+    );
+
+    assert!(
+        !build.contains("shellcheck shfmt"),
+        "shfmt is being installed from the distribution again. That is what \
+         produced the 3.6.0 disagreement; it is bootstrapped with a checksum \
+         below instead."
+    );
+}
+
 /// Non-npm gates CI runs, and the substring that proves `e2e/build.sh` runs it.
 ///
 /// Written out rather than parsed, because a `cargo` invocation has too many
