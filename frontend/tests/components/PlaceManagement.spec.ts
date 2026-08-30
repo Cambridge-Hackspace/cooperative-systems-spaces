@@ -194,26 +194,18 @@ describe('what the server config gates', () => {
     expect(buttonNamed(w, '+ Special place').attributes('disabled')).toBeUndefined()
   })
 
-  // FINDING, pinned. Both create buttons are gated on `config?.enabled`, and
-  // `loadAll` writes `config` only `if (cfg.success && cfg.data)`. A refused
-  // config request therefore leaves `config` null: no warning renders (that
-  // needs `config &&`), the level vocabulary shows as "…", and both buttons
-  // are dead with nothing on screen to say why. It looks exactly like the
-  // module being switched off, which is a different thing entirely.
-  it('is indistinguishable from a disabled module when the config is refused', async () => {
+  // FIXED. Both create buttons are gated on `config?.enabled`, and `loadAll`
+  // wrote `config` only on success -- so a refused config left it null: no
+  // warning, the vocabulary rendered as "…", both buttons dead, and nothing to
+  // say why. It looked exactly like the module being switched off, which is a
+  // different thing entirely.
+  it('says so when the config is refused, instead of looking switched off', async () => {
     mocks.config.mockResolvedValue({ success: false, error: 'Forbidden' })
     mocks.list.mockResolvedValue({ success: true, data: [place('b1', 'Main Building')] })
     const w = mount(PlaceManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(
-      w.find('.alert-warning').exists(),
-      'a refused config now says something -- if that was fixed, this test ' +
-        'should assert the message instead of its absence'
-    ).toBe(false)
-    expect(w.text()).not.toContain('Forbidden')
-    expect(buttonNamed(w, '+ New root place').attributes('disabled')).toBeDefined()
-    expect(w.text()).toContain('…')
+    expect(w.find('.alert-error').text()).toContain('Forbidden')
   })
 })
 
@@ -459,27 +451,23 @@ describe('deleting', () => {
 })
 
 describe('what a network error does', () => {
-  // FINDING, pinned. Eighth component with this shape.
-  it('spins forever when the load rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The loader had no try/catch and cleared `loading` only after the
+  // await, so a rejection spun forever and escaped to an
+  // `app.config.errorHandler` that `src/main.ts` never sets.
+  it('reports a rejected load and stops spinning', async () => {
     mocks.list.mockRejectedValue(new Error('Network Error'))
-    const w = mount(PlaceManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(PlaceManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(w.find('.loading-spinner').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.loading-spinner').exists()).toBe(false)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 
-  // FINDING, pinned. Third component with this shape: `save()` has no
-  // `finally`, so a rejection strands the button and the modal.
-  it('strands the save button when the save rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The save set its busy flag with no `finally`, so a rejection left
+  // the button disabled with no way to retry.
+  it('frees the button and reports the failure when the save rejects', async () => {
     mocks.create.mockRejectedValue(new Error('Network Error'))
-    const w = mount(PlaceManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(PlaceManagement, { global: { stubs } })
     await flushPromises()
     await buttonNamed(w, '+ New root place').trigger('click')
     await nextTick()
@@ -487,11 +475,7 @@ describe('what a network error does', () => {
     await w.find('.modal-action .btn-primary').trigger('click')
     await flushPromises()
 
-    expect(
-      w.find('.modal-action .btn-primary').attributes('disabled'),
-      'the save button now recovers -- if a try/finally was added, delete this test'
-    ).toBeDefined()
-    expect(w.find('.modal-open').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.modal-action .btn-primary').attributes('disabled')).toBeUndefined()
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 })

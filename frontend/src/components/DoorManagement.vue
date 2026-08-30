@@ -559,9 +559,15 @@ function ruleValueLabel(r: DoorAccessRule) {
 
 async function loadDoors() {
   loading.value = true
-  const r = await doorsApi.list()
-  loading.value = false
-  if (r.success && r.data) doors.value = r.data
+  try {
+    const r = await doorsApi.list()
+    if (r.success && r.data) doors.value = r.data
+    else notify(r.error || 'Could not load the doors', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load the doors', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function loadDevices() {
@@ -621,13 +627,18 @@ async function saveDoor() {
   }
   form.value.location = formLocation.value.trim() || null
   saving.value = true
-  const r = await doorsApi.create(form.value)
-  saving.value = false
-  if (r.success) {
-    notify('Door created')
-    showForm.value = false
-    await loadDoors()
-  } else notify(r.error || 'Failed', false)
+  try {
+    const r = await doorsApi.create(form.value)
+    if (r.success) {
+      notify('Door created')
+      showForm.value = false
+      await loadDoors()
+    } else notify(r.error || 'Failed', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed', false)
+  } finally {
+    saving.value = false
+  }
 }
 
 async function deleteDoor(d: Door) {
@@ -703,14 +714,19 @@ async function saveInline() {
   }
   form.value.location = formLocation.value.trim() || null
   saving.value = true
-  const r = await doorsApi.update(detail.value.id, form.value)
-  saving.value = false
-  if (r.success) {
-    notify('Door saved')
-    editingInline.value = false
-    await loadDoors()
-    await openDetail({ id: detail.value.id } as Door)
-  } else notify(r.error || 'Failed', false)
+  try {
+    const r = await doorsApi.update(detail.value.id, form.value)
+    if (r.success) {
+      notify('Door saved')
+      editingInline.value = false
+      await loadDoors()
+      await openDetail({ id: detail.value.id } as Door)
+    } else notify(r.error || 'Failed', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed', false)
+  } finally {
+    saving.value = false
+  }
 }
 
 async function switchToEvents() {
@@ -718,6 +734,9 @@ async function switchToEvents() {
   detailTab.value = 'events'
   const r = await doorsApi.events(detail.value.id, { limit: 100 })
   if (r.success && r.data) events.value = r.data
+  // An empty history reads as "this door has never been opened", on the screen
+  // an admin uses to find out whether it had.
+  else notify(r.error || 'Could not load the access events', false)
 }
 
 async function switchToQr() {

@@ -455,39 +455,30 @@ describe('deleting', () => {
 })
 
 describe('what a network error does', () => {
-  // FINDING, pinned. Seventh component with this shape: `load()` has no
-  // try/catch and clears `loading` only after the await.
-  it('spins forever when the list rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The loader had no try/catch and cleared `loading` only after the
+  // await, so a rejection spun forever and escaped to an
+  // `app.config.errorHandler` that `src/main.ts` never sets.
+  it('reports a rejected load and stops spinning', async () => {
     mocks.list.mockRejectedValue(new Error('Network Error'))
-    const w = mount(ScheduleManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(ScheduleManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(w.find('.loading-spinner').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.loading-spinner').exists()).toBe(false)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 
-  // FINDING, pinned. Second component with this shape: `save()` sets
-  // `saving = true` with no `finally`.
-  it('strands the save button when the save rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The save set its busy flag with no `finally`, so a rejection left
+  // the button disabled with no way to retry.
+  it('frees the button and reports the failure when the save rejects', async () => {
     mocks.create.mockRejectedValue(new Error('Network Error'))
-    const w = mount(ScheduleManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(ScheduleManagement, { global: { stubs } })
     await flushPromises()
     await openNew(w)
     await w.find('input[type="text"]').setValue('Member Hours')
     await w.find('.modal-action .btn-primary').trigger('click')
     await flushPromises()
 
-    expect(
-      w.find('.modal-action .btn-primary').attributes('disabled'),
-      'the save button now recovers -- if a try/finally was added, delete this test'
-    ).toBeDefined()
-    expect(w.find('.modal-open').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.modal-action .btn-primary').attributes('disabled')).toBeUndefined()
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 })

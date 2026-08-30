@@ -321,9 +321,19 @@ function formatRel(iso: string): string {
 
 async function load() {
   loading.value = true
-  const r = await homeLinksApi.list()
-  loading.value = false
-  if (r.success && r.data) links.value = r.data
+  try {
+    const r = await homeLinksApi.list()
+    if (r.success && r.data) links.value = r.data
+    else notify(r.error || 'Could not load the homepage links', false)
+  } catch (e) {
+    // Without this the rejection escaped to `app.config.errorHandler`, which
+    // `src/main.ts` never sets -- so it reached the browser console and nowhere
+    // else, and the spinner never cleared because the line that cleared it was
+    // after the await.
+    notify(e instanceof Error ? e.message : 'Could not load the homepage links', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function save() {
@@ -340,15 +350,22 @@ async function save() {
     enabled: form.value.enabled,
     expires_at: localInputToIso(form.value.expires_at_local),
   }
-  const res = editing.value
-    ? await homeLinksApi.update(editing.value.id, body)
-    : await homeLinksApi.create(body)
-  saving.value = false
-  if (res.success) {
-    notify(editing.value ? 'Link saved' : 'Link created')
-    showForm.value = false
-    await load()
-  } else notify(res.error || 'Failed to save', false)
+  try {
+    const res = editing.value
+      ? await homeLinksApi.update(editing.value.id, body)
+      : await homeLinksApi.create(body)
+    if (res.success) {
+      notify(editing.value ? 'Link saved' : 'Link created')
+      showForm.value = false
+      await load()
+    } else notify(res.error || 'Failed to save', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save', false)
+  } finally {
+    // In a `finally`, so a rejection cannot strand the button disabled and the
+    // modal open with no way to retry.
+    saving.value = false
+  }
 }
 
 async function onDelete(l: HomeLink) {

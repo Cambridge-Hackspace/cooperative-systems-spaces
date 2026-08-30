@@ -364,58 +364,40 @@ describe('deleting a link', () => {
 })
 
 describe('what a network error does', () => {
-  // FINDING, pinned. `load()` has no try/catch and sets `loading = false` only
-  // after the await, so a rejected list leaves the spinner up forever and the
-  // rejection escapes to `app.config.errorHandler`, which `src/main.ts` never
-  // sets. Sixth component with this exact shape.
-  it('spins forever when the list rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. `load()` had no try/catch and cleared `loading` only after the
+  // await, so a rejected list spun forever and the rejection escaped to an
+  // `app.config.errorHandler` that `src/main.ts` never sets.
+  it('reports a rejected list and stops spinning', async () => {
     mocks.list.mockRejectedValue(new Error('Network Error'))
-    const w = mount(HomeLinkManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(HomeLinkManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(
-      w.find('.loading-spinner').exists(),
-      'the page now reacts to a rejected list -- if a try/catch was added, ' +
-        'this test should assert what the user is shown'
-    ).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.loading-spinner').exists()).toBe(false)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 
-  it('says nothing when the list is refused', async () => {
+  it('reports a refused list rather than showing an empty one', async () => {
     mocks.list.mockResolvedValue({ success: false, error: 'Forbidden' })
     const w = mount(HomeLinkManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(w.text()).toContain('No homepage links yet')
-    expect(w.text()).not.toContain('Forbidden')
+    expect(w.find('.alert-error').text()).toContain('Forbidden')
   })
 
-  // FINDING, pinned. `save()` sets `saving = true`, awaits, and sets it back on
-  // the next line with no `finally`. A rejection strands the flag, the Save
-  // button stays disabled, and the modal stays open with no way to retry --
-  // the same defect MfaSettings has in three handlers.
-  it('strands the save button when the save rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. `save()` set `saving = true` with no `finally`, so a rejection left
+  // the button disabled and the modal open with no way to retry.
+  it('frees the save button and reports the failure when the save rejects', async () => {
     mocks.create.mockRejectedValue(new Error('Network Error'))
-    const w = mount(HomeLinkManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(HomeLinkManagement, { global: { stubs } })
     await flushPromises()
     await openForm(w)
     await fill(w, 'Wiki', 'https://wiki.example.org')
     await w.find('.modal-action .btn-primary').trigger('click')
     await flushPromises()
 
-    expect(
-      w.find('.modal-action .btn-primary').attributes('disabled'),
-      'the save button now recovers -- if a try/finally was added, delete ' + 'this test'
-    ).toBeDefined()
+    expect(w.find('.modal-action .btn-primary').attributes('disabled')).toBeUndefined()
     expect(w.find('.modal-open').exists()).toBe(true)
-    expect(w.find('.alert-error').exists()).toBe(false)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 })
 

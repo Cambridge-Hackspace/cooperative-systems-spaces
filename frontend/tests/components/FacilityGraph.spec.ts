@@ -417,11 +417,10 @@ describe('the selection strip', () => {
 })
 
 describe('what happens when the server does not cooperate', () => {
-  // FINDING, pinned. `if (p.success && p.data)` and nothing else. A response
-  // that reports failure leaves the previous data in place and says nothing,
-  // so pressing Reload against a server that has started refusing shows a
-  // graph that is quietly out of date.
-  it('keeps the stale graph and says nothing when a reload is refused', async () => {
+  // FIXED. `if (p.success && p.data)` and nothing else, so a refused reload kept
+  // the previous graph on screen and said nothing -- against a server that had
+  // started refusing, the view was quietly out of date.
+  it('reports a refused reload rather than showing a stale graph in silence', async () => {
     const w = await graphWith([place('p1', 'Hall')], [])
     expect(nodes()[0].data.label).toBe('Hall')
 
@@ -433,35 +432,15 @@ describe('what happens when the server does not cooperate', () => {
       ?.trigger('click')
     await flushPromises()
 
-    // The graph really is rebuilt -- asserting only on `built()` would read the
-    // *first* construction and pass just as well if the refusal had emptied the
-    // view and skipped the rebuild entirely.
-    expect(graph.constructed).toHaveLength(2)
-    expect(nodes()[0].data.label).toBe('Hall')
-    expect(
-      w.text(),
-      'the component now reports a refused load -- if that was fixed, this ' +
-        'test should assert the message instead of its absence'
-    ).not.toContain('Forbidden')
+    expect(w.find('.alert-error').text()).toContain('Forbidden')
   })
 
-  // FINDING, pinned, and the worst of the three. `load()` has no try/catch and
-  // `loading.value = false` sits after the await, so a rejected request strands
-  // the spinner forever: no error state, no retry prompt, nothing but a
-  // spinner that never stops.
-  //
-  // The rejection escapes the component entirely. `onMounted(load)` hands Vue
-  // an async function, so Vue routes the rejection to `app.config.errorHandler`
-  // -- and `src/main.ts` sets none, which means in production it lands in the
-  // browser console and nowhere else. That is also why `no-floating-promises`
-  // never saw it: `onMounted(load)` passes a reference rather than calling it.
-  //
-  // The handler is installed on this mount rather than in `tests/setup.ts`,
-  // per the note there: a warning that is genuinely expected is declared by the
-  // test that provokes it. Without one, Vue's own "Unhandled error during
-  // execution of mounted hook" warning fails this test -- which is the harness
-  // working, not a reason to widen it.
-  it('spins forever when a request rejects, and the rejection leaves the app', async () => {
+  // FIXED. `load()` had no try/catch and set `loading = false` only after the
+  // await, so a rejection stranded the spinner forever -- and this component
+  // had no error surface at all, so the rejection went to an
+  // `app.config.errorHandler` that `src/main.ts` never sets, reaching the
+  // browser console and nowhere else. It has one now.
+  it('reports a rejected load, stops spinning, and offers a retry', async () => {
     const escaped: unknown[] = []
     mocks.listPlaces.mockRejectedValue(new Error('Network Error'))
 
@@ -470,18 +449,16 @@ describe('what happens when the server does not cooperate', () => {
     })
     await flushPromises()
 
-    expect(
-      w.find('.loading-spinner').exists(),
-      'the spinner now clears after a rejected load -- if a failure state ' +
-        'was added, this test should assert it; `load()` has no try/catch ' +
-        'and sets `loading = false` only after the await'
-    ).toBe(true)
-    expect(w.text()).not.toContain('Nothing to graph yet')
-    expect(graph.constructed).toHaveLength(0)
-    expect(
-      escaped,
-      'the rejection is now handled inside the component -- if a try/catch was ' +
-        'added, delete this expectation and assert what the user is shown'
-    ).toHaveLength(1)
+    expect(w.find('.loading-spinner').exists()).toBe(false)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
+    expect(escaped, 'the rejection is handled now, not routed to the app').toHaveLength(0)
+
+    mocks.listPlaces.mockResolvedValue({ success: true, data: [place('p1', 'Hall')] })
+    await w
+      .findAll('button')
+      .find((b) => b.text().trim() === 'Retry')
+      ?.trigger('click')
+    await flushPromises()
+    expect(w.find('.alert-error').exists()).toBe(false)
   })
 })

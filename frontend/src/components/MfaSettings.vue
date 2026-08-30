@@ -221,9 +221,17 @@ function fmt(iso: string) {
 }
 
 async function loadAll() {
-  const [s, w] = await Promise.all([mfaApi.status(), mfaApi.listWebauthn()])
-  if (s.success && s.data) status.value = s.data
-  if (w.success && w.data) webauthn.value = w.data
+  try {
+    const [s, w] = await Promise.all([mfaApi.status(), mfaApi.listWebauthn()])
+    // The whole page is gated on `v-if="!status"`, so a refused status left it
+    // a spinner forever -- on the page whose job is letting somebody secure
+    // their account.
+    if (s.success && s.data) status.value = s.data
+    else notify(s.error || 'Could not load your two-factor settings', false)
+    if (w.success && w.data) webauthn.value = w.data
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load your two-factor settings', false)
+  }
 }
 
 // Regenerate the QR data URL whenever a new TOTP setup arrives.
@@ -241,25 +249,35 @@ watch(totpSetup, async (v) => {
 
 async function beginTotp() {
   busy.value = true
-  const r = await mfaApi.totpSetup()
-  busy.value = false
-  if (r.success && r.data) {
-    totpSetup.value = r.data
-    totpConfirmCode.value = ''
-  } else notify(r.error || 'Failed to start TOTP setup', false)
+  try {
+    const r = await mfaApi.totpSetup()
+    if (r.success && r.data) {
+      totpSetup.value = r.data
+      totpConfirmCode.value = ''
+    } else notify(r.error || 'Failed to start TOTP setup', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to start TOTP setup', false)
+  } finally {
+    busy.value = false
+  }
 }
 
 async function confirmTotp() {
   busy.value = true
-  const r = await mfaApi.totpConfirm(totpConfirmCode.value.trim())
-  busy.value = false
-  if (r.success && r.data) {
-    freshRecovery.value = r.data.recovery_codes
-    totpSetup.value = null
-    totpConfirmCode.value = ''
-    notify('TOTP enabled.')
-    await loadAll()
-  } else notify(r.error || 'Invalid code', false)
+  try {
+    const r = await mfaApi.totpConfirm(totpConfirmCode.value.trim())
+    if (r.success && r.data) {
+      freshRecovery.value = r.data.recovery_codes
+      totpSetup.value = null
+      totpConfirmCode.value = ''
+      notify('TOTP enabled.')
+      await loadAll()
+    } else notify(r.error || 'Invalid code', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Invalid code', false)
+  } finally {
+    busy.value = false
+  }
 }
 
 function cancelTotp() {
@@ -315,13 +333,18 @@ async function regenRecovery() {
   )
     return
   busy.value = true
-  const r = await mfaApi.regenerateRecoveryCodes()
-  busy.value = false
-  if (r.success && r.data) {
-    freshRecovery.value = r.data.recovery_codes
-    notify('New recovery codes generated.')
-    await loadAll()
-  } else notify(r.error || 'Failed', false)
+  try {
+    const r = await mfaApi.regenerateRecoveryCodes()
+    if (r.success && r.data) {
+      freshRecovery.value = r.data.recovery_codes
+      notify('New recovery codes generated.')
+      await loadAll()
+    } else notify(r.error || 'Failed', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed', false)
+  } finally {
+    busy.value = false
+  }
 }
 
 onMounted(loadAll)

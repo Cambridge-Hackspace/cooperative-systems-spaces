@@ -25,6 +25,10 @@
     >
       <span class="loading loading-spinner loading-lg"></span>
     </div>
+    <div v-else-if="error" class="alert alert-error">
+      <span>{{ error }}</span>
+      <button class="btn btn-sm" @click="load">Retry</button>
+    </div>
     <div
       v-else-if="!places.length && !doors.length"
       class="h-[600px] flex items-center justify-center bg-base-100 border border-base-300 rounded text-base-content/60"
@@ -62,6 +66,7 @@ type LayoutName = 'cose' | 'breadthfirst' | 'concentric' | 'grid'
 
 const cyContainer = ref<HTMLDivElement | null>(null)
 const loading = ref(false)
+const error = ref('')
 const places = ref<Place[]>([])
 const doors = ref<Door[]>([])
 const layoutName = ref<LayoutName>('cose')
@@ -75,10 +80,22 @@ let cy: Core | null = null
 
 async function load() {
   loading.value = true
-  const [p, d] = await Promise.all([placesApi.list(), doorsApi.list()])
-  if (p.success && p.data) places.value = p.data
-  if (d.success && d.data) doors.value = d.data
-  loading.value = false
+  error.value = ''
+  try {
+    const [p, d] = await Promise.all([placesApi.list(), doorsApi.list()])
+    if (p.success && p.data) places.value = p.data
+    else error.value = p.error || 'Could not load the places'
+    if (d.success && d.data) doors.value = d.data
+    else error.value = d.error || 'Could not load the doors'
+  } catch (e) {
+    // This component had no error surface at all, so a rejected load left the
+    // spinner up forever and the rejection went to an
+    // `app.config.errorHandler` that `src/main.ts` never sets -- reaching the
+    // browser console and nowhere else.
+    error.value = e instanceof Error ? e.message : 'Could not load the graph'
+  } finally {
+    loading.value = false
+  }
   await nextTick()
   rebuild()
 }

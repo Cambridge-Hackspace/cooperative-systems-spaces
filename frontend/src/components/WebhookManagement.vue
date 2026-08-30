@@ -382,15 +382,21 @@ function webhookName(id: string) {
 
 async function loadAll() {
   loading.value = true
-  const [whRes, authRes, etRes] = await Promise.all([
-    webhooksApi.listWebhooks(),
-    webhooksApi.listAuthHeaders(),
-    webhooksApi.listEventTypes(),
-  ])
-  if (whRes.success && whRes.data) webhooks.value = whRes.data
-  if (authRes.success && authRes.data) authHeaders.value = authRes.data
-  if (etRes.success && etRes.data) eventTypes.value = etRes.data
-  loading.value = false
+  try {
+    const [whRes, authRes, etRes] = await Promise.all([
+      webhooksApi.listWebhooks(),
+      webhooksApi.listAuthHeaders(),
+      webhooksApi.listEventTypes(),
+    ])
+    if (whRes.success && whRes.data) webhooks.value = whRes.data
+    else notify(whRes.error || 'Could not load the webhooks', false)
+    if (authRes.success && authRes.data) authHeaders.value = authRes.data
+    if (etRes.success && etRes.data) eventTypes.value = etRes.data
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load the webhooks', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function loadDeliveries() {
@@ -403,7 +409,7 @@ async function loadDeliveries() {
   // from "no deliveries yet" -- the same silent-failure shape as the door and
   // rule bugs fixed on this branch. This component has no error surface of its
   // own, so the log is the honest minimum; it is not a substitute for one.
-  console.error('Could not load webhook deliveries:', res.error)
+  notify(res.error || 'Could not load the delivery history', false)
 }
 function switchToDeliveries() {
   tab.value = 'deliveries'
@@ -450,16 +456,21 @@ async function saveWebhook() {
     return
   }
   saving.value = true
-  const res = editingWebhook.value
-    ? await webhooksApi.updateWebhook(editingWebhook.value.id, whForm.value)
-    : await webhooksApi.createWebhook(whForm.value)
-  saving.value = false
-  if (res.success) {
-    showWebhookModal.value = false
-    notify(editingWebhook.value ? 'Webhook updated' : 'Webhook created')
-    await loadAll()
-  } else {
-    notify(res.error || 'Failed to save webhook', false)
+  try {
+    const res = editingWebhook.value
+      ? await webhooksApi.updateWebhook(editingWebhook.value.id, whForm.value)
+      : await webhooksApi.createWebhook(whForm.value)
+    if (res.success) {
+      showWebhookModal.value = false
+      notify(editingWebhook.value ? 'Webhook updated' : 'Webhook created')
+      await loadAll()
+    } else {
+      notify(res.error || 'Failed to save webhook', false)
+    }
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save webhook', false)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -498,27 +509,39 @@ async function saveAuthHeader() {
     notify('Name and header name are required', false)
     return
   }
-  saving.value = true
-  let res
-  if (editingAuth.value) {
-    const payload: any = { name: authForm.value.name, header_name: authForm.value.header_name }
-    if (authForm.value.header_value) payload.header_value = authForm.value.header_value
-    res = await webhooksApi.updateAuthHeader(editingAuth.value.id, payload)
-  } else {
-    if (!authForm.value.header_value) {
-      saving.value = false
-      notify('A header value is required', false)
-      return
-    }
-    res = await webhooksApi.createAuthHeader(authForm.value)
+  // The value check moved above the flag, so the early return no longer has to
+  // remember to clear it -- and the rest is in try/finally, so a rejection
+  // cannot either.
+  if (!editingAuth.value && !authForm.value.header_value) {
+    notify('A header value is required', false)
+    return
   }
-  saving.value = false
-  if (res.success) {
-    showAuthModal.value = false
-    notify(editingAuth.value ? 'Credential updated' : 'Credential created')
-    await loadAll()
-  } else {
-    notify(res.error || 'Failed to save credential', false)
+
+  saving.value = true
+  try {
+    let res
+    if (editingAuth.value) {
+      const payload: Record<string, string> = {
+        name: authForm.value.name,
+        header_name: authForm.value.header_name,
+      }
+      // Omitted unless retyped, so saving a rename does not blank the secret.
+      if (authForm.value.header_value) payload.header_value = authForm.value.header_value
+      res = await webhooksApi.updateAuthHeader(editingAuth.value.id, payload)
+    } else {
+      res = await webhooksApi.createAuthHeader(authForm.value)
+    }
+    if (res.success) {
+      showAuthModal.value = false
+      notify(editingAuth.value ? 'Credential updated' : 'Credential created')
+      await loadAll()
+    } else {
+      notify(res.error || 'Failed to save credential', false)
+    }
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save credential', false)
+  } finally {
+    saving.value = false
   }
 }
 

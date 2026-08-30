@@ -111,27 +111,18 @@ describe('before the status arrives', () => {
     expect(w.text()).not.toContain('Authenticator app')
   })
 
-  // FINDING, pinned. `loadAll` writes `status` only `if (s.success && s.data)`,
-  // and the template gates everything on `v-if="!status"`. A refused status
-  // request therefore leaves the page as a spinner, forever, with no message.
-  // On the page whose whole job is letting someone secure their account.
-  it('spins forever when the status request is refused, and says nothing', async () => {
+  // FIXED. `loadAll` wrote `status` only on success and the whole page is
+  // gated on `v-if="!status"`, so a refused status left it a spinner forever
+  // -- on the page whose job is letting somebody secure their account.
+  it('reports a refused status instead of spinning forever', async () => {
     mocks.status.mockResolvedValue({ success: false, error: 'Forbidden' })
     const w = mount(MfaSettings, { global: { stubs } })
     await flushPromises()
 
-    expect(
-      w.find('.loading-spinner').exists(),
-      'the page now reacts to a refused status -- if an error state was added, ' +
-        'this test should assert it; the guard is `if (s.success && s.data)`'
-    ).toBe(true)
-    expect(w.text()).not.toContain('Forbidden')
+    expect(w.find('.alert-error').text()).toContain('Forbidden')
   })
 
-  // FINDING, pinned. Same shape as FacilityGraph: `loadAll` has no try/catch
-  // and `onMounted(loadAll)` hands Vue an async function, so the rejection goes
-  // to `app.config.errorHandler` -- which `src/main.ts` never sets.
-  it('spins forever when the status request rejects, and the rejection leaves the app', async () => {
+  it('reports a rejected status rather than letting it escape the app', async () => {
     const escaped: unknown[] = []
     mocks.status.mockRejectedValue(new Error('Network Error'))
     const w = mount(MfaSettings, {
@@ -139,8 +130,8 @@ describe('before the status arrives', () => {
     })
     await flushPromises()
 
-    expect(w.find('.loading-spinner').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
+    expect(escaped, 'the rejection is handled now, not routed to the app').toHaveLength(0)
   })
 })
 
@@ -440,19 +431,19 @@ describe('what a network error does to the page', () => {
     ],
   ]
 
-  it('locks every button on the page when Confirm rejects', async () => {
-    // The third handler without a `finally`, reached only from inside the TOTP
-    // setup flow -- so it does not fit the table above, and leaving it out
-    // would mean the comment claims three and the spec covers two.
-    const escaped: unknown[] = []
+  // FIXED. `beginTotp`, `confirmTotp` and `regenRecovery` each set `busy = true`
+  // and cleared it on the next line, so a rejection in any of them stranded the
+  // flag and every primary button on the page stayed disabled for the life of
+  // it -- with nothing on screen to say why. `addWebauthn` already did the same
+  // work inside try/finally, which is what made it an oversight rather than a
+  // design.
+  it('frees the page and reports the failure when Confirm rejects', async () => {
     mocks.totpSetup.mockResolvedValue({
       success: true,
       data: { secret_base32: 'JBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/css:me' },
     })
     mocks.totpConfirm.mockRejectedValue(new Error('Network Error'))
-    const w = mount(MfaSettings, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(MfaSettings, { global: { stubs } })
     await flushPromises()
 
     await buttonNamed(w, 'Set up authenticator').trigger('click')
@@ -461,41 +452,27 @@ describe('what a network error does to the page', () => {
     await buttonNamed(w, 'Confirm').trigger('click')
     await flushPromises()
 
-    expect(
-      buttonNamed(w, 'Confirm').attributes('disabled'),
-      'Confirm left the page locked -- if a try/finally was added, delete ' +
-        'this test; only addWebauthn has one today'
-    ).toBeDefined()
-    expect(buttonNamed(w, 'Add security key').attributes('disabled')).toBeDefined()
-    expect(w.find('.alert-error').exists()).toBe(false)
-    expect(escaped).toHaveLength(1)
+    expect(buttonNamed(w, 'Confirm').attributes('disabled')).toBeUndefined()
+    expect(flashText(w)).toContain('Network Error')
   })
 
   for (const [label, arrange] of locking) {
-    it(`locks every button on the page when ${label} rejects`, async () => {
-      const escaped: unknown[] = []
+    it(`frees the page and reports the failure when ${label} rejects`, async () => {
       arrange()
       mocks.status.mockResolvedValue({
         success: true,
         data: status({ recovery_codes_remaining: 5 }),
       })
-      const w = mount(MfaSettings, {
-        global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-      })
+      const w = mount(MfaSettings, { global: { stubs } })
       await flushPromises()
 
       await buttonNamed(w, label).trigger('click')
       await flushPromises()
 
-      expect(
-        buttonNamed(w, 'Set up authenticator').attributes('disabled'),
-        `${label} left the page locked -- if a try/finally was added, delete ` +
-          'this test; only addWebauthn has one today'
-      ).toBeDefined()
-      expect(buttonNamed(w, 'Add security key').attributes('disabled')).toBeDefined()
-      expect(buttonNamed(w, 'Regenerate recovery codes').attributes('disabled')).toBeDefined()
-      expect(w.find('.alert-error').exists()).toBe(false)
-      expect(escaped).toHaveLength(1)
+      expect(buttonNamed(w, 'Set up authenticator').attributes('disabled')).toBeUndefined()
+      expect(buttonNamed(w, 'Add security key').attributes('disabled')).toBeDefined() // no label typed
+      expect(buttonNamed(w, 'Regenerate recovery codes').attributes('disabled')).toBeUndefined()
+      expect(flashText(w)).toContain('Network Error')
     })
   }
 })

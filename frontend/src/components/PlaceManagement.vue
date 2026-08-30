@@ -288,10 +288,20 @@ const movableParentOptions = computed(() => {
 
 async function loadAll() {
   loading.value = true
-  const [cfg, list] = await Promise.all([placesApi.config(), placesApi.list()])
-  loading.value = false
-  if (cfg.success && cfg.data) config.value = cfg.data
-  if (list.success && list.data) places.value = list.data
+  try {
+    const [cfg, list] = await Promise.all([placesApi.config(), placesApi.list()])
+    // A refused config used to leave `config` null, which is exactly what the
+    // module being switched off looks like: no warning, the level vocabulary
+    // rendered as "…", and both create buttons dead with nothing to say why.
+    if (cfg.success && cfg.data) config.value = cfg.data
+    else notify(cfg.error || 'Could not load the places configuration', false)
+    if (list.success && list.data) places.value = list.data
+    else notify(list.error || 'Could not load the places', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load the places', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 function openCreate(parent: Place | null) {
@@ -362,32 +372,37 @@ function allowedTypesFor(parent: Place | null): string[] {
 async function save() {
   saving.value = true
   let res
-  if (editing.value) {
-    res = await placesApi.update(editing.value.id, {
-      name: form.value.name.trim(),
-      place_type: form.value.place_type,
-      parent_id: form.value.parent_id,
-      description: form.value.description,
-      external_id: form.value.external_id,
-      is_special: form.value.is_special,
-    })
-  } else {
-    res = await placesApi.create({
-      name: form.value.name.trim(),
-      place_type: form.value.place_type,
-      parent_id: form.value.parent_id,
-      description: form.value.description,
-      external_id: form.value.external_id,
-      is_special: form.value.is_special,
-    })
-  }
-  saving.value = false
-  if (res.success) {
-    notify(editing.value ? 'Place saved' : 'Place created')
-    showForm.value = false
-    await loadAll()
-  } else {
-    notify(res.error || 'Failed to save', false)
+  try {
+    if (editing.value) {
+      res = await placesApi.update(editing.value.id, {
+        name: form.value.name.trim(),
+        place_type: form.value.place_type,
+        parent_id: form.value.parent_id,
+        description: form.value.description,
+        external_id: form.value.external_id,
+        is_special: form.value.is_special,
+      })
+    } else {
+      res = await placesApi.create({
+        name: form.value.name.trim(),
+        place_type: form.value.place_type,
+        parent_id: form.value.parent_id,
+        description: form.value.description,
+        external_id: form.value.external_id,
+        is_special: form.value.is_special,
+      })
+    }
+    if (res.success) {
+      notify(editing.value ? 'Place saved' : 'Place created')
+      showForm.value = false
+      await loadAll()
+    } else {
+      notify(res.error || 'Failed to save', false)
+    }
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save', false)
+  } finally {
+    saving.value = false
   }
 }
 

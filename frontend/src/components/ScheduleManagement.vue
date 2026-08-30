@@ -352,9 +352,15 @@ function updateInterval(day: DayOfWeek, idxWithinDay: number, key: 'start' | 'en
 
 async function load() {
   loading.value = true
-  const r = await schedulesApi.list()
-  loading.value = false
-  if (r.success && r.data) schedules.value = r.data
+  try {
+    const r = await schedulesApi.list()
+    if (r.success && r.data) schedules.value = r.data
+    else notify(r.error || 'Could not load the schedules', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Could not load the schedules', false)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function save() {
@@ -375,15 +381,20 @@ async function save() {
     intervals: form.value.intervals,
     is_public: form.value.is_public,
   }
-  const res = editing.value
-    ? await schedulesApi.update(editing.value.id, body)
-    : await schedulesApi.create(body)
-  saving.value = false
-  if (res.success) {
-    notify(editing.value ? 'Schedule saved' : 'Schedule created')
-    showForm.value = false
-    await load()
-  } else notify(res.error || 'Failed to save', false)
+  try {
+    const res = editing.value
+      ? await schedulesApi.update(editing.value.id, body)
+      : await schedulesApi.create(body)
+    if (res.success) {
+      notify(editing.value ? 'Schedule saved' : 'Schedule created')
+      showForm.value = false
+      await load()
+    } else notify(res.error || 'Failed to save', false)
+  } catch (e) {
+    notify(e instanceof Error ? e.message : 'Failed to save', false)
+  } finally {
+    saving.value = false
+  }
 }
 
 async function onDelete(s: Schedule) {

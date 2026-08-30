@@ -505,23 +505,17 @@ describe('the detail tabs', () => {
     expect(w.find('.alert-error').text()).toContain('Failed to render QR')
   })
 
-  // FINDING, pinned. `switchToEvents` and `switchToQr` both guard with
-  // `if (r.success && r.data)` and have no else. A refused events request
-  // leaves the tab showing an empty history, which reads as "this door has
-  // never been opened" -- on the screen an admin would use to investigate
-  // whether it had.
-  it('shows a refused event history as an empty one', async () => {
+  // FIXED. `switchToEvents` guarded with `if (r.success && r.data)` and had no
+  // else, so a refused history showed as an empty one -- "this door has never
+  // been opened" -- on the screen an admin uses to find out whether it had.
+  it('reports a refused event history rather than showing an empty one', async () => {
     mocks.events.mockResolvedValue({ success: false, error: 'Forbidden' })
     const w = await page([door()])
     await openDetail(w)
     await tabNamed(w, 'Events').trigger('click')
     await flushPromises()
 
-    expect(
-      w.text(),
-      'the events tab now reports a refused load -- if that was fixed, this ' +
-        'test should assert the message'
-    ).not.toContain('Forbidden')
+    expect(w.find('.alert-error').text()).toContain('Forbidden')
   })
 })
 
@@ -572,27 +566,23 @@ describe('deleting a door', () => {
 })
 
 describe('what a network error does', () => {
-  // FINDING, pinned. Tenth component with this shape.
-  it('spins forever when the door list rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The loader had no try/catch and cleared `loading` only after the
+  // await, so a rejection spun forever and escaped to an
+  // `app.config.errorHandler` that `src/main.ts` never sets.
+  it('reports a rejected load and stops spinning', async () => {
     mocks.listDoors.mockRejectedValue(new Error('Network Error'))
-    const w = mount(DoorManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(DoorManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(w.find('.loading-spinner').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.loading-spinner').exists()).toBe(false)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 
-  // FINDING, pinned. Fifth component with this shape: `saveDoor` sets
-  // `saving = true` with no `finally`, so a rejection strands the button.
-  it('strands the create button when the save rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The save set its busy flag with no `finally`, so a rejection left
+  // the button disabled with no way to retry.
+  it('frees the button and reports the failure when the save rejects', async () => {
     mocks.createDoor.mockRejectedValue(new Error('Network Error'))
-    const w = mount(DoorManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(DoorManagement, { global: { stubs } })
     await flushPromises()
     await buttonNamed(w, '+ New door').trigger('click')
     await nextTick()
@@ -600,10 +590,7 @@ describe('what a network error does', () => {
     await w.find('.modal-action .btn-primary').trigger('click')
     await flushPromises()
 
-    expect(
-      w.find('.modal-action .btn-primary').attributes('disabled'),
-      'the create button now recovers -- if a try/finally was added, delete this test'
-    ).toBeDefined()
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.modal-action .btn-primary').attributes('disabled')).toBeUndefined()
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 })

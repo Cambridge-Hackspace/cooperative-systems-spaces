@@ -182,22 +182,16 @@ describe('the three tabs', () => {
     expect(mocks.listDeliveries).toHaveBeenCalledTimes(2)
   })
 
-  // Pinned, and the component says so itself in a comment: `loadDeliveries`
-  // logs a failure and leaves the tab showing an empty list, which reads as
-  // "no deliveries yet". The comment is honest that the log "is not a
-  // substitute" for an error surface. This test holds it to that.
-  it('shows a failed delivery load as an empty history', async () => {
+  // FIXED. `loadDeliveries` logged the failure and left the tab showing an
+  // empty list, which reads as "no deliveries yet". The component's own comment
+  // said the log "is not a substitute" for an error surface. There is one now.
+  it('reports a failed delivery load rather than showing an empty history', async () => {
     mocks.listDeliveries.mockResolvedValue({ success: false, error: 'Forbidden' })
     const w = await page()
     await tabNamed(w, 'Deliveries').trigger('click')
     await flushPromises()
 
-    expect(
-      w.text(),
-      'the deliveries tab now reports a failed load -- if an error surface was ' +
-        'added, this test should assert it instead'
-    ).not.toContain('Forbidden')
-    expect(w.findAll('tbody tr')).toHaveLength(0)
+    expect(w.find('.alert-error').text()).toContain('Forbidden')
   })
 })
 
@@ -446,29 +440,23 @@ describe('credentials', () => {
 })
 
 describe('what a network error does', () => {
-  // FINDING, pinned. Ninth component with this shape.
-  it('spins forever when the initial load rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The loader had no try/catch and cleared `loading` only after the
+  // await, so a rejection spun forever and escaped to an
+  // `app.config.errorHandler` that `src/main.ts` never sets.
+  it('reports a rejected load and stops spinning', async () => {
     mocks.listWebhooks.mockRejectedValue(new Error('Network Error'))
-    const w = mount(WebhookManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(WebhookManagement, { global: { stubs } })
     await flushPromises()
 
-    expect(w.find('.loading-spinner').exists()).toBe(true)
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.loading-spinner').exists()).toBe(false)
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 
-  // FINDING, pinned. Fourth component with this shape: `saveWebhook` sets
-  // `saving = true` with no `finally`. It does clear the flag before both of
-  // its *early* returns, which is more care than most -- the gap is only the
-  // rejecting request.
-  it('strands the save button when the save rejects', async () => {
-    const escaped: unknown[] = []
+  // FIXED. The save set its busy flag with no `finally`, so a rejection left
+  // the button disabled with no way to retry.
+  it('frees the button and reports the failure when the save rejects', async () => {
     mocks.createWebhook.mockRejectedValue(new Error('Network Error'))
-    const w = mount(WebhookManagement, {
-      global: { stubs, config: { errorHandler: (e: unknown) => escaped.push(e) } },
-    })
+    const w = mount(WebhookManagement, { global: { stubs } })
     await flushPromises()
     await openNewWebhook(w)
     await modalInputs(w)[0].setValue('Matrix bridge')
@@ -476,10 +464,7 @@ describe('what a network error does', () => {
     await w.find('.modal-action .btn-primary').trigger('click')
     await flushPromises()
 
-    expect(
-      w.find('.modal-action .btn-primary').attributes('disabled'),
-      'the save button now recovers -- if a try/finally was added, delete this test'
-    ).toBeDefined()
-    expect(escaped).toHaveLength(1)
+    expect(w.find('.modal-action .btn-primary').attributes('disabled')).toBeUndefined()
+    expect(w.find('.alert-error').text()).toContain('Network Error')
   })
 })
