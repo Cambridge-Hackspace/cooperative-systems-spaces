@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 pub use css_lib::MqttConfig;
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -374,7 +376,7 @@ impl Default for RegistrationChallengeConfig {
             throttle_attempts: 5,
             throttle_seconds: 300,
             terms_of_service_checkbox: true,
-            terms_of_service_md: "By registering, you agree to the [terms of service](https://example.com/terms-of-service)".to_string(),
+            terms_of_service_md: "By registering, you agree to the <a href=\"/terms\" target=\"_blank\" class=\"link link-primary\">terms of service</a>".to_string(),
             recaptcha_enabled: false,
             recaptcha_site_key: String::new(),
             recaptcha_secret_key: String::new(),
@@ -475,10 +477,28 @@ impl AuthMfaConfig {
     }
 }
 
+/// The old, publicly-known placeholder JWT secret. Any config carrying this
+/// exact value (rather than a generated one) signing tokens is a full auth
+/// bypass, so it's rejected at load time rather than just warned about.
+const LEGACY_DEFAULT_JWT_SECRET: &str = "your-super-secret-jwt-key-change-this-in-production";
+
+/// A fresh, unguessable JWT secret for new installs: a recognizable prefix
+/// (so it's still obvious in a config file that it was auto-generated,
+/// not a deliberately chosen production secret) plus 32 random
+/// alphanumeric characters, which is enough entropy for an HMAC key.
+fn generate_default_jwt_secret() -> String {
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    format!("{}-{}", LEGACY_DEFAULT_JWT_SECRET, suffix)
+}
+
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            jwt_secret: "your-super-secret-jwt-key-change-this-in-production".to_string(),
+            jwt_secret: generate_default_jwt_secret(),
             jwt_expiration_hours: 24,
             allow_registration: true,
             require_email_verification: false,
@@ -588,10 +608,15 @@ pub struct ProfileField {
 /// User profile field configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
-    /// Profile field definitions
-    pub profile_fields: Vec<ProfileField>,
-    /// Enable user profile functionality
-    pub profiles_enabled: bool,
+    /// Initial profile field definitions, used only to seed the database's
+    /// versioned `profile_config_versions` table on first boot. Once any
+    /// version exists there, the database is authoritative and this value
+    /// is ignored — editing it in config.toml after first boot has no
+    /// effect. See `api::profiles::current_profile_config`.
+    pub profile_fields_seed: Vec<ProfileField>,
+    /// Initial profiles-enabled toggle, used only to seed the database on
+    /// first boot. Same caveat as `profile_fields_seed`.
+    pub profiles_enabled_seed: bool,
 }
 
 /// Profile field type specification
@@ -614,7 +639,7 @@ pub enum ProfileFieldType {
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
-            profile_fields: vec![
+            profile_fields_seed: vec![
                 ProfileField {
                     key: "bio".to_string(),
                     label: "Bio".to_string(),
@@ -637,7 +662,7 @@ impl Default for UserConfig {
                     help_text: Some("Emergency contact information".to_string()),
                 },
             ],
-            profiles_enabled: true,
+            profiles_enabled_seed: true,
         }
     }
 }
@@ -1048,8 +1073,26 @@ impl fmt::Display for ConfigRewritten {
 impl std::error::Error for ConfigRewritten {}
 
 impl AppConfig {
-    /// Load configuration from a TOML file
+    /// Load configuration from a TOML file at boot. If the file is missing
+    /// fields added since it was written, self-heals by merging in
+    /// defaults, backing up the old file, and exiting the process so the
+    /// operator restarts against the corrected file — safe here because
+    /// nothing is serving traffic yet.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::from_file_impl(path, true)
+    }
+
+    /// Load configuration from a TOML file for a live reload. Never exits
+    /// the process: an admin editing config.toml on a running server and
+    /// triggering a reload with a mistake in it (e.g. a section copied in
+    /// without every required field) must get an error back, not have the
+    /// self-heal-and-restart behavior above take down the whole server for
+    /// every connected user.
+    pub fn from_file_for_reload<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::from_file_impl(path, false)
+    }
+
+    fn from_file_impl<P: AsRef<Path>>(path: P, allow_recovery: bool) -> Result<Self> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
 
@@ -1061,7 +1104,7 @@ impl AppConfig {
             Err(e) => {
                 // Check if error is about missing fields
                 let error_msg = e.to_string();
-                if error_msg.contains("missing field") {
+                if error_msg.contains("missing field") && allow_recovery {
                     eprintln!("\n⚠️  Configuration file is missing required fields!");
                     eprintln!("Error: {}\n", e);
 
@@ -1198,7 +1241,7 @@ impl ConfigManager {
             AppConfig::from_file(config_path).with_context(|| "Failed to reload configuration")?;
 
         // Validate the new configuration
-        self.validate_config(&new_config)?;
+        validate_config(&new_config)?;
 
         // Update the configuration atomically
         {
@@ -1210,35 +1253,6 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Validate configuration before applying
-    fn validate_config(&self, config: &AppConfig) -> Result<()> {
-        // Validate JWT secret is not default
-        if config.auth.jwt_secret == "your-super-secret-jwt-key-change-this-in-production" {
-            warn!("JWT secret is still set to default value - this is insecure for production");
-        }
-
-        // Validate database connection string
-        if config.database.get_url().is_empty() {
-            return Err(anyhow::anyhow!("Database URL cannot be empty"));
-        }
-
-        // Validate server bind address
-        if config.server.bind_address.is_empty() {
-            return Err(anyhow::anyhow!("Server bind address cannot be empty"));
-        }
-
-        // Validate initial setup admin email format
-        if config.initial_setup.setup_enabled
-            && !config.initial_setup.setup_admin_email.contains('@')
-        {
-            return Err(anyhow::anyhow!(
-                "Initial setup admin email must be a valid email address"
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Get a thread-safe reference to the configuration
     pub fn get_config_ref(&self) -> Arc<RwLock<AppConfig>> {
         Arc::clone(&self.config)
@@ -1246,11 +1260,11 @@ impl ConfigManager {
 
     /// Overwrite the in-memory profile field schema without touching the
     /// config file. The version-history table in the database is the
-    /// source of truth for `profile_fields`; this just keeps the shared
-    /// `AppConfig` (read by validation and the config-file `GET`) in sync
-    /// with the latest DB version.
+    /// source of truth; this only keeps the seed slot in sync as a
+    /// fallback for the (post-bootstrap, shouldn't normally happen) case
+    /// where nothing has read a DB version yet.
     pub fn set_profile_fields(&self, profile_fields: Vec<ProfileField>) {
-        self.config.write().unwrap().user.profile_fields = profile_fields;
+        self.config.write().unwrap().user.profile_fields_seed = profile_fields;
     }
 
     /// Apply an in-place mutation to the shared configuration and persist
@@ -1275,15 +1289,57 @@ impl ConfigManager {
 
         Ok(())
     }
+
+    /// Overwrite the in-memory `profiles_enabled` seed without touching
+    /// the config file. Same caveat as `set_profile_fields`: the
+    /// `profile_config_versions` table is authoritative, this is just the
+    /// fallback slot.
+    pub fn set_profiles_enabled(&self, enabled: bool) {
+        self.config.write().unwrap().user.profiles_enabled_seed = enabled;
+    }
+}
+
+/// Validate configuration before applying it, whether at startup or reload.
+fn validate_config(config: &AppConfig) -> Result<()> {
+    // Reject the well-known placeholder JWT secret outright: it's public
+    // (it's the code default, and has shipped in tracked config files), so
+    // a server signing tokens with it is a full auth bypass, not just an
+    // insecure setting to warn about.
+    if config.auth.jwt_secret == LEGACY_DEFAULT_JWT_SECRET {
+        return Err(anyhow::anyhow!(
+            "auth.jwt_secret is still set to the default placeholder value. \
+             Set a real, random secret before starting (or delete the [auth] \
+             section and restart to have one generated automatically)."
+        ));
+    }
+
+    // Validate database connection string
+    if config.database.get_url().is_empty() {
+        return Err(anyhow::anyhow!("Database URL cannot be empty"));
+    }
+
+    // Validate server bind address
+    if config.server.bind_address.is_empty() {
+        return Err(anyhow::anyhow!("Server bind address cannot be empty"));
+    }
+
+    // Validate initial setup admin email format
+    if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
+        return Err(anyhow::anyhow!(
+            "Initial setup admin email must be a valid email address"
+        ));
+    }
+
+    Ok(())
 }
 
 /// Load configuration from file or create default configuration
 pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
     let path = config_path.as_ref();
 
-    if path.exists() {
+    let config = if path.exists() {
         println!("Loading configuration from: {}", path.display());
-        AppConfig::from_file(path)
+        AppConfig::from_file(path)?
     } else {
         println!(
             "Config file not found. Creating default configuration at: {}",
@@ -1297,8 +1353,12 @@ pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
             .with_context(|| "Failed to create default configuration file")?;
 
         println!("Default configuration file created. Please review and modify as needed.");
-        Ok(default_config)
-    }
+        default_config
+    };
+
+    validate_config(&config)?;
+
+    Ok(config)
 }
 
 /// Generate a sample configuration file with comments
@@ -1504,5 +1564,16 @@ mod tests {
 
         // File should now exist
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_load_config_rejects_legacy_default_jwt_secret() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let mut config = AppConfig::default();
+        config.auth.jwt_secret = LEGACY_DEFAULT_JWT_SECRET.to_string();
+        config.to_file(temp_file.path()).unwrap();
+
+        let err = load_config(temp_file.path()).unwrap_err();
+        assert!(err.to_string().contains("jwt_secret"));
     }
 }

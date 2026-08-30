@@ -26,6 +26,32 @@
       <router-link to="/profile/mfa" class="btn btn-primary btn-sm">Manage</router-link>
     </div>
 
+    <!-- Change password link (only shown for own profile) -->
+    <div
+      v-if="isOwnProfile"
+      class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4"
+    >
+      <div>
+        <div class="font-medium">Password</div>
+        <div class="text-sm text-base-content/70">Change your account password.</div>
+      </div>
+      <router-link to="/profile/password" class="btn btn-primary btn-sm">Change</router-link>
+    </div>
+
+    <!-- Transit card link (only when viewing own profile AND a card field is configured) -->
+    <div
+      v-if="isOwnProfile && cardFieldConfigured"
+      class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4"
+    >
+      <div>
+        <div class="font-medium">Transit Card</div>
+        <div class="text-sm text-base-content/70">
+          Set your RFID/NFC card ID for door and tool access.
+        </div>
+      </div>
+      <router-link to="/profile/card" class="btn btn-primary btn-sm">Manage</router-link>
+    </div>
+
     <!-- Theme Picker (only shown for own profile) -->
     <ThemePicker v-if="isOwnProfile" :user-id="userId" />
 
@@ -40,6 +66,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 import UserProfile from '@/components/UserProfile.vue'
 import ThemePicker from '@/components/ThemePicker.vue'
 import InstanceQrCard from '@/components/InstanceQrCard.vue'
@@ -48,6 +75,7 @@ import type { User } from '@/types'
 
 const route = useRoute()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 // Local state
 const user = ref<User | null>(null)
@@ -55,6 +83,8 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 /** True only after we've confirmed the server has MFA enabled. */
 const mfaAvailable = ref(false)
+/** True when the server has a profile field configured to hold a card id. */
+const cardFieldConfigured = computed(() => !!configStore.cardIdField())
 
 // Computed properties
 const userId = computed(() => {

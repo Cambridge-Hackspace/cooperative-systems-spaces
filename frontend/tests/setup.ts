@@ -73,3 +73,50 @@ afterEach(() => {
     )
   }
 })
+
+// ---------------------------------------------------------------------------
+// `window.matchMedia`
+// ---------------------------------------------------------------------------
+// jsdom does not implement it, and `utils/theme.ts` calls it at module scope --
+// so importing anything that transitively reaches the theme util throws
+// `window.matchMedia is not a function` before a single test runs, which
+// presents as a suite that failed to collect rather than as a missing DOM API.
+//
+// Deliberately a working implementation rather than a stub returning
+// `{ matches: false }`. A frozen `false` would make `resolveTheme` untestable
+// for the dark case, and every test asserting the light branch would pass for
+// the wrong reason. `setPrefersDark()` drives it, and dispatches `change` to
+// the listeners `onSystemThemeChange` registers, so the subscription path is
+// exercised too.
+const mediaListeners = new Set<(e: MediaQueryListEvent) => void>()
+let prefersDarkNow = false
+
+export function setPrefersDark(value: boolean): void {
+  if (value === prefersDarkNow) return
+  prefersDarkNow = value
+  const event = { matches: value, media: '(prefers-color-scheme: dark)' } as MediaQueryListEvent
+  for (const listener of mediaListeners) listener(event)
+}
+
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: (query: string) => ({
+    get matches() {
+      return query.includes('prefers-color-scheme: dark') ? prefersDarkNow : false
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => mediaListeners.add(cb),
+    removeEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) =>
+      mediaListeners.delete(cb),
+    addListener: (cb: (e: MediaQueryListEvent) => void) => mediaListeners.add(cb),
+    removeListener: (cb: (e: MediaQueryListEvent) => void) => mediaListeners.delete(cb),
+    dispatchEvent: () => false,
+  }),
+})
+
+// The preference is process-global and `utils/theme.ts` captures the
+// MediaQueryList once, so a test that turns it on must not leak into the next.
+afterEach(() => {
+  setPrefersDark(false)
+})

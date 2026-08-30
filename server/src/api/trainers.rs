@@ -269,13 +269,22 @@ async fn create_training_record(
     user: AuthUser,
     Json(payload): Json<CreateTrainingRecordRequest>,
 ) -> Result<Json<ApiResponse<TrainingRecord>>, ApiError> {
-    // Check if user is an active trainer for this tool
+    // dev's rule, and it is right: staff/admin can record training without an
+    // explicit trainer assignment, matching `update_training_record` below. A
+    // stricter create than update makes no sense -- staff who can already
+    // correct any record should be able to enter one, for a backfill or for
+    // training somebody else delivered.
+    //
+    // Our error conversion, though. dev's flattened this to a blanket
+    // InternalServerError, which tells the caller the server broke when the
+    // real answer might be that the row they named does not exist;
+    // `checks/tests/database_errors_keep_their_meaning.rs` counts those.
     let is_trainer = state
         .db
         .is_active_tool_trainer(payload.tool_id, user.0.id)
         .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
-    if !is_trainer {
+    if !is_trainer && !user.0.role.can_access_staff() {
         return Err(ApiError::Forbidden(
             "User is not authorized as a trainer for this tool".to_string(),
         ));

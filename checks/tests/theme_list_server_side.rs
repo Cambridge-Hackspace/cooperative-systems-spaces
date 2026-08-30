@@ -149,13 +149,81 @@ fn all_three_lists_were_actually_parsed() {
     );
 }
 
+/// The one accepted value that is deliberately not a compiled theme.
+///
+/// `"system"` means "follow the OS light/dark setting"; `resolveTheme` turns it
+/// into `css-light` or `css-dark` before anything reaches `data-theme`. It has
+/// to be storable -- that is the whole point, since a stored `css-light` would
+/// stop following the OS -- so the server must accept a value daisyUI does not
+/// compile.
+///
+/// Deliberately a single named constant rather than a list, and
+/// `the_sentinel_list_stays_a_single_deliberate_exception` asserts it stays
+/// one. An exclusion list that can grow is how a check like this stops finding
+/// anything: the next phantom theme would just be appended.
+const SENTINELS: &[&str] = &["system"];
+
+#[test]
+fn the_sentinel_list_stays_a_single_deliberate_exception() {
+    assert_eq!(
+        SENTINELS.len(),
+        1,
+        "a second sentinel was added. Every entry here is a value the server \
+         stores that has no CSS behind it, so it must be resolved somewhere \
+         before render or the user gets an unstyled page. Adding one is a \
+         design decision, not a way to quiet this file."
+    );
+}
+
+#[test]
+fn every_sentinel_actually_resolves_to_a_real_theme() {
+    // The assertion that earns the exception above. A sentinel the frontend
+    // does not translate is exactly the defect `phantom` exists to catch, so
+    // excluding it from that check without proving this would be a hole.
+    let theme_util = read("frontend/src/utils/theme.ts");
+    let tailwind = tailwind_themes();
+
+    for sentinel in SENTINELS {
+        assert!(
+            theme_util.contains(&format!("'{sentinel}'"))
+                || theme_util.contains(&format!("\"{sentinel}\"")),
+            "`{sentinel}` is accepted by the server but frontend/src/utils/theme.ts \
+             never names it, so nothing translates it into a theme with CSS."
+        );
+    }
+
+    // And what it resolves *to* must be real. `resolveTheme` returns
+    // `css-dark`/`css-light`; if those were renamed in tailwind.config.js and
+    // not here, every system-theme user would get an unstyled page and this is
+    // the only place that would notice.
+    for fallback in ["css-dark", "css-light"] {
+        // The quoted literal, not a bare substring. `contains("css-dark")` is
+        // satisfied by `'css-darkk'`, so a typo in the resolution target --
+        // precisely the failure this test exists for -- would pass. Found by
+        // mutation-checking this assertion.
+        assert!(
+            theme_util.contains(&format!("'{fallback}'"))
+                || theme_util.contains(&format!("\"{fallback}\"")),
+            "resolveTheme no longer mentions `{fallback}`"
+        );
+        assert!(
+            tailwind.iter().any(|t| t == fallback),
+            "resolveTheme resolves to `{fallback}`, which tailwind.config.js does \
+             not compile"
+        );
+    }
+}
+
 #[test]
 fn the_server_accepts_exactly_the_themes_daisyui_compiles() {
     let tailwind = tailwind_themes();
     let server = server_themes();
 
     let refused: Vec<&String> = tailwind.iter().filter(|t| !server.contains(t)).collect();
-    let phantom: Vec<&String> = server.iter().filter(|t| !tailwind.contains(t)).collect();
+    let phantom: Vec<&String> = server
+        .iter()
+        .filter(|t| !tailwind.contains(t) && !SENTINELS.contains(&t.as_str()))
+        .collect();
 
     assert!(
         refused.is_empty(),
@@ -179,8 +247,17 @@ fn the_server_list_matches_the_audit_fixture_too() {
     // asserting this pair directly is what makes the four-way agreement a
     // property rather than an inference across two test suites that can be run
     // separately.
+    // Minus the sentinels: the contrast audit measures rendered colours, and a
+    // value with no CSS has none to measure. It is checked instead by
+    // `every_sentinel_actually_resolves_to_a_real_theme`, whose two resolution
+    // targets are both in this list.
+    let real: Vec<String> = server_themes()
+        .into_iter()
+        .filter(|t| !SENTINELS.contains(&t.as_str()))
+        .collect();
+
     assert_eq!(
-        server_themes(),
+        real,
         fixture_themes(),
         "the server's accepted themes and the contrast audit's list disagree"
     );

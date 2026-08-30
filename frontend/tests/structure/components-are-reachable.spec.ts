@@ -37,6 +37,15 @@ const UNREFERENCED: Record<string, string> = {
   ToolTrainingCard:
     'Superseded by ToolTrainingModal, which renders the same training flow. ' +
     'This copy still carries a red debug banner in its template.',
+  SiteIndexContent:
+    'Arrived unreferenced with the gitwiki/pages work and is superseded by ' +
+    'SiteView, which composes PageNavigation and PageViewer. Left in place ' +
+    "rather than deleted because that is the author's call, but recorded as " +
+    "a finding: it calls `fetch('/api/pages/page/index')` directly rather " +
+    'than going through utils/api, so it carries no Authorization header, ' +
+    'skips the 401 interceptor, and treats any non-ok response as silence -- ' +
+    'the failure mode is a blank panel with no error. Wiring it up as it ' +
+    'stands would ship all three.',
 }
 
 function componentNames(): string[] {

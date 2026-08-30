@@ -356,17 +356,6 @@ const UNRESOLVED: &[(&str, &str)] = &[
          resolve, so only the create path is wrong.",
     ),
     (
-        "/api/training/progress/{p}/start",
-        "trainingApi.startTrainingSession POSTs here (utils/api.ts:699). The \
-         server has POST /api/training/sessions/start (api/training.rs:145), \
-         which identifies the user from the token rather than the path.",
-    ),
-    (
-        "/api/training/progress/{p}/complete",
-        "trainingApi.completeTrainingSession POSTs here (utils/api.ts:708). The \
-         server has POST /api/training/sessions/complete (api/training.rs:146).",
-    ),
-    (
         "/api/trainers/users",
         "userApi.getUsersForTraining GETs here (utils/api.ts:195) and already \
          has an explicit 404 fallback, so this one was known: somebody hit it, \

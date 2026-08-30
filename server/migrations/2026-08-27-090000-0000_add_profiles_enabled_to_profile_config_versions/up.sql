@@ -1,0 +1,11 @@
+-- profiles_enabled travels with the versioned field schema so both are
+-- persisted (and rolled back) together, instead of profiles_enabled being
+-- written to the on-disk config file separately.
+--
+-- Nullable, no default: any row that already existed before this column
+-- was added has no reliable prior value to backfill -- that value lived
+-- only in config.toml, which this migration can't read -- so NULL means
+-- "unknown, ask the config file's seed" rather than silently guessing
+-- true and potentially re-enabling profiles an admin had turned off.
+-- The application always sets this explicitly on every new row it writes.
+ALTER TABLE profile_config_versions ADD COLUMN profiles_enabled BOOLEAN;

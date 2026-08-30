@@ -39,3 +39,7 @@
 # out of the pinned image.
 /frontend/.playwright/
 
+# `fcf70d2` on dev stopped tracking this: it carries secret_key, jwt_secret,
+# stripe.secret_key, webhook_secret and database passwords. TESTING.md recorded
+# the hazard; dev removed it.
+/server/config.toml

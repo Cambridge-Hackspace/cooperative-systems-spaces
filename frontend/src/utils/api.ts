@@ -312,6 +312,14 @@ export const userApi = {
   activateUser(userId: string): Promise<ApiResponse<User>> {
     return apiClient.put(`/admin/users/${userId}/activate`)
   },
+
+  // Change your own password (requires current password)
+  changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<void>> {
+    return apiClient.put<void>('/users/me/password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+  },
 }
 
 export default apiClient
@@ -411,57 +419,90 @@ export const placesApi = {
   },
 }
 
-// Doors API
-export const doorsApi = {
-  // Member-facing
-  info(doorId: string) {
-    return apiClient.get<import('@/types').DoorInfo>(`/doors/${doorId}/info`)
-  },
-  checkin(doorId: string) {
-    return apiClient.post<import('@/types').DoorCheckinResult>(`/doors/${doorId}/checkin`)
-  },
-
-  // Admin
-  list() {
-    return apiClient.get<import('@/types').Door[]>('/admin/doors')
-  },
-  get(doorId: string) {
-    return apiClient.get<import('@/types').DoorDetail>(`/admin/doors/${doorId}`)
-  },
-  create(body: import('@/types').CreateDoorRequest) {
-    return apiClient.post<import('@/types').Door>('/admin/doors', body)
-  },
-  update(doorId: string, body: import('@/types').UpdateDoorRequest) {
-    return apiClient.patch<import('@/types').Door>(`/admin/doors/${doorId}`, body)
-  },
-  remove(doorId: string) {
-    return apiClient.delete<void>(`/admin/doors/${doorId}`)
-  },
-  unlock(doorId: string) {
-    return apiClient.post<{ unlocked: boolean }>(`/admin/doors/${doorId}/unlock`)
-  },
-  republish(doorId: string) {
-    return apiClient.post<{ republished: boolean }>(`/admin/doors/${doorId}/republish`)
-  },
-  qrUrl(doorId: string) {
-    return apiClient.get<{ url: string }>(`/admin/doors/${doorId}/qr`)
-  },
-  events(doorId: string, params?: { limit?: number; offset?: number }) {
-    return apiClient.get<import('@/types').DoorAccessEvent[]>(
-      `/admin/doors/${doorId}/events`,
-      params
-    )
-  },
-  listRules(doorId: string) {
-    return apiClient.get<import('@/types').DoorAccessRule[]>(`/admin/doors/${doorId}/rules`)
-  },
-  addRule(doorId: string, body: import('@/types').AddDoorRuleRequest) {
-    return apiClient.post<import('@/types').DoorAccessRule>(`/admin/doors/${doorId}/rules`, body)
-  },
-  removeRule(doorId: string, ruleId: string) {
-    return apiClient.delete<void>(`/admin/doors/${doorId}/rules/${ruleId}`)
-  },
+// Wraps every method on an API object so a rejected request (network
+// failure, or any non-2xx response, since apiClient/axios reject on
+// those) resolves to the same ApiResponse<T> failure shape a handled
+// API-level error already does, instead of throwing. Callers can then
+// always just check `.success`/`.error` — no per-call-site try/catch
+// needed, and no risk of a forgotten one leaving a loading/saving flag
+// stuck or a failure passing with no user-facing feedback.
+function withErrorGuard<T extends Record<string, (...args: any[]) => Promise<ApiResponse<any>>>>(
+  api: T,
+  fallbackMessage: string
+): T {
+  const guarded = {} as T
+  // `Object.entries`, not `api[key]`: under `noUncheckedIndexedAccess` an
+  // index read is `T[k] | undefined` and the call below is unprovable.
+  for (const [key, fn] of Object.entries(api) as [keyof T, T[keyof T]][]) {
+    guarded[key] = (async (...args: any[]) => {
+      try {
+        return await fn(...args)
+      } catch (e: unknown) {
+        // `envelopeError`, not a second copy of the extraction. The inline
+        // version read only `response.data.error`, so a transport failure --
+        // which has no `response` at all -- lost the reason entirely and every
+        // one of these endpoints reported the same fixed sentence.
+        return envelopeError(e, fallbackMessage)
+      }
+    }) as T[keyof T]
+  }
+  return guarded
 }
+
+// Doors API
+export const doorsApi = withErrorGuard(
+  {
+    // Member-facing
+    info(doorId: string) {
+      return apiClient.get<import('@/types').DoorInfo>(`/doors/${doorId}/info`)
+    },
+    checkin(doorId: string) {
+      return apiClient.post<import('@/types').DoorCheckinResult>(`/doors/${doorId}/checkin`)
+    },
+
+    // Admin
+    list() {
+      return apiClient.get<import('@/types').Door[]>('/admin/doors')
+    },
+    get(doorId: string) {
+      return apiClient.get<import('@/types').DoorDetail>(`/admin/doors/${doorId}`)
+    },
+    create(body: import('@/types').CreateDoorRequest) {
+      return apiClient.post<import('@/types').Door>('/admin/doors', body)
+    },
+    update(doorId: string, body: import('@/types').UpdateDoorRequest) {
+      return apiClient.patch<import('@/types').Door>(`/admin/doors/${doorId}`, body)
+    },
+    remove(doorId: string) {
+      return apiClient.delete<void>(`/admin/doors/${doorId}`)
+    },
+    unlock(doorId: string) {
+      return apiClient.post<{ unlocked: boolean }>(`/admin/doors/${doorId}/unlock`)
+    },
+    republish(doorId: string) {
+      return apiClient.post<{ republished: boolean }>(`/admin/doors/${doorId}/republish`)
+    },
+    qrUrl(doorId: string) {
+      return apiClient.get<{ url: string }>(`/admin/doors/${doorId}/qr`)
+    },
+    events(doorId: string, params?: { limit?: number; offset?: number }) {
+      return apiClient.get<import('@/types').DoorAccessEvent[]>(
+        `/admin/doors/${doorId}/events`,
+        params
+      )
+    },
+    listRules(doorId: string) {
+      return apiClient.get<import('@/types').DoorAccessRule[]>(`/admin/doors/${doorId}/rules`)
+    },
+    addRule(doorId: string, body: import('@/types').AddDoorRuleRequest) {
+      return apiClient.post<import('@/types').DoorAccessRule>(`/admin/doors/${doorId}/rules`, body)
+    },
+    removeRule(doorId: string, ruleId: string) {
+      return apiClient.delete<void>(`/admin/doors/${doorId}/rules/${ruleId}`)
+    },
+  },
+  'Door request failed'
+)
 
 // MFA API functions
 export const mfaApi = {
@@ -815,20 +856,6 @@ export const trainingApi = {
 
   // === Tool Training Overview ===
 
-  // Get tool training steps with progress for a specific user
-  getToolTrainingSteps(toolId: string, userId?: string): Promise<ApiResponse<any[]>> {
-    const url = userId
-      ? `/training/tools/${toolId}/steps/${userId}`
-      : `/training/tools/${toolId}/steps`
-    return apiClient.get<any[]>(url).catch((error) => {
-      console.error('Error fetching tool training steps:', error)
-      return {
-        ...envelopeError(error, 'Failed to fetch tool training steps'),
-        data: [],
-      }
-    })
-  },
-
   // Get tool training overview for user
   getToolTrainingOverview(
     toolId: string,
@@ -845,9 +872,11 @@ export const trainingApi = {
 
   // Check if user can access tool
   canAccessTool(toolId: string, userId?: string): Promise<ApiResponse<boolean>> {
-    const url = userId
-      ? `/training/tools/${toolId}/can-access/${userId}`
-      : `/training/tools/${toolId}/can-access/me`
+    // dev's route, which is the one the server declares
+    // (api/training.rs:178); ours addressed `/tools/{id}/can-access/{user}`,
+    // which is not a route. Our error extraction, because `error.message` is
+    // the axios status restated and discards the server's own words.
+    const url = userId ? `/training/access/${toolId}/${userId}` : `/training/access/${toolId}`
     return apiClient.get<boolean>(url).catch((error) => {
       console.error('Error checking tool access:', error)
       return { ...envelopeError(error, 'Failed to check tool access'), data: false }

@@ -1,43 +1,157 @@
 <template>
   <div class="container mx-auto px-4 py-8">
-    <div class="hero">
-      <div class="hero-content text-center">
-        <div class="max-w-5xl">
-          <h1 class="text-5xl font-bold">{{ siteName }}</h1>
-          <div class="py-6">&nbsp;</div>
-          <div class="flex gap-4 justify-center flex-wrap">
-            <router-link v-if="!authStore.isAuthenticated" to="/login" class="btn btn-primary">
-              Get Started
-            </router-link>
-            <router-link
-              v-if="authStore.isAuthenticated && homepageLinks.view_my_profile"
-              to="/profile/me"
-              class="btn btn-primary"
+    <!-- Announcement banners -->
+    <div
+      class="alert mb-8 flex justify-center text-center"
+      style="background-color: #d9edf7; color: #31708f"
+    >
+      <span>
+        Interested in joining our community?
+        <router-link to="/join" class="underline font-semibold"
+          >Checkout our memberships</router-link
+        >, and see what we have to offer!
+      </span>
+    </div>
+
+    <!-- Title bar: what / why / who / where -->
+    <div class="my-10">
+      <div class="flex items-center gap-4 max-w-3xl mx-auto mb-10">
+        <div class="flex-1 border-t-2 border-dotted border-base-content/40"></div>
+        <div class="text-3xl md:text-4xl font-bold text-center px-2">Cambridge Hackspace</div>
+        <div class="flex-1 border-t-2 border-dotted border-base-content/40"></div>
+      </div>
+
+      <div class="grid gap-8 md:grid-cols-4 text-center max-w-6xl mx-auto">
+        <div>
+          <img src="/images/index_red.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
+          <h3 class="text-xl font-bold mb-2">what</h3>
+          <p class="text-sm text-base-content/70">
+            We are a 501(c)(3) makerspace in the center of Somerville, MA. We have a 1200sqft
+            workshop catering to enthusiastic makers, and hold weekly meetings where we get together
+            and make things. We have a Laser cutter, CNCs, 3D printers, and a range of other tools
+            for our members to use.
+          </p>
+        </div>
+
+        <div>
+          <img src="/images/index_blue.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
+          <h3 class="text-xl font-bold mb-2">why</h3>
+          <p class="text-sm text-base-content/70">
+            We've started the Cambridge Hackspace to provide a physical space where people can
+            gather and work on their projects, have access to larger or expensive tools (like the 3D
+            printers, and laser cutter), and provide a place where the community can share their
+            knowledge.
+          </p>
+        </div>
+
+        <div>
+          <img src="/images/index_yellow.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
+          <h3 class="text-xl font-bold mb-2">who</h3>
+          <p class="text-sm text-base-content/70">
+            Anyone and everyone is welcome. Whether your thing is software, electronics, woodwork,
+            or knitting, we provide a space where you can meet fellow makers, to learn, and be
+            inspired. We hold workshops every month so you can learn new skills.
+          </p>
+        </div>
+
+        <div>
+          <img src="/images/index_green.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
+          <h3 class="text-xl font-bold mb-2">where</h3>
+          <p class="text-sm text-base-content/70">
+            We are located in Union Square, Somerville (<router-link to="/contact" class="underline"
+              >address</router-link
+            >). We hold events every week, our next meeting is on Tuesday at 6.30pm — check our
+            events page for future events. You can also like our
+            <a
+              href="https://www.facebook.com/CambridgeHackspace"
+              target="_blank"
+              rel="noopener"
+              class="underline"
+              >Facebook page</a
             >
-              View My Profile
-            </router-link>
-            <router-link
-              v-if="authStore.isAuthenticated && homepageLinks.browse_tools"
-              to="/tools"
-              class="btn btn-secondary"
+            and follow us on Twitter (<a
+              href="https://twitter.com/hackcambridge"
+              target="_blank"
+              rel="noopener"
+              class="underline"
+              >@HackCambridge</a
+            >).
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="border-t-2 border-dotted border-base-content/30 max-w-3xl mx-auto my-10"></div>
+
+    <!-- Join / Next event / Donate + photo grid -->
+    <div class="grid gap-10 md:grid-cols-2 max-w-6xl mx-auto mb-16">
+      <div class="text-center md:text-left space-y-8">
+        <div>
+          <template v-if="authStore.isAuthenticated">
+            <h3 class="text-2xl font-bold mb-3">Welcome back!</h3>
+            <router-link to="/profile/me" class="btn btn-primary btn-lg"
+              >Visit your dashboard</router-link
             >
-              Browse Tools
-            </router-link>
-            <router-link
-              v-if="authStore.isAuthenticated && authStore.isAdmin && homepageLinks.admin_panel"
-              to="/admin"
-              class="btn btn-secondary"
-            >
-              Admin Panel
-            </router-link>
-            <router-link
-              v-if="pagesConfig.wiki_enabled && shouldShowWikiLink && homepageLinks.wiki"
-              to="/wiki"
-              class="btn btn-accent"
-            >
-              📚 Wiki
-            </router-link>
-          </div>
+          </template>
+          <template v-else>
+            <h2 class="text-3xl font-bold mb-3">Join Cambridge Hackspace</h2>
+            <p class="text-base-content/70 mb-4">
+              Become a Cambridge Hackspace member, join us and help support our efforts to get
+              bigger and better.
+            </p>
+            <router-link to="/join" class="btn btn-primary btn-lg">Become a Member</router-link>
+          </template>
+        </div>
+
+        <div class="border-t-2 border-dotted border-base-content/30"></div>
+
+        <div>
+          <h3 class="text-2xl font-bold mb-1">Next Event</h3>
+          <h4 class="text-lg">Hackspace Project Night - Open to Everyone!</h4>
+          <p class="text-base-content/70 mb-3">Tuesday @ 6.30pm</p>
+          <a
+            href="https://www.meetup.com/Cambridge-Hackspace/events/"
+            target="_blank"
+            rel="noopener"
+            class="btn btn-info btn-lg"
+          >
+            Meetup Events
+          </a>
+        </div>
+
+        <div class="border-t-2 border-dotted border-base-content/30"></div>
+
+        <div>
+          <h3 class="text-2xl font-bold mb-1">Donate</h3>
+          <p class="text-base-content/70">
+            Support our mission of building a community that shares knowledge about making things.
+          </p>
+          <p class="text-base-content/70 mb-3">
+            The donate button goes to our payment processor, Stripe, to keep your payment secure.
+          </p>
+          <a
+            href="https://donate.stripe.com/3csg1z40seWLbcccMM"
+            target="_blank"
+            rel="noopener"
+            class="btn btn-info btn-lg"
+          >
+            Donate
+          </a>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-center md:justify-start">
+        <div class="text-center md:text-left">
+          <h3 class="text-2xl font-bold mb-1">See what we've been up to</h3>
+          <p class="text-base-content/70 mb-3">Photos from project nights, builds, and events.</p>
+          <a
+            href="https://www.instagram.com/hackcambridge/"
+            target="_blank"
+            rel="noopener"
+            class="btn btn-secondary btn-lg"
+          >
+            @hackcambridge on Instagram
+          </a>
         </div>
       </div>
     </div>
@@ -109,11 +223,6 @@
       </div>
     </section>
 
-    <!-- Site Index Content -->
-    <div v-if="pagesConfig.site_enabled" class="mt-16">
-      <SiteIndexContent />
-    </div>
-
     <!-- Calendar Events Section -->
     <div class="mt-16">
       <CalendarEvents />
@@ -125,48 +234,10 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import CalendarEvents from '@/components/CalendarEvents.vue'
-import SiteIndexContent from '@/components/SiteIndexContent.vue'
 import { schedulesApi, homeLinksApi } from '@/utils/api'
 import type { DayOfWeek, HomeLink, HomeLinkAudience, Schedule } from '@/types'
-import axios from 'axios'
 
 const authStore = useAuthStore()
-const siteName = ref('Loading...')
-
-interface PagesConfig {
-  wiki_enabled: boolean
-  wiki_link: 'Navigation' | 'HomePage' | 'Both'
-  site_enabled: boolean
-  site_link: 'Navigation' | 'HomePage' | 'Both'
-}
-
-const pagesConfig = ref<PagesConfig>({
-  wiki_enabled: false,
-  wiki_link: 'Navigation',
-  site_enabled: false,
-  site_link: 'Navigation',
-})
-
-interface HomepageLinksFlags {
-  view_my_profile: boolean
-  browse_tools: boolean
-  admin_panel: boolean
-  wiki: boolean
-}
-
-// Defaults match the server's `HomepageLinksConfig::default()` — all true,
-// so behavior matches pre-config-flag installs while the public config
-// payload is in flight (or on older servers that don't surface the field).
-const homepageLinks = ref<HomepageLinksFlags>({
-  view_my_profile: true,
-  browse_tools: true,
-  admin_panel: true,
-  wiki: true,
-})
-
-const shouldShowWikiLink = computed(() => {
-  return pagesConfig.value.wiki_link === 'HomePage' || pagesConfig.value.wiki_link === 'Both'
-})
 
 /** Public schedules drive the "Hours today" panel. */
 const publicSchedules = ref<Schedule[]>([])
@@ -266,38 +337,8 @@ function audienceTooltip(a: HomeLinkAudience): string {
   }[a]
 }
 
-onMounted(async () => {
-  try {
-    const response = await axios.get('/api/config/public')
-    if (response.data?.data?.site?.site_name) {
-      siteName.value = response.data.data.site.site_name
-    } else {
-      siteName.value = 'Cooperative Systems Spaces'
-    }
-
-    // Load pages configuration
-    if (response.data?.data?.pages) {
-      pagesConfig.value = response.data.data.pages
-    }
-
-    // Homepage button toggles. Missing fields default to true (preserves
-    // pre-flag behavior).
-    const hl = response.data?.data?.site?.homepage_links
-    if (hl) {
-      homepageLinks.value = {
-        view_my_profile: hl.view_my_profile !== false,
-        browse_tools: hl.browse_tools !== false,
-        admin_panel: hl.admin_panel !== false,
-        wiki: hl.wiki !== false,
-      }
-    }
-  } catch (error) {
-    console.error('Failed to load site configuration:', error)
-    siteName.value = 'Cooperative Systems Spaces'
-  }
-  // Awaited together rather than fired and forgotten: neither handles its own
-  // errors, so an unawaited rejection here was an unhandled promise rejection
-  // and the section it feeds simply stayed empty with no indication why.
-  await Promise.allSettled([loadPublicSchedules(), loadHomeLinks()])
+onMounted(() => {
+  void loadPublicSchedules()
+  void loadHomeLinks()
 })
 </script>

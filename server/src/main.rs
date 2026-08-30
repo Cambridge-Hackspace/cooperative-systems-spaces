@@ -113,14 +113,30 @@ async fn main() -> Result<(), anyhow::Error> {
         Some(latest) => {
             let fields: Vec<config::ProfileField> = serde_json::from_value(latest.profile_fields)?;
             config_manager.set_profile_fields(fields);
+            let profiles_enabled = latest.profiles_enabled.unwrap_or_else(|| {
+                warn!(
+                    "profile_config_versions version {} predates the profiles_enabled column; \
+                     falling back to config file's profiles_enabled_seed",
+                    latest.version
+                );
+                app_config.user.profiles_enabled_seed
+            });
+            config_manager.set_profiles_enabled(profiles_enabled);
             info!(
                 "Loaded profile field schema from database (version {})",
                 latest.version
             );
         }
         None => {
-            let seed = serde_json::to_value(&app_config.user.profile_fields)?;
-            db_manager.insert_profile_config_version(seed, None)?;
+            profile_fields::validate_profile_fields(&app_config.user.profile_fields_seed).map_err(
+                |e| anyhow::anyhow!("Invalid profile_fields_seed in config file: {}", e),
+            )?;
+            let seed = serde_json::to_value(&app_config.user.profile_fields_seed)?;
+            db_manager.insert_profile_config_version(
+                seed,
+                app_config.user.profiles_enabled_seed,
+                None,
+            )?;
             info!("Seeded profile field schema version 1 from config file");
         }
     }
@@ -138,7 +154,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
     prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
-    let profile_validator = ProfileValidator::new(&app_config.user);
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
     let recaptcha_service = Arc::new(RecaptchaService::new(
@@ -259,7 +274,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let app_state = AppState {
         config_manager,
         db: db_manager,
-        profile_validator,
         audit_logger,
         throttle_service,
         recaptcha_service,

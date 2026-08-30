@@ -245,6 +245,20 @@ async fn tool_on(
         req.tool_id
     );
 
+    let tool_for_key_check = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
+    if !validate_api_key(
+        &state,
+        req.api_key.as_deref().unwrap_or(""),
+        tool_for_key_check.as_ref(),
+    )
+    .await?
+    {
+        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
+        return Ok(Json(ToolGuardResponse::tool_denied(
+            "Invalid or missing API key",
+        )));
+    }
+
     let user = match find_user_by_card(&state, &req.card).await? {
         Some(u) => u,
         None => {
@@ -258,7 +272,7 @@ async fn tool_on(
         return Ok(Json(ToolGuardResponse::tool_denied("User is not active")));
     }
 
-    let tool = match find_tool_by_toolguard_id(&state, &req.tool_id).await? {
+    let tool = match tool_for_key_check {
         Some(t) => t,
         None => {
             log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool not found").await?;
@@ -368,12 +382,18 @@ async fn tool_off(
         req.tool_id
     );
 
+    let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
+    if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
+        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
+        return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
+    }
+
     let user = match find_user_by_card(&state, &req.card).await? {
         Some(u) => u,
         None => return Ok(Json(ToolGuardResponse::error("Unknown card"))),
     };
 
-    let tool = match find_tool_by_toolguard_id(&state, &req.tool_id).await? {
+    let tool = match tool {
         Some(t) => t,
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
     };
@@ -429,12 +449,18 @@ async fn tool_log(
         req.temperature
     );
 
+    let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
+    if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
+        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
+        return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
+    }
+
     let user = match find_user_by_card(&state, &req.card).await? {
         Some(u) => u,
         None => return Ok(Json(ToolGuardResponse::error("Unknown card"))),
     };
 
-    let tool = match find_tool_by_toolguard_id(&state, &req.tool_id).await? {
+    let tool = match tool {
         Some(t) => t,
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
     };

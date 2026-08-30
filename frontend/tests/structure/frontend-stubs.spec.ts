@@ -60,10 +60,12 @@ const KNOWN: Stub[] = [
       'passed in, so the picker labels each option "Tool 3f2a91b0...".',
   },
   {
-    file: 'src/views/AboutView.vue',
+    file: 'src/views/PlatformView.vue',
     note:
       'The release page claims the server serves its own source, marked ' +
-      '@TODO in the rendered prose where a visitor can read it.',
+      '@TODO in the rendered prose where a visitor can read it. This is an ' +
+      'AGPL offer, so the @TODO is a compliance gap, not a cosmetic one. ' +
+      'Moved here from AboutView when the platform page was split out.',
   },
 ]
 

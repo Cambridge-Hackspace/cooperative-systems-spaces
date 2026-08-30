@@ -52,14 +52,25 @@ const BUDGET: &[(&str, usize)] = &[
     ("mod.rs", 0),
     ("pages.rs", 0),
     ("places.rs", 0),
-    ("profiles.rs", 5),
+    // Down from 5: the validation in this file moved to `profile_fields.rs`
+    // and the reads now come back from the database rather than the config
+    // cache, which retired one blanket 500 along the way.
+    ("profiles.rs", 4),
     ("responses.rs", 0),
     ("schedules.rs", 3),
     ("toolguard.rs", 17),
     ("tools.rs", 0),
     ("trainers.rs", 1),
     ("training.rs", 0),
-    ("users.rs", 2),
+    // 3, not 2: `change_own_password` (the self-service path, added with the
+    // profiles work) hashes the new password, and an Argon2 failure is the
+    // server's own fault -- there is nothing the caller can do differently.
+    // Same kind as the site already counted in `update_user`. This budget
+    // counts every `InternalServerError` in the file, not only the ones
+    // converted from a `DatabaseError`, so a legitimate 500 still spends from
+    // it; that coarseness is deliberate, since the alternative is a check that
+    // can be sidestepped by laundering the error through another type first.
+    ("users.rs", 3),
     ("webhooks.rs", 0),
 ];
 

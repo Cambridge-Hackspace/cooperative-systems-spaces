@@ -750,22 +750,18 @@ async function switchToQr() {
     } catch (e: any) {
       notify('Failed to render QR: ' + (e?.message || ''), false)
     }
-  }
+  } else notify(r.error || 'Failed to load QR code', false)
 }
 
 async function addRule() {
   if (!detail.value || !newRule.value.value.trim()) return
-  try {
-    const r = await doorsApi.addRule(detail.value.id, { ...newRule.value })
-    if (r.success) {
-      notify('Rule added')
-      newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''
-      newRule.value.schedule_id = null
-      await openDetail(detail.value)
-    } else notify(r.error || 'Failed', false)
-  } catch (e: any) {
-    notify(e?.response?.data?.error || 'Failed to add rule', false)
-  }
+  const r = await doorsApi.addRule(detail.value.id, { ...newRule.value })
+  if (r.success) {
+    notify('Rule added')
+    newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''
+    newRule.value.schedule_id = null
+    await openDetail(detail.value)
+  } else notify(r.error || 'Failed to add rule', false)
 }
 
 async function loadSchedules() {

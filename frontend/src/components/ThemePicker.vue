@@ -63,7 +63,7 @@
                   ? 'border-primary bg-primary/10'
                   : 'border-base-300 hover:border-primary/50',
               ]"
-              :data-theme="theme.value"
+              :data-theme="resolveTheme(theme.value)"
               @click="selectTheme(theme.value)"
             >
               <!-- Theme preview colors -->
@@ -120,6 +120,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { apiClient } from '@/utils/api'
+import { resolveTheme, SYSTEM_THEME } from '@/utils/theme'
 import type { User } from '@/types'
 
 interface Props {
@@ -139,14 +140,17 @@ const selectedTheme = ref<string | null>(null)
 // Get the user ID (either from props or current user)
 const effectiveUserId = computed(() => props.userId || authStore.user?.id || '')
 
-// Get current theme from user meta
+// Get current theme from user meta — no saved value means "system"
+// (matches how App.vue resolves the theme for display).
 const currentTheme = computed(() => {
-  if (!authStore.user?.meta) return 'light'
-  return (authStore.user.meta as any).theme || 'light'
+  return (authStore.user?.meta as any)?.theme || SYSTEM_THEME
 })
 
-// Themes from tailwind.config.js (must match the config exactly)
+// Themes from tailwind.config.js (must match the config exactly), plus
+// "system" which isn't a real daisyUI theme — it resolves to css-light/
+// css-dark based on the browser's prefers-color-scheme.
 const themes = [
+  { value: SYSTEM_THEME, label: 'System', group: 'CSS' },
   { value: 'css-light', label: 'CSS Light', group: 'CSS' },
   { value: 'css-dark', label: 'CSS Dark', group: 'CSS' },
   { value: 'afterdark', label: 'After Dark', group: 'NEIAM' },
@@ -204,7 +208,7 @@ async function selectTheme(theme: string) {
       }
 
       // Apply the theme immediately
-      document.documentElement.setAttribute('data-theme', theme)
+      document.documentElement.setAttribute('data-theme', resolveTheme(theme))
 
       successMessage.value = `Theme changed to ${theme}`
 
@@ -229,8 +233,6 @@ async function selectTheme(theme: string) {
 
 // Apply current theme on mount
 onMounted(() => {
-  if (currentTheme.value) {
-    document.documentElement.setAttribute('data-theme', currentTheme.value)
-  }
+  document.documentElement.setAttribute('data-theme', resolveTheme(currentTheme.value))
 })
 </script>

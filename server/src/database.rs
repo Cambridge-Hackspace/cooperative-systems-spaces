@@ -3406,6 +3406,7 @@ impl DatabaseManager {
     pub fn insert_profile_config_version(
         &self,
         fields: serde_json::Value,
+        enabled: bool,
         creator: Option<uuid::Uuid>,
     ) -> Result<crate::models::ProfileConfigVersion, DatabaseError> {
         use crate::schema::profile_config_versions::dsl::*;
@@ -3420,6 +3421,7 @@ impl DatabaseManager {
                 version: current_max.unwrap_or(0) + 1,
                 profile_fields: fields,
                 created_by: creator,
+                profiles_enabled: enabled,
             };
 
             diesel::insert_into(profile_config_versions)

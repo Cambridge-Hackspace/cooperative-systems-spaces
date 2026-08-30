@@ -219,7 +219,7 @@ describe('the count and the pages', () => {
 
 describe('the event-type filter', () => {
   // FINDING, pinned. `AuditEventType::as_str` in `server/src/models.rs` names
-  // sixty-six event types. This filter offers nine. Every door event
+  // sixty-eight event types. This filter offers eleven. Every door event
   // (`door_unlocked_card`, `door_unlock_denied`, `door_unlocked_qr`), every
   // device event and every MFA event is absent -- which is to say, in an
   // access-control system, the events an admin would most want to isolate are
@@ -227,8 +227,10 @@ describe('the event-type filter', () => {
   //
   // The exact set is checked against the server's enum in
   // `tests/structure/audit-event-types.spec.ts`; this asserts only the count,
-  // so the two fail independently.
-  it('offers nine of the event types the server can write', async () => {
+  // so the two fail independently. Note that the *gap* has not narrowed: the
+  // two profile-config options added since this was pinned came with two new
+  // server variants, so the ratchet there still reads 57.
+  it('offers eleven of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -239,7 +241,7 @@ describe('the event-type filter', () => {
       offered,
       'the filter list changed -- update tests/structure/audit-event-types.spec.ts, ' +
         'which holds the comparison against the server enum'
-    ).toHaveLength(9)
+    ).toHaveLength(11)
   })
 
   it('titles every option it does offer', async () => {

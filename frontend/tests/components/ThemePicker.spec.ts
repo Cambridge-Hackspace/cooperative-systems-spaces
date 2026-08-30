@@ -21,6 +21,7 @@ vi.mock('@/utils/api', () => ({ apiClient: { patch: mocks.patch } }))
 
 import ThemePicker from '@/components/ThemePicker.vue'
 import { useAuthStore } from '@/stores/auth'
+import { setPrefersDark } from '../setup'
 
 beforeEach(() => {
   patch.mockReset()
@@ -136,11 +137,44 @@ describe('choosing a theme', () => {
     expect(patch).not.toHaveBeenCalled()
   })
 
-  it('defaults to light when the user has no theme recorded', async () => {
+  it('treats no recorded theme as System, not as Light', async () => {
+    // These are different states and the distinction is the whole point of the
+    // System option: "follow the OS" has to survive the OS changing, so it
+    // cannot be stored as whichever of light or dark the OS happened to want
+    // when the account was made.
+    //
+    // So clicking Light from an unset account *is* a change, and must persist.
+    // This test used to assert the opposite -- correctly, before System
+    // existed.
     const w = picker({ id: 'u1', meta: null })
     await flushPromises()
-    // Light is current, so clicking it is the no-op case.
+    expect(buttonFor(w, 'System').classes()).toContain('border-primary')
+
     await buttonFor(w, 'Light').trigger('click')
+    await flushPromises()
+    expect(patch).toHaveBeenCalledWith('/users/u1/theme', { theme: 'light' })
+  })
+
+  it('resolves System against the OS preference rather than guessing light', async () => {
+    // The reason `resolveTheme` exists. If this ever collapses to a constant,
+    // every dark-mode user gets a light page and nothing else notices.
+    setPrefersDark(true)
+    const w = picker({ id: 'u1', meta: null })
+    await flushPromises()
+    expect(document.documentElement.getAttribute('data-theme')).toBe('css-dark')
+
+    setPrefersDark(false)
+    const light = picker({ id: 'u1', meta: null })
+    await flushPromises()
+    expect(document.documentElement.getAttribute('data-theme')).toBe('css-light')
+    light.unmount()
+    w.unmount()
+  })
+
+  it('does nothing when System is already current', async () => {
+    const w = picker({ id: 'u1', meta: null })
+    await flushPromises()
+    await buttonFor(w, 'System').trigger('click')
     await flushPromises()
     expect(patch).not.toHaveBeenCalled()
   })

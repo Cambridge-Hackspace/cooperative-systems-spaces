@@ -458,16 +458,23 @@ describe('the rule editor', () => {
     expect(w.find('.alert-error').text()).toContain('Rule already exists')
   })
 
-  it('reads the server body when adding a rule throws', async () => {
-    // Worth asserting: unlike most of its siblings, this catch reads
-    // `e.response.data.error`, which is the key the envelope fills.
-    mocks.addRule.mockRejectedValue({ response: { data: { error: 'Schedule not found' } } })
+  it('still says something when the refusal carries no message', async () => {
+    // `addRule` no longer catches: `doorsApi` is wrapped in `withErrorGuard`,
+    // so a rejection -- including a transport failure, the 92afb4c shape --
+    // arrives here as an envelope. That guarantee is asserted against the real
+    // client in `tests/unit/api-envelope.spec.ts`; mocking a rejection here
+    // would only test this file's own double.
+    //
+    // What is left for this component is the fallback. Without it a refused
+    // rule shows an empty red alert, which reads as "it worked" to anyone who
+    // does not look twice at the rules list.
+    mocks.addRule.mockResolvedValue({ success: false })
     const w = await page([door()])
     await openDetail(w)
     await buttonNamed(w, 'Add rule').trigger('click')
     await flushPromises()
 
-    expect(w.find('.alert-error').text()).toContain('Schedule not found')
+    expect(w.find('.alert-error').text()).toContain('Failed to add rule')
   })
 })
 

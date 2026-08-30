@@ -198,8 +198,13 @@ pub const ROUTES: &[R] = &[
     R("PUT", "/api/training/progress/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000001", Guard::Auth), // training::update_training_progress
     R("GET", "/api/training/roster", Guard::Auth), // training::get_training_roster
     R("GET", "/api/training/roster/00000000-0000-4000-8000-000000000001", Guard::Auth), // training::get_training_roster_for_tool
-    R("POST", "/api/training/sessions/complete", Guard::Auth), // training::complete_training_session
-    R("POST", "/api/training/sessions/start", Guard::Auth), // training::start_training_session
+    // The session endpoints moved under /progress/{user_id}/ so an instructor
+    // can start or complete a session for somebody else; the handlers now take
+    // the subject from the path and check `can_access_staff` when it is not the
+    // caller. The frontend was already calling these paths -- they were on the
+    // route-parity unresolved list until the server caught up.
+    R("POST", "/api/training/progress/00000000-0000-4000-8000-000000000001/complete", Guard::Auth), // training::complete_training_session
+    R("POST", "/api/training/progress/00000000-0000-4000-8000-000000000001/start", Guard::Auth), // training::start_training_session
     R("GET", "/api/training/steps", Guard::Auth), // training::get_training_steps
     R("POST", "/api/training/steps", Guard::Staff), // training::create_training_step
     R("DELETE", "/api/training/steps/00000000-0000-4000-8000-000000000001", Guard::Staff), // training::delete_training_step
@@ -216,5 +221,6 @@ pub const ROUTES: &[R] = &[
     R("DELETE", "/api/users/00000000-0000-4000-8000-000000000001", Guard::Admin), // users::delete_user
     R("GET", "/api/users/00000000-0000-4000-8000-000000000001", Guard::Auth), // users::get_user_by_id
     R("PUT", "/api/users/00000000-0000-4000-8000-000000000001", Guard::Auth), // users::update_user
+    R("PUT", "/api/users/me/password", Guard::Auth), // users::change_own_password
     R("PATCH", "/api/users/00000000-0000-4000-8000-000000000001/theme", Guard::Auth), // users::update_user_theme
 ];

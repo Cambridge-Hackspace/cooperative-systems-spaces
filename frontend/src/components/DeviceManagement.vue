@@ -522,7 +522,7 @@ h2 {
   display: flex;
   gap: 10px;
   margin-bottom: 30px;
-  border-bottom: 2px solid #e0e0e0;
+  border-bottom: 2px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .tab {
@@ -614,8 +614,8 @@ h2 {
 }
 
 .device-card {
-  background: white;
-  border: 2px solid #e0e0e0;
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
+  border: 2px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 8px;
   padding: 20px;
   transition: all 0.2s;
@@ -712,24 +712,24 @@ h2 {
 .invites-table {
   width: 100%;
   border-collapse: collapse;
-  background: white;
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
 }
 
 .invites-table th,
 .invites-table td {
   padding: 12px;
   text-align: left;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .invites-table th {
-  background: #f5f5f5;
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   font-weight: 600;
   color: #666;
 }
 
 .device-code {
-  background: #f5f5f5;
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   padding: 4px 8px;
   border-radius: 4px;
   font-family: monospace;
@@ -788,7 +788,7 @@ h2 {
 }
 
 .modal-content {
-  background: white;
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   width: 90%;
   max-width: 500px;
@@ -798,7 +798,7 @@ h2 {
 
 .modal-header {
   padding: 20px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -825,7 +825,7 @@ h2 {
 }
 
 .close-btn:hover {
-  background: #f5f5f5;
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
 }
 
 .modal-body {
@@ -834,7 +834,7 @@ h2 {
 
 .modal-actions {
   padding: 20px;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   display: flex;
   gap: 10px;
   justify-content: flex-end;
@@ -843,7 +843,7 @@ h2 {
 .form-input {
   width: 100%;
   padding: 10px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 14px;
   margin-top: 8px;
@@ -875,7 +875,7 @@ h2 {
 }
 
 .invite-code-display {
-  background: #f5f5f5;
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   border-radius: 8px;
   padding: 20px;
   margin: 20px 0;

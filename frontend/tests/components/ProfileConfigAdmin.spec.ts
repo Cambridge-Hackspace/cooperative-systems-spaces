@@ -114,33 +114,31 @@ describe('what the page shows before anything is edited', () => {
     expect(actions.fetchProfileConfig).toHaveBeenCalled()
   })
 
-  // FINDING, pinned. The field list is `v-if="editConfig.profile_fields.length > 0"`
-  // over `editConfig`, which starts empty and is only filled by
-  // `startEditing()`. The configured fields are on the store the whole time
-  // and are never rendered until the admin presses Edit.
-  it('shows no fields at all, however many are configured', async () => {
+  // Was a pinned FINDING: the field list is
+  // `v-if="editConfig.profile_fields.length > 0"` over `editConfig`, which
+  // started empty and was only filled by `startEditing()` -- so the configured
+  // fields sat on the store the whole time and were never rendered until the
+  // admin pressed Edit. `loadConfiguration()` now calls
+  // `syncEditConfigFromProfile()`, so the read-only view shows real data.
+  //
+  // The pin said to delete this test if the binding was fixed. Kept instead,
+  // inverted, because the fix is one call in one function and nothing else
+  // would notice if it were dropped.
+  it('shows the configured fields before anything is edited', async () => {
     const w = await page()
     expect(store().profileConfig?.profile_fields).toHaveLength(2)
-    expect(
-      fieldCards(w),
-      'the read-only view now renders the configured fields -- if the template ' +
-        'was pointed at profileConfig, delete this test'
-    ).toHaveLength(0)
-    expect(w.text()).not.toContain('Shirt size')
+    expect(fieldCards(w)).toHaveLength(2)
+    expect(w.text()).toContain('Shirt size')
   })
 
-  // FINDING, pinned, and the same cause. The toggle is bound to
-  // `editConfig.profiles_enabled`, which is `false` until edit mode opens. An
-  // admin looking at a system with profiles switched *on* is shown a switch in
-  // the off position.
-  it('shows profiles as disabled when they are enabled', async () => {
+  // Same cause, same fix: the toggle is bound to
+  // `editConfig.profiles_enabled`, which was `false` until edit mode opened,
+  // so an admin looking at a system with profiles switched *on* was shown a
+  // switch in the off position.
+  it('shows profiles as enabled when they are enabled', async () => {
     const w = await page()
     expect(store().profileConfig?.profiles_enabled).toBe(true)
-    expect(
-      (enabledToggle(w).element as HTMLInputElement).checked,
-      'the toggle now reflects the stored setting -- if it was rebound to ' +
-        'profileConfig, delete this test'
-    ).toBe(false)
+    expect((enabledToggle(w).element as HTMLInputElement).checked).toBe(true)
   })
 
   it('does at least refuse to let the toggle be moved outside edit mode', async () => {
@@ -158,22 +156,26 @@ describe('what the page shows before anything is edited', () => {
     expect((enabledToggle(w).element as HTMLInputElement).checked).toBe(true)
   })
 
-  // FINDING, pinned. Cancelling resets `editConfig` to the empty default
-  // rather than to what the server sent, so the page goes back to claiming
-  // there is no configuration.
-  it('goes back to showing nothing when the edit is cancelled', async () => {
+  // Was a pinned FINDING: cancelling reset `editConfig` to the empty default
+  // rather than to what the server sent, so the page went back to claiming
+  // there was no configuration. `cancelEditing()` now re-syncs.
+  it('restores the stored configuration when the edit is cancelled', async () => {
     const w = await page()
     await buttonNamed(w, 'Edit Configuration').trigger('click')
     await nextTick()
     expect(fieldCards(w)).toHaveLength(2)
 
+    // Edit something, so a cancel that merely left the buffer alone would be
+    // indistinguishable from one that restored it.
+    await buttonNamed(w, 'Add Field').trigger('click')
+    await nextTick()
+    expect(fieldCards(w)).toHaveLength(3)
+
     await buttonNamed(w, 'Cancel').trigger('click')
     await nextTick()
 
-    expect(
-      fieldCards(w),
-      'cancelling now restores the stored configuration -- if that was fixed, ' + 'delete this test'
-    ).toHaveLength(0)
+    expect(fieldCards(w)).toHaveLength(2)
+    expect(w.text()).toContain('Shirt size')
     expect(actions.clearError).toHaveBeenCalled()
   })
 

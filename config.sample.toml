@@ -4,8 +4,11 @@
 
 # JWT Authentication Configuration
 [auth]
-# Secret key for JWT token signing (CHANGE THIS IN PRODUCTION!)
-jwt_secret = "your-super-secret-jwt-key-change-this-in-production"
+# Secret key for JWT token signing. Deliberately omitted here: the server
+# refuses to start with a known placeholder value, so leave this unset and
+# it will generate a random one on first boot and persist it to disk. Set
+# it explicitly only if you need a stable secret across a config rebuild
+# (e.g. so existing sessions survive re-seeding config.toml).
 # Token expiration time in hours
 jwt_expiration_hours = 24
 # Enable user registration
@@ -226,35 +229,35 @@ cors_enabled = true
 # List of allowed origins for CORS requests
 cors_origins = ["http://localhost:3000"]
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "bio"
 label = "Bio"
 field_type = "Text"
 required = false
 help_text = "Tell us about yourself"
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "phone"
 label = "Phone Number"
 field_type = "Phone"
 required = false
 help_text = "Your contact phone number"
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "emergency_contact"
 label = "Emergency Contact"
 field_type = "Text"
 required = false
 help_text = "Emergency contact information"
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "favorite_bird"
 label = "Fav Bird"
 field_type = "Text"
 required = false
 help_text = "BIRD"
 
-[[user.profile_fields]]
+[[user.profile_fields_seed]]
 key = "card_id"
 label = "Transit Card ID for ToolGuard"
 field_type = "Text"
@@ -263,7 +266,10 @@ help_text = "0x"
 
 
 [user]
-profiles_enabled = true
+# profile_fields_seed / profiles_enabled_seed only take effect on first
+# boot, to seed the database's versioned profile config. After that, the
+# database is authoritative and editing these has no effect.
+profiles_enabled_seed = true
 
 [tools]
 

@@ -18,6 +18,12 @@ pub struct ProfileConfigVersion {
     pub profile_fields: serde_json::Value,
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// NULL only for rows that predate this column (added after
+    /// profile_fields versioning already existed): their real prior value
+    /// lived solely in config.toml, which the migration that added this
+    /// column couldn't read, so it's left unknown rather than guessed at.
+    /// Every row inserted by the app always sets this explicitly.
+    pub profiles_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -27,4 +33,5 @@ pub struct NewProfileConfigVersion {
     pub version: i64,
     pub profile_fields: serde_json::Value,
     pub created_by: Option<Uuid>,
+    pub profiles_enabled: bool,
 }

@@ -1,5 +1,5 @@
 use crate::{
-    config::{ProfileField, ProfileFieldType, UserConfig},
+    config::{ProfileField, ProfileFieldType},
     database::DatabaseManager,
     models::{AuditEventType, NewAuditLog},
 };
@@ -15,10 +15,10 @@ pub struct ProfileValidator {
 }
 
 impl ProfileValidator {
-    /// Create a new profile validator from user configuration
-    pub fn new(user_config: &UserConfig) -> Self {
+    /// Create a new profile validator from a field schema.
+    pub fn new(profile_fields: &[ProfileField]) -> Self {
         let mut field_definitions = HashMap::new();
-        for field in &user_config.profile_fields {
+        for field in profile_fields {
             field_definitions.insert(field.key.clone(), field.clone());
         }
 

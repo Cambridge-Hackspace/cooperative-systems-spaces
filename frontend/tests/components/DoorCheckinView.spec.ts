@@ -151,36 +151,39 @@ describe('the load failure paths, both of them', () => {
     expect(wrapper.find('button').exists()).toBe(false)
   })
 
-  it('shows the server error when the request rejects with a response', async () => {
-    info.mockRejectedValue({ response: { data: { error: 'Door is not published' } } })
+  // `doorsApi` is wrapped in `withErrorGuard`, so its contract is that it
+  // resolves an envelope and never rejects — including for a transport
+  // failure, which is the branch 92afb4c added. That guarantee lives in
+  // `utils/api.ts` now rather than in this component's own `try`, so it is
+  // asserted in `tests/unit/api-envelope.spec.ts` against the real `doorsApi`
+  // over a rejecting transport. Asserting it here would only exercise this
+  // file's own mock.
+  //
+  // What is left for this component is the half it still owns: showing the
+  // envelope's message, and having a message to show when the envelope
+  // carries none.
+
+  it("shows the server's own words when the load is refused", async () => {
+    info.mockResolvedValue({ success: false, error: 'Door is not published' })
     const wrapper = await mountView()
     expect(wrapper.find('.alert-error').text()).toBe('Door is not published')
   })
 
-  it('shows the fallback when the request rejects with no response at all', async () => {
-    // **The branch 92afb4c added.** A network failure, a DNS failure, a
-    // cancelled request: `e.response` is undefined, `e?.response?.data?.error`
-    // is undefined, and without the `||` the alert renders empty — a red box
-    // with no text, in a corridor, on somebody's phone.
-    //
-    // Only a transport-level rejection reaches it. Injecting a 500 does not:
-    // axios attaches a response to those, so the first half of the expression
-    // is defined and the fallback is never executed. A suite that only injects
-    // HTTP errors reports this line as covered while never running it.
-    info.mockRejectedValue(new Error('Network Error'))
+  it('shows a fallback rather than an empty red box when the envelope has no message', async () => {
+    // A red alert with no text, in a corridor, on somebody's phone.
+    info.mockResolvedValue({ success: false })
     const wrapper = await mountView()
     expect(wrapper.find('.alert-error').text()).toBe('Failed to load door')
-    expect(wrapper.find('.alert-error').text().length).toBeGreaterThan(0)
   })
 
   it('stops the spinner however the load failed', async () => {
-    for (const failure of [
-      () => info.mockResolvedValue({ success: false, error: 'nope' }),
-      () => info.mockRejectedValue({ response: { data: { error: 'nope' } } }),
-      () => info.mockRejectedValue(new Error('Network Error')),
+    for (const envelope of [
+      { success: false, error: 'nope' },
+      { success: false },
+      { success: true, data: undefined },
     ]) {
       info.mockReset()
-      failure()
+      info.mockResolvedValue(envelope)
       const wrapper = await mountView()
       expect(wrapper.find('.loading-spinner').exists()).toBe(false)
     }
@@ -215,11 +218,12 @@ describe('the unlock', () => {
     expect(alert?.text()).toContain('Relay offline')
   })
 
-  it('surfaces a transport failure rather than appearing to have worked', async () => {
+  it('surfaces a failed unlock rather than appearing to have worked', async () => {
     // The other half of the 92afb4c shape, on the action rather than the load.
     // Silence after pressing the button is indistinguishable from success to
-    // somebody standing at a door that did not open.
-    checkin.mockRejectedValue(new Error('Network Error'))
+    // somebody standing at a door that did not open. An envelope with no
+    // message is the case that used to render nothing at all.
+    checkin.mockResolvedValue({ success: false })
     const wrapper = await mountView()
     await wrapper.find('button').trigger('click')
     await flushPromises()

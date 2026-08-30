@@ -241,7 +241,7 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
+  background: var(--fallback-b1, oklch(var(--b1) / 1));
   border-radius: 8px;
   max-width: 800px;
   width: 90%;
@@ -254,12 +254,12 @@ onMounted(() => {
   justify-content: space-between;
   align-items: flex-start;
   padding: 1.5rem;
-  border-bottom: 1px solid #e1e5e9;
+  border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
 }
 
 .modal-header h3 {
   margin: 0 0 0.25rem 0;
-  color: #2c3e50;
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .subtitle {
@@ -284,7 +284,7 @@ onMounted(() => {
 }
 
 .close-btn:hover {
-  color: #2c3e50;
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
 }
 
 .modal-body {
@@ -296,7 +296,7 @@ onMounted(() => {
 }
 
 .section h4 {
-  color: #2c3e50;
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   margin-bottom: 1rem;
 }
 
@@ -305,7 +305,7 @@ onMounted(() => {
   font-style: italic;
   padding: 1rem;
   text-align: center;
-  background: #f8f9fa;
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   border-radius: 4px;
 }
 
@@ -320,7 +320,7 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 1rem;
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
 }
 
@@ -329,7 +329,7 @@ onMounted(() => {
 }
 
 .prerequisite-info strong {
-  color: #2c3e50;
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   display: block;
   margin-bottom: 0.25rem;
 }
@@ -353,14 +353,14 @@ onMounted(() => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: #2c3e50;
+  color: var(--fallback-bc, oklch(var(--bc) / 1));
   font-weight: 500;
 }
 
 .form-control {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   border-radius: 4px;
   font-size: 0.9rem;
 }
@@ -376,7 +376,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 1rem;
-  background: #f8f9fa;
+  background: var(--fallback-b2, oklch(var(--b2) / 1));
   border-radius: 4px;
 }
 
@@ -418,7 +418,7 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid #e1e5e9;
+  border-top: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
   margin-top: 1rem;
 }
 

@@ -166,6 +166,11 @@ impl From<AuthError> for ApiError {
             AuthError::InternalError => {
                 ApiError::InternalServerError("Authentication service error".to_string())
             }
+            // dev's, and it is the fix for a real defect: an insufficient role
+            // answered 401 Invalid token, which the frontend interceptor treats
+            // as an expired session and logs the user out. 403 says what
+            // happened.
+            AuthError::Forbidden(what) => ApiError::Forbidden(what.to_string()),
         }
     }
 }

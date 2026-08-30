@@ -359,10 +359,18 @@ fn schedule_is_active_at(
     let sched = match schedules.iter().find(|s| s.id == sid) {
         Some(s) => s,
         None => {
-            // Schedule went missing (deleted mid-compile). Treat as always
-            // — matches the FK ON DELETE SET NULL semantics on the next
-            // recompile.
-            return true;
+            // schedule_id's FK is ON DELETE SET NULL, so a genuinely
+            // deleted schedule can never leave a dangling id here — this
+            // only fires from the narrow read-time race between this
+            // call's list_rules_for_door and list_schedules snapshots (a
+            // schedule deleted in between). Fail closed on that ambiguity
+            // rather than treating the rule as unconditionally active,
+            // consistent with the invalid-intervals case just below.
+            warn!(
+                "Schedule {} referenced but not found in current snapshot",
+                sid
+            );
+            return false;
         }
     };
     let intervals = match crate::schedules::parse_intervals(&sched.intervals) {

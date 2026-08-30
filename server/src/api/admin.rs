@@ -79,9 +79,12 @@ async fn reload_config(
             )))
         }
         Err(e) => {
-            tracing::error!("Failed to reload configuration: {}", e);
+            //  rather than : anyhow's alternate format prints the
+            // whole cause chain, and a config reload fails for a reason three
+            // layers down more often than not.
+            tracing::error!("Failed to reload configuration: {:#}", e);
             Err(ApiError::InternalServerError(format!(
-                "Failed to reload configuration: {}",
+                "Failed to reload configuration: {:#}",
                 e
             )))
         }
