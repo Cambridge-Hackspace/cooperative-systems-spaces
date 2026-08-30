@@ -91,6 +91,31 @@ api.interceptors.response.use(
 )
 
 // API helper functions
+/**
+ * Turn a rejected request into the envelope the rest of the app expects.
+ *
+ * Forty-two call sites used to do this inline, and every one read
+ * `error.message` -- which for axios is the status restated ("Request failed
+ * with status code 409") while the server's own explanation sat unread in
+ * `error.response.data.error`. So every component that showed a failure to a
+ * user showed the wrong half of it.
+ *
+ * What this does NOT fix: a caller that never reads `.success` still cannot
+ * tell a refusal from a success, because this still resolves. No helper can fix
+ * that from here; the components that did it are corrected individually and
+ * their specs assert the correction.
+ */
+export function envelopeError<T>(error: unknown, fallback: string): ApiResponse<T> {
+  const e = error as {
+    response?: { data?: { error?: unknown; message?: unknown } }
+    message?: unknown
+  }
+  const fromBody = e?.response?.data?.error ?? e?.response?.data?.message
+  const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
+
+  return { success: false, error: text(fromBody) ?? text(e?.message) ?? fallback }
+}
+
 export const apiClient = {
   async get<T>(url: string, params?: any): Promise<ApiResponse<T>> {
     const response = await api.get<ApiResponse<T>>(url, { params })
@@ -175,7 +200,7 @@ export const userApi = {
       })
       .catch((error) => {
         console.error('Error fetching roster:', error)
-        return { success: false, error: error.message || 'Failed to fetch users' }
+        return envelopeError(error, 'Failed to fetch users')
       })
   },
 
@@ -239,7 +264,7 @@ export const userApi = {
         }
 
         console.error('Error fetching users for training:', error)
-        return { success: false, error: error.message || 'Failed to fetch users for training' }
+        return envelopeError(error, 'Failed to fetch users for training')
       })
   },
 
@@ -259,7 +284,7 @@ export const userApi = {
       })
       .catch((error) => {
         console.error('Error fetching training history:', error)
-        return { success: false, error: error.message || 'Failed to fetch training history' }
+        return envelopeError(error, 'Failed to fetch training history')
       })
   },
 
@@ -304,7 +329,7 @@ export const adminApi = {
 
     return apiClient.get<AuditLog[]>('/admin/audit-logs', params).catch((error) => {
       console.error('Error fetching audit logs:', error)
-      return { success: false, error: error.message || 'Failed to fetch audit logs', data: [] }
+      return { ...envelopeError(error, 'Failed to fetch audit logs'), data: [] }
     })
   },
 
@@ -539,7 +564,7 @@ export const toolsApi = {
   getTools(query?: ToolQuery): Promise<ApiResponse<Tool[]>> {
     return apiClient.get<Tool[]>('/tools', query).catch((error) => {
       console.error('Error fetching tools:', error)
-      return { success: false, error: error.message || 'Failed to fetch tools', data: [] }
+      return { ...envelopeError(error, 'Failed to fetch tools'), data: [] }
     })
   },
 
@@ -547,7 +572,7 @@ export const toolsApi = {
   getTool(toolId: string): Promise<ApiResponse<Tool>> {
     return apiClient.get<Tool>(`/tools/${toolId}`).catch((error) => {
       console.error('Error fetching tool:', error)
-      return { success: false, error: error.message || 'Failed to fetch tool' }
+      return envelopeError(error, 'Failed to fetch tool')
     })
   },
 
@@ -555,7 +580,7 @@ export const toolsApi = {
   createTool(toolData: CreateToolRequest): Promise<ApiResponse<Tool>> {
     return apiClient.post<Tool>('/tools', toolData).catch((error) => {
       console.error('Error creating tool:', error)
-      return { success: false, error: error.message || 'Failed to create tool' }
+      return envelopeError(error, 'Failed to create tool')
     })
   },
 
@@ -563,7 +588,7 @@ export const toolsApi = {
   updateTool(toolId: string, updates: UpdateToolRequest): Promise<ApiResponse<Tool>> {
     return apiClient.put<Tool>(`/tools/${toolId}`, updates).catch((error) => {
       console.error('Error updating tool:', error)
-      return { success: false, error: error.message || 'Failed to update tool' }
+      return envelopeError(error, 'Failed to update tool')
     })
   },
 
@@ -571,7 +596,7 @@ export const toolsApi = {
   deleteTool(toolId: string): Promise<ApiResponse<void>> {
     return apiClient.delete<void>(`/tools/${toolId}`).catch((error) => {
       console.error('Error deleting tool:', error)
-      return { success: false, error: error.message || 'Failed to delete tool' }
+      return envelopeError(error, 'Failed to delete tool')
     })
   },
 
@@ -582,7 +607,7 @@ export const toolsApi = {
   ): Promise<ApiResponse<Tool>> {
     return apiClient.put<Tool>(`/tools/${toolId}/status`, statusData).catch((error) => {
       console.error('Error changing tool status:', error)
-      return { success: false, error: error.message || 'Failed to change tool status' }
+      return envelopeError(error, 'Failed to change tool status')
     })
   },
 
@@ -590,7 +615,7 @@ export const toolsApi = {
   getToolEvents(toolId: string): Promise<ApiResponse<ToolEvent[]>> {
     return apiClient.get<ToolEvent[]>(`/tools/${toolId}/events`).catch((error) => {
       console.error('Error fetching tool events:', error)
-      return { success: false, error: error.message || 'Failed to fetch tool events', data: [] }
+      return { ...envelopeError(error, 'Failed to fetch tool events'), data: [] }
     })
   },
 
@@ -598,7 +623,7 @@ export const toolsApi = {
   getAvailableTools(): Promise<ApiResponse<Tool[]>> {
     return apiClient.get<Tool[]>('/tools/available').catch((error) => {
       console.error('Error fetching available tools:', error)
-      return { success: false, error: error.message || 'Failed to fetch available tools', data: [] }
+      return { ...envelopeError(error, 'Failed to fetch available tools'), data: [] }
     })
   },
 
@@ -609,8 +634,7 @@ export const toolsApi = {
       .catch((error) => {
         console.error('Error checking tool usage:', error)
         return {
-          success: false,
-          error: error.message || 'Failed to check tool usage',
+          ...envelopeError(error, 'Failed to check tool usage'),
           data: { can_use: false },
         }
       })
@@ -652,7 +676,7 @@ export const trainingApi = {
   getTrainingSteps(query?: TrainingQuery): Promise<ApiResponse<TrainingStep[]>> {
     return apiClient.get<TrainingStep[]>('/training/steps', query).catch((error) => {
       console.error('Error fetching training steps:', error)
-      return { success: false, error: error.message || 'Failed to fetch training steps', data: [] }
+      return { ...envelopeError(error, 'Failed to fetch training steps'), data: [] }
     })
   },
 
@@ -660,7 +684,7 @@ export const trainingApi = {
   getTrainingStep(stepId: string): Promise<ApiResponse<TrainingStep>> {
     return apiClient.get<TrainingStep>(`/training/steps/${stepId}`).catch((error) => {
       console.error('Error fetching training step:', error)
-      return { success: false, error: error.message || 'Failed to fetch training step' }
+      return envelopeError(error, 'Failed to fetch training step')
     })
   },
 
@@ -668,7 +692,7 @@ export const trainingApi = {
   createTrainingStep(stepData: CreateTrainingStepRequest): Promise<ApiResponse<TrainingStep>> {
     return apiClient.post<TrainingStep>('/training/steps', stepData).catch((error) => {
       console.error('Error creating training step:', error)
-      return { success: false, error: error.message || 'Failed to create training step' }
+      return envelopeError(error, 'Failed to create training step')
     })
   },
 
@@ -679,7 +703,7 @@ export const trainingApi = {
   ): Promise<ApiResponse<TrainingStep>> {
     return apiClient.put<TrainingStep>(`/training/steps/${stepId}`, updates).catch((error) => {
       console.error('Error updating training step:', error)
-      return { success: false, error: error.message || 'Failed to update training step' }
+      return envelopeError(error, 'Failed to update training step')
     })
   },
 
@@ -687,7 +711,7 @@ export const trainingApi = {
   deleteTrainingStep(stepId: string): Promise<ApiResponse<void>> {
     return apiClient.delete<void>(`/training/steps/${stepId}`).catch((error) => {
       console.error('Error deleting training step:', error)
-      return { success: false, error: error.message || 'Failed to delete training step' }
+      return envelopeError(error, 'Failed to delete training step')
     })
   },
 
@@ -697,7 +721,7 @@ export const trainingApi = {
       .put<void>(`/training/steps/${stepId}/position`, { step_number: newPosition })
       .catch((error) => {
         console.error('Error updating training step position:', error)
-        return { success: false, error: error.message || 'Failed to update training step position' }
+        return envelopeError(error, 'Failed to update training step position')
       })
   },
 
@@ -710,8 +734,7 @@ export const trainingApi = {
       .catch((error) => {
         console.error('Error fetching training prerequisites:', error)
         return {
-          success: false,
-          error: error.message || 'Failed to fetch training prerequisites',
+          ...envelopeError(error, 'Failed to fetch training prerequisites'),
           data: [],
         }
       })
@@ -723,7 +746,7 @@ export const trainingApi = {
   ): Promise<ApiResponse<TrainingPrerequisite>> {
     return apiClient.post<TrainingPrerequisite>('/training/prerequisites', data).catch((error) => {
       console.error('Error adding training prerequisite:', error)
-      return { success: false, error: error.message || 'Failed to add training prerequisite' }
+      return envelopeError(error, 'Failed to add training prerequisite')
     })
   },
 
@@ -731,7 +754,7 @@ export const trainingApi = {
   removeTrainingPrerequisite(prerequisiteId: string): Promise<ApiResponse<void>> {
     return apiClient.delete<void>(`/training/prerequisites/${prerequisiteId}`).catch((error) => {
       console.error('Error removing training prerequisite:', error)
-      return { success: false, error: error.message || 'Failed to remove training prerequisite' }
+      return envelopeError(error, 'Failed to remove training prerequisite')
     })
   },
 
@@ -747,8 +770,7 @@ export const trainingApi = {
       .catch((error) => {
         console.error('Error fetching user training progress:', error)
         return {
-          success: false,
-          error: error.message || 'Failed to fetch user training progress',
+          ...envelopeError(error, 'Failed to fetch user training progress'),
           data: [],
         }
       })
@@ -763,7 +785,7 @@ export const trainingApi = {
       .post<UserTrainingProgress>(`/training/progress/${userId}/start`, data)
       .catch((error) => {
         console.error('Error starting training session:', error)
-        return { success: false, error: error.message || 'Failed to start training session' }
+        return envelopeError(error, 'Failed to start training session')
       })
   },
 
@@ -776,7 +798,7 @@ export const trainingApi = {
       .post<UserTrainingProgress>(`/training/progress/${userId}/complete`, data)
       .catch((error) => {
         console.error('Error completing training session:', error)
-        return { success: false, error: error.message || 'Failed to complete training session' }
+        return envelopeError(error, 'Failed to complete training session')
       })
   },
 
@@ -790,8 +812,7 @@ export const trainingApi = {
     return apiClient.get<any[]>(url).catch((error) => {
       console.error('Error fetching tool training steps:', error)
       return {
-        success: false,
-        error: error.message || 'Failed to fetch tool training steps',
+        ...envelopeError(error, 'Failed to fetch tool training steps'),
         data: [],
       }
     })
@@ -807,7 +828,7 @@ export const trainingApi = {
       : `/training/tools/${toolId}/overview/me`
     return apiClient.get<ToolTrainingOverview>(url).catch((error) => {
       console.error('Error fetching tool training overview:', error)
-      return { success: false, error: error.message || 'Failed to fetch tool training overview' }
+      return envelopeError(error, 'Failed to fetch tool training overview')
     })
   },
 
@@ -818,7 +839,7 @@ export const trainingApi = {
       : `/training/tools/${toolId}/can-access/me`
     return apiClient.get<boolean>(url).catch((error) => {
       console.error('Error checking tool access:', error)
-      return { success: false, error: error.message || 'Failed to check tool access', data: false }
+      return { ...envelopeError(error, 'Failed to check tool access'), data: false }
     })
   },
 
@@ -829,8 +850,7 @@ export const trainingApi = {
     return apiClient.get<TrainingInstructor[]>('/training/instructors', query).catch((error) => {
       console.error('Error fetching training instructors:', error)
       return {
-        success: false,
-        error: error.message || 'Failed to fetch training instructors',
+        ...envelopeError(error, 'Failed to fetch training instructors'),
         data: [],
       }
     })
@@ -840,7 +860,7 @@ export const trainingApi = {
   certifyInstructor(data: CertifyInstructorRequest): Promise<ApiResponse<TrainingInstructor>> {
     return apiClient.post<TrainingInstructor>('/training/instructors', data).catch((error) => {
       console.error('Error certifying instructor:', error)
-      return { success: false, error: error.message || 'Failed to certify instructor' }
+      return envelopeError(error, 'Failed to certify instructor')
     })
   },
 
@@ -848,7 +868,7 @@ export const trainingApi = {
   revokeInstructorCertification(instructorId: string): Promise<ApiResponse<void>> {
     return apiClient.delete<void>(`/training/instructors/${instructorId}`).catch((error) => {
       console.error('Error revoking instructor certification:', error)
-      return { success: false, error: error.message || 'Failed to revoke instructor certification' }
+      return envelopeError(error, 'Failed to revoke instructor certification')
     })
   },
 }
@@ -863,7 +883,7 @@ export const trainerApi = {
       .post<ToolTrainer>(`/trainers/tools/${data.tool_id}/trainers`, data)
       .catch((error) => {
         console.error('Error assigning tool trainer:', error)
-        return { success: false, error: error.message || 'Failed to assign tool trainer' }
+        return envelopeError(error, 'Failed to assign tool trainer')
       })
   },
 
@@ -878,7 +898,7 @@ export const trainerApi = {
       })
       .catch((error) => {
         console.error('Error fetching tool trainers:', error)
-        return { success: false, error: error.message || 'Failed to fetch tool trainers', data: [] }
+        return { ...envelopeError(error, 'Failed to fetch tool trainers'), data: [] }
       })
   },
 
@@ -892,7 +912,7 @@ export const trainerApi = {
       .put<ToolTrainer>(`/trainers/tools/${toolId}/trainers/${userId}`, data)
       .catch((error) => {
         console.error('Error updating tool trainer:', error)
-        return { success: false, error: error.message || 'Failed to update tool trainer' }
+        return envelopeError(error, 'Failed to update tool trainer')
       })
   },
 
@@ -900,7 +920,7 @@ export const trainerApi = {
   removeToolTrainer(toolId: string, userId: string): Promise<ApiResponse<void>> {
     return apiClient.delete<void>(`/trainers/tools/${toolId}/trainers/${userId}`).catch((error) => {
       console.error('Error removing tool trainer:', error)
-      return { success: false, error: error.message || 'Failed to remove tool trainer' }
+      return envelopeError(error, 'Failed to remove tool trainer')
     })
   },
 
@@ -917,8 +937,7 @@ export const trainerApi = {
         }
         console.error('Error checking trainer authorization:', error)
         return {
-          success: false,
-          error: error.message || 'Failed to check trainer authorization',
+          ...envelopeError(error, 'Failed to check trainer authorization'),
           data: false,
         }
       })
@@ -930,7 +949,7 @@ export const trainerApi = {
   createTrainingRecord(data: CreateTrainingRecordRequest): Promise<ApiResponse<TrainingRecord>> {
     return apiClient.post<TrainingRecord>('/trainers/training-records', data).catch((error) => {
       console.error('Error creating training record:', error)
-      return { success: false, error: error.message || 'Failed to create training record' }
+      return envelopeError(error, 'Failed to create training record')
     })
   },
 
@@ -943,8 +962,7 @@ export const trainerApi = {
       .catch((error) => {
         console.error('Error fetching training records:', error)
         return {
-          success: false,
-          error: error.message || 'Failed to fetch training records',
+          ...envelopeError(error, 'Failed to fetch training records'),
           data: [],
         }
       })
@@ -959,7 +977,7 @@ export const trainerApi = {
       .put<TrainingRecord>(`/trainers/training-records/${recordId}`, data)
       .catch((error) => {
         console.error('Error updating training record:', error)
-        return { success: false, error: error.message || 'Failed to update training record' }
+        return envelopeError(error, 'Failed to update training record')
       })
   },
 
@@ -975,8 +993,7 @@ export const trainerApi = {
       .catch((error) => {
         console.error('Error fetching user training records:', error)
         return {
-          success: false,
-          error: error.message || 'Failed to fetch user training records',
+          ...envelopeError(error, 'Failed to fetch user training records'),
           data: [],
         }
       })

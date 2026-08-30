@@ -202,7 +202,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize webhook dispatcher and wire it to audit-log creation.
     info!("Initializing webhook dispatcher...");
-    let (webhook_dispatcher, webhook_tx) = WebhookDispatcher::start(db_manager.clone());
+    let (webhook_dispatcher, webhook_tx) =
+        WebhookDispatcher::start(db_manager.clone(), config_manager.clone());
     db_manager.set_webhook_sender(webhook_tx);
     info!("Webhook dispatcher initialized");
 

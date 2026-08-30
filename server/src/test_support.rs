@@ -67,7 +67,8 @@ pub async fn app_state() -> AppState {
     let config_manager = Arc::new(ConfigManager::new(config.clone(), None));
     let db = Arc::new(DatabaseManager::disconnected());
 
-    let (webhook_dispatcher, _audit_tx) = WebhookDispatcher::start(db.clone());
+    let (webhook_dispatcher, _audit_tx) =
+        WebhookDispatcher::start(db.clone(), config_manager.clone());
 
     let device_registry = DeviceChannelRegistry::new();
     let device_transport = Arc::new(DeviceTransport::new(device_registry.clone(), None));
