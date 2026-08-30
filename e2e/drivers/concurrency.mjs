@@ -28,7 +28,8 @@
 // on the update, or a transaction, and the finding is worth acting on whether
 // or not a later round reproduces it.
 
-import { GET, POST, PUT, adminAccount, record, ok, assertEq, main, RUN_TAG } from './lib.mjs'
+import { GET, POST, PUT, adminAccount, record, ok, assertEq, main, RUN_TAG, allProfileConfigVersions,
+} from './lib.mjs'
 
 const FANOUT = Number(process.env.CSS_RACE_FANOUT ?? 8)
 const ROUNDS = Number(process.env.CSS_RACE_ROUNDS ?? 3)
@@ -291,8 +292,11 @@ async function profileConfigVersions(admin) {
 }
 
 async function versions(admin) {
-  const res = await GET('/api/profiles/config/versions', { token: admin.token })
-  const list = Array.isArray(res.json?.data) ? res.json.data : []
+  // Paged. See allProfileConfigVersions: the endpoint's default limit is 50
+  // and the stages share a database, so an unqualified read starts dropping
+  // the oldest rows partway through a run -- and this function's caller asks
+  // whether the numbering starts at 1.
+  const list = await allProfileConfigVersions(admin.token)
   return list.map((v) => Number(v.version)).filter((n) => Number.isFinite(n))
 }
 

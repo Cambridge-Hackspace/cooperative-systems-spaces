@@ -25,7 +25,7 @@
 import {
   GET, POST, PUT, DELETE,
   record, ok, main, RUN_TAG, PASSWORD,
-  adminAccount, register,
+  adminAccount, register, allProfileConfigVersions,
 } from './lib.mjs'
 import { INVARIANTS } from '../journeys/invariants.mjs'
 
@@ -355,7 +355,9 @@ async function observe() {
     `the driver believes ${model.users.filter((u) => u.exists).length} users ` +
     'exist and GET /api/users returned none; the response shape is not what ' +
     'this driver parses, so the roster invariants are judging an empty world')
-  const versions = (await GET('/api/profiles/config/versions', { token: admin.token })).json?.data ?? []
+  // Paged. See allProfileConfigVersions for why an unqualified read of this
+  // endpoint made this invariant report a product defect that was not there.
+  const versions = await allProfileConfigVersions(admin.token)
   const devices = (await GET('/api/admin/devices', { token: admin.token })).json?.data ?? []
 
   const rules = []

@@ -206,6 +206,40 @@ export async function adminAccount(kind) {
 /** Matches `[initial_setup] setup_admin_email` in e2e/stack-config.toml. */
 export const ADMIN_EMAIL = 'admin@e2e.invalid'
 
+/**
+ * Every profile-config version, paged.
+ *
+ * `GET /api/profiles/config/versions` is `ORDER BY version DESC` with the
+ * limit defaulting to 50, so one unqualified call returns the fifty *newest*
+ * rows and silently drops the rest. Two drivers read it to decide whether the
+ * numbering is a contiguous run from 1, and both treated that page as the
+ * whole table.
+ *
+ * It held for as long as a run made fewer than fifty versions. The stages
+ * share one database and all three write: the contract stage writes a couple,
+ * the concurrency race writes ROUNDS x FANOUT (24 by default), and the journey
+ * driver writes whatever its seed chooses. CI drew a seed that made 25 and
+ * pushed the total to 51 -- so `versions-are-contiguous` reported "numbering
+ * starts at 2, not 1", which was true of the page and false of the table.
+ *
+ * A truncated observation that reads as a product defect is the worst answer
+ * this tier can give, so this is shared rather than fixed twice. 500 is the
+ * endpoint's own clamp ceiling, so this makes the fewest requests that can be
+ * correct.
+ */
+export async function allProfileConfigVersions(token) {
+  const PAGE = 500
+  const out = []
+  for (let offset = 0; ; offset += PAGE) {
+    const res = await GET(`/api/profiles/config/versions?limit=${PAGE}&offset=${offset}`, { token })
+    const page = res.json?.data
+    if (!Array.isArray(page)) break
+    out.push(...page)
+    if (page.length < PAGE) break
+  }
+  return out
+}
+
 export function appendLog(file, line) {
   try {
     appendFileSync(file, line + '\n')
