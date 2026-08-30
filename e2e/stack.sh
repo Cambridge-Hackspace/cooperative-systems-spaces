@@ -206,7 +206,46 @@ start_postgres() {
     chmod 0777 "${pgdata}"
   fi
 
-  log "starting postgres (encoding=${PG_ENCODING}, locale=C, TZ=${STACK_TZ})"
+  # POSTGRES_INITDB_ARGS is only honoured when PGDATA is empty: the image runs
+  # initdb once and never again. So a PGDATA that already exists pins the
+  # cluster's encoding forever, and asking for a different one does nothing.
+  #
+  # That is not hypothetical here, it is the normal case. `reaper test` is
+  # sync -> build -> reset -> run, and reset rolls tank/state back to the
+  # @pristine snapshot -- which holds whatever encoding the cluster was first
+  # built with. `reaper test --profile utf8` on a session that had already run
+  # LATIN1 came up LATIN1, while this function's log line cheerfully announced
+  # UTF8, because it printed the request rather than the result.
+  #
+  # schema/encoding catches the mismatch and did. But a check that fires on
+  # every run of a profile that cannot work is not a knob, so: if the existing
+  # cluster was built for a different encoding, discard it and let initdb run
+  # again. PGDATA is scratch state destroyed with the session, which is what
+  # makes this safe.
+  #
+  # The marker lives beside PGDATA rather than inside it, because initdb
+  # refuses a directory that is not empty.
+  local marker="${pgdata%/}.encoding"
+  local existing=""
+  [[ -f ${marker} ]] && existing="$(cat "${marker}" 2>/dev/null || true)"
+
+  if [[ -n $(ls -A "${pgdata}" 2>/dev/null || true) && ${existing} != "${PG_ENCODING}" ]]; then
+    log "PGDATA was built as ${existing:-an unrecorded encoding}; rebuilding it for ${PG_ENCODING}"
+    # Guarded: this is an rm -rf, and the only path it may ever take is the one
+    # stack_pgdata composes.
+    case "${pgdata}" in
+      */pgdata) rm -rf "${pgdata}" ;;
+      *)
+        echo "refusing to remove ${pgdata}: not a pgdata directory" >&2
+        exit 1
+        ;;
+    esac
+    mkdir -p "${pgdata}"
+    [[ ${PROVISION} != "external" ]] && chmod 0777 "${pgdata}"
+  fi
+  printf '%s' "${PG_ENCODING}" >"${marker}"
+
+  log "starting postgres (requested encoding=${PG_ENCODING}, locale=C, TZ=${STACK_TZ})"
   pm run -d --name "${C_PG}" --network host \
     -e POSTGRES_USER="${PG_USER}" \
     -e POSTGRES_PASSWORD="${PG_PASS}" \
