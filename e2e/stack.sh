@@ -225,6 +225,24 @@ start_postgres() {
   #
   # The marker lives beside PGDATA rather than inside it, because initdb
   # refuses a directory that is not empty.
+  #
+  # In practice it is never found, and the rebuild therefore happens on every
+  # run. @pristine is taken once and reaper does not re-take it, so the
+  # rollback always restores a PGDATA from before this marker existed. That was
+  # measured, not assumed: two consecutive default-profile runs both logged
+  # "an unrecorded encoding".
+  #
+  # Left as it is rather than moved somewhere that survives a rollback. The
+  # rebuild costs about a second -- postgres went from ready-after-1s to
+  # ready-after-2s -- and the alternative is a marker on a dataset the rollback
+  # does not cover, which can then disagree with the cluster it describes. An
+  # unconditional rebuild cannot. The consequence worth knowing is that the
+  # state rollback no longer does anything for PGDATA specifically; every run
+  # gets a genuinely fresh cluster, which is what the snapshot was approximating
+  # anyway.
+  #
+  # schema/encoding is the guarantee regardless: it asks the running server
+  # what the encoding actually is, and it is what caught this whole class.
   local marker="${pgdata%/}.encoding"
   local existing=""
   [[ -f ${marker} ]] && existing="$(cat "${marker}" 2>/dev/null || true)"
