@@ -191,6 +191,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { homeLinksApi } from '@/utils/api'
+import { ALLOWED_LINK_SCHEMES, isSafeLinkUrl } from '@/lib/urls'
 import type { HomeLink, HomeLinkAudience } from '@/types'
 
 const loading = ref(false)
@@ -338,6 +339,16 @@ async function load() {
 
 async function save() {
   if (!canSave.value) return
+
+  // The URL ends up in `:href` on the public home page, and Vue does not
+  // sanitise an href binding. See lib/urls.ts.
+  if (!isSafeLinkUrl(form.value.url)) {
+    notify(
+      `That URL cannot be used as a link. Permitted: ${ALLOWED_LINK_SCHEMES.join(', ')} or a path on this site.`,
+      false
+    )
+    return
+  }
   saving.value = true
   // `null` clears an existing expiry on update; on create it just means "no expiry".
   const body = {

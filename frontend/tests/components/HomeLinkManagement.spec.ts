@@ -239,31 +239,35 @@ describe('creating a link', () => {
     expect(w.find('.modal-open').exists()).toBe(true)
   })
 
-  // FINDING, pinned. Neither this component nor the server checks the scheme:
-  // `api/home_links.rs:239` rejects only an empty URL. `HomeView.vue:85`
-  // renders the stored value as `:href="l.url"`, and Vue does not sanitise an
-  // href binding -- so a `javascript:` URL saved here becomes a live script
-  // handler on the *public* home page, served to signed-out visitors whenever
-  // the audience is `everyone` or `anonymous`.
-  //
-  // It takes an admin to set one, so this is not an unauthenticated hole. What
-  // it is: a compromised or careless admin account turning into persistent
-  // script execution against every visitor, from a field that looks like it
-  // only picks a destination. `target="_blank"` and `rel="noopener"` do not
-  // apply to a `javascript:` href.
-  it('sends a javascript: URL to the server unchallenged', async () => {
+  // FIXED. The URL is rendered as `:href` on the public home page and Vue does
+  // not sanitise an href binding, so a `javascript:` URL saved here became a
+  // live script handler for every signed-out visitor. Neither this form nor
+  // `api/home_links.rs:239` -- which checks only that the string is non-empty
+  // -- stopped one. There is an allowlist now; see lib/urls.ts for why it is an
+  // allowlist rather than a denylist.
+  it('refuses a javascript: URL, and says what is permitted', async () => {
     const w = await page()
     await openForm(w)
     await fill(w, 'Free money', 'javascript:fetch("/api/v1/users").then(r=>r.json())')
     await buttonNamed(w, 'Create').trigger('click')
     await flushPromises()
 
-    expect(
-      body().url,
-      'the URL is now validated -- if a scheme check was added, delete this ' +
-        'test and assert the rejection instead'
-    ).toBe('javascript:fetch("/api/v1/users").then(r=>r.json())')
-    expect(w.find('.alert-error').exists()).toBe(false)
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(w.find('.alert-error').text()).toContain('http:')
+    expect(w.find('.modal-open').exists()).toBe(true)
+  })
+
+  it('still accepts an ordinary destination and a path on this site', async () => {
+    for (const url of ['https://wiki.example.org', '/tools']) {
+      mocks.create.mockClear()
+      const w = await page()
+      await openForm(w)
+      await fill(w, 'Wiki', url)
+      await buttonNamed(w, 'Create').trigger('click')
+      await flushPromises()
+
+      expect((mocks.create.mock.calls[0][0] as { url: string }).url, url).toBe(url)
+    }
   })
 })
 
