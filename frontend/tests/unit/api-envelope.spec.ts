@@ -41,16 +41,55 @@ describe('which message reaches the user', () => {
     expect(r.error).toBe('the real one')
   })
 
-  it('falls back to the axios message when the body says nothing', () => {
-    expect(envelopeError(axiosish(500, {}), 'fallback').error).toBe(
-      'Request failed with status code 500'
+  // These two used to assert the opposite: that `e.message` wins over the
+  // caller's fallback. That was wrong, and it took the browser tier's first
+  // real run to show it -- tests/e2e/door-checkin.spec.ts asserts a dropped
+  // connection shows "Failed to load door", and these asserted it shows
+  // "Network Error". Two tests in one suite contradicting each other.
+  //
+  // The fallback wins. Every string axios puts in `e.message` is written for a
+  // developer -- "Request failed with status code 500", "Network Error",
+  // "timeout of 10000ms exceeded", "canceled" -- and showing the first of
+  // those to a user is the defect this helper exists to remove. The caller's
+  // fallback is written at the call site in the words a user should read.
+
+  it('prefers the caller fallback over the axios prose when the body says nothing', () => {
+    expect(envelopeError(axiosish(500, {}), 'Failed to load door').error).toBe(
+      'Failed to load door'
     )
   })
 
-  it('falls back to the axios message when there is no response at all', () => {
+  it('prefers the caller fallback when there is no response at all', () => {
     // The transport-failure shape: no `response`, which is the branch
     // DoorCheckinView's fix (92afb4c) exists for.
-    expect(envelopeError(new Error('Network Error'), 'fallback').error).toBe('Network Error')
+    expect(envelopeError(new Error('Network Error'), 'Failed to load door').error).toBe(
+      'Failed to load door'
+    )
+  })
+
+  it('never shows a string axios wrote, whatever shape the failure is', () => {
+    // The general form, so a future change that reinstates `e.message` for one
+    // of these shapes fails here rather than only in the browser tier.
+    const axiosProse = [
+      new Error('Network Error'),
+      new Error('timeout of 10000ms exceeded'),
+      Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' }),
+      axiosish(500, {}),
+      axiosish(502, undefined),
+    ]
+    for (const failure of axiosProse) {
+      expect(envelopeError(failure, 'Failed to load door').error).toBe('Failed to load door')
+    }
+  })
+
+  it('still logs the reason, so a transport failure is not indistinguishable from an empty body', () => {
+    // The cost of the rule above is that the only clue to *why* leaves the
+    // returned envelope. It has to go somewhere.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    envelopeError(new Error('Network Error'), 'Failed to load door')
+    expect(warn).toHaveBeenCalled()
+    expect(warn.mock.calls[0]?.join(' ')).toContain('Network Error')
+    warn.mockRestore()
   })
 
   it('falls back to the caller-supplied text when there is nothing else', () => {
@@ -61,19 +100,20 @@ describe('which message reaches the user', () => {
 
   it('ignores an empty or whitespace-only server message rather than showing it', () => {
     // A blank alert is worse than a generic one: it looks like the UI broke.
-    expect(envelopeError(axiosish(500, { error: '' }), 'fallback').error).toBe(
-      'Request failed with status code 500'
+    // What replaces it is the caller's fallback, per the rule above.
+    expect(envelopeError(axiosish(500, { error: '' }), 'Failed to load door').error).toBe(
+      'Failed to load door'
     )
-    expect(envelopeError(axiosish(500, { error: '   ' }), 'fallback').error).toBe(
-      'Request failed with status code 500'
+    expect(envelopeError(axiosish(500, { error: '   ' }), 'Failed to load door').error).toBe(
+      'Failed to load door'
     )
   })
 
   it('ignores a non-string server message', () => {
     // Postgres and serde have both been seen to put structured detail here.
-    expect(envelopeError(axiosish(400, { error: { detail: 'nested' } }), 'fallback').error).toBe(
-      'Request failed with status code 400'
-    )
+    expect(
+      envelopeError(axiosish(400, { error: { detail: 'nested' } }), 'Failed to load door').error
+    ).toBe('Failed to load door')
   })
 
   it('always reports failure, whatever it was given', () => {

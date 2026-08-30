@@ -25,6 +25,12 @@
 /e2e/artifacts/
 /e2e/.node/
 /e2e/.npm/
+# e2e/build.sh sets CARGO_HOME to ${REAPER_CACHE_CARGO:-${ROOT}/e2e/.cargo}, so
+# the fallback fires wherever that variable is unset -- CI, and anyone running
+# the build verb by hand. A cargo registry is hundreds of megabytes, and an
+# untracked one defeats preflight's artifacts/commit-matches-tree check by
+# making every tree look dirty.
+/e2e/.cargo/
 
 # AppConfig::from_file rewrites config in place on a missing-field error and
 # leaves the original beside it as <path>.<unixtime>.backup.

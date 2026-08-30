@@ -113,7 +113,36 @@ export function envelopeError<T>(error: unknown, fallback: string): ApiResponse<
   const fromBody = e?.response?.data?.error ?? e?.response?.data?.message
   const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null)
 
-  return { success: false, error: text(fromBody) ?? text(e?.message) ?? fallback }
+  const serverSaid = text(fromBody)
+  if (serverSaid === null) {
+    // Not discarded, just not shown. `e.message` is the only remaining clue to
+    // why a request failed with no body, and swallowing it makes a transport
+    // failure indistinguishable from a server that answered `{}`.
+    console.warn('[api] request failed with no server message:', e?.message ?? e)
+  }
+
+  // `e.message` is deliberately NOT a candidate for the returned string, and
+  // this is the second time that decision has been made in this function.
+  //
+  // Every value axios puts there is a developer string: "Request failed with
+  // status code 500", "Network Error", "timeout of 10000ms exceeded",
+  // "canceled". Showing the first of those to a user is the exact defect this
+  // helper was written to remove -- forty-two call sites read `error.message`
+  // and rendered the status restated, while the server's own explanation sat
+  // unread in `response.data.error`. Keeping it as a *second* choice fixed the
+  // common case and left the same class of string reaching users whenever the
+  // body was empty.
+  //
+  // The fallback is written by the caller, at the call site, in the words a
+  // user should read ("Failed to load door"). It is the better answer whenever
+  // the server has not supplied one, so it wins outright.
+  //
+  // Caught by tests/e2e/door-checkin.spec.ts on the first run of the browser
+  // tier: it asserts a dropped connection shows "Failed to load door", while
+  // tests/unit/api-envelope.spec.ts asserted it shows "Network Error". Two of
+  // my own tests contradicting each other, for as long as the tier covering
+  // the real behaviour had never executed.
+  return { success: false, error: serverSaid ?? fallback }
 }
 
 export const apiClient = {
