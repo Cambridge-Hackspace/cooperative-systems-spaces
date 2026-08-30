@@ -62,6 +62,7 @@
 import { ref, computed } from 'vue'
 import { trainerApi } from '../utils/api'
 import type { Tool, ToolTrainerWithUser, UpdateTrainerRequest } from '../types'
+import { localDate, utcDateOf } from '@/lib/dates'
 
 interface Props {
   tool: Tool
@@ -80,16 +81,18 @@ const error = ref('')
 
 const formData = ref<UpdateTrainerRequest & { expires_at: string }>({
   notes: props.trainerWithUser.trainer.notes || '',
-  expires_at: props.trainerWithUser.trainer.expires_at
-    ? new Date(props.trainerWithUser.trainer.expires_at).toISOString().split('T')[0]
-    : '',
+  // `utcDateOf`, not `localDateOf`: this is a stored timestamp whose date
+  // component is the date somebody picked. Rendering the instant locally shows
+  // the previous day west of UTC, and walks back one more each time the form is
+  // opened and saved.
+  expires_at: utcDateOf(props.trainerWithUser.trainer.expires_at),
   is_active: props.trainerWithUser.trainer.is_active,
 })
 
 // Computed
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// The user's date, not UTC's. `toISOString()` here floored the picker at the
+// UTC date, so west of UTC a trainer could not be given an expiry of today.
+const today = computed(() => localDate())
 
 // Methods
 const submitForm = async () => {

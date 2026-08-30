@@ -536,6 +536,7 @@ import CreateTrainingStepModal from './CreateTrainingStepModal.vue'
 import EditTrainingStepModal from './EditTrainingStepModal.vue'
 import TrainerManagement from './TrainerManagement.vue'
 import RecordTrainingModal from './RecordTrainingModal.vue'
+import { localDate } from '@/lib/dates'
 
 interface Props {
   tool: Tool
@@ -576,7 +577,7 @@ const recordFormData = ref<CreateTrainingRecordRequest>({
   tool_id: '',
   training_step_id: '',
   trainee_user_id: '',
-  training_date: new Date().toISOString().split('T')[0],
+  training_date: localDate(),
   completion_status: 'completed' as TrainingCompletionStatus,
   minutes_trained: undefined,
   skills_covered: undefined,
@@ -606,9 +607,9 @@ const canStartTraining = computed(() => {
   return !!auth.user // User must be logged in
 })
 
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// See RecordTrainingModal, which has the same inline form and had the same
+// UTC default and ceiling.
+const today = computed(() => localDate())
 
 // Methods
 const closeModal = () => {
@@ -858,7 +859,7 @@ const submitRecordForm = async () => {
         tool_id: '',
         training_step_id: '',
         trainee_user_id: '',
-        training_date: new Date().toISOString().split('T')[0],
+        training_date: localDate(),
         completion_status: 'completed' as TrainingCompletionStatus,
         minutes_trained: undefined,
         skills_covered: undefined,

@@ -311,26 +311,20 @@ describe('assigning a trainer', () => {
     expect(json).not.toHaveProperty('expires_at')
   })
 
-  // FINDING, pinned. Third component sending a bare calendar date where
-  // `api/trainers.rs:25` declares `Option<DateTime<Utc>>`, after
-  // EditTrainerModal and AssignTrainerModal -- and the fourth whose date floor
-  // is `toISOString()`, the UTC date rather than the user's.
-  it('sends a bare calendar date, floored at the UTC date', async () => {
+  // FIXED half, still-pinned half. The floor is the user's date now. The
+  // *format* is still a bare calendar date where `api/trainers.rs:25` declares
+  // `Option<DateTime<Utc>>`, which serde cannot parse -- that one needs the
+  // component to build a timestamp, and is pinned below.
+  it("floors the picker at the user's date, and still sends a bare date", async () => {
     const w = await page()
     await openForm(w)
     expect(w.find('#expires_at').attributes('min')).toBe('2026-01-15')
 
-    // The frozen clock is 12:00Z, which is 06:00 on the same day in the suite's
-    // timezone -- so the UTC and local dates agree there and the floor cannot
-    // be told apart. Moved to an instant where they disagree.
     vi.setSystemTime(new Date('2026-01-16T02:00:00Z'))
     expect(new Date().getDate(), 'the suite timezone is not what this assumes').toBe(15)
     const late = await page()
     await openForm(late)
-    expect(
-      late.find('#expires_at').attributes('min'),
-      'the floor is now the local date -- if that was fixed, delete this half'
-    ).toBe('2026-01-16')
+    expect(late.find('#expires_at').attributes('min')).toBe('2026-01-15')
     vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
 
     await w.find('#user').setValue('a')
@@ -340,7 +334,7 @@ describe('assigning a trainer', () => {
 
     expect(
       assigned().expires_at,
-      'the expiry is now a timestamp -- if that was fixed, delete this test'
+      'the expiry is now a timestamp -- if that was fixed, delete this half'
     ).toBe('2026-04-01')
   })
 

@@ -429,11 +429,8 @@ describe('recording a session inline', () => {
     ).toHaveBeenCalledTimes(1)
   })
 
-  // FINDING, pinned. `training_date` defaults to
-  // `new Date().toISOString().split('T')[0]`, the UTC date. Fifth component on
-  // this branch computing a user-facing date in UTC, after EditTrainerModal,
-  // AssignTrainerModal, RecordTrainingModal and TrainerManagement.
-  it("defaults the training date to the UTC date, not the user's", async () => {
+  // FIXED, alongside RecordTrainingModal, which has the same inline form.
+  it("defaults the training date to the instructor's date", async () => {
     asRole(UserRole.Staff)
     vi.setSystemTime(new Date('2026-01-16T02:00:00Z'))
     expect(new Date().getDate(), 'the suite timezone is not what this assumes').toBe(15)
@@ -444,11 +441,7 @@ describe('recording a session inline', () => {
     await toggle.trigger('click')
     await flushPromises()
 
-    const dateInput = w.find('input[type="date"]')
-    expect(
-      (dateInput.element as HTMLInputElement).value,
-      'the default is now the local date -- if that was fixed, delete this test'
-    ).toBe('2026-01-16')
+    expect((w.find('input[type="date"]').element as HTMLInputElement).value).toBe('2026-01-15')
     vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
   })
 })

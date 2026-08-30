@@ -133,25 +133,18 @@ describe('the training date', () => {
     expect(w.find('#training_date').attributes('max')).toBe('2026-01-15')
   })
 
-  // FINDING, pinned. Both the default and the ceiling are the UTC date. At
-  // 20:00 on the 15th in the suite's zone it is already the 16th in UTC, so an
-  // instructor recording a session they just ran is handed tomorrow's date --
-  // and because the `max` moved with it, nothing objects.
-  //
-  // The session then sits in the record dated a day after it happened, which
-  // is the kind of thing nobody notices until an expiry or an audit depends on
-  // it.
-  it('dates an evening session tomorrow, and permits it', async () => {
+  // FIXED. Both the default and the ceiling were the UTC date, so an instructor
+  // recording a session at eight in the evening was handed tomorrow -- and
+  // because the ceiling moved with it, nothing objected. The session then sat
+  // in the record dated a day after it happened.
+  it("dates an evening session today, in the instructor's timezone", async () => {
     vi.setSystemTime(new Date('2026-01-16T02:00:00Z'))
     expect(new Date().getDate(), 'the suite timezone is not what this test assumes').toBe(15)
 
     const w = await modal()
-    expect(
-      (w.find('#training_date').element as HTMLInputElement).value,
-      'the default is now the local date -- if that was fixed, delete this test; ' +
-        'both it and the max read `toISOString()`, which is always UTC'
-    ).toBe('2026-01-16')
-    expect(w.find('#training_date').attributes('max')).toBe('2026-01-16')
+    expect((w.find('#training_date').element as HTMLInputElement).value).toBe('2026-01-15')
+    expect(w.find('#training_date').attributes('max')).toBe('2026-01-15')
+    vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
   })
 
   it('sends the date in the shape the server parses', async () => {

@@ -145,6 +145,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { trainerApi, userApi } from '../utils/api'
 import type { Tool, CreateTrainingRecordRequest, TrainingCompletionStatus, User } from '../types'
+import { localDate } from '@/lib/dates'
 
 interface Props {
   tool?: Tool
@@ -166,7 +167,7 @@ const newSkill = ref('')
 const formData = ref<CreateTrainingRecordRequest>({
   tool_id: props.tool?.id || '',
   trainee_user_id: '',
-  training_date: new Date().toISOString().split('T')[0],
+  training_date: localDate(),
   completion_status: 'completed' as TrainingCompletionStatus,
   minutes_trained: undefined,
   skills_covered: [],
@@ -175,9 +176,10 @@ const formData = ref<CreateTrainingRecordRequest>({
 })
 
 // Computed
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// Both the default above and this ceiling were the UTC date, so an instructor
+// recording an evening session was handed tomorrow -- and the ceiling had moved
+// with it, so nothing objected.
+const today = computed(() => localDate())
 
 // Methods
 const loadUsers = async () => {

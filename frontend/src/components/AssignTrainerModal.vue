@@ -68,6 +68,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { trainerApi, userApi } from '../utils/api'
 import type { Tool, AssignTrainerRequest, User } from '../types'
+import { localDate } from '@/lib/dates'
 
 interface Props {
   tool: Tool
@@ -93,9 +94,8 @@ const formData = ref({
 })
 
 // Computed
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// See EditTrainerModal: `toISOString()` is the UTC date, not the user's.
+const today = computed(() => localDate())
 
 const availableUsers = computed(() => {
   return users.value.filter((user) => user.is_active && !props.existingTrainers.includes(user.id))

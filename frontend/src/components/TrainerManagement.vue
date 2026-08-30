@@ -235,9 +235,8 @@ const canManageTrainers = computed(() => {
   return userRole === 'staff' || userRole === 'admin'
 })
 
-const today = computed(() => {
-  return new Date().toISOString().split('T')[0]
-})
+// See EditTrainerModal: `toISOString()` is the UTC date, not the user's.
+const today = computed(() => localDate())
 
 const availableUsers = computed(() => {
   return users.value.filter(
@@ -247,6 +246,7 @@ const availableUsers = computed(() => {
 
 // Import User type
 import type { User } from '../types'
+import { localDate } from '@/lib/dates'
 
 // Methods
 const loadUsers = async () => {

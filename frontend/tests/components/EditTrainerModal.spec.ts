@@ -111,20 +111,19 @@ describe('what the form starts with', () => {
   // disagree for the last hours of their day: at 02:00Z on the 16th it is still
   // the 15th in Chicago, and `min` is set to the 16th -- so a trainer cannot be
   // given an expiry of today.
-  it("floors the date picker at the UTC date, which is not the user's date", () => {
+  // FIXED. `today` used to be `toISOString().split('T')[0]`, the UTC date, so
+  // west of UTC a trainer could not be given an expiry of today.
+  it("floors the date picker at the user's date", () => {
     expect(modal().find('#expires_at').attributes('min')).toBe('2026-01-15')
 
     // 02:00Z on the 16th is 20:00 on the 15th in the suite's timezone, which
     // `vitest.config.ts` pins to America/Chicago precisely so this distinction
-    // exists. The assertion below is the mismatch itself: the user's date is
-    // the 15th, and the picker refuses anything before the 16th.
+    // exists. Under UTC the fixed and the broken implementation agree, and the
+    // test would prove nothing.
     vi.setSystemTime(new Date('2026-01-16T02:00:00Z'))
     expect(new Date().getDate(), 'the suite timezone is not what this test assumes').toBe(15)
-    expect(
-      modal().find('#expires_at').attributes('min'),
-      'the floor is now computed from the local date -- if that was fixed, ' +
-        'delete this test; `today` reads `toISOString()`, which is always UTC'
-    ).toBe('2026-01-16')
+    expect(modal().find('#expires_at').attributes('min')).toBe('2026-01-15')
+    vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
   })
 })
 

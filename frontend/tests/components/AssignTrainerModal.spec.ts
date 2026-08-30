@@ -205,17 +205,15 @@ describe('what the form sends', () => {
     ).toBe('2026-04-01')
   })
 
-  // FINDING, pinned. Same as EditTrainerModal: `today` is
-  // `toISOString().split('T')[0]`, the UTC date rather than the user's.
-  it("floors the date picker at the UTC date, which is not the user's date", async () => {
+  // FIXED. The floor is the user's date now; it used to be the UTC one, so
+  // west of UTC a trainer could not be given an expiry of today.
+  it("floors the date picker at the user's date", async () => {
     expect((await modal()).find('#expires_at').attributes('min')).toBe('2026-01-15')
 
     vi.setSystemTime(new Date('2026-01-16T02:00:00Z'))
     expect(new Date().getDate(), 'the suite timezone is not what this test assumes').toBe(15)
-    expect(
-      (await modal()).find('#expires_at').attributes('min'),
-      'the floor is now computed from the local date -- if that was fixed, ' + 'delete this test'
-    ).toBe('2026-01-16')
+    expect((await modal()).find('#expires_at').attributes('min')).toBe('2026-01-15')
+    vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
   })
 
   // Recorded, with its limits stated. The select carries `required`, so a real
