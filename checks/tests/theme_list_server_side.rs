@@ -247,7 +247,7 @@ fn the_server_list_matches_the_audit_fixture_too() {
     // asserting this pair directly is what makes the four-way agreement a
     // property rather than an inference across two test suites that can be run
     // separately.
-    // Minus the sentinels: the contrast audit measures rendered colours, and a
+    // Minus the sentinels: the contrast audit measures rendered colors, and a
     // value with no CSS has none to measure. It is checked instead by
     // `every_sentinel_actually_resolves_to_a_real_theme`, whose two resolution
     // targets are both in this list.

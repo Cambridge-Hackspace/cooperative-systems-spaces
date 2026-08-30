@@ -114,7 +114,7 @@ afterEach(() => {
 
 describe('a failed config load is not silent', () => {
   it('records the failure somewhere the user could be told about', async () => {
-    // A FINDING, recorded as an assertion on the current behaviour.
+    // A FINDING, recorded as an assertion on the current behavior.
     //
     // `configStore.fetchConfig` has its own try/catch and does **not** rethrow:
     // it writes the message into `configStore.error` and returns normally. So

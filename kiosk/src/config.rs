@@ -36,7 +36,7 @@ pub struct KioskConfig {
     /// How the kiosk displays and cycles its views.
     #[serde(default)]
     pub display_mode: KioskDisplayMode,
-    /// Visual colour theme.
+    /// Visual color theme.
     #[serde(default)]
     pub theme: KioskTheme,
 }

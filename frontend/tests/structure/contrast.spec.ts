@@ -6,25 +6,25 @@
 // and cannot be read.
 //
 // So the contrast ratios are computed rather than eyeballed. WCAG's relative
-// luminance, over the colours the themes actually declare, for the pairings the
+// luminance, over the colors the themes actually declare, for the pairings the
 // application actually renders.
 //
 // WHAT IT CHECKS, and why these pairs. daisyUI's `text-error`, `text-success`,
-// `text-warning` and `text-info` set the foreground to the semantic colour and
+// `text-warning` and `text-info` set the foreground to the semantic color and
 // leave the background to whatever card the element sits in — which in this
 // application is `base-100`, `base-200` or `base-300`. `ProfileField.vue` puts
 // its required marker and its error message in `text-error` inside a
-// `form-control`; `ToolCard.vue` sits on `bg-base-300`. So a semantic colour has
+// `form-control`; `ToolCard.vue` sits on `bg-base-300`. So a semantic color has
 // to be legible on all three bases, not just on white.
 //
 // WHAT THIS DOES NOT PROVE. It reads the declared palette, not a rendered page.
-// A class that does not exist, a colour overridden by a stylesheet, an element
+// A class that does not exist, a color overridden by a stylesheet, an element
 // whose real background is an ancestor three levels up — none of that is
 // visible here. That is Tier 10's, in a browser, with `getComputedStyle`. This
 // is the cheap version that runs on any machine in milliseconds and catches the
 // case where the *palette itself* is unreadable.
 //
-// It also says nothing about colour used as the only signal. A red badge and a
+// It also says nothing about color used as the only signal. A red badge and a
 // green badge can both pass this and still be indistinguishable to somebody who
 // cannot tell them apart, because the ratio against the background is identical.
 
@@ -35,7 +35,7 @@ import { join } from 'node:path'
 const ROOT = process.cwd()
 
 // ---------------------------------------------------------------------------
-// Colour
+// Color
 // ---------------------------------------------------------------------------
 
 /** Linear-light sRGB components in [0, 1]. */
@@ -108,7 +108,7 @@ function luminance([r, g, b]: Linear): number {
 /** Parse, or fail loudly. For the known-answer tests, where null is the bug. */
 function must(value: string): Linear {
   const c = parse(value)
-  if (!c) throw new Error(`the colour parser could not read ${value}`)
+  if (!c) throw new Error(`the color parser could not read ${value}`)
   return c
 }
 
@@ -148,7 +148,7 @@ function customThemes(): Record<string, Palette> {
     for (const line of body.split('\n')) {
       const kv = /^\s*'?([a-z0-9-]+)'?:\s*'(#[0-9a-fA-F]{3,8})'/.exec(line)
       // Both groups checked. A capture that came back undefined would key the
-      // palette on "undefined" and put a colour where no theme declares one.
+      // palette on "undefined" and put a color where no theme declares one.
       const key = kv?.[1]
       const value = kv?.[2]
       if (key && value) palette[key] = value
@@ -173,7 +173,7 @@ async function builtinThemes(): Promise<Record<string, Palette>> {
   return out
 }
 
-/** Backgrounds an element carrying a semantic text colour actually sits on. */
+/** Backgrounds an element carrying a semantic text color actually sits on. */
 const BASES = ['base-100', 'base-200', 'base-300'] as const
 
 /**
@@ -199,22 +199,22 @@ describe('the palettes were read', () => {
     expect(Object.keys(builtin).length, `builtin: ${Object.keys(builtin).join(',')}`).toBe(6)
   })
 
-  it('parses every colour it finds', async () => {
+  it('parses every color it finds', async () => {
     const all = { ...customThemes(), ...(await builtinThemes()) }
     const unparsed: string[] = []
     for (const [theme, palette] of Object.entries(all)) {
       for (const [key, value] of Object.entries(palette)) {
         // daisyUI theme objects carry CSS custom properties alongside the
-        // colours -- --rounded-box, --animation-btn and so on. They are not
-        // colours and skipping them is not a narrowing; the assertion is about
-        // colour values the audit could not read.
+        // colors -- --rounded-box, --animation-btn and so on. They are not
+        // colors and skipping them is not a narrowing; the assertion is about
+        // color values the audit could not read.
         if (key.startsWith('--') || key === 'color-scheme') continue
         if (parse(value) === null) unparsed.push(`${theme}.${key} = ${value}`)
       }
     }
     expect(
       unparsed,
-      'these colours were skipped, so every ratio computed from them is missing ' +
+      'these colors were skipped, so every ratio computed from them is missing ' +
         'rather than wrong -- which is how an audit reports a clean bill of health ' +
         'for a palette it could not read'
     ).toEqual([])
@@ -229,7 +229,7 @@ describe('the reference implementation is right', () => {
     expect(contrast(must('#000000'), must('#ffffff'))).toBeCloseTo(21, 1)
   })
 
-  it('a colour against itself is 1:1', () => {
+  it('a color against itself is 1:1', () => {
     expect(contrast(must('#3b82f6'), must('#3b82f6'))).toBeCloseTo(1, 5)
   })
 

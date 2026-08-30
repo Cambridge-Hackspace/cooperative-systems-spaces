@@ -30,16 +30,16 @@ concurrency:
 # Unset -- the default -- means GitHub-hosted `ubuntu-latest`. An undefined
 # repository variable evaluates to the empty string, which is falsy in a GitHub
 # expression, so the fallback applies with nothing configured anywhere. Set the
-# repository or organisation variable `CI_RUNNER` to a self-hosted label (this
+# repository or organization variable `CI_RUNNER` to a self-hosted label (this
 # project's upstream uses `arc-runner-set`) to send them elsewhere.
 #
 # It is a variable because it was a hardcoded `arc-runner-set` for two and a
 # half months, and that made the workflow unrunnable anywhere except the one
-# organisation those runners are registered to. Forks do not inherit a parent's
+# organization those runners are registered to. Forks do not inherit a parent's
 # self-hosted runners -- deliberately, since inheriting them would let any fork
 # execute arbitrary code on the parent's infrastructure. So on a fork every job
 # here sat `queued` against a runner that could never claim it, until GitHub
-# cancelled it at the twenty-four hour mark. Nothing failed, nothing reported,
+# canceled it at the twenty-four hour mark. Nothing failed, nothing reported,
 # and the repository's Actions tab stayed empty through a merge to master.
 #
 # The expression is repeated at each job rather than defined once because the
@@ -572,7 +572,7 @@ jobs:
       #
       # `paho-mqtt-sys` builds the Paho C library through the `cmake` crate,
       # which asks the `cc` crate which Visual Studio is installed and turns the
-      # answer into a CMake generator string. When `cc` does not recognise the
+      # answer into a CMake generator string. When `cc` does not recognize the
       # installation, the failure is `couldn't determine visual studio
       # generator` with nothing said about what was actually there.
       #

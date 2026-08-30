@@ -181,7 +181,7 @@ describe('doorsApi never rejects, however the transport failed', () => {
 
   it('leaves the message to the caller when there is no response at all', async () => {
     // **The branch 92afb4c added.** A network failure, a DNS failure, a
-    // cancelled request: `e.response` is undefined, so there is nothing from
+    // canceled request: `e.response` is undefined, so there is nothing from
     // the server to show.
     //
     // Only a transport-level rejection reaches it. Injecting a 500 does not:

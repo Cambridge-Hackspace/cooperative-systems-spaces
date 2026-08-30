@@ -4,7 +4,7 @@
 //
 // First, it gets the expiry right where EditTrainerModal gets it wrong: it
 // converts the `datetime-local` value through the *local* getters, and it sends
-// an explicit `null` to clear. Those are asserted here as behaviour worth
+// an explicit `null` to clear. Those are asserted here as behavior worth
 // keeping, not just as coverage.
 //
 // Second, the URL is free text end to end. This component does not check it,
@@ -82,7 +82,7 @@ type Wrapper = Awaited<ReturnType<typeof page>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -300,7 +300,7 @@ describe('editing a link', () => {
     expect(patched().expires_at).toBe('2026-02-01T15:30:00.000Z')
   })
 
-  // Worth asserting as behaviour to keep: this component reaches the "clear it"
+  // Worth asserting as behavior to keep: this component reaches the "clear it"
   // state that EditTrainerModal cannot, by sending an explicit null.
   it('sends an explicit null to clear an expiry, rather than omitting the field', async () => {
     const w = await page([link({ expires_at: '2026-02-01T15:30:00Z' })])

@@ -95,7 +95,7 @@ type Wrapper = Awaited<ReturnType<typeof settings>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 

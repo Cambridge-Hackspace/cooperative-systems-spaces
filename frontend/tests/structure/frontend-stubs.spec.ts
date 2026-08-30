@@ -113,7 +113,7 @@ describe('frontend stubs', () => {
       finished,
       'these are recorded as stubs but no longer carry the marker. If one was ' +
         'finished, delete its entry -- and re-read its tier-2 spec, which pins ' +
-        'the stub behaviour and will now be asserting something untrue.'
+        'the stub behavior and will now be asserting something untrue.'
     ).toEqual([])
   })
 

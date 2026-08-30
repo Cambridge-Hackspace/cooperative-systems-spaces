@@ -626,7 +626,7 @@ mod tests {
     }
 
     // `169.254.169.254` is also `2852039166`, `0xa9fea9fe` and `0251.0376.0251.0376`.
-    // The URL parser normalises all of them to the same address, which is why
+    // The URL parser normalizes all of them to the same address, which is why
     // the check inspects the parsed host rather than the string -- a
     // `starts_with` test on the text would miss every one of these.
     #[test]

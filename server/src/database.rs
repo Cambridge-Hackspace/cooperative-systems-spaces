@@ -85,7 +85,7 @@ impl DatabaseManager {
     /// Every query through it fails fast with a pool error, which handlers map
     /// to a 500. It exists so the request-rejection surface — authentication,
     /// routing, method dispatch, body decoding — can be tested without a live
-    /// PostgreSQL, which is most of the server's security-relevant behaviour
+    /// PostgreSQL, which is most of the server's security-relevant behavior
     /// and none of which reaches the database. `AuthUser::from_request_parts`
     /// checks the header, the `Bearer` prefix and the JWT signature *before*
     /// its single `find_user_by_id`, so every negative case is reachable here.

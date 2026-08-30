@@ -1,6 +1,6 @@
 // Tier 2: FacilityManagement.
 //
-// A tab host, and all of its behaviour is the relationship between one ref and
+// A tab host, and all of its behavior is the relationship between one ref and
 // the URL. That relationship runs both ways -- clicking a tab writes `?tab=`,
 // and changing `?tab=` moves the tab -- and each direction is a separate piece
 // of code that can break without the other noticing.
@@ -64,7 +64,7 @@ function facility(initial: Record<string, unknown> = {}) {
 // instead of naming the tab it looked for.
 function tabNamed(w: ReturnType<typeof facility>, name: string) {
   const tab = w.findAll('[role="tab"]').find((t) => t.text().trim() === name)
-  if (!tab) throw new Error(`no tab labelled ${JSON.stringify(name)}`)
+  if (!tab) throw new Error(`no tab labeled ${JSON.stringify(name)}`)
   return tab
 }
 
@@ -89,7 +89,7 @@ describe('which tab is shown', () => {
     const w = facility({ tab: 'nonsense' })
     expect(
       w.find('[data-t="graph"]').exists(),
-      'an unrecognised ?tab= value fell through to the graph, which is the ' +
+      'an unrecognized ?tab= value fell through to the graph, which is the ' +
         'lazy-loaded cytoscape view -- an unknown tab should not load 150KB'
     ).toBe(true)
   })

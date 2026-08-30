@@ -68,7 +68,7 @@ type Wrapper = Awaited<ReturnType<typeof modal>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -256,7 +256,7 @@ describe('what the form sends', () => {
   // FINDING, pinned. `v-model.number` on an emptied number input yields the
   // empty *string*: Vue's `looseToNumber` returns its argument unchanged when
   // `parseFloat` gives NaN, and `parseFloat('')` is NaN. The server's field is
-  // `Option<i32>`, which cannot deserialise `""`. Same defect as
+  // `Option<i32>`, which cannot deserialize `""`. Same defect as
   // EditTrainingStepModal, and the same fix.
   it('sends an empty string, not nothing, when the minutes box is cleared', async () => {
     const w = await modal()

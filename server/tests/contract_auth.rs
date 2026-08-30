@@ -202,6 +202,6 @@ async fn a_router_nested_at_slash_answers_without_the_trailing_slash() {
         trailing,
         StatusCode::NOT_FOUND,
         "if axum starts matching the trailing-slash form too, this test should \
-         be relaxed deliberately rather than left asserting the old behaviour"
+         be relaxed deliberately rather than left asserting the old behavior"
     );
 }

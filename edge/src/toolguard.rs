@@ -122,7 +122,7 @@ impl ToolGuardState {
         self.inner.read().unwrap().clone()
     }
 
-    /// Check whether a card holder is authorised to activate a tool.
+    /// Check whether a card holder is authorized to activate a tool.
     ///
     /// `card_value`  – the scanned card value (matched against `profile_field_value`)
     /// `tool_id_str` – the hardware tool identifier (matched against `external_id` first,

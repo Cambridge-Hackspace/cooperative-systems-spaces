@@ -12,8 +12,8 @@
 // means to offer.
 //
 // This modal cannot reach two of the three states. It sends
-// `formData.expires_at || undefined`, and `undefined` serialises to *absent* --
-// so the field labelled "Leave blank for no expiration" cannot remove an
+// `formData.expires_at || undefined`, and `undefined` serializes to *absent* --
+// so the field labeled "Leave blank for no expiration" cannot remove an
 // expiration. And when a date is chosen it sends `"2026-03-01"`, a date with no
 // time, where the server asks for an RFC 3339 timestamp.
 //
@@ -66,7 +66,7 @@ type Wrapper = ReturnType<typeof modal>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -151,7 +151,7 @@ describe('what the form sends', () => {
   // FINDING, pinned. The `<input type="date">` yields a date with no time, and
   // it is forwarded verbatim. The server's field is `DateTime<Utc>`, whose
   // serde implementation wants RFC 3339 -- "2026-03-01" is not one, so this is
-  // a payload the server cannot deserialise. Nothing in this component turns
+  // a payload the server cannot deserialize. Nothing in this component turns
   // the date into a timestamp, and nothing in the handler coerces it.
   it('sends a bare calendar date where the server declares a timestamp', async () => {
     const w = modal()

@@ -141,7 +141,7 @@ export function envelopeError<T>(error: unknown, fallback?: string): ApiResponse
   // tier: it asserts a dropped connection shows "Failed to load door", while
   // tests/unit/api-envelope.spec.ts asserted it shows "Network Error". Two of
   // my own tests contradicting each other, for as long as the tier covering
-  // the real behaviour had never executed.
+  // the real behavior had never executed.
   // `?? undefined` rather than `?? ''`: an absent `error` lets a caller's own
   // `r.error || 'Failed to load door'` fire, which is the point of the
   // optional parameter. An empty string is truthy-adjacent enough to be a trap

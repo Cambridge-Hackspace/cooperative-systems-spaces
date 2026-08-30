@@ -205,7 +205,7 @@ describe('the event list', () => {
     expect(titles).toEqual(['First', 'Second', 'Third'])
   })
 
-  it('carries the calendar colour onto the card and the tag', async () => {
+  it('carries the calendar color onto the card and the tag', async () => {
     const { wrapper } = await mountWith([
       event({ calendar_color: '#ff5733', calendar_name: 'Shop' }),
     ])

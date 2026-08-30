@@ -277,11 +277,11 @@ describe('the edit link', () => {
     expect(href(w)).toContain('/edit/main/')
   })
 
-  // Recorded: for a host it does not recognise the link goes to the repository
+  // Recorded: for a host it does not recognize the link goes to the repository
   // root rather than the file, and calls itself "Edit on Git". It is a
   // deliberate fallback rather than a broken link, but the label does not say
   // that the destination is different in kind.
-  it('links to the repository root, still labelled as an edit, for an unknown host', async () => {
+  it('links to the repository root, still labeled as an edit, for an unknown host', async () => {
     const w = await withRepo('https://git.example.org/space/wiki.git')
     expect(href(w)).toBe('https://git.example.org/space/wiki')
     expect(w.find('.edit-link').text()).toContain('Git')

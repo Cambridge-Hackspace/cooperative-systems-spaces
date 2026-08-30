@@ -139,7 +139,7 @@ fn no_file_gained_a_blanket_500() {
          error knew: a missing row becomes 500 instead of 404, a collision \
          becomes 500 instead of 409, and the caller is told the server broke \
          about something they can fix. Log it and return `ApiError::from(e)`.\n\n\
-         If the error genuinely is ours -- a serialisation failure, a config \
+         If the error genuinely is ours -- a serialization failure, a config \
          problem -- 500 is right, and the budget in this file goes up with the \
          reason in the commit message.",
         regressions.join("\n")

@@ -3,7 +3,7 @@
 // The profile store is mocked as a reactive stub rather than driven through
 // `createTestingPinia`. The component reads six getters and calls five actions,
 // and what is under test here is which branch it renders and what it hands to
-// `ProfileField` -- not the store's own behaviour, which `tests/unit` already
+// `ProfileField` -- not the store's own behavior, which `tests/unit` already
 // covers. `ProfileField` is stubbed for the same reason: it has its own spec.
 //
 // Two findings come out of the branch chain and one out of the save path.
@@ -164,7 +164,7 @@ function emitFromField(w: Wrapper, i: number, event: string, payload: unknown) {
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -474,7 +474,7 @@ describe('saving', () => {
     // `startEditing` re-seeds it from the stored profile either way, so
     // removing that line changes nothing observable. Recorded rather than
     // asserted -- a test that could only fail by reading private state would be
-    // asserting the implementation, not the behaviour.
+    // asserting the implementation, not the behavior.
     await buttonNamed(w, 'Edit Profile').trigger('click')
     await nextTick()
     expect(w.findAll('.pf')[0].text()).toBe('"Machinist"')

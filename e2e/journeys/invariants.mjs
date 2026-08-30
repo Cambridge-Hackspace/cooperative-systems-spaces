@@ -26,7 +26,7 @@
  * The roster the driver believes exists must equal the roster the server
  * returns — as a set of ids, and with no duplicates on either side.
  *
- * Modelled on a real shape: a duplicate roster entry after a role change, where
+ * Modeled on a real shape: a duplicate roster entry after a role change, where
  * the update inserted rather than updated. The set comparison catches the
  * absence; the duplicate check catches the presence, and neither catches the
  * other.

@@ -91,7 +91,7 @@ database = "@PG_DB@"
 username = "@PG_USER@"
 password = "@PG_PASS@"
 # Above the concurrency tier's fan-out on purpose. A pool smaller than the
-# number of concurrent requests serialises them, which makes a race disappear
+# number of concurrent requests serializes them, which makes a race disappear
 # and the tier report a pass it did not earn.
 max_connections = 64
 min_connections = 2

@@ -175,7 +175,7 @@ function fillPath(template) {
 // would switch the oracle off.
 //
 // Every one of them is also asserted to still occur, further down. An exemption
-// for something that no longer happens is a claim about behaviour nobody is
+// for something that no longer happens is a claim about behavior nobody is
 // checking, and it is the reason a suppression list eventually stops describing
 // anything.
 const KNOWN = [

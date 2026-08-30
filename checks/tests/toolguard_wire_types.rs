@@ -106,7 +106,7 @@ const EXPECTED_FIELDS: &[(&str, &[&str])] = &[
     // decision.
     ("kiosk", &["tools", "users"]),
     ("toolguard-status-ui", &["tools", "users"]),
-    // Drops `users` as well, so this one cannot show who is authorised for
+    // Drops `users` as well, so this one cannot show who is authorized for
     // anything.
     ("toolguard-test-ui", &["tools"]),
 ];

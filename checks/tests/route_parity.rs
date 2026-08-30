@@ -120,7 +120,7 @@ fn parse_builder(src: &str, name: &str) -> Builder {
     out
 }
 
-/// Every route the server serves, with `{param}` segments normalised to `{p}`.
+/// Every route the server serves, with `{param}` segments normalized to `{p}`.
 ///
 /// Walks the nesting recursively: `api_routes()` nests module routers,
 /// `admin_routes()` nests a second layer, and `auth_routes()` nests the MFA
@@ -166,7 +166,7 @@ fn server_routes() -> BTreeSet<String> {
             } else {
                 format!("{prefix}{path}")
             };
-            out.insert(normalise(&full));
+            out.insert(normalize(&full));
         }
         for (sub_prefix, target) in parsed.nests {
             if let Some((m, b)) = target.split_once("::") {
@@ -186,7 +186,7 @@ fn server_routes() -> BTreeSet<String> {
 }
 
 /// `{user_id}` / `${userId}` / `:id` all become `{p}`.
-fn normalise(path: &str) -> String {
+fn normalize(path: &str) -> String {
     let mut out = String::new();
     let mut chars = path.chars().peekable();
     while let Some(c) = chars.next() {
@@ -286,7 +286,7 @@ fn client_paths(dir: &str, exts: &[&str], prefix: Prefix) -> BTreeSet<String> {
                     .next()
                     .unwrap_or(&candidate)
                     .to_string();
-                out.insert(normalise(&path));
+                out.insert(normalize(&path));
             }
         }
     }
@@ -433,7 +433,7 @@ fn the_unresolved_list_has_no_stale_entries() {
     let server = server_routes();
     for (path, _reason) in UNRESOLVED {
         assert!(
-            !server.contains(&normalise(path)),
+            !server.contains(&normalize(path)),
             "{path} is on the unresolved list but the server now serves it; \
              remove the entry"
         );

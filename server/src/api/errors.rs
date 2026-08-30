@@ -188,7 +188,7 @@ impl From<DatabaseError> for ApiError {
             // Delegated, not re-implemented.
             //
             // These two conversions used to classify the same diesel error
-            // differently: this one recognised only NotFound and turned
+            // differently: this one recognized only NotFound and turned
             // everything else into a 500, while `From<diesel::result::Error>`
             // below mapped a unique violation to 409. Which of the two a
             // failure took depended on whether the calling code had wrapped it
@@ -269,7 +269,7 @@ impl From<diesel::result::Error> for ApiError {
 
             // A value the schema constrains was out of range. The door and tool
             // enums are text columns with CHECK constraints, so this is the arm
-            // an unrecognised kind or effect lands in.
+            // an unrecognized kind or effect lands in.
             E::DatabaseError(Kind::CheckViolation, _) => {
                 ApiError::BadRequest("A value was not one this field accepts".to_string())
             }
@@ -292,7 +292,7 @@ impl From<diesel::result::Error> for ApiError {
             // 22P05 and 22021 are not reachable as codes, and the alternative is
             // leaving both as 500. The strings are Postgres's own and stable in
             // English; a server whose messages are localised would fall through
-            // to the arm below and answer 500, which is the previous behaviour
+            // to the arm below and answer 500, which is the previous behavior
             // rather than a new failure. `errors.rs`'s own tests pin both
             // phrases so a silent change of wording is caught here rather than
             // in production.
@@ -304,7 +304,7 @@ impl From<diesel::result::Error> for ApiError {
                 )
             }
 
-            // Postgres could not serialise concurrent transactions. Retrying
+            // Postgres could not serialize concurrent transactions. Retrying
             // genuinely may work, which is exactly what 409 tells a caller and
             // 500 does not.
             E::DatabaseError(Kind::SerializationFailure, _) => ApiError::Conflict(
@@ -344,7 +344,7 @@ mod tests {
     /// Copied from real server output captured on a LATIN1 cluster and on a
     /// UTF-8 one, not written from memory.
     #[test]
-    fn the_two_messages_this_depends_on_are_recognised() {
+    fn the_two_messages_this_depends_on_are_recognized() {
         assert!(
             is_unrepresentable_text("invalid byte sequence for encoding \"UTF8\": 0x00"),
             "a NUL byte in text is refused by every Postgres encoding, so this \

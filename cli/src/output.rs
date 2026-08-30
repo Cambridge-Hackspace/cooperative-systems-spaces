@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn format_uuid_keeps_the_nil_uuid_recognisable() {
+    fn format_uuid_keeps_the_nil_uuid_recognizable() {
         assert_eq!(format_uuid(&uuid::Uuid::nil()), "00000000...0000");
     }
 

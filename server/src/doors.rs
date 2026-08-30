@@ -227,7 +227,7 @@ impl DoorService {
             if !schedule_is_active_at(rule.schedule_id, &schedules, tz, Utc::now()) {
                 continue;
             }
-            // Same fail-open as the compilation path: an unrecognised effect
+            // Same fail-open as the compilation path: an unrecognized effect
             // used to be treated as allow. Skipped now.
             let effect = match DoorRuleEffect::parse(&rule.effect) {
                 Some(e) => e,
@@ -459,7 +459,7 @@ pub fn expand_rules_at(
             Some(e) => e,
             None => {
                 warn!(
-                    "Skipping door rule {} with unrecognised effect '{}' -- refusing to \
+                    "Skipping door rule {} with unrecognized effect '{}' -- refusing to \
                      guess; an unknown effect used to be treated as allow",
                     rule.id, rule.effect
                 );

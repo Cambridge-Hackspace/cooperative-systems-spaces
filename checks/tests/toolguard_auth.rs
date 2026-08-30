@@ -44,7 +44,7 @@ enum Auth {
 }
 
 /// The functions that constitute authenticating a ToolGuard caller.
-const AUTHORISERS: &[&str] = &["extract_device_auth", "authorize_toolguard"];
+const AUTHORIZERS: &[&str] = &["extract_device_auth", "authorize_toolguard"];
 
 /// The body of `async fn <name>(`, ending at the next top-level item.
 ///
@@ -120,7 +120,7 @@ fn every_toolguard_handler_authenticates_its_caller() {
         .map(|(name, _)| *name)
         .filter(|name| {
             let body = handler_body(&src, name);
-            !AUTHORISERS.iter().any(|a| body.contains(a))
+            !AUTHORIZERS.iter().any(|a| body.contains(a))
         })
         .collect();
 

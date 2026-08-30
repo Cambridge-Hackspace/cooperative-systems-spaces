@@ -124,8 +124,8 @@ export interface TrainingStepWithProgress {
   is_available?: boolean
   instructor_required?: boolean
   // No aliases here, deliberately. `progress` and `can_start` used to sit in
-  // this interface labelled "Alias for user_progress" and "Alias for
-  // is_available" -- and nothing populated an alias. The server serialises its
+  // this interface labeled "Alias for user_progress" and "Alias for
+  // is_available" -- and nothing populated an alias. The server serializes its
   // own field names (models/training.rs:280), so both arrived `undefined` on
   // every response, and ToolTrainingModal read them: Start, Mark Complete and
   // Retry Training keyed off fields that were never set, so none of the three

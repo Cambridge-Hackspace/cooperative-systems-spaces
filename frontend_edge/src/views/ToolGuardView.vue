@@ -112,7 +112,7 @@ function connect() {
       // A WebSocket delivers `any`: a text frame gives a string, a binary one
       // gives a Blob or an ArrayBuffer. Only the first can be parsed, and
       // handing JSON.parse the other two threw inside this same try -- so the
-      // check states what was already true rather than changing behaviour.
+      // check states what was already true rather than changing behavior.
       if (typeof evt.data !== 'string') {
         throw new TypeError('toolguard state arrived as a non-text frame')
       }

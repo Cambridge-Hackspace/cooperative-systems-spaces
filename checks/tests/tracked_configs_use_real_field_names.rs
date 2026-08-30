@@ -15,7 +15,7 @@
 //!
 //! Both were caught, eventually, by `server/tests/stack_config_parses.rs` and
 //! `config::tests::the_shipped_sample_config_parses` -- which are the right
-//! tests and the authoritative ones, because they deserialise into the real
+//! tests and the authoritative ones, because they deserialize into the real
 //! `AppConfig` and therefore also check types, not just names. But they live in
 //! `css-server`, which does not compile on the FreeBSD workstation where the
 //! merge happened: `dr-metrix-axum` calls `prometheus::process_collector`,
@@ -32,7 +32,7 @@
 use css_checks::{read, repo_root};
 use std::collections::BTreeSet;
 
-/// Tracked files that are meant to deserialise as an `AppConfig`.
+/// Tracked files that are meant to deserialize as an `AppConfig`.
 ///
 /// Listed rather than globbed: `Cargo.toml`, `rustfmt.toml` and
 /// `.reaper.toml` are also tracked TOML and are not configs of this shape, and
@@ -40,9 +40,9 @@ use std::collections::BTreeSet;
 /// a real one. `every_listed_config_exists` keeps the list honest.
 const CONFIGS: &[&str] = &["config.sample.toml", "e2e/stack-config.toml"];
 
-/// Files that declare the structs an `AppConfig` deserialises into.
+/// Files that declare the structs an `AppConfig` deserializes into.
 ///
-/// `css_lib` is here because `[edge.edge_mqtt_config]` deserialises into
+/// `css_lib` is here because `[edge.edge_mqtt_config]` deserializes into
 /// `css_lib::MqttConfig` -- the edge's MQTT settings are shared with the edge
 /// binary, so they live in the shared crate rather than in `config.rs`. A
 /// version of this check that read only `config.rs` reported those three
@@ -198,7 +198,7 @@ fn no_tracked_config_names_a_field_that_does_not_exist() {
     for path in CONFIGS {
         let text = read(path);
         // The stack config is deliberately not valid TOML before substitution
-        // -- `port = @PORT@` is unquoted -- so placeholders are neutralised
+        // -- `port = @PORT@` is unquoted -- so placeholders are neutralized
         // first. Substituting a number keeps integer fields integers.
         let substituted = substitute_placeholders(&text);
 

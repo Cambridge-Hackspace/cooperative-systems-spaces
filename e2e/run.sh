@@ -491,7 +491,7 @@ stage_schema() {
   # --- the tables the tiers below depend on exist -------------------------
   # Named individually rather than counted. A count tells you the number
   # changed; a name tells you which table went missing, and these are the ones
-  # whose absence would make a later stage fail somewhere unrecognisable.
+  # whose absence would make a later stage fail somewhere unrecognizable.
   local t
   # Names taken from server/src/schema.rs, not guessed. The first version of
   # this list asked for `toolguard_tools`, which has never existed -- ToolGuard
@@ -1208,8 +1208,8 @@ stage_logs() {
 
   # --- and the exemptions are not stale ------------------------------------
   # An exemption for a message that no longer appears is a claim about
-  # behaviour nobody is checking. It is removed, not left.
-  # An exemption for a message that no longer appears is a claim about behaviour
+  # behavior nobody is checking. It is removed, not left.
+  # An exemption for a message that no longer appears is a claim about behavior
   # nobody is checking, so it is reported -- but as a skip rather than a
   # failure. These messages are produced by the fuzz tier reaching for things
   # that do not exist, and a short run legitimately may not reach them. A
@@ -1338,7 +1338,7 @@ done
     echo "  is no engine to check."
   fi
   echo "- Assertions named findings/... pin a known defect in place rather"
-  echo "  than asserting correct behaviour. They FAIL when the defect is fixed,"
+  echo "  than asserting correct behavior. They FAIL when the defect is fixed,"
   echo "  which is when they should be read and deleted. TESTING.md \S8 lists them."
   echo
   echo "## Where to look"

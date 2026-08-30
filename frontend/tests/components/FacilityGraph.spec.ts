@@ -183,7 +183,7 @@ describe('places become nodes', () => {
     expect(nodes()[0].classes).toBe('place')
   })
 
-  it('marks a special place so the stylesheet can colour it differently', async () => {
+  it('marks a special place so the stylesheet can color it differently', async () => {
     await graphWith([place('p1', 'Outside', { is_special: true })], [])
     expect(nodes()[0].classes).toBe('place special')
   })

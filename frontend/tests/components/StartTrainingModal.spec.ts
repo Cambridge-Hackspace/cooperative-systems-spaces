@@ -12,7 +12,7 @@
 // deliberately, it is `''`. The server declares `instructor_id: Option<Uuid>`,
 // and `""` is not a Uuid -- so clicking the option that describes the default
 // produces a request the server rejects, while leaving it alone produces one it
-// accepts. Both findings below are pinned to the current behaviour.
+// accepts. Both findings below are pinned to the current behavior.
 //
 // What this spec does NOT prove: what the server actually answers for
 // `instructor_id: ""`. That is Tier 4's question. Here the claim is only about
@@ -86,7 +86,7 @@ async function modal(over: Partial<TrainingStep> = {}) {
 
 function buttonNamed(w: Awaited<ReturnType<typeof modal>>, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 

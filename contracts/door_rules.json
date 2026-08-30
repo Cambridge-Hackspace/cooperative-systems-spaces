@@ -82,7 +82,7 @@
       }
     },
     {
-      "name": "an unrecognised effect is skipped, not treated as allow",
+      "name": "an unrecognized effect is skipped, not treated as allow",
       "_why": "This was a fail-open. A typo in a rule's effect column silently granted access to whatever the rule named, on a physical door.",
       "now": "2026-05-28T14:00:00Z",
       "tz": "America/Chicago",
@@ -95,7 +95,7 @@
       }
     },
     {
-      "name": "an unrecognised kind is skipped",
+      "name": "an unrecognized kind is skipped",
       "now": "2026-05-28T14:00:00Z",
       "tz": "America/Chicago",
       "users": [],

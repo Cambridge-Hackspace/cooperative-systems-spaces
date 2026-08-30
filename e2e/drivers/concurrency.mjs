@@ -19,7 +19,7 @@
 // A race that loses four times in five is still a race, so each scenario runs
 // several rounds and reports the worst. And the server's pool is configured
 // above the fan-out in e2e/stack.sh on purpose: a pool smaller than the number
-// of concurrent requests serialises them, which makes a race disappear and this
+// of concurrent requests serializes them, which makes a race disappear and this
 // tier report a pass it did not earn.
 //
 // WHAT THIS DOES NOT PROVE. Absence. A round that finds nothing means this
@@ -92,7 +92,7 @@ async function inviteRedemption(admin) {
       'findings/device-invite-codes-require-a-utf8-database',
       500,
       probe.status,
-      `PINNED FINDING, not a passing behaviour: on a ${ENCODING} cluster a device ` +
+      `PINNED FINDING, not a passing behavior: on a ${ENCODING} cluster a device ` +
         'invite cannot be created at all, because the code is eight emoji. ' +
         'Device registration is therefore impossible, and nothing says the ' +
         'application requires a UTF-8 database. 500 is correct here rather ' +
@@ -123,7 +123,7 @@ async function inviteRedemption(admin) {
     }
 
     const prefix = `race-dev-${TAG}-r${round}`
-    // Built first, fired second. Awaiting inside the loop would serialise them
+    // Built first, fired second. Awaiting inside the loop would serialize them
     // and the window would never open.
     const thunks = []
     for (let i = 0; i < FANOUT; i += 1) {
@@ -267,7 +267,7 @@ async function profileConfigVersions(admin) {
     record('race/config/loser-gets-a-conflict-not-a-fault', 'fail',
       `${worstFive} concurrent profile-config write(s) answered 5xx. A lost update is a ` +
         'conflict the caller can retry; errors.rs has two conversion paths for a unique ' +
-        'violation and this one takes the path that does not recognise it. Fixing the ' +
+        'violation and this one takes the path that does not recognize it. Fixing the ' +
         'conversion is separate from closing the race, and both are worth doing.')
   } else {
     record('race/config/loser-gets-a-conflict-not-a-fault', 'ok')

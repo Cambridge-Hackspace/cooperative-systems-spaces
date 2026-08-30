@@ -12,7 +12,7 @@ import { createPinia, setActivePinia } from 'pinia'
 //
 // tests/structure/store-cycle.spec.ts asserts `useAuthStore` is never hoisted
 // out of those callbacks, so the cycle stays benign rather than becoming a
-// module-initialisation order problem nobody can debug.
+// module-initialization order problem nobody can debug.
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.clear()

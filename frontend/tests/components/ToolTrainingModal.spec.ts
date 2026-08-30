@@ -10,9 +10,9 @@
 //     v-if="stepWithProgress.progress?.status === 'in_progress' && isInstructor"
 //     v-if="stepWithProgress.progress?.status === 'failed'"
 //
-// `progress` and `can_start` were fields in the TypeScript interface labelled
+// `progress` and `can_start` were fields in the TypeScript interface labeled
 // "Alias for user_progress" and "Alias for is_available" -- and nothing
-// populated an alias. The server serialises its own names
+// populated an alias. The server serializes its own names
 // (models/training.rs:280), so both arrived `undefined` on every response.
 // `getStepStatusClass` read them too, so every step was classed `step-locked`
 // whatever its real state.
@@ -250,7 +250,7 @@ describe('how a step is classed', () => {
 
   it('does not put a newline in the class it returns', async () => {
     // `getStepStatusClass` used to end in a template literal with two trailing
-    // newlines. The DOM normalises whitespace so nothing broke, but the value
+    // newlines. The DOM normalizes whitespace so nothing broke, but the value
     // was still wrong, and a `class` carrying line breaks is the kind of thing
     // that stops being harmless the moment somebody compares it as a string.
     const w = await modal(
@@ -374,7 +374,7 @@ describe('who sees the management controls', () => {
     expect(labels(await modal())).toContain('Add Training Step')
   })
 
-  it('shows a trainer-only section to an authorised trainer who is not staff', async () => {
+  it('shows a trainer-only section to an authorized trainer who is not staff', async () => {
     asRole(UserRole.Member)
     mocks.checkTrainerAuthorization.mockResolvedValue({ success: true, data: true })
     const w = await modal()

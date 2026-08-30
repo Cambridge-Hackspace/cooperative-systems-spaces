@@ -2,14 +2,14 @@
 //!
 //! This exists because the workflow spent two and a half months naming
 //! `arc-runner-set` — a self-hosted Actions Runner Controller set registered to
-//! the upstream organisation — and self-hosted runners do not cross a fork
+//! the upstream organization — and self-hosted runners do not cross a fork
 //! boundary. A fork cannot claim its parent's runners; if it could, forking a
 //! repository would be a way to run code on the parent's infrastructure.
 //!
 //! What makes that worth a permanent check is the shape of the failure. A job
 //! that no runner can claim does not error, does not annotate the commit and
 //! does not appear as a red X. It sits in `queued` for twenty-four hours and is
-//! then cancelled. On this fork the consequence was that CI had never once
+//! then canceled. On this fork the consequence was that CI had never once
 //! executed — not on a feature branch, not on a pull request, not on a merge to
 //! `master` — and the only visible symptom was an Actions tab with nothing in
 //! it, which looks exactly like a repository that has not been pushed to yet.
@@ -18,7 +18,7 @@
 //! the property that made the outage possible: that nothing here depends on
 //! infrastructure the reader of this repository may not have. A self-hosted
 //! label is still allowed — through a variable with a hosted fallback, so the
-//! organisation that owns runners uses them and everybody else still gets a
+//! organization that owns runners uses them and everybody else still gets a
 //! result.
 //!
 //! What this does not prove: that the hosted runner it falls back to can
@@ -34,7 +34,7 @@ use css_checks::repo_root;
 ///
 /// The property is obtainability, not this exact list: anyone who can read this
 /// repository can run a job on one of these, with no runner to register, no
-/// organisation to belong to and nothing to configure.
+/// organization to belong to and nothing to configure.
 const HOSTED: [&str; 3] = ["ubuntu-", "windows-", "macos-"];
 
 /// The matrix key this check knows how to follow. See `resolves` for why a
@@ -193,7 +193,7 @@ fn every_job_names_a_runner_a_clone_can_obtain() {
         failures.is_empty(),
         "a job here can only run on infrastructure a clone of this repository \
          may not have. A job no runner can claim does not fail -- it queues, \
-         then is cancelled after twenty-four hours, reporting nothing.\n\n{}",
+         then is canceled after twenty-four hours, reporting nothing.\n\n{}",
         failures.join("\n")
     );
 }

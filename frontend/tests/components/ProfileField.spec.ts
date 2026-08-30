@@ -15,7 +15,7 @@
 // runs no cascade, so `getComputedStyle` returns the declarations on the
 // element and not the result of the stylesheet — an assertion about what
 // `input-error` *looks* like would pass against a stylesheet that does not
-// define it. Class names are structure; colours and layout are Tier 5's.
+// define it. Class names are structure; colors and layout are Tier 5's.
 //
 // WHAT THIS DOES NOT PROVE. That the daisyUI classes used here exist. A typo
 // in `input-bordred` is asserted faithfully by these tests and renders as an

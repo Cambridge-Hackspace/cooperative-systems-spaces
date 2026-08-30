@@ -9,7 +9,7 @@
 // believe.
 //
 // So each invariant is fed **what a broken server would send**, and must fire.
-// Every case here is modelled on a defect this project actually had, or on one
+// Every case here is modeled on a defect this project actually had, or on one
 // the design predicted and the stack battery then confirmed:
 //
 //   * a 403 on the member profile-config read                    (5c2fa3c)

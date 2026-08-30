@@ -3,7 +3,7 @@
 How this project is tested, what each layer can and cannot see, where each one
 runs, and what is *not* covered yet.
 
-The organising idea is from
+The organizing idea is from
 [`calebpower/reaper`'s testing methodology](https://github.com/calebpower/reaper/blob/main/docs/testing-methodology.md):
 not a pyramid but a **portfolio of oracles**. Every tier earns its place by
 answering a question no cheaper tier can answer. A tier that cannot do that is a
@@ -178,7 +178,7 @@ passing quietly.
 
 **Which machine.** The Linux jobs run on `${{ vars.CI_RUNNER || 'ubuntu-latest' }}`.
 Unset means GitHub-hosted, which is what a fork or a clone gets with no
-configuration at all. Set the repository or organisation variable `CI_RUNNER` to
+configuration at all. Set the repository or organization variable `CI_RUNNER` to
 a self-hosted label to send them elsewhere; this project's upstream uses
 `arc-runner-set`.
 
@@ -187,7 +187,7 @@ a self-hosted label to send them elsewhere; this project's upstream uses
 boundary -- a fork cannot claim its parent's runners, because that would let
 anyone who forked the repository run code on the parent's infrastructure. So on
 this fork every job queued against a runner that could never take it and was
-cancelled silently twenty-four hours later. The Actions tab stayed empty through
+canceled silently twenty-four hours later. The Actions tab stayed empty through
 a merge to `master`. A workflow that cannot be claimed does not fail; it simply
 never reports, which is the failure mode hardest to notice and the reason this
 is a variable now rather than a label.
@@ -285,7 +285,7 @@ Four of those seven found something real:
 The Windows release leg took four of the seven on its own, each failing one
 layer deeper than the last: no OpenSSL, then the wrong OpenSSL version, then the
 right version in an unexpected directory layout, then a Visual Studio the pinned
-`cc` could not recognise. Three of those four were fixed by upgrading a
+`cc` could not recognize. Three of those four were fixed by upgrading a
 dependency the lockfile had pinned for reproducibility rather than for any
 reason anybody chose -- `openssl-sys` 0.9.109 to 0.9.117, `cc` 1.2.40 to 1.4.4,
 `cmake` 0.1.54 to 0.1.58. The fourth was fixed by searching for the import
@@ -491,7 +491,7 @@ methodology forbids wearing the costume of progress.
 
 ## 8. Known defects that tests record rather than fix
 
-Every one of these is **pinned by an assertion on the current behaviour**, not
+Every one of these is **pinned by an assertion on the current behavior**, not
 left as a failing test. That is a deliberate choice and it is worth stating why:
 a suite that stays red teaches people to ignore red, and within a month a
 genuine regression is indistinguishable from the wallpaper. An assertion that
@@ -649,7 +649,7 @@ Not attributable to the four causes above.
 
 `find_user_by_username` and `find_user_by_email` both filter with a plain `eq`
 and no `lower()` on either side. This is not a collation artifact — it is the
-behaviour on every cluster, including UTF-8 ones.
+behavior on every cluster, including UTF-8 ones.
 
 It matters most for email, which is the field people retype. Somebody who
 registered as `Alice@example.com` and types `alice@example.com` is told "Wrong
@@ -731,7 +731,7 @@ short-circuits on `!user.is_active` and the QR path refuses the same person. Two
 doors, two answers, one deactivation.
 
 *Why not fixed:* whether deactivating a member should revoke card rules naming
-their card is a product decision. The vectors assert the current behaviour with
+their card is a product decision. The vectors assert the current behavior with
 the reasoning written out, and it cannot change unnoticed.
 *(`contracts/door_rules.json`, last case)*
 
@@ -744,12 +744,12 @@ and `00:00` is rejected by `validate` as `end <= start`. The fix belongs in the
 server's interval model.
 *(`frontend/tests/unit/schedule_templates.spec.ts`)*
 
-### `hasRole` is fail-open on an unrecognised *required* role
+### `hasRole` is fail-open on an unrecognized *required* role
 
 `roleHierarchy[required] || 0` maps an unknown role to level 0, so a guard
 asking for a role that does not exist admits everyone, `Unknown` included.
 
-*Why not fixed:* it is a behaviour change on the authorization path, and the
+*Why not fixed:* it is a behavior change on the authorization path, and the
 right shape is a total mapping that fails to compile when a role is added.
 *(`frontend/tests/unit/auth-roles.spec.ts`)*
 
@@ -934,13 +934,13 @@ endpoint: `api.ts` wraps every call in `.catch` and produces the same generic
 *(`checks/tests/unimplemented_endpoints.rs` pins the list and asserts each one
 says which feature is missing.)*
 
-### Thirty-six colour pairings are below WCAG AA
+### Thirty-six color pairings are below WCAG AA
 
 `text-error`, `text-warning`, `text-success` and `text-info` set a foreground
 and leave the background to whatever card the element sits in — `base-100`,
 `base-200` or `base-300` in this application. Across the fourteen themes, 36 of
 those pairings fall below 4.5:1. `lofi`'s `text-success` on `base-300` is
-**1.01:1** — the same colour, effectively.
+**1.01:1** — the same color, effectively.
 
 Not hypothetical: `ProfileField.vue` renders both the required marker and the
 validation message in `text-error`, so a theme in that list is a theme where the
@@ -998,9 +998,9 @@ degraded boot should be surfaced.
   it and `App.vue` renders a hardcoded `CSS`; only `HomeView` and `AdminView`
   read the configured value. A space that sets its own name sees it in two
   places out of three.
-* **Neither field on the login form was labelled.** A `<label>` with no `for`
+* **Neither field on the login form was labeled.** A `<label>` with no `for`
   whose input is a sibling rather than a child is associated with nothing: a
-  screen reader announces an unlabelled text field, and clicking the label does
+  screen reader announces an unlabeled text field, and clicking the label does
   not focus it. Both fields on the one form every user must complete were like
   that. **Fixed** — found because the browser tier addresses fields by their
   label, which is what assistive technology does, so the spec's selector *is*
@@ -1069,7 +1069,7 @@ It is a script, `e2e/acceptance.sh`, rather than something somebody did once:
     reaper test                 # the suite is now EXPECTED to fail
     e2e/acceptance.sh restore
 
-Each revert is **surgical** — the behavioural change only, not the whole
+Each revert is **surgical** — the behavioral change only, not the whole
 commit. `11c4f42` in particular added a migration, a database module and an
 entire version history alongside the guard change; reverting that wholesale
 produces a tree that fails for reasons which have nothing to do with the

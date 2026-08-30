@@ -3,7 +3,7 @@
 // Three tabs over four endpoints. This one is better written than most of its
 // neighbours -- it clears `saving` before its early returns, it acknowledges
 // its own silent-failure gap in a comment, and it uses `void` deliberately
-// rather than by accident -- so several assertions below are about behaviour
+// rather than by accident -- so several assertions below are about behavior
 // worth keeping rather than defects.
 //
 // The finding that matters is not in the component's logic. The webhook URL is
@@ -132,7 +132,7 @@ type Wrapper = Awaited<ReturnType<typeof page>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -393,7 +393,7 @@ describe('credentials', () => {
     expect(mocks.createAuthHeader).not.toHaveBeenCalled()
   })
 
-  // Behaviour worth keeping: editing opens with the secret box empty and omits
+  // Behavior worth keeping: editing opens with the secret box empty and omits
   // it from the payload unless retyped, so saving a rename does not blank the
   // credential. The secret is never sent back to the browser either --
   // `WebhookAuthHeader` carries `has_value`, not the value.

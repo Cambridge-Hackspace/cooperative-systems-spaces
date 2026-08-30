@@ -86,7 +86,7 @@ fn the_stack_config_parses_as_an_app_config() {
     assert!(
         config.database.max_connections >= 32,
         "the concurrency tier fans out to {}; a pool smaller than the fan-out \
-         serialises the requests, which makes a race disappear and the tier \
+         serializes the requests, which makes a race disappear and the tier \
          report a pass it did not earn",
         config.database.max_connections
     );

@@ -4,7 +4,7 @@
 //
 // Every part of the page that displays configuration reads `editConfig` --
 // the toggle, the field list, and the preview card. `editConfig` is
-// initialised to `{ profiles_enabled: false, profile_fields: [] }` and is only
+// initialized to `{ profiles_enabled: false, profile_fields: [] }` and is only
 // ever filled in by `startEditing()`. `profileConfig`, which holds what the
 // server actually returned, is used for nothing but the loading and error
 // gates and as the source of `startEditing`'s deep copy.
@@ -15,7 +15,7 @@
 //
 // The store is mocked as a reactive stub, as in the UserProfile spec: what is
 // under test is which state the page renders and what it sends, not the
-// store's own behaviour.
+// store's own behavior.
 //
 // What this spec does NOT prove: that the server accepts the config shape.
 // Tier 6 owns the round trip; `tests/unit/profile-validate.spec.ts` owns the
@@ -96,7 +96,7 @@ type Wrapper = Awaited<ReturnType<typeof page>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -159,7 +159,7 @@ describe('what the page shows before anything is edited', () => {
   // Was a pinned FINDING: cancelling reset `editConfig` to the empty default
   // rather than to what the server sent, so the page went back to claiming
   // there was no configuration. `cancelEditing()` now re-syncs.
-  it('restores the stored configuration when the edit is cancelled', async () => {
+  it('restores the stored configuration when the edit is canceled', async () => {
     const w = await page()
     await buttonNamed(w, 'Edit Configuration').trigger('click')
     await nextTick()

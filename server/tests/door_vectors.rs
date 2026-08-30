@@ -176,7 +176,7 @@ fn the_vector_file_was_actually_read() {
         .filter_map(|c| c["name"].as_str())
         .collect::<Vec<_>>();
     for needle in [
-        "unrecognised effect is skipped",
+        "unrecognized effect is skipped",
         "deny beats allow",
         "schedule-gated rule is silent",
         "inactive member",

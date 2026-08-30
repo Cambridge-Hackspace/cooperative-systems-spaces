@@ -204,8 +204,8 @@
             answer "what's in this room?".
           </li>
           <li>
-            <strong>Graph view</strong> renders places as nodes, doors as labelled edges, and
-            special places in amber &mdash; useful for surveying connectivity at a glance.
+            <strong>Graph view</strong> renders places as nodes, doors as labeled edges, and special
+            places in amber &mdash; useful for surveying connectivity at a glance.
           </li>
         </ul>
       </section>

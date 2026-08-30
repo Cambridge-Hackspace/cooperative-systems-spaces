@@ -86,7 +86,7 @@ describe('the api.ts <-> auth.ts import cycle', () => {
    * The cycle is benign *only* because `useAuthStore()` is called inside the
    * axios interceptor callbacks, at request time, rather than at module scope.
    * Hoist it out of those callbacks and the cycle becomes a
-   * module-initialisation-order problem whose symptom — an undefined import,
+   * module-initialization-order problem whose symptom — an undefined import,
    * somewhere else entirely — is very hard to trace back here.
    *
    * This asserts the shape that keeps it benign.
@@ -104,7 +104,7 @@ describe('the api.ts <-> auth.ts import cycle', () => {
     expect(
       offenders,
       'useAuthStore() must stay inside the interceptor callbacks; calling it at ' +
-        'module scope turns a benign import cycle into an initialisation-order bug'
+        'module scope turns a benign import cycle into an initialization-order bug'
     ).toEqual([])
   })
 

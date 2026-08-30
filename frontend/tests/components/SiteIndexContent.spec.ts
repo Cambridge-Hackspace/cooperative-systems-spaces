@@ -61,7 +61,7 @@ describe('when the index loads', () => {
 
 describe('findings: a failed load is silent', () => {
   it('renders nothing at all when the request fails', async () => {
-    // A PINNED FINDING, not a passing behaviour.
+    // A PINNED FINDING, not a passing behavior.
     //
     // The template has no failure branch. `content` stays null and `loading`
     // returns to false, so both conditions are false and the component renders

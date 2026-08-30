@@ -174,7 +174,7 @@ describe('the field_type fallback', () => {
   // that was neither — and since the `Select` branch then re-checks the shape
   // and finds it wrong, such a field silently received no validation at all
   // under a label claiming it had been validated as a Select.
-  it('treats an unrecognised object field_type as Text, matching the component', () => {
+  it('treats an unrecognized object field_type as Text, matching the component', () => {
     const weird = field({ key: 'x', field_type: { Mystery: {} } as never })
     // Text imposes no constraint, so anything is accepted — but it is accepted
     // *as Text*, which is what the renderer will show.

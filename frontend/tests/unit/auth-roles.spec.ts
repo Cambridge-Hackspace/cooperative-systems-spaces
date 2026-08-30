@@ -52,15 +52,15 @@ describe('hasRole', () => {
 
   // Names a real weakness rather than papering over it.
   //
-  // `roleHierarchy[userRoleString] || 0` maps anything unrecognised to 0. That
+  // `roleHierarchy[userRoleString] || 0` maps anything unrecognized to 0. That
   // is fail-closed for the *user's* role, which is right. But it does the same
   // for the *required* role, so a guard asking for a role that does not exist
   // — a typo, a role removed from the server but not the client — resolves to
   // level 0 and admits everyone, including Unknown.
   //
-  // Pinned as-is because changing it is a behaviour change to the authorization
+  // Pinned as-is because changing it is a behavior change to the authorization
   // path and belongs with the server-side matrix work, not smuggled in here.
-  it('admits everyone when the *required* role is unrecognised, which is fail-open', () => {
+  it('admits everyone when the *required* role is unrecognized, which is fail-open', () => {
     const store = signedInAs(UserRole.Unknown)
     expect(store.hasRole('supervisor' as UserRole)).toBe(true)
   })

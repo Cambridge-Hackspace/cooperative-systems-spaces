@@ -5,7 +5,7 @@
 //!
 //! What this buys: an [`AppState`] with no database behind it, so the entire
 //! request-*rejection* surface can be asserted in-process. That is most of the
-//! server's security-relevant behaviour, and none of it reaches the database:
+//! server's security-relevant behavior, and none of it reaches the database:
 //! `AuthUser::from_request_parts` checks the header, the `Bearer` prefix and
 //! the JWT signature before its single `find_user_by_id`.
 //!

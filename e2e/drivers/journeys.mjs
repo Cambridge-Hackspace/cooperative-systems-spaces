@@ -317,7 +317,7 @@ async function nemesisMalformedBody() {
   note('nemesis/bad-role', 'unknown role')
   witness('an administrator', 'set a role the system does not have', 'a member', res)
   tallied('journeys/nemesis/an-unknown-role-is-not-a-5xx', res.status < 500,
-    `an unrecognised role answered ${res.status}`)
+    `an unrecognized role answered ${res.status}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +581,7 @@ main(async () => {
     const roster = (await observe())['roster-matches']
     const visible = deactivated.filter((u) => roster.some((r) => r.id === u.id))
     ok('findings/deactivated-users-vanish-from-the-admin-roster', visible.length === 0,
-      `PINNED FINDING, not a passing behaviour: DatabaseManager::list_users ` +
+      `PINNED FINDING, not a passing behavior: DatabaseManager::list_users ` +
       `filters is_active = true, so deactivating a member removes them from ` +
       `GET /api/users altogether -- not shown as inactive, absent -- and there ` +
       `is no parameter to include them. An administrator who deactivates ` +

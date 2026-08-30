@@ -67,7 +67,7 @@ type Wrapper = Awaited<ReturnType<typeof modal>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -213,7 +213,7 @@ describe('what the form sends', () => {
 
   it('carries on with an empty picker when the schedule list fails', async () => {
     // `loadSchedules` has a catch that resets to `[]`, so a failed schedule
-    // load does not stop a tool being created. Asserted as behaviour worth
+    // load does not stop a tool being created. Asserted as behavior worth
     // keeping: this is the one request in the modal whose failure is handled.
     mocks.listSchedules.mockRejectedValue(new Error('Network Error'))
     const w = await modal()

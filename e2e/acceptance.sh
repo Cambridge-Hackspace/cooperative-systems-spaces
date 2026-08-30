@@ -8,7 +8,7 @@
 # anything.
 #
 # The corpus is the four fixes at the head of feature/tests. Each is reverted
-# *surgically* -- the behavioural change only, not the whole commit -- because
+# *surgically* -- the behavioral change only, not the whole commit -- because
 # two of them also added a migration, a route and a component restructure, and
 # reverting those wholesale produces a tree that fails for reasons that have
 # nothing to do with the defect.

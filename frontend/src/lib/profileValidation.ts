@@ -1,7 +1,7 @@
 // Profile validation, as a pure function.
 //
 // Extracted from `stores/profile.ts`, where it was a closure over the store's
-// `profileConfig`. Behaviour is unchanged: the store now delegates and passes
+// `profileConfig`. Behavior is unchanged: the store now delegates and passes
 // its own config in.
 //
 // The reason it moved is that two other things need it and neither can reach a

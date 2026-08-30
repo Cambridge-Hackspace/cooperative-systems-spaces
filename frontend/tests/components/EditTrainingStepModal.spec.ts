@@ -20,7 +20,7 @@
 //
 // Serde ignores unknown fields, so the four on the left with no match are
 // dropped in silence and the request answers 200. `passing_score` and
-// `is_active` have no column at all -- the checkbox labelled "Active (visible
+// `is_active` have no column at all -- the checkbox labeled "Active (visible
 // to users)" controls nothing that exists. `step_number` is real but is only
 // updatable through a separate endpoint, `update_training_step_position`.
 //
@@ -88,7 +88,7 @@ type Wrapper = ReturnType<typeof modal>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -211,7 +211,7 @@ describe('what the form sends', () => {
   // FINDING, pinned. `v-model.number` on an emptied number input yields the
   // empty *string*, not undefined: Vue's `looseToNumber` returns its argument
   // unchanged when `parseFloat` gives NaN, and `parseFloat('')` is NaN. The
-  // matching server fields are `Option<i32>`, which cannot deserialise `""`.
+  // matching server fields are `Option<i32>`, which cannot deserialize `""`.
   it('sends an empty string, not nothing, when a number field is cleared', async () => {
     const w = modal()
     await w.find('#expires_after_days').setValue('')

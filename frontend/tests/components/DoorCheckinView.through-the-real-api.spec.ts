@@ -2,7 +2,7 @@
 //
 // Every other component spec mocks `@/utils/api` wholesale. That is the right
 // default -- it keeps a component test about the component -- but it means the
-// api layer's own behaviour is invisible to them, and `doorsApi` is wrapped in
+// api layer's own behavior is invisible to them, and `doorsApi` is wrapped in
 // `withErrorGuard`, so what a component actually receives on a failure is
 // decided there rather than in the double.
 //

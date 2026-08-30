@@ -13,10 +13,10 @@ export default mergeConfig(
 
       // jsdom, not happy-dom, and the reason is specific to this tier rather
       // than a general preference. happy-dom is roughly three times faster and
-      // that would settle it if these were behavioural tests. They are not:
+      // that would settle it if these were behavioral tests. They are not:
       // tier 2 asserts whole-string class attributes and exact element counts
       // on components dense with inline <svg> (ThemePicker.vue alone has
-      // five), and happy-dom's SVG-namespace and innerHTML normalisation have
+      // five), and happy-dom's SVG-namespace and innerHTML normalization have
       // historically differed from browsers in exactly those places. Buying
       // speed with a chance of a false conformance pass is the wrong trade for
       // the tier whose entire value is exactness. If this gets slow the answer

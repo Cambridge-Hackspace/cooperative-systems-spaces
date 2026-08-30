@@ -116,8 +116,8 @@ describe('a complete config', () => {
     expect(store.shouldShowSiteOnHomePage()).toBe(true)
   })
 
-  it('treats an unrecognised link location as "do not show"', () => {
-    // The value is a Rust enum serialised as a string. A variant the frontend
+  it('treats an unrecognized link location as "do not show"', () => {
+    // The value is a Rust enum serialized as a string. A variant the frontend
     // does not know about must not default to showing something.
     const store = withConfig(complete({ wiki_enabled: true, wiki_link: 'Sidebar' }))
     expect(store.shouldShowWikiInNav()).toBe(false)

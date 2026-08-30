@@ -202,7 +202,7 @@ describe('the optional detail rows', () => {
     expect(wrapper.findAll('.info-row')).toHaveLength(0)
   })
 
-  it('renders one row per populated field, labelled', () => {
+  it('renders one row per populated field, labeled', () => {
     const wrapper = mountCard({
       tool: tool({
         description: 'A big saw',

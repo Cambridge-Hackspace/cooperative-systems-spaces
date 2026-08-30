@@ -24,7 +24,7 @@
             `for` / `id`, not a bare label beside an input.
             A <label> with no `for` whose input is a *sibling* rather than a
             child is not associated with anything: a screen reader announces an
-            unlabelled text field, and clicking the label does not focus it.
+            unlabeled text field, and clicking the label does not focus it.
             Both fields on the only form every user must complete were like
             this.
             Found because the browser tier addresses these fields by their

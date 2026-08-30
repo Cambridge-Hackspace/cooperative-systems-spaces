@@ -101,7 +101,7 @@ function buttonNamed(w: Wrapper, label: string) {
   const b =
     all.find((btn) => btn.text().trim() === label) ??
     all.find((btn) => btn.text().trim().endsWith(label))
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 const alerts = () =>
@@ -182,7 +182,7 @@ describe('how time is shown', () => {
     }
   })
 
-  it('summarises uptime at the largest useful unit', async () => {
+  it('summarizes uptime at the largest useful unit', async () => {
     const cases: [number, string][] = [
       [90_000, '1d 1h'],
       [7_200, '2h 0m'],
@@ -283,7 +283,7 @@ describe('invites', () => {
     expect(w.find('.generated-invite').text()).toContain('🔧🔩⚙️')
   })
 
-  // Behaviour worth keeping, and the component's own comment explains why: the
+  // Behavior worth keeping, and the component's own comment explains why: the
   // clipboard write is awaited and its failure handled, so an admin on an
   // insecure origin is given the code in the fallback message rather than
   // being told it was copied when it was not.

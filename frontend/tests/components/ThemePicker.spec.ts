@@ -2,7 +2,7 @@
 //
 // The theme LIST is already pinned by tests/structure/themes.spec.ts, which
 // asserts the same set and the same order across tailwind.config.js and this
-// component. This file is about behaviour instead: grouping, the guard against
+// component. This file is about behavior instead: grouping, the guard against
 // pointless writes, applying the theme to the document, and the failure path —
 // which is missing.
 
@@ -55,7 +55,7 @@ const findButton = (w: ReturnType<typeof picker>, label: string) =>
 // 'trigger')" instead of naming the label it looked for.
 function buttonFor(w: ReturnType<typeof picker>, label: string) {
   const b = findButton(w, label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -75,14 +75,14 @@ describe('how themes are grouped', () => {
   })
 
   it('never shows the group names it went to the trouble of computing', async () => {
-    // A PINNED FINDING, not a passing behaviour.
+    // A PINNED FINDING, not a passing behavior.
     //
     // `themeGroups` builds named groups and orders them CSS, NEIAM, DAISY. The
     // template renders that name into
     //
     //     <h3 class="text-lg font-semibold text-base-content/70"></h3>
     //
-    // which is empty. So the user sees three unlabelled clusters of buttons
+    // which is empty. So the user sees three unlabeled clusters of buttons
     // with no indication of what separates them, and the ordering work is
     // invisible. An empty <h3> is also a heading with no accessible name, which
     // a screen reader announces as a heading and then says nothing.
@@ -210,7 +210,7 @@ describe('messages', () => {
 
 describe('findings: a refused write says nothing', () => {
   it('shows no message at all when the server answers success: false', async () => {
-    // A PINNED FINDING, not a passing behaviour.
+    // A PINNED FINDING, not a passing behavior.
     //
     // `if (response.success) { ... }` has no else. A server that refuses the
     // change -- a role that may not set another user's theme, a validation

@@ -8,7 +8,7 @@
 // It also contains a defect its own comment describes as working. The comment
 // on `flat` says a special place's children "show up here rooted at the
 // special's id; render them at depth 0". They do not show up at all -- see
-// `findings/` below. A comment that describes intended behaviour beside code
+// `findings/` below. A comment that describes intended behavior beside code
 // that does something else is worse than no comment, because it stops the next
 // reader looking.
 
@@ -33,7 +33,7 @@ function picker(places: Place[], props: Record<string, unknown> = {}) {
 }
 
 describe('the null option', () => {
-  it('is selectable and labelled by default', () => {
+  it('is selectable and labeled by default', () => {
     const first = picker([]).findAll('option')[0]
     expect(first.text()).toBe('— Unassigned —')
     expect(first.attributes('disabled')).toBeUndefined()
@@ -102,7 +102,7 @@ describe('the hierarchy', () => {
 
 describe('findings', () => {
   it('drops the children of a special place entirely', () => {
-    // A PINNED FINDING, not a passing behaviour.
+    // A PINNED FINDING, not a passing behavior.
     //
     // `flat` builds `byParent` from the non-special places and then walks with
     // `visit(null, 0)`. A regular place whose parent is a SPECIAL place has

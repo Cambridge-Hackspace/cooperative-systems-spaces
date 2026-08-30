@@ -72,7 +72,7 @@ type Wrapper = ReturnType<typeof modal>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -132,7 +132,7 @@ describe('against the step the server actually sends', () => {
     expect(sent().passed).toBe(false)
   })
 
-  it('summarises what passing means, and shows nothing when failing', async () => {
+  it('summarizes what passing means, and shows nothing when failing', async () => {
     const w = modal()
     expect(w.find('.training-summary').exists()).toBe(true)
 

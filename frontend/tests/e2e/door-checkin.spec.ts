@@ -95,7 +95,7 @@ test.describe('when the load fails', () => {
     // load, so the spinner is forever. Whether that should become an error
     // after N seconds is a product decision; what the tier can say is that the
     // page does not offer an unlock button while it does not know whether the
-    // person is authorised.
+    // person is authorized.
     await signIn(page)
     await arm(request, 'hangNext', '/doors')
     await page.goto(DOOR)

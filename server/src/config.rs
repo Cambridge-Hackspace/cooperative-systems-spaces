@@ -390,7 +390,7 @@ pub struct AuthConfig {
     ///
     /// Optional in the file. `config.sample.toml` deliberately ships without
     /// it -- writing a real secret into a sample is how a public one ends up
-    /// signing production tokens -- so this has to deserialise from its
+    /// signing production tokens -- so this has to deserialize from its
     /// absence or the shipped sample does not parse at all.
     ///
     /// Absence means the empty string here, not a generated secret, and that
@@ -1151,7 +1151,7 @@ impl AppConfig {
 
                     // Parse the merged config
                     let merged_text = toml::to_string(&merged_value)
-                        .with_context(|| "Failed to serialise the merged configuration")?;
+                        .with_context(|| "Failed to serialize the merged configuration")?;
                     let merged_config: AppConfig = toml::from_str(&merged_text)
                         .with_context(|| "Failed to parse merged configuration")?;
 
@@ -1469,12 +1469,12 @@ mod tests {
         // same shape that stopped the stack battery booting on its first run.
         //
         // The assertion that the removal changed something is not decoration.
-        // The first version of this test removed a line the serialiser does not
+        // The first version of this test removed a line the serializer does not
         // emit, so the config parsed cleanly, `from_file` succeeded, and the
         // test failed with a wall of Debug output rather than saying the
         // fixture was wrong. A mutation that does not mutate is a test that
         // proves nothing while looking like it proves something.
-        let text = toml::to_string_pretty(&AppConfig::default()).expect("serialise");
+        let text = toml::to_string_pretty(&AppConfig::default()).expect("serialize");
         let broken: String = text
             .lines()
             .filter(|l| !l.trim_start().starts_with("lookahead_days"))
@@ -1483,7 +1483,7 @@ mod tests {
         assert_ne!(
             text.lines().count(),
             broken.lines().count(),
-            "the fixture removed nothing; AppConfig no longer serialises lookahead_days"
+            "the fixture removed nothing; AppConfig no longer serializes lookahead_days"
         );
         std::fs::write(&path, &broken).expect("write the config");
 
@@ -1580,7 +1580,7 @@ mod tests {
              writes it back on first boot."
         );
 
-        // And the absence really does deserialise, rather than only being
+        // And the absence really does deserialize, rather than only being
         // tolerated by a `from_file` repair that would edit a tracked file.
         let config: AppConfig = toml::from_str(&text).expect("sample parses");
         assert!(config.auth.jwt_secret.is_empty());

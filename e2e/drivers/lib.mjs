@@ -25,7 +25,7 @@ export function record(name, status, message = '') {
 
 /**
  * `why` is for the assertions that pin a known defect in place rather than
- * asserting correct behaviour. Those fail the day somebody fixes the defect,
+ * asserting correct behavior. Those fail the day somebody fixes the defect,
  * and at that moment the reader needs to know that failing is the good outcome
  * and the assertion should be deleted -- which a bare "expected 500, got 400"
  * does not say.

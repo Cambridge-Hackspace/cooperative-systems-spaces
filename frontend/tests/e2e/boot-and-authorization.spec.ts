@@ -50,7 +50,7 @@ test.describe('the boot sequence', () => {
   })
 
   test('says NOTHING when the config load fails -- a pinned finding', async ({ page, request }) => {
-    // PINNED FINDING, not a passing behaviour.
+    // PINNED FINDING, not a passing behavior.
     //
     // `configStore.fetchConfig` catches its own errors and does not rethrow, so
     // App.vue's `Promise.all` resolves, its `catch` never runs, and the

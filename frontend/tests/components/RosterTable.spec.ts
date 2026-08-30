@@ -236,7 +236,7 @@ describe('the role vocabulary', () => {
   })
 
   it('offers only the four assignable roles in the editor, never Unknown', async () => {
-    // `Unknown` is what the server produces for a role it does not recognise.
+    // `Unknown` is what the server produces for a role it does not recognize.
     // Offering it as a choice would let an admin assign a value that means
     // "something went wrong".
     const { wrapper } = await mountRoster(UserRole.Admin, [user({ id: 'other' })])

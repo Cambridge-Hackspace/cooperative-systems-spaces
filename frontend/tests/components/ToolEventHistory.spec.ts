@@ -246,7 +246,7 @@ describe('the error branch', () => {
   // envelope is `{ success, data, message, error }` and every refusal fills
   // `error` (api/errors.rs:111 onwards); this catch reads
   // `err.response?.data?.message`, which is never populated, so the server's
-  // own words are discarded in favour of the generic fallback.
+  // own words are discarded in favor of the generic fallback.
   it("shows the server's own reason, from the key the envelope fills", async () => {
     mocks.getToolEvents.mockRejectedValue({
       response: { data: { success: false, error: 'Staff role required' } },

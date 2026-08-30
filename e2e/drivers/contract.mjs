@@ -226,12 +226,12 @@ main(async () => {
   // production database. That is not a hostile-cluster curiosity; it is every
   // deployment, and it is what changed the calculus.
   //
-  // The earlier judgement, written into the pin this replaces, was that
+  // The earlier judgment, written into the pin this replaces, was that
   // matching Postgres's English prose was too fragile to accept, because
   // diesel's DatabaseErrorInformation exposes no SQLSTATE. That reasoning was
   // sound for a LATIN1-only defect. It does not hold for one that fires on
   // UTF-8, and the failure mode of a bad match is a 500 -- exactly the
-  // behaviour being replaced -- so a localised server is no worse off than
+  // behavior being replaced -- so a localised server is no worse off than
   // before.
   const nul = await register(`e2e_nul_${RUN_TAG}\u0000x`, `nul_${RUN_TAG}@e2e.invalid`)
   ok('contract/a-nul-byte-is-not-a-server-error', nul.status < 500,
@@ -249,19 +249,19 @@ main(async () => {
   // -----------------------------------------------------------------------
   // With C ctype there is no case folding outside ASCII, so whatever
   // case-insensitive matching the application does it must be doing itself.
-  // This asserts the behaviour rather than the mechanism.
+  // This asserts the behavior rather than the mechanism.
   const upper = await login(newbie.username.toUpperCase())
   assertEq(
     'findings/login-is-case-sensitive',
     401,
     upper.status,
-    'PINNED FINDING, not a passing behaviour: login is case-sensitive on both ' +
+    'PINNED FINDING, not a passing behavior: login is case-sensitive on both ' +
       'username and email because both lookups filter with a plain eq. ' +
       'If this assertion fails, the defect was fixed -- delete it. ' +
       'See TESTING.md, "Known defects".',
     // Not a collation artifact. `find_user_by_username` and
     // `find_user_by_email` both filter with a plain `eq`, with no lower() on
-    // either side, so this is the behaviour on every cluster.
+    // either side, so this is the behavior on every cluster.
     //
     // It matters most for the email path, which is the one people actually
     // retype: somebody who registered as Alice@example.com and types
@@ -340,7 +340,7 @@ main(async () => {
   assertEq('contract/a-prerequisite-on-a-missing-step-is-a-409', 409, prereq.status)
 
   // Logging out and reusing the token. JWTs are stateless here, so this
-  // records the actual behaviour rather than asserting a property the design
+  // records the actual behavior rather than asserting a property the design
   // does not have.
   const out = await POST('/api/auth/logout', { token: newbie.token })
   assertEq('contract/logout-succeeds', 200, out.status)

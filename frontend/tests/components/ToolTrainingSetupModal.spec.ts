@@ -59,7 +59,7 @@ type Wrapper = ReturnType<typeof modal>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -222,7 +222,7 @@ describe('what it creates', () => {
     await flushPromises()
 
     // The call that makes the tool require training at all. Carrying on past
-    // its refusal built a training programme for a tool that does not require
+    // its refusal built a training program for a tool that does not require
     // training.
     expect(mocks.createTrainingStep).not.toHaveBeenCalled()
     expect(w.find('.error-message').text()).toContain('Tool is archived')

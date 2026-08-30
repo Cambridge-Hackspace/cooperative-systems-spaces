@@ -22,9 +22,9 @@ import { describe, expect, it } from 'vitest'
  * So the guarantee is asserted here, against the server source, from the side
  * that depends on it.
  *
- * This is a source-level check, not a behavioural one: it cannot prove comrak
+ * This is a source-level check, not a behavioral one: it cannot prove comrak
  * escapes anything. What it proves is that this repository never asks it not
- * to. The behavioural half belongs to the server's own tests.
+ * to. The behavioral half belongs to the server's own tests.
  */
 const FRONTEND_ROOT = process.cwd()
 const read = (rel: string) => readFileSync(join(FRONTEND_ROOT, rel), 'utf8')

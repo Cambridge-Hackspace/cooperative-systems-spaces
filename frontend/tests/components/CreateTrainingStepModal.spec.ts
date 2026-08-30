@@ -60,7 +60,7 @@ const modal = () => mount(CreateTrainingStepModal, { props: { tools: TOOLS } })
 // 'trigger')" instead of naming the label it looked for.
 function buttonNamed(w: ReturnType<typeof modal>, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 

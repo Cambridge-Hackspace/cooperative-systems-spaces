@@ -62,7 +62,7 @@ type Wrapper = Awaited<ReturnType<typeof table>>
 
 function buttonNamed(w: Wrapper, label: string) {
   const b = w.findAll('button').find((btn) => btn.text().trim() === label)
-  if (!b) throw new Error(`no button labelled ${JSON.stringify(label)}`)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
   return b
 }
 
@@ -115,14 +115,14 @@ describe('a row as rendered', () => {
     )
   })
 
-  it('titles the event type and colours it', async () => {
+  it('titles the event type and colors it', async () => {
     const w = await table([log({ event_type: 'failed_login_attempt' })])
     const badge = w.find('tbody .badge')
     expect(badge.text()).toBe('Failed Login Attempt')
     expect(badge.classes()).toContain('badge-error')
   })
 
-  it('falls back to a neutral badge for a type it has no colour for', async () => {
+  it('falls back to a neutral badge for a type it has no color for', async () => {
     const w = await table([log({ event_type: 'door_unlocked_card' })])
     const badge = w.find('tbody .badge')
     expect(badge.text()).toBe('Door Unlocked Card')
@@ -176,7 +176,7 @@ describe('the details modal', () => {
 })
 
 describe('the count and the pages', () => {
-  // FINDING, pinned. `totalLogs` is the length of the page in hand, labelled
+  // FINDING, pinned. `totalLogs` is the length of the page in hand, labeled
   // "Total Logs". The endpoint returns a bare `Vec<AuditLog>` with no count,
   // so the number the admin reads is the size of one page, presented as the
   // size of the trail.
@@ -275,7 +275,7 @@ describe('when the request fails', () => {
   })
 
   it('reads the server body on a thrown error, unlike most of its siblings', async () => {
-    // Worth asserting as behaviour to keep: this catch reads
+    // Worth asserting as behavior to keep: this catch reads
     // `err.response?.data?.error`, which is the key the envelope actually
     // fills. ToolEventHistory reads `.message` and gets nothing.
     mocks.getAuditLogs.mockRejectedValue({ response: { data: { error: 'Token expired' } } })

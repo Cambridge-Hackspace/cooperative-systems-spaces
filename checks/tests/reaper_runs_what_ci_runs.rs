@@ -18,7 +18,7 @@
 //! What this does NOT prove: that the two run them with the same arguments, or
 //! in the same environment, or that `e2e/build.sh` reaches the line. It is a
 //! parity check on *what is invoked*, which is the failure that has actually
-//! happened. Tier 6 running green in both places is the behavioural half.
+//! happened. Tier 6 running green in both places is the behavioral half.
 
 use css_checks::{read, repo_root};
 use std::collections::BTreeSet;
