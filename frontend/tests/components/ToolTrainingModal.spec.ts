@@ -1,35 +1,26 @@
 // Tier 2: ToolTrainingModal.
 //
-// The training UI that actually ships -- ToolTrainingCard renders the same
-// flow and is imported by nothing. 1,590 lines, and none of its three action
-// buttons can render, for anyone, because they all key off fields the server
-// does not send.
+// The training UI that actually ships -- ToolTrainingCard renders the same flow
+// and is imported by nothing.
 //
-// `TrainingStepWithProgress` on the server (models/training.rs:280) has
-// exactly five fields: `step`, `prerequisites`, `user_progress`,
-// `is_available`, `instructor_required`. The TypeScript interface adds two
-// more and labels them honestly:
+// FIXED, and this was the largest finding of the tier-2 sweep. None of the
+// three action buttons could render, for anyone, on any step:
 //
-//     progress?: UserTrainingProgress   // Alias for user_progress
-//     can_start?: boolean               // Alias for is_available
-//
-// Nothing populates an alias. The server serialises its own field names, so
-// `progress` and `can_start` arrive `undefined` on every response. And this
-// component reads the aliases:
-//
-//     v-if="stepWithProgress.can_start && !stepWithProgress.progress && canStartTraining"
+//     v-if="stepWithProgress.can_start && !stepWithProgress.progress && ..."
 //     v-if="stepWithProgress.progress?.status === 'in_progress' && isInstructor"
 //     v-if="stepWithProgress.progress?.status === 'failed'"
 //
-// Start, Mark Complete and Retry Training are therefore unreachable -- not
-// gated behind a role, not conditional on state, simply never rendered.
-// `getStepStatusClass` reads `progress` too, so every step is also classed as
-// available-or-locked rather than by its real status, and `can_start` being
-// undefined makes that "locked".
+// `progress` and `can_start` were fields in the TypeScript interface labelled
+// "Alias for user_progress" and "Alias for is_available" -- and nothing
+// populated an alias. The server serialises its own names
+// (models/training.rs:280), so both arrived `undefined` on every response.
+// `getStepStatusClass` read them too, so every step was classed `step-locked`
+// whatever its real state.
 //
-// What this spec does NOT prove: that the server would accept a start
-// request. It would; the endpoint exists and StartTrainingModal builds a valid
-// payload. The capability is there and the UI cannot reach it.
+// The component now reads `user_progress` and `is_available`, and the aliases
+// are deleted from the type so nothing can reach for them again. The tests
+// below build steps the way the server actually sends them, which is what they
+// did before -- the difference is that the buttons now appear.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -161,64 +152,69 @@ const asRole = (role: UserRole) => {
 const labels = (w: Wrapper) => w.findAll('button').map((b) => b.text().trim())
 
 describe('the action buttons, against what the server actually sends', () => {
-  // FINDING, pinned, and the largest on this branch. Every action button keys
-  // off `can_start` or `progress`, and both are TypeScript-only aliases that
-  // the server never populates -- it serialises `is_available` and
-  // `user_progress`. So no role, no state and no configuration produces a
-  // Start button.
-  it('never offers Start, whoever is looking', async () => {
+  // Every one of these builds its step the way the server does -- `is_available`
+  // and `user_progress`, no aliases -- which is exactly what they did while the
+  // buttons were unreachable. The difference is that they now appear.
+  it('offers Start on an available step with no progress yet', async () => {
     for (const role of [UserRole.Member, UserRole.Staff, UserRole.Admin]) {
       asRole(role)
       const w = await modal(overview({ steps: [serverStep(1, { is_available: true })] }))
-      expect(
-        labels(w),
-        `${role} sees a Start button now -- if the template was pointed at ` +
-          '`is_available`, delete this test and assert who gets it'
-      ).not.toContain('Start Training')
+      expect(labels(w), `${role} should be offered Start`).toContain('Start Training')
     }
   })
 
-  it('never offers Mark Complete for a session in progress', async () => {
+  it('withholds Start on a step whose prerequisites are not met', async () => {
+    asRole(UserRole.Staff)
+    const w = await modal(overview({ steps: [serverStep(1, { is_available: false })] }))
+    expect(labels(w)).not.toContain('Start Training')
+  })
+
+  it('withholds Start once a step has been started', async () => {
+    asRole(UserRole.Staff)
+    const w = await modal(
+      overview({
+        steps: [
+          serverStep(1, {
+            is_available: true,
+            user_progress: progress(TrainingStatus.InProgress),
+          }),
+        ],
+      })
+    )
+    expect(labels(w)).not.toContain('Start Training')
+  })
+
+  it('offers Mark Complete for a session in progress, to an instructor', async () => {
     asRole(UserRole.Staff)
     const w = await modal(
       overview({
         steps: [serverStep(1, { user_progress: progress(TrainingStatus.InProgress) })],
       })
     )
-    expect(labels(w)).not.toContain('Mark Complete')
+    expect(labels(w)).toContain('Mark Complete')
   })
 
-  it('never offers Retry after a failure', async () => {
+  it('offers Retry after a failure', async () => {
     asRole(UserRole.Staff)
     const w = await modal(
       overview({ steps: [serverStep(1, { user_progress: progress(TrainingStatus.Failed) })] })
     )
-    expect(labels(w)).not.toContain('Retry Training')
-  })
-
-  // The other half of the pair: fed the alias names the component expects,
-  // every button appears and works. That is what makes this a wiring defect
-  // rather than a missing feature -- and it is how the mutation check for the
-  // template gate is expressed.
-  it('offers all three the moment the alias fields are present', async () => {
-    asRole(UserRole.Staff)
-    const withAliases = overview({
-      steps: [
-        { ...serverStep(1), can_start: true },
-        { ...serverStep(2), progress: progress(TrainingStatus.InProgress) },
-        { ...serverStep(3), progress: progress(TrainingStatus.Failed) },
-      ],
-    })
-    const w = await modal(withAliases)
-
-    expect(labels(w)).toContain('Start Training')
-    expect(labels(w)).toContain('Mark Complete')
     expect(labels(w)).toContain('Retry Training')
   })
 
-  it('opens the start modal when the button can be reached', async () => {
+  it('offers nothing on a completed step', async () => {
     asRole(UserRole.Staff)
-    const w = await modal(overview({ steps: [{ ...serverStep(1), can_start: true }] }))
+    const w = await modal(
+      overview({ steps: [serverStep(1, { user_progress: progress(TrainingStatus.Completed) })] })
+    )
+    expect(labels(w)).not.toContain('Start Training')
+    expect(labels(w)).not.toContain('Mark Complete')
+    expect(labels(w)).not.toContain('Retry Training')
+  })
+
+  it('opens the start modal on the step the button belongs to', async () => {
+    asRole(UserRole.Staff)
+    const w = await modal(overview({ steps: [serverStep(1, { is_available: true })] }))
     await w
       .findAll('button')
       .filter((b) => b.text().trim() === 'Start Training')[0]
@@ -230,11 +226,10 @@ describe('the action buttons, against what the server actually sends', () => {
 })
 
 describe('how a step is classed', () => {
-  // FINDING, pinned, same cause. `getStepStatusClass` reads `progress`, so it
-  // always takes the no-progress branch, and then reads `can_start`, which is
-  // also absent -- so every step is classed `step-locked` whatever its real
-  // state. A completed step and an unavailable one look the same.
-  it('classes every step as locked, including a completed one', async () => {
+  // Used to class every step `step-locked` whatever its real state, because
+  // `getStepStatusClass` read the two aliases. A completed step and an
+  // unavailable one looked identical.
+  it('classes a step by its real state', async () => {
     const w = await modal(
       overview({
         steps: [
@@ -244,19 +239,33 @@ describe('how a step is classed', () => {
       })
     )
     const classes = w.findAll('.step-item, .training-step').map((n) => n.classes().join(' '))
-    expect(
-      classes[0],
-      'the status class now follows user_progress -- if the template was ' +
-        'repointed, delete this test'
-    ).toContain('step-locked')
+    expect(classes[0]).toContain('step-completed')
     expect(classes[1]).toContain('step-locked')
   })
 
-  // The step *number* class reads `user_progress`, which the server does send,
-  // so it is correct -- and the two functions therefore disagree about the
-  // same step. Asserted because it is the evidence that one of them is reading
-  // the wrong field rather than both being wrong together.
-  it('classes the step number correctly, from the field the server does send', async () => {
+  it('classes an available step it has not started as available', async () => {
+    const w = await modal(overview({ steps: [serverStep(1, { is_available: true })] }))
+    expect(w.find('.step-item, .training-step').classes().join(' ')).toContain('step-available')
+  })
+
+  it('does not put a newline in the class it returns', async () => {
+    // `getStepStatusClass` used to end in a template literal with two trailing
+    // newlines. The DOM normalises whitespace so nothing broke, but the value
+    // was still wrong, and a `class` carrying line breaks is the kind of thing
+    // that stops being harmless the moment somebody compares it as a string.
+    const w = await modal(
+      overview({ steps: [serverStep(1, { user_progress: progress(TrainingStatus.Completed) })] })
+    )
+    for (const c of w.find('.step-item, .training-step').classes()) {
+      expect(c).not.toMatch(/\s/)
+    }
+  })
+
+  // The step *number* class always read `user_progress` and was always right;
+  // the two functions used to disagree about the same step, which was the
+  // evidence that one of them had the wrong field rather than both being
+  // broken together. They agree now.
+  it('classes the step number by progress too', async () => {
     const w = await modal(
       overview({
         steps: [
@@ -269,7 +278,14 @@ describe('how a step is classed', () => {
     const numbers = w.findAll('.step-number').map((n) => n.classes().join(' '))
     expect(numbers[0]).toContain('number-completed')
     expect(numbers[1]).toContain('number-in-progress')
-    expect(numbers[2]).toContain('number-locked')
+    // Third step has no progress and defaults to available, so it is offered
+    // rather than locked. Locked needs `is_available: false`.
+    expect(numbers[2]).toContain('number-available')
+  })
+
+  it('classes an unavailable step number as locked', async () => {
+    const w = await modal(overview({ steps: [serverStep(1, { is_available: false })] }))
+    expect(w.find('.step-number').classes().join(' ')).toContain('number-locked')
   })
 })
 
@@ -440,7 +456,7 @@ describe('recording a session inline', () => {
 describe('the child modals it owns', () => {
   it('reloads and announces an update when training is started', async () => {
     asRole(UserRole.Staff)
-    const w = await modal(overview({ steps: [{ ...serverStep(1), can_start: true }] }))
+    const w = await modal(overview({ steps: [serverStep(1, { is_available: true })] }))
     await w
       .findAll('button')
       .filter((b) => b.text().trim() === 'Start Training')[0]

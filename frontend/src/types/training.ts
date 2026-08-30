@@ -119,14 +119,20 @@ export interface CertifyInstructorRequest {
 
 export interface TrainingStepWithProgress {
   step: TrainingStep
-  user_progress?: UserTrainingProgress // Backend uses 'user_progress', not 'progress'
+  user_progress?: UserTrainingProgress
   prerequisites: TrainingStep[]
   is_available?: boolean
   instructor_required?: boolean
-  // Additional fields for compatibility
-  progress?: UserTrainingProgress // Alias for user_progress
-  can_start?: boolean // Alias for is_available
-  has_users_with_progress?: boolean
+  // No aliases here, deliberately. `progress` and `can_start` used to sit in
+  // this interface labelled "Alias for user_progress" and "Alias for
+  // is_available" -- and nothing populated an alias. The server serialises its
+  // own field names (models/training.rs:280), so both arrived `undefined` on
+  // every response, and ToolTrainingModal read them: Start, Mark Complete and
+  // Retry Training keyed off fields that were never set, so none of the three
+  // rendered for anyone, on any step. An alias that nothing assigns is a
+  // second name for `undefined`.
+  //
+  // `has_users_with_progress` was the same thing without a reader.
 }
 
 export interface ToolTrainingOverview {

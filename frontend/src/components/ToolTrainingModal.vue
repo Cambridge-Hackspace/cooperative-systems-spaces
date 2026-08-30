@@ -359,31 +359,35 @@
                     </div>
 
                     <!-- Progress Details -->
-                    <div v-if="stepWithProgress.progress" class="progress-details">
-                      <div v-if="stepWithProgress.progress.started_at" class="progress-item">
+                    <div v-if="stepWithProgress.user_progress" class="progress-details">
+                      <div v-if="stepWithProgress.user_progress.started_at" class="progress-item">
                         <strong>Started:</strong>
-                        {{ formatDate(stepWithProgress.progress.started_at) }}
+                        {{ formatDate(stepWithProgress.user_progress.started_at) }}
                       </div>
-                      <div v-if="stepWithProgress.progress.completed_at" class="progress-item">
+                      <div v-if="stepWithProgress.user_progress.completed_at" class="progress-item">
                         <strong>Completed:</strong>
-                        {{ formatDate(stepWithProgress.progress.completed_at) }}
+                        {{ formatDate(stepWithProgress.user_progress.completed_at) }}
                       </div>
-                      <div v-if="stepWithProgress.progress.expires_at" class="progress-item">
+                      <div v-if="stepWithProgress.user_progress.expires_at" class="progress-item">
                         <strong>Expires:</strong>
-                        {{ formatDate(stepWithProgress.progress.expires_at) }}
-                      </div>
-                      <div v-if="stepWithProgress.progress.instructor_id" class="progress-item">
-                        <strong>Instructor ID:</strong>
-                        {{ stepWithProgress.progress.instructor_id }}
+                        {{ formatDate(stepWithProgress.user_progress.expires_at) }}
                       </div>
                       <div
-                        v-if="stepWithProgress.progress.assessment_score !== null"
+                        v-if="stepWithProgress.user_progress.instructor_id"
                         class="progress-item"
                       >
-                        <strong>Score:</strong> {{ stepWithProgress.progress.assessment_score }} %
+                        <strong>Instructor ID:</strong>
+                        {{ stepWithProgress.user_progress.instructor_id }}
                       </div>
-                      <div v-if="stepWithProgress.progress.notes" class="progress-item notes">
-                        <strong>Notes:</strong> {{ stepWithProgress.progress.notes }}
+                      <div
+                        v-if="stepWithProgress.user_progress.assessment_score !== null"
+                        class="progress-item"
+                      >
+                        <strong>Score:</strong>
+                        {{ stepWithProgress.user_progress.assessment_score }} %
+                      </div>
+                      <div v-if="stepWithProgress.user_progress.notes" class="progress-item notes">
+                        <strong>Notes:</strong> {{ stepWithProgress.user_progress.notes }}
                       </div>
                     </div>
                   </div>
@@ -402,7 +406,9 @@
                     <!-- User Training Actions -->
                     <button
                       v-if="
-                        stepWithProgress.can_start && !stepWithProgress.progress && canStartTraining
+                        stepWithProgress.is_available &&
+                        !stepWithProgress.user_progress &&
+                        canStartTraining
                       "
                       class="btn btn-sm btn-primary"
                       @click="startTraining(stepWithProgress.step)"
@@ -411,7 +417,9 @@
                     </button>
 
                     <button
-                      v-if="stepWithProgress.progress?.status === 'in_progress' && isInstructor"
+                      v-if="
+                        stepWithProgress.user_progress?.status === 'in_progress' && isInstructor
+                      "
                       class="btn btn-sm btn-success"
                       @click="completeTraining(stepWithProgress.step)"
                     >
@@ -419,14 +427,14 @@
                     </button>
 
                     <button
-                      v-if="stepWithProgress.progress?.status === 'failed'"
+                      v-if="stepWithProgress.user_progress?.status === 'failed'"
                       class="btn btn-sm btn-secondary"
                       @click="retryTraining(stepWithProgress.step)"
                     >
                       Retry Training
                     </button>
 
-                    <!--                    <div v-if="!stepWithProgress.can_start && !stepWithProgress.progress" class="step-locked">-->
+                    <!--                    <div v-if="!stepWithProgress.is_available && !stepWithProgress.user_progress" class="step-locked">-->
                     <!--                      <span class="lock-icon">🔒</span>-->
                     <!--                      <span class="lock-text">Complete prerequisites first</span>-->
                     <!--                    </div>-->
@@ -636,19 +644,17 @@ const loadTrainingOverview = async () => {
 }
 
 const getStepStatusClass = (stepWithProgress: TrainingStepWithProgress): string => {
-  if (!stepWithProgress.progress) {
-    return stepWithProgress.can_start ? 'step-available' : 'step-locked'
+  if (!stepWithProgress.user_progress) {
+    return stepWithProgress.is_available ? 'step-available' : 'step-locked'
   }
 
-  const status = stepWithProgress.progress.status
-  return `step-${status.replace('_', '-')}
-
-`
+  const status = stepWithProgress.user_progress.status
+  return `step-${status.replace('_', '-')}`
 }
 
 const getStepNumberClass = (stepWithProgress: TrainingStepWithProgress): string => {
   if (!stepWithProgress.user_progress) {
-    return stepWithProgress.can_start ? 'number-available' : 'number-locked'
+    return stepWithProgress.is_available ? 'number-available' : 'number-locked'
   }
 
   const status = stepWithProgress.user_progress.status
