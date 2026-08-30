@@ -386,7 +386,21 @@ impl Default for RegistrationChallengeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// JWT secret key for signing tokens
+    /// JWT secret key for signing tokens.
+    ///
+    /// Optional in the file. `config.sample.toml` deliberately ships without
+    /// it -- writing a real secret into a sample is how a public one ends up
+    /// signing production tokens -- so this has to deserialise from its
+    /// absence or the shipped sample does not parse at all.
+    ///
+    /// Absence means the empty string here, not a generated secret, and that
+    /// is deliberate: `load_config` fills it in *and writes it back*.
+    /// Generating in the serde default would mint a fresh secret on every
+    /// boot without persisting any of them, so every restart would invalidate
+    /// every session -- a symptom that looks like broken token expiry and
+    /// would not lead anyone here. `validate_config` refuses an empty secret,
+    /// so the unfilled value can never reach `EncodingKey`.
+    #[serde(default)]
     pub jwt_secret: String,
     /// JWT token expiration time in hours
     pub jwt_expiration_hours: u32,
@@ -1313,6 +1327,20 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         ));
     }
 
+    // An empty secret is worse than the placeholder: HMAC accepts a zero-length
+    // key, so the server would sign and verify tokens with a key an attacker
+    // does not even have to look up. `load_config` fills an absent secret in
+    // before it gets here, so reaching this means either a config that set it
+    // to "" explicitly, or a live reload of one -- and the reload path is why
+    // this lives in `validate_config` rather than next to the generation.
+    if config.auth.jwt_secret.is_empty() {
+        return Err(anyhow::anyhow!(
+            "auth.jwt_secret is empty. Remove the key entirely to have a \
+             secret generated and written back, or set a real random value; \
+             an empty secret signs tokens with a zero-length HMAC key."
+        ));
+    }
+
     // Validate database connection string
     if config.database.get_url().is_empty() {
         return Err(anyhow::anyhow!("Database URL cannot be empty"));
@@ -1337,7 +1365,7 @@ fn validate_config(config: &AppConfig) -> Result<()> {
 pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
     let path = config_path.as_ref();
 
-    let config = if path.exists() {
+    let mut config = if path.exists() {
         println!("Loading configuration from: {}", path.display());
         AppConfig::from_file(path)?
     } else {
@@ -1355,6 +1383,21 @@ pub fn load_config<P: AsRef<Path>>(config_path: P) -> Result<AppConfig> {
         println!("Default configuration file created. Please review and modify as needed.");
         default_config
     };
+
+    // An existing file that omits auth.jwt_secret gets one generated here and
+    // written straight back. Persisting is the whole point: an in-memory-only
+    // secret would be different on every boot, so every restart would silently
+    // sign out every user, and the config file would still look fine.
+    //
+    // The file-did-not-exist branch above already persisted, via `to_file` on a
+    // fresh `AppConfig::default()`; this covers the branch that read a file.
+    if config.auth.jwt_secret.is_empty() {
+        println!("auth.jwt_secret is not set; generating one and writing it to the config file.");
+        config.auth.jwt_secret = generate_default_jwt_secret();
+        config
+            .to_file(path)
+            .with_context(|| "Failed to persist the generated auth.jwt_secret")?;
+    }
 
     validate_config(&config)?;
 
@@ -1511,6 +1554,95 @@ mod tests {
             config.pages.wiki_repo.is_none() && config.pages.site_repo.is_none(),
             "the sample names a wiki or site repository; a fresh deployment would \
              clone it on first boot without anybody asking for it"
+        );
+    }
+
+    /// The sample deliberately ships no `auth.jwt_secret`, because a real one
+    /// written into a tracked sample is a public secret the moment anybody
+    /// copies the file. That only works if absence is a valid parse.
+    ///
+    /// Pinned separately from the parse test above so the reason survives: if
+    /// somebody "fixes" a future parse failure by putting a value back into the
+    /// sample, this fails and says why.
+    #[test]
+    fn the_sample_ships_no_jwt_secret() {
+        let sample = concat!(env!("CARGO_MANIFEST_DIR"), "/../config.sample.toml");
+        let text = std::fs::read_to_string(sample).expect("config.sample.toml");
+
+        let raw: toml::Value = toml::from_str(&text).expect("sample is valid TOML");
+        let present = raw.get("auth").and_then(|a| a.get("jwt_secret")).is_some();
+
+        assert!(
+            !present,
+            "config.sample.toml sets auth.jwt_secret. Whatever value is there \
+             is now public, and every deployment that copies this file signs \
+             its tokens with it. Remove the key: load_config generates one and \
+             writes it back on first boot."
+        );
+
+        // And the absence really does deserialise, rather than only being
+        // tolerated by a `from_file` repair that would edit a tracked file.
+        let config: AppConfig = toml::from_str(&text).expect("sample parses");
+        assert!(config.auth.jwt_secret.is_empty());
+    }
+
+    /// An absent secret must come back *generated and persisted*, not
+    /// generated per boot. The persistence half is the one that fails
+    /// silently: sessions would die on every restart and the config file
+    /// would still look correct.
+    #[test]
+    fn an_absent_jwt_secret_is_generated_and_written_back() {
+        // Absence, not `jwt_secret = ""`. The sample's shape is a missing key,
+        // and a test that wrote an empty string would pass even if serde still
+        // required the field.
+        let temp_file = NamedTempFile::new().unwrap();
+        let mut seed = AppConfig::default();
+        seed.auth.jwt_secret = "placeholder-to-be-stripped".to_string();
+        seed.to_file(temp_file.path()).unwrap();
+
+        let text = std::fs::read_to_string(temp_file.path()).unwrap();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("jwt_secret"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !stripped.contains("jwt_secret"),
+            "the key was not actually removed, so this test proves nothing"
+        );
+        std::fs::write(temp_file.path(), &stripped).unwrap();
+
+        let first = load_config(temp_file.path()).expect("load generates a secret");
+        assert!(
+            !first.auth.jwt_secret.is_empty(),
+            "an absent secret was left empty; validate_config should have refused \
+             it, and if it did not the server signs with a zero-length HMAC key"
+        );
+        assert_ne!(first.auth.jwt_secret, LEGACY_DEFAULT_JWT_SECRET);
+
+        // The persistence claim, and the whole reason this is not a serde
+        // default: a second load must find the same secret, not mint another.
+        let second = load_config(temp_file.path()).expect("second load");
+        assert_eq!(
+            first.auth.jwt_secret, second.auth.jwt_secret,
+            "the generated secret was not written back, so every restart mints a \
+             new one and signs out every user"
+        );
+    }
+
+    /// An explicitly empty secret is refused rather than used. This is the
+    /// path a live `admin_config_reload` takes, which never goes through
+    /// `load_config` and so is never filled in for.
+    #[test]
+    fn an_empty_jwt_secret_is_refused() {
+        let mut config = AppConfig::default();
+        config.database.url = Some("postgres://localhost/x".to_string());
+        config.auth.jwt_secret = String::new();
+
+        let err = validate_config(&config).expect_err("an empty secret must be refused");
+        assert!(
+            err.to_string().contains("jwt_secret"),
+            "the refusal must name the field: {err}"
         );
     }
 
