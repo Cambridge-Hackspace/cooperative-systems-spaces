@@ -1,5 +1,17 @@
 # ==================== FRONTEND BUILD STAGE ====================
-FROM node:20-alpine AS frontend-builder
+# node:24, and glibc rather than alpine. Two reasons, both of which broke this
+# build:
+#
+#   1. Node 20 is below the floor the dependency tree states. jsdom, undici and
+#      the @asamuzakjp packages all declare `node: ^22.x || >=24`, and npm
+#      reports every one of them as EBADENGINE on 20. CI and e2e/build.sh both
+#      use Node 24; this file was the only place that did not.
+#   2. package-lock.json carries glibc binaries only -- there is no
+#      @esbuild/*-musl entry anywhere in it -- so an alpine (musl) builder has
+#      to resolve a platform package the lockfile does not pin.
+#
+# bookworm-slim also matches what the runtime stage below already is: a Debian.
+FROM node:24-bookworm-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
@@ -16,7 +28,10 @@ COPY frontend/ ./
 RUN npm run build
 
 # ==================== BACKEND BUILD STAGE ====================
-FROM rust:1.90.0 AS backend-builder
+# Matching the toolchain everything else builds with. CI uses stable and
+# .reaper.toml pins the 1.97 image; 1.90 here was drift that nothing checked,
+# and it would surface only on a push to dev.
+FROM rust:1.97 AS backend-builder
 
 WORKDIR /app
 
