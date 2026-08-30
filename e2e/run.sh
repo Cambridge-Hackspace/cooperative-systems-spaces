@@ -1327,8 +1327,10 @@ done
   if [[ ${PG_ENCODING} != "UTF8" ]]; then
     echo "- The invite-redemption race was NOT exercised: a device invite code is"
     echo "  eight emoji and this cluster (${PG_ENCODING}) cannot store one. The"
-    echo "  finding is asserted instead. Run with CSS_E2E_DB_ENCODING=UTF8 to"
-    echo "  exercise the race itself."
+    echo "  finding is asserted instead. To exercise the race itself:"
+    echo "  reaper test --profile utf8, or CSS_E2E_DB_ENCODING=UTF8 when running"
+    echo "  e2e/run.sh directly. Setting that variable on the workstation does"
+    echo "  NOT reach a reaper run -- run.cmd expands in the guest's shell."
   fi
   if [[ ${PROVISION} == "external" ]]; then
     echo "- --provision=external: postgres and the container images are the"

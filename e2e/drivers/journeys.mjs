@@ -516,7 +516,9 @@ main(async () => {
     record('journeys/device-actions-not-run', 'skip',
       `a device invite code is eight emoji and this cluster (${ENCODING}) can ` +
       'store none of them, so invites-are-single-use judges an empty world here. ' +
-      'Run with CSS_E2E_DB_ENCODING=UTF8 to exercise it.')
+      'Exercise it with `reaper test --profile utf8`, or CSS_E2E_DB_ENCODING=UTF8 ' +
+      'when invoking e2e/run.sh directly -- setting that variable on the ' +
+      'workstation does not reach a reaper run.')
   }
 
   const pool = [

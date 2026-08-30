@@ -80,8 +80,23 @@ exec = "host"
 # failed. (This is not hypothetical: the same trap produced a false "the server
 # compiles" reading while this tenant was being planned.)
 #
-# ${CSS_E2E_STAGES:-default} expands in that shell. A value under [run.env]
-# would not -- the framework never interpolates one, by design.
+# ${CSS_E2E_STAGES:-default} expands in that shell -- the guest's, not the
+# one you typed in. A value under [run.env] is exported rather than
+# interpolated; the framework never interpolates one, by design.
+#
+# The consequence, learned the tedious way: **a variable set on the host
+# workstation does not reach this command.** `CSS_E2E_STAGES=all reaper test`
+# expands to `--only default` here, because the guest shell has no such
+# variable. That went unnoticed through eight runs for one reason only --
+# STAGES_ALL and STAGES_DEFAULT are the same list in run.sh, so `all` and
+# `default` are the same request and the suite really was comprehensive. It
+# would not have been forgiving about any other knob.
+#
+# So the only supported way to change a knob for a reaper run is a profile:
+# `reaper test --profile utf8`. Values under [profiles.*.env] are exported into
+# the run's environment, which is what run.sh and stack.sh read. Interpolating
+# here would not help -- the same absence that swallows the host's
+# CSS_E2E_STAGES would swallow anything else typed on the host.
 cmd = "e2e/reaper-run.sh --provision=podman --only ${CSS_E2E_STAGES:-default}"
 
 # Pre-pulled into tank/images before the run, so no run pays a registry
@@ -183,3 +198,28 @@ warm_cache = true
 # driver lands; checks/tests/configured_env_is_read.rs exempts them by name and
 # fails if either ever becomes read without the exemption being removed.
 env = { CSS_E2E_STAGES = "up,fuzz", CSS_FUZZ_ITERATIONS = "20000", JOURNEY_ITERATIONS = "20000", JOURNEY_SEEDS = "hunt" }
+
+[profiles.utf8]
+# The whole suite on a UTF-8 cluster.
+#
+# The default cluster is LATIN1 on purpose, and it earns that: it is what
+# proves astral text becomes a 4xx rather than a 500, and that ORDER BY is byte
+# order. But a device invite code is eight emoji, so LATIN1 cannot store one --
+# and four cases switch themselves off as a result:
+#
+#   race/invite/not-run-on-this-cluster
+#   journeys/device-actions-not-run
+#   fuzz/known-finding-not-reached: POST /api/admin/devices/invite 500
+#   (and the invite half of invites-are-single-use)
+#
+# Each says so rather than passing quietly, which is right. But `nightly` sets
+# SQL_ASCII, which is harsher still, so *no* profile in this file exercised the
+# invite paths -- the device-invite race, which is a real finding (register_device
+# reads, checks used_at, and marks it used in a separate statement with no
+# transaction), has never been run by anything.
+#
+# A profile, and not a documented environment variable, because a variable set
+# on the workstation does not reach the run at all -- see the note on run.cmd.
+ttl        = "4h"
+warm_cache = true
+env = { CSS_E2E_DB_ENCODING = "UTF8" }
