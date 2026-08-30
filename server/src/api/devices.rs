@@ -197,7 +197,8 @@ pub async fn register_device(
         .first(conn)
         .map_err(|_| ApiError::BadRequest("Invalid device code".to_string()))?;
 
-    // Check if already used
+    // An early-out for the ordinary case, and only that. It is NOT what makes
+    // the invite single-use -- see the claim below.
     if invite.used_at.is_some() {
         return Err(ApiError::BadRequest(
             "Device code has already been used".to_string(),
@@ -223,6 +224,36 @@ pub async fn register_device(
         "other" => crate::models::SpaceDevicePlatform::Other,
         _ => return Err(ApiError::BadRequest("Invalid platform".to_string())),
     };
+
+    // Claim the invite before creating anything, with the condition in the
+    // statement rather than in a preceding `if`.
+    //
+    // The check above reads `used_at`, and the update at the end used to set it
+    // -- two statements, no transaction, nothing between them stopping a second
+    // request from reading the same NULL. The concurrency tier redeemed one
+    // invite eight ways and got two devices, each with its own standing auth
+    // token. That is a permanent credential minted from a code its issuer
+    // believed was spent.
+    //
+    // `WHERE used_at IS NULL` plus the affected-row count is what fixes it, and
+    // it is sufficient without a transaction: the losing UPDATE blocks on the
+    // row lock, then re-evaluates its predicate against the committed row under
+    // READ COMMITTED, sees a non-NULL `used_at`, and reports zero rows.
+    //
+    // Claiming first means a redemption that fails later burns the invite. That
+    // is the right way round: an invite that has to be reissued is an
+    // inconvenience, and a second device holding a valid token is not.
+    let claimed = diesel::update(space_device_auth_requests::table)
+        .filter(space_device_auth_requests::id.eq(invite.id))
+        .filter(space_device_auth_requests::used_at.is_null())
+        .set(space_device_auth_requests::used_at.eq(Some(Utc::now())))
+        .execute(conn)?;
+
+    if claimed == 0 {
+        return Err(ApiError::BadRequest(
+            "Device code has already been used".to_string(),
+        ));
+    }
 
     // Create the device
     let new_device = NewSpaceDevice {
@@ -251,12 +282,6 @@ pub async fn register_device(
 
     diesel::insert_into(space_device_auth::table)
         .values(&new_auth)
-        .execute(conn)?;
-
-    // Mark invite as used
-    diesel::update(space_device_auth_requests::table)
-        .filter(space_device_auth_requests::id.eq(invite.id))
-        .set(space_device_auth_requests::used_at.eq(Some(Utc::now())))
         .execute(conn)?;
 
     // Create audit logs

@@ -25,6 +25,12 @@ import {
   assertEq, assertNe, ok, record, main, RUN_TAG, ADMIN_EMAIL,
 } from './lib.mjs'
 
+// The cluster the stack brought up, forwarded by e2e/stack.sh on both the
+// host and container paths. The fuzz, concurrency and journey drivers all read
+// it; this one did not, which is why its astral-text assertion was written as
+// though LATIN1 were the only possibility.
+const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
+
 /** The six routes behind a device credential, per server/tests/common/mod.rs. */
 const DEVICE_ROUTES = [
   ['GET', '/api/devices/ws'],
@@ -182,14 +188,34 @@ main(async () => {
     `${astral.status}`)
 
   const emoji = await register(`e2e_emoji_${RUN_TAG}_\u{1F6A7}`, `emoji_${RUN_TAG}@e2e.invalid`)
-  assertEq(
-    'contract/text-the-database-cannot-store-is-a-4xx',
-    400,
-    emoji.status,
-    'text a LATIN1 cluster cannot represent must be refused as the caller\'s ' +
-      'input, not as the server breaking. This was pinned at 500 as ' +
-      'findings/astral-text-is-a-500-not-a-4xx and is now fixed.'
-  )
+
+  // What the right answer is depends on the cluster, so the assertion has to
+  // as well. The premise of the original -- "text the database cannot store"
+  // -- is simply false on UTF8, where an emoji is ordinary text; asserting 400
+  // there demanded the server reject input it can handle perfectly well. It
+  // failed on the first UTF8 run, correctly.
+  //
+  // Both branches are asserted rather than one being skipped. A skip on UTF8
+  // would leave the more interesting half untested: that the 22P05 handling
+  // added for LATIN1 did not start refusing legitimate text everywhere else.
+  if (ENCODING === 'UTF8') {
+    record(
+      'contract/storable-text-is-accepted',
+      emoji.status < 300 ? 'ok' : 'fail',
+      `${emoji.status} -- an emoji is ordinary text on a UTF8 cluster, so ` +
+        'registration must succeed. A 4xx here would mean the fix for 22P05 ' +
+        'on LATIN1 became a blanket refusal of astral text everywhere.'
+    )
+  } else {
+    assertEq(
+      'contract/text-the-database-cannot-store-is-a-4xx',
+      400,
+      emoji.status,
+      `text a ${ENCODING} cluster cannot represent must be refused as the ` +
+        "caller's input, not as the server breaking. This was pinned at 500 " +
+        'as findings/astral-text-is-a-500-not-a-4xx and is now fixed.'
+    )
+  }
 
   // The same defect on a cluster that has nothing to do with LATIN1, and the
   // reason the fix was worth the fragility it costs.
