@@ -223,6 +223,18 @@ log "e2e/lint.sh"
 # `cargo fmt --check` is a CI job on its own, and it is the cheapest thing in
 # this file. Running it before the build means a formatting failure costs a
 # second rather than a full compile.
+#
+# The component is added rather than assumed: the stock `rust:1.97` image does
+# not carry rustfmt, and the failure without this is
+# "'cargo-fmt' is not installed for the toolchain", which reads like a broken
+# image rather than a missing one-line install. CI gets it from
+# `dtolnay/rust-toolchain`'s `components:` key; this is the same thing for the
+# container.
+if ! cargo fmt --version >/dev/null 2>&1; then
+  log "installing rustfmt"
+  rustup component add rustfmt
+fi
+
 log "cargo fmt --check"
 cargo fmt --all -- --check
 
