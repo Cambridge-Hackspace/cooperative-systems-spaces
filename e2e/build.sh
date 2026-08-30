@@ -28,18 +28,13 @@ log() { printf '\n=== %s ===\n' "$*"; }
 # Paho C library with cmake; the edge crate's transitive GUI dependencies want
 # alsa and udev headers. Guarded, so after the first run this is one lookup.
 #
-# One of these is for e2e/lint.sh rather than for the build: the shell linter.
-# It is installed here because a gate that only exists in CI is a gate you
-# discover by pushing, then fixing, then pushing again.
-#
-# The shell *formatter* is deliberately not from apt -- see the pinned bootstrap
-# below.
-if ! command -v cmake >/dev/null 2>&1 || [ ! -e /usr/include/postgresql/libpq-fe.h ] \
-  || ! command -v shellcheck >/dev/null 2>&1; then
+# Neither shell tool comes from apt -- see the pinned bootstraps below. What is
+# here is what the *build* needs.
+if ! command -v cmake >/dev/null 2>&1 || [ ! -e /usr/include/postgresql/libpq-fe.h ]; then
   log "installing system dependencies"
   apt-get -qq update
   apt-get -qq install -y --no-install-recommends \
-    libpq-dev cmake build-essential libasound2-dev libudev-dev shellcheck
+    libpq-dev cmake build-essential libasound2-dev libudev-dev
 fi
 
 # ---------------------------------------------------------------------------
@@ -55,6 +50,32 @@ fi
 #
 # A formatter is only "total and non-negotiable" if every machine runs the same
 # one. This is that.
+# The linter is pinned for the same reason as the formatter below it, and the
+# same class of bug is already recorded in e2e/lint.sh: a rule that one version
+# reports and another does not means the tree is clean on one machine and dirty
+# on the next, and whichever you happened to run last is the one you believe.
+# Debian bookworm packages 0.9.0, Ubuntu's runners carry something else again,
+# and the FreeBSD workstation has 0.11.0 -- three answers to one question.
+SHELLCHECK_VERSION="v0.11.0"
+SHELLCHECK_SHA256="8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+
+SHELLCHECK_ROOT="${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}/shellcheck-${SHELLCHECK_VERSION}"
+if [ ! -x "${SHELLCHECK_ROOT}/shellcheck" ]; then
+  log "bootstrapping shellcheck ${SHELLCHECK_VERSION}"
+  mkdir -p "${SHELLCHECK_ROOT}"
+  curl -fsSL -o "${SHELLCHECK_ROOT}/shellcheck.tar.xz" \
+    "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+  if ! printf '%s  %s\n' "${SHELLCHECK_SHA256}" "shellcheck.tar.xz" \
+    | (cd "${SHELLCHECK_ROOT}" && sha256sum -c -); then
+    rm -f "${SHELLCHECK_ROOT}/shellcheck.tar.xz"
+    echo "shellcheck checksum mismatch; refusing to unpack it" >&2
+    exit 1
+  fi
+  tar -xJf "${SHELLCHECK_ROOT}/shellcheck.tar.xz" -C "${SHELLCHECK_ROOT}" --strip-components=1
+  rm -f "${SHELLCHECK_ROOT}/shellcheck.tar.xz"
+fi
+export PATH="${SHELLCHECK_ROOT}:${PATH}"
+
 SHFMT_VERSION="v3.13.1"
 SHFMT_SHA256="fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1"
 

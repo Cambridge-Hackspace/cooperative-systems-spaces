@@ -159,7 +159,22 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+      # Pinned to the same version `e2e/build.sh` pins. Ubuntu's package moves
+      # on its own schedule and the container's was 0.9.0, so "the tree is
+      # clean" meant different things on different machines.
+      # checks/tests/reaper_runs_what_ci_runs.rs asserts the two stay equal.
+      - name: Install shellcheck (pinned)
+        run: |
+          set -Eeuo pipefail
+          ver=v0.11.0
+          sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          curl -fsSL -o sc.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.x86_64.tar.xz"
+          echo "${sha}  sc.tar.xz" | sha256sum -c -
+          sudo tar -xJf sc.tar.xz --strip-components=1 -C /usr/local/bin \
+            "shellcheck-${ver}/shellcheck"
+          rm -f sc.tar.xz
+          shellcheck --version
       # Pinned, and to the same version `e2e/build.sh` pins. Unpinned this action
       # installs whatever is latest, and a formatter that differs between two
       # machines is a formatter that rejects a tree the other accepts. Debian

@@ -125,6 +125,36 @@ fn the_shell_formatter_is_pinned_to_one_version_everywhere() {
     );
 }
 
+#[test]
+fn the_shell_linter_is_pinned_to_one_version_everywhere() {
+    // Same reasoning as the formatter above, and the same failure: a rule one
+    // version reports and another does not means the tree is clean on one
+    // machine and dirty on the next. Debian bookworm packages 0.9.0, the
+    // GitHub runners carry another, and the FreeBSD workstation has 0.11.0.
+    let build = read("e2e/build.sh");
+    let ci = workflow_text();
+
+    let pinned = build
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("SHELLCHECK_VERSION=\"v"))
+        .and_then(|v| v.strip_suffix('"'))
+        .map(str::to_owned)
+        .expect("e2e/build.sh must pin SHELLCHECK_VERSION as \"vX.Y.Z\"");
+
+    assert!(
+        ci.contains(&format!("ver=v{pinned}")),
+        "e2e/build.sh pins shellcheck {pinned} and no workflow pins the same \
+         version. Left to the distribution the two drift, and the tree becomes \
+         un-lintable to one of them."
+    );
+
+    assert!(
+        !ci.contains("install -y --no-install-recommends shellcheck"),
+        "shellcheck is being installed from the distribution again in CI. That \
+         is the thing this pin exists to stop."
+    );
+}
+
 /// Non-npm gates CI runs, and the substring that proves `e2e/build.sh` runs it.
 ///
 /// Written out rather than parsed, because a `cargo` invocation has too many
