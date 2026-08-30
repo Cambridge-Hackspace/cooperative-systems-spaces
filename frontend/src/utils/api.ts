@@ -744,10 +744,21 @@ export const trainingApi = {
   addTrainingPrerequisite(
     data: CreateTrainingPrerequisiteRequest
   ): Promise<ApiResponse<TrainingPrerequisite>> {
-    return apiClient.post<TrainingPrerequisite>('/training/prerequisites', data).catch((error) => {
-      console.error('Error adding training prerequisite:', error)
-      return envelopeError(error, 'Failed to add training prerequisite')
-    })
+    // The route and the body both come from the server, not from a guess.
+    // `api/training.rs:130` declares
+    // `POST /training/steps/{step_id}/prerequisites` taking a bare `Json<Uuid>`
+    // -- this used to post an object to `/training/prerequisites`, which is not
+    // a route at all, so adding a prerequisite could not work from anywhere in
+    // the UI.
+    return apiClient
+      .post<TrainingPrerequisite>(
+        `/training/steps/${data.training_step_id}/prerequisites`,
+        data.prerequisite_step_id
+      )
+      .catch((error) => {
+        console.error('Error adding training prerequisite:', error)
+        return envelopeError(error, 'Failed to add training prerequisite')
+      })
   },
 
   // Remove training prerequisite (staff only)

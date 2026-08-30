@@ -281,22 +281,30 @@ describe('what happens after the request', () => {
   // a refusal follows exactly the same path as a success: `updated` is
   // emitted, the parent refreshes, and the edit that did not happen looks like
   // one that did.
-  it('announces an update that was refused, exactly as if it had worked', async () => {
+  it("reports a refusal in the server's own words, and announces nothing", async () => {
     mocks.updateTool.mockResolvedValue({ success: false, error: 'Barcode already in use' })
     const w = await modal()
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(
-      w.emitted('updated'),
-      'the component now reads `response.success` -- if that was fixed, this ' +
-        'test should assert the error it reports instead'
-    ).toHaveLength(1)
-    expect(w.find('.error').exists()).toBe(false)
-    expect(w.text()).not.toContain('Barcode already in use')
+    expect(w.find('.error').text()).toBe('Barcode already in use')
+    expect(w.emitted('updated')).toBeUndefined()
   })
 
-  it('has an error branch that nothing can reach, reading a key nothing fills', async () => {
+  it('falls back to a generic message when a refusal carries none', async () => {
+    mocks.updateTool.mockResolvedValue({ success: false })
+    const w = await modal()
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(w.find('.error').text()).toBe('Failed to update tool')
+    expect(w.emitted('updated')).toBeUndefined()
+  })
+
+  it("reads the server's body if the call ever does reject", async () => {
+    // Defence rather than a production path -- `updateTool` catches its own
+    // rejection -- but it reads `error` now, the key the envelope fills, where
+    // it used to read `message` and get the generic fallback.
     mocks.updateTool.mockRejectedValue({
       response: { data: { error: 'Barcode already in use' } },
     })
@@ -304,7 +312,7 @@ describe('what happens after the request', () => {
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(w.find('.error').text()).toBe('Failed to update tool')
+    expect(w.find('.error').text()).toBe('Barcode already in use')
     expect(w.emitted('updated')).toBeUndefined()
   })
 

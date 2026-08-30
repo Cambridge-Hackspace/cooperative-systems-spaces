@@ -16,10 +16,10 @@
 //       error.value = response.error || 'Failed to load users'
 //     }
 //
-// So a successful assignment emits nothing, closes nothing and says nothing --
-// it logs a count of users to the console -- and every failure of the *submit*
-// is reported to the user as a failure to load users. The parent is never told
-// the assignment happened, so nothing refreshes.
+// FIXED. Every branch used to talk about loading users: the success path
+// logged a user count and emitted nothing, so the parent was never told, and
+// every failure of the *submit* reported "Failed to load users". It now emits
+// `assigned` and describes the operation it actually failed at.
 //
 // What this spec does NOT prove: that a real browser lets an empty submit
 // through. The select carries `required`, and native constraint validation
@@ -241,21 +241,15 @@ describe('what happens after a successful assignment', () => {
   // so the parent never refreshes its trainer list; the modal does not close;
   // no confirmation appears. From the operator's side, assigning a trainer
   // looks exactly like nothing happening.
-  it('emits nothing, closes nothing and says nothing', async () => {
+  it('announces the assignment so the parent can refresh', async () => {
     const w = await modal()
     await w.find('#user').setValue('a')
     await w.find('form').trigger('submit')
     await flushPromises()
 
     expect(mocks.assignToolTrainer).toHaveBeenCalledTimes(1)
-    expect(
-      w.emitted('assigned'),
-      'the modal now announces a successful assignment -- if that was fixed, ' +
-        'this test should assert the emit instead of its absence'
-    ).toBeUndefined()
-    expect(w.emitted('close')).toBeUndefined()
+    expect(w.emitted('assigned')).toHaveLength(1)
     expect(w.find('.error').exists()).toBe(false)
-    expect(w.text()).not.toContain('Assigned')
   })
 
   it('re-enables the submit button either way', async () => {
@@ -285,18 +279,15 @@ describe('what happens after a refused assignment', () => {
   // FINDING, pinned. The failure branch is the other half of the same
   // copy-paste. A refusal with no message reads "Failed to load users" -- for
   // an operation that loaded nothing.
-  it('blames the user loader for a failure to assign', async () => {
+  it('describes the operation it actually failed at', async () => {
     mocks.assignToolTrainer.mockResolvedValue({ success: false })
     const w = await modal()
     await w.find('#user').setValue('a')
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(
-      w.find('.error').text(),
-      'the fallback message now describes the assignment -- if that was fixed, ' +
-        'delete this test'
-    ).toBe('Failed to load users')
+    expect(w.find('.error').text()).toBe('Failed to assign trainer')
+    expect(w.emitted('assigned')).toBeUndefined()
   })
 
   it("does show the server's own reason when there is one", async () => {
@@ -328,14 +319,16 @@ describe('what happens after a refused assignment', () => {
   // `{ success: false, error }`. Asserted so the dead branch is documented as
   // dead rather than mistaken for coverage -- and note it, too, says "Failed to
   // load users".
-  it('has a catch that also blames the user loader, which nothing can reach', async () => {
-    mocks.assignToolTrainer.mockRejectedValue(new Error(''))
+  it("reads the server's body if the call ever does reject", async () => {
+    mocks.assignToolTrainer.mockRejectedValue({
+      response: { data: { error: 'Already a trainer for this tool' } },
+    })
     const w = await modal()
     await w.find('#user').setValue('a')
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(w.find('.error').text()).toBe('Failed to load users')
+    expect(w.find('.error').text()).toBe('Already a trainer for this tool')
   })
 })
 

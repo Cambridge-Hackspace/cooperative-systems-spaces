@@ -333,6 +333,9 @@ const canProceedToNextStep = computed(() => {
     case 1:
       return true // Always can proceed from overview
     case 2:
+      // Nothing to fill in if the tool needs no training; insisting on a step
+      // there was the same confusion as the disabled Create button.
+      if (!trainingConfig.requiresTraining) return true
       return trainingConfig.steps.every((step) => step.step_name.trim() && step.description.trim())
     case 3:
       return true // Prerequisites are optional
@@ -342,8 +345,13 @@ const canProceedToNextStep = computed(() => {
 })
 
 const canCreateSetup = computed(() => {
+  // "This tool needs no training" is an answer, not an absence of one. This
+  // used to open with `trainingConfig.requiresTraining &&`, which disabled the
+  // only button that would submit that answer -- so the `else` branch of
+  // `createTrainingSetup`, the one that clears the flag, could never run.
+  if (!trainingConfig.requiresTraining) return true
+
   return (
-    trainingConfig.requiresTraining &&
     trainingConfig.steps.length > 0 &&
     trainingConfig.steps.every((step) => step.step_name.trim() && step.description.trim())
   )
@@ -421,9 +429,16 @@ const createTrainingSetup = async () => {
 
     // First, update the tool to require training
     if (trainingConfig.requiresTraining) {
-      await toolsApi.updateTool(props.tool.id, {
+      // Checked, not merely awaited. `updateTool` resolves on failure, so an
+      // unchecked call meant a refused update -- the one that makes the tool
+      // require training at all -- was followed by the whole step-creation
+      // loop, for a tool that does not require training.
+      const marked = await toolsApi.updateTool(props.tool.id, {
         requires_training: true,
       })
+      if (!marked.success) {
+        throw new Error(marked.error || 'Failed to mark the tool as requiring training')
+      }
 
       // Create each training step
       const createdSteps: any[] = []
@@ -457,18 +472,24 @@ const createTrainingSetup = async () => {
 
         if (stepConfig.prerequisites && stepConfig.prerequisites.length > 0) {
           for (const prereqIndex of stepConfig.prerequisites) {
-            await trainingApi.addTrainingPrerequisite({
+            const linked = await trainingApi.addTrainingPrerequisite({
               training_step_id: createdSteps[i].id,
               prerequisite_step_id: createdSteps[prereqIndex].id,
             })
+            if (!linked.success) {
+              throw new Error(linked.error || 'Failed to add a prerequisite')
+            }
           }
         }
       }
     } else {
       // Just update tool to not require training
-      await toolsApi.updateTool(props.tool.id, {
+      const cleared = await toolsApi.updateTool(props.tool.id, {
         requires_training: false,
       })
+      if (!cleared.success) {
+        throw new Error(cleared.error || 'Failed to update the tool')
+      }
     }
 
     emit('created')

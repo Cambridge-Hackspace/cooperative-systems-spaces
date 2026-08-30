@@ -75,7 +75,7 @@ interface Props {
 }
 
 const props = defineProps<Props>()
-defineEmits<{
+const emit = defineEmits<{
   close: []
   assigned: []
 }>()
@@ -139,15 +139,17 @@ const submitForm = async () => {
 
     const response = await trainerApi.assignToolTrainer(requestData)
 
+    // Was `console.log('Loaded users:', users.value.length)` on success and
+    // 'Failed to load users' on failure -- both copied from `loadUsers` and
+    // never adapted. Nothing was emitted, so the parent never refreshed and an
+    // assignment looked exactly like the button not working.
     if (response.success) {
-      console.log('Loaded users:', users.value.length)
+      emit('assigned')
     } else {
-      error.value = response.error || 'Failed to load users'
-      console.error('Failed to load users:', response)
+      error.value = response.error || 'Failed to assign trainer'
     }
   } catch (err: any) {
-    error.value = err.message || 'Failed to load users'
-    console.error('Error loading users:', err)
+    error.value = err?.response?.data?.error || err.message || 'Failed to assign trainer'
   } finally {
     submitting.value = false
   }

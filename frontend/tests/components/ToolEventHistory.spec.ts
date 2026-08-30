@@ -215,7 +215,7 @@ describe('when there is nothing to show', () => {
   //
   // This is the shape below the one seen elsewhere on this branch. A blank
   // screen is unhelpful; this is confidently wrong.
-  it('claims a tool has no events when the request was actually refused', async () => {
+  it('reports a refusal instead of claiming the tool has no events', async () => {
     mocks.getToolEvents.mockResolvedValue({
       success: false,
       error: 'Forbidden',
@@ -224,13 +224,8 @@ describe('when there is nothing to show', () => {
     const w = mount(ToolEventHistory, { props: { tool: TOOL } })
     await flushPromises()
 
-    expect(
-      w.find('.no-events').exists(),
-      'the component now reads `response.success` -- if that was fixed, this ' +
-        'test should assert the error it reports instead'
-    ).toBe(true)
-    expect(w.find('.error').exists()).toBe(false)
-    expect(w.text()).not.toContain('Forbidden')
+    expect(w.find('.error').text()).toBe('Forbidden')
+    expect(w.find('.no-events').exists()).toBe(false)
   })
 })
 
@@ -238,12 +233,12 @@ describe('the error branch', () => {
   // The template has one, and it works -- but nothing in production can reach
   // it, because `toolsApi.getToolEvents` never rejects. Asserted as a pair so
   // the dead branch is documented as dead rather than mistaken for coverage.
-  it('renders when the call rejects, which is the only way in', async () => {
+  it('renders on a rejection too', async () => {
     mocks.getToolEvents.mockRejectedValue(new Error('Network Error'))
     const w = mount(ToolEventHistory, { props: { tool: TOOL } })
     await flushPromises()
 
-    expect(w.find('.error').text()).toBe('Failed to load tool events')
+    expect(w.find('.error').text()).toBe('Network Error')
     expect(w.find('.no-events').exists()).toBe(false)
   })
 
@@ -252,19 +247,14 @@ describe('the error branch', () => {
   // `error` (api/errors.rs:111 onwards); this catch reads
   // `err.response?.data?.message`, which is never populated, so the server's
   // own words are discarded in favour of the generic fallback.
-  it('discards the server message because it reads the wrong key', async () => {
+  it("shows the server's own reason, from the key the envelope fills", async () => {
     mocks.getToolEvents.mockRejectedValue({
       response: { data: { success: false, error: 'Staff role required' } },
     })
     const w = mount(ToolEventHistory, { props: { tool: TOOL } })
     await flushPromises()
 
-    expect(
-      w.find('.error').text(),
-      'the catch now reads `error` -- if that was fixed, delete this test; the ' +
-        'envelope fills `error`, not `message`'
-    ).toBe('Failed to load tool events')
-    expect(w.text()).not.toContain('Staff role required')
+    expect(w.find('.error').text()).toBe('Staff role required')
   })
 
   it('stops loading whether the request resolved or rejected', async () => {

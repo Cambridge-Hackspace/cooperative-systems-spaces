@@ -1,20 +1,17 @@
 // Tier 2: ToolCreateModal.
 //
-// One request, and the component never looks at the answer:
+// FIXED, and the tests below assert the fix rather than the defect.
+//
+// This modal used to do
 //
 //     await toolsApi.createTool(toolData)
 //     emit('created')
 //
-// `api.ts:556` makes `createTool` catch its own rejection and return
-// `{ success: false, error }`, so the await always resolves. The `success`
-// flag is never read and the `catch` block is therefore unreachable. Every
-// refusal -- a duplicate barcode, a missing role, a dropped connection --
-// emits `created`, closes the modal, and tells the parent to go and refresh a
-// list that has not changed.
-//
-// That is worse than the silent failures elsewhere on this branch, and worse
-// than ToolEventHistory's wrong answer: this one reports a success that did
-// not happen.
+// and `createTool` catches its own rejection and resolves with
+// `{ success: false, error }` -- so the await always succeeded, the flag was
+// never read, and every refusal was announced as a success: `created` emitted,
+// the parent refreshing a list that had not changed, nothing on screen. It now
+// reads the flag and reports the server's words.
 //
 // What this spec does NOT prove: which categories the *server* accepts. The
 // category list is compared against the TypeScript enum, which is a claim
@@ -244,27 +241,37 @@ describe('what happens after the request', () => {
   // success flag is never examined, and `createTool` resolves rather than
   // rejects on failure, so a refusal follows exactly the same path as a
   // success: `created` is emitted, the parent refreshes, and nothing is shown.
-  it('announces a new tool that was refused, exactly as if it had worked', async () => {
+  it("reports a refusal in the server's own words, and announces nothing", async () => {
     mocks.createTool.mockResolvedValue({ success: false, error: 'Barcode already in use' })
     const w = await modal()
     await fillMinimum(w)
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(
-      w.emitted('created'),
-      'the component now reads `response.success` -- if that was fixed, this ' +
-        'test should assert the error it reports instead'
-    ).toHaveLength(1)
-    expect(w.find('.error').exists()).toBe(false)
-    expect(w.text()).not.toContain('Barcode already in use')
+    expect(w.find('.error').text()).toBe('Barcode already in use')
+    expect(w.emitted('created')).toBeUndefined()
   })
 
-  // The catch works, and nothing can reach it, because `createTool` never
+  it('falls back to a generic message when a refusal carries none', async () => {
+    mocks.createTool.mockResolvedValue({ success: false })
+    const w = await modal()
+    await fillMinimum(w)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(w.find('.error').text()).toBe('Failed to create tool')
+    expect(w.emitted('created')).toBeUndefined()
+  })
+
+  // The catch is defence rather than a path production takes, because
   // rejects. Asserted as a pair so the dead branch is documented as dead --
   // and note it reads `err.response?.data?.message`, where the envelope fills
   // `error`, so even reached it would discard the server's words.
-  it('has an error branch that nothing can reach, reading a key nothing fills', async () => {
+  it("reads the server's body if the call ever does reject", async () => {
+    // `createTool` catches its own rejection, so this branch is defence rather
+    // than a path production takes. It reads `error` now -- the key the
+    // envelope actually fills -- where it used to read `message` and get
+    // nothing but the generic fallback.
     mocks.createTool.mockRejectedValue({
       response: { data: { error: 'Barcode already in use' } },
     })
@@ -273,7 +280,7 @@ describe('what happens after the request', () => {
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(w.find('.error').text()).toBe('Failed to create tool')
+    expect(w.find('.error').text()).toBe('Barcode already in use')
     expect(w.emitted('created')).toBeUndefined()
   })
 

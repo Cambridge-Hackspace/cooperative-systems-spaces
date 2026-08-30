@@ -99,9 +99,17 @@ const loadEvents = async () => {
     error.value = ''
 
     const response = await toolsApi.getToolEvents(props.tool.id)
+
+    // The flag, not just the data. `getToolEvents` resolves with
+    // `{ success: false, data: [] }` on failure, so reading only `data` turned
+    // a 403 into "No events recorded for this tool." -- a statement of fact
+    // about the tool rather than a report about the request.
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to load tool events')
+    }
     events.value = response.data || []
   } catch (err: any) {
-    error.value = err.response?.data?.message || 'Failed to load tool events'
+    error.value = err.response?.data?.error || err.message || 'Failed to load tool events'
   } finally {
     loading.value = false
   }

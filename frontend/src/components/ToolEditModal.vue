@@ -288,10 +288,17 @@ const updateTool = async () => {
       }
     })
 
-    await toolsApi.updateTool(props.tool.id, toolData)
+    const response = await toolsApi.updateTool(props.tool.id, toolData)
+
+    // See ToolCreateModal: an unchecked `await` reported every refusal as a
+    // success, because the client resolves rather than rejects.
+    if (!response.success) {
+      error.value = response.error || 'Failed to update tool'
+      return
+    }
     emit('updated')
   } catch (err: any) {
-    error.value = err.response?.data?.message || 'Failed to update tool'
+    error.value = err.response?.data?.error || err.message || 'Failed to update tool'
   } finally {
     loading.value = false
   }

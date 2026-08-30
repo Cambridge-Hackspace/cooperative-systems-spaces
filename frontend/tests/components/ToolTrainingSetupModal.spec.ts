@@ -1,21 +1,23 @@
 // Tier 2: ToolTrainingSetupModal.
 //
-// A four-page wizard that ends in a burst of unguarded writes. Three things
-// come out of `createTrainingSetup`:
+// A four-page wizard that ends in a burst of writes. Three of its four defects
+// are FIXED and asserted as fixed below:
 //
-//   - The tool update is awaited and never checked. `updateTool` resolves on
-//     failure (api.ts catches its own rejection), so if marking the tool as
-//     requiring training fails, the wizard carries on and creates the steps
-//     anyway -- for a tool that does not require training.
-//   - Step creation runs in a loop and throws on the first failure, with
-//     nothing to undo the steps already created. A retry duplicates them.
-//   - Prerequisites are posted to `/training/prerequisites`, a route the
-//     server does not have (see the PrerequisitesModal spec), and the result
-//     is not checked either. Everything configured on page 3 goes nowhere.
+//   - The tool update is checked now. It used to be awaited and discarded, and
+//     `updateTool` resolves on failure, so a refused update -- the call that
+//     makes the tool require training at all -- was followed by the whole
+//     step-creation loop.
+//   - Prerequisites go to the route that exists. They used to be posted to
+//     `/training/prerequisites`, which is not one, and the result was not
+//     checked either, so page 3 was discarded silently.
+//   - "This tool needs no training" is submittable. `canCreateSetup` used to
+//     require `requiresTraining`, which disabled the only button that would
+//     record that answer, and page 2 demanded a filled-in step for it anyway.
 //
-// And `canCreateSetup` requires `requiresTraining`, so the "this tool needs no
-// training" path cannot be submitted at all: the button that would run it is
-// disabled exactly when it is chosen.
+// The fourth is still open and still pinned: step creation throws on the first
+// failure with nothing to undo the steps already created, so a retry
+// duplicates whatever succeeded. Fixing that needs either a transaction the
+// API does not offer or an idempotency key it does not accept.
 //
 // What this spec does NOT prove: what the server answers to any of these.
 // Tier 6 owns the round trip and Tier 4 the status codes.
@@ -211,7 +213,7 @@ describe('what it creates', () => {
   // `updateTool` resolves rather than rejects on failure. So a refused update
   // -- the call that makes the tool require training at all -- is followed by
   // the whole step-creation loop, and the wizard reports success.
-  it('creates the steps even when marking the tool as requiring training was refused', async () => {
+  it('creates no steps when marking the tool as requiring training was refused', async () => {
     mocks.updateTool.mockResolvedValue({ success: false, error: 'Tool is archived' })
     const w = modal()
     await fillFirstStep(w)
@@ -219,13 +221,12 @@ describe('what it creates', () => {
     await buttonNamed(w, 'Create Training Setup').trigger('click')
     await flushPromises()
 
-    expect(
-      mocks.createTrainingStep,
-      'the tool update is now checked -- if that was fixed, this test should ' +
-        'assert that step creation is skipped and the error reported'
-    ).toHaveBeenCalledTimes(1)
-    expect(w.emitted('created')).toHaveLength(1)
-    expect(w.find('.error-message').exists()).toBe(false)
+    // The call that makes the tool require training at all. Carrying on past
+    // its refusal built a training programme for a tool that does not require
+    // training.
+    expect(mocks.createTrainingStep).not.toHaveBeenCalled()
+    expect(w.find('.error-message').text()).toContain('Tool is archived')
+    expect(w.emitted('created')).toBeUndefined()
   })
 
   // FINDING, pinned. The loop throws on the first failed step and nothing
@@ -300,41 +301,42 @@ describe('the path that cannot be taken', () => {
   //
   // A wizard whose first question is "does this tool require training?" cannot
   // record the answer "no".
-  it('still demands a filled-in training step even when none is required', async () => {
-    // `canProceedToNextStep` case 2 checks every step regardless of
-    // `requiresTraining`, so answering "no" on page 1 does not skip or relax
-    // page 2. The wizard insists on a training step for a tool that is being
-    // configured to need no training.
+  it('stops demanding a training step once the answer is "none required"', async () => {
+    // `canProceedToNextStep` case 2 used to check every step regardless of
+    // `requiresTraining`, so answering "no" on page 1 still insisted on a
+    // filled-in training step for a tool being configured to need none.
     const w = modal()
     await w.find('input[type="checkbox"]').setValue(false)
     await nextTick()
     await buttonNamed(w, 'Next').trigger('click')
     await nextTick()
 
-    expect(
-      buttonNamed(w, 'Next').attributes('disabled'),
-      'page 2 now lets the no-training path through -- if it was made ' +
-        'conditional, this test should assert the skip'
-    ).toBeDefined()
+    expect(buttonNamed(w, 'Next').attributes('disabled')).toBeUndefined()
   })
 
-  it('disables Create exactly when "no training required" is chosen', async () => {
+  it('records "no training required" instead of disabling the button that says so', async () => {
+    // `canCreateSetup` used to open with `trainingConfig.requiresTraining &&`,
+    // which disabled the only button that would submit that answer -- so the
+    // branch of `createTrainingSetup` that clears the flag could never run. A
+    // wizard whose first question is "does this tool require training?" could
+    // not record "no".
     const w = modal()
     await w.find('input[type="checkbox"]').setValue(false)
     await nextTick()
-    // Page 2 has to be satisfied anyway -- see above -- so a throwaway step is
-    // filled in purely to reach the review page.
-    await fillFirstStep(w)
-    await toReview(w)
+    await buttonNamed(w, 'Next').trigger('click')
+    await nextTick()
+    await buttonNamed(w, 'Next').trigger('click')
+    await nextTick()
+    await buttonNamed(w, 'Next').trigger('click')
+    await nextTick()
 
-    expect(w.text()).toContain('Requires Training')
-    expect(
-      buttonNamed(w, 'Create Training Setup').attributes('disabled'),
-      'the no-training path is now submittable -- if `canCreateSetup` stopped ' +
-        'requiring `requiresTraining`, delete this test and assert the ' +
-        'requires_training: false call instead'
-    ).toBeDefined()
-    expect(mocks.updateTool).not.toHaveBeenCalled()
+    expect(buttonNamed(w, 'Create Training Setup').attributes('disabled')).toBeUndefined()
+    await buttonNamed(w, 'Create Training Setup').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateTool).toHaveBeenCalledWith('tool-1', { requires_training: false })
+    expect(mocks.createTrainingStep).not.toHaveBeenCalled()
+    expect(w.emitted('created')).toHaveLength(1)
   })
 })
 
@@ -345,7 +347,7 @@ describe('prerequisites configured in the wizard', () => {
   // so this route does not exist -- and the result is not checked either, so
   // the wizard reports success regardless. Whatever is configured on page 3 is
   // discarded.
-  it('posts them to a route the server does not have, and does not check', async () => {
+  it('reports a refused prerequisite instead of claiming the setup worked', async () => {
     const w = modal()
     await fillFirstStep(w)
     await buttonNamed(w, '+ Add Another Step').trigger('click')
@@ -364,22 +366,41 @@ describe('prerequisites configured in the wizard', () => {
 
     await buttonNamed(w, 'Next').trigger('click')
     await nextTick()
-    mocks.addTrainingPrerequisite.mockResolvedValue({ success: false, error: 'No such route' })
+    mocks.addTrainingPrerequisite.mockResolvedValue({
+      success: false,
+      error: 'Would form a cycle',
+    })
     await buttonNamed(w, 'Create Training Setup').trigger('click')
     await flushPromises()
 
     expect(mocks.addTrainingPrerequisite).toHaveBeenCalled()
-    expect(
-      mocks.addTrainingPrerequisite.mock.calls[0][0],
-      'the prerequisite payload changed -- if it was aligned with the real ' +
-        'route, delete this test'
-    ).toHaveProperty('training_step_id')
-    expect(
-      w.emitted('created'),
-      'a failed prerequisite is now reported -- if the result is checked now, ' +
-        'this test should assert the error'
-    ).toHaveLength(1)
-    expect(w.find('.error-message').exists()).toBe(false)
+    expect(w.find('.error-message').text()).toContain('Would form a cycle')
+    expect(w.emitted('created')).toBeUndefined()
+  })
+
+  it('links them, by the ids the server gave each created step', async () => {
+    const w = modal()
+    await fillFirstStep(w)
+    await buttonNamed(w, '+ Add Another Step').trigger('click')
+    await nextTick()
+    await stepNameInputs(w)[1].setValue('Operation')
+    await descriptionInputs(w)[1].setValue('Speeds and feeds')
+    await nextTick()
+    await buttonNamed(w, 'Next').trigger('click')
+    await nextTick()
+    const boxes = w.findAll('input[type="checkbox"]')
+    await boxes[boxes.length - 1].setValue(true)
+    await nextTick()
+    await buttonNamed(w, 'Next').trigger('click')
+    await nextTick()
+    await buttonNamed(w, 'Create Training Setup').trigger('click')
+    await flushPromises()
+
+    expect(mocks.addTrainingPrerequisite.mock.calls[0][0]).toEqual({
+      training_step_id: 'step-2',
+      prerequisite_step_id: 'step-1',
+    })
+    expect(w.emitted('created')).toHaveLength(1)
   })
 
   it('says there is nothing to configure with a single step', async () => {

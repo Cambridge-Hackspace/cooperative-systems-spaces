@@ -239,10 +239,19 @@ const createTool = async () => {
       }
     })
 
-    await toolsApi.createTool(toolData)
+    const response = await toolsApi.createTool(toolData)
+
+    // Read the flag. `createTool` catches its own rejection and resolves with
+    // `{ success: false }`, so an unchecked `await` announced every refusal as
+    // a success: `created` emitted, the parent refreshing a list that had not
+    // changed, and nothing shown.
+    if (!response.success) {
+      error.value = response.error || 'Failed to create tool'
+      return
+    }
     emit('created')
   } catch (err: any) {
-    error.value = err.response?.data?.message || 'Failed to create tool'
+    error.value = err.response?.data?.error || err.message || 'Failed to create tool'
   } finally {
     loading.value = false
   }
