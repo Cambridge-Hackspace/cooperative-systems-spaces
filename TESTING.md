@@ -52,8 +52,8 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 |---|---|---|
 | 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
-| 2 Component conformance | Did the rendered output drift? | **Started.** Five suites, 129 cases, on the components carrying the four fixes the acceptance test reverts. Thirty-five components have none. Every suite here was mutation-checked against the defect it covers. |
-| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 58 cases in `checks/`, plus 11 in `frontend/tests/structure/`. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
+| 2 Component conformance | Did the rendered output drift? | **Complete.** All 40 components have a spec, plus two views: 54 files, 903 cases. Every assertion mutation-checked, each mutation guarded so one that fails to apply errors rather than passes. It produced roughly forty findings, listed in §8 grouped by cause; the largest is that ToolTrainingModal's three action buttons cannot render at all. |
+| 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 63 cases in `checks/`, plus 26 in `frontend/tests/structure/` — including four ratchets the tier-2 sweep motivated: the audit-log filter against the server enum, the components nothing imports, the frontend stubs, and the database writers that discard their row count. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 32 tests across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. |
 | 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
@@ -74,7 +74,7 @@ spend the next hour:
 | Tier | Real defects it found |
 |---|---|
 | 3 Source-as-data | The unauthenticated ToolGuard endpoints; four broken CLI paths; the `UserRole` wire drift; the duplicate migrations root; the two divergent error conversions; five diverged copies of one wire format |
-| 1 / 2 Unit and component | The unreachable training warning; the iCal `v-html`; the roster refresh that never refreshed; the roster error banner that destroyed the list |
+| 1 / 2 Unit and component | The unreachable training warning; the iCal `v-html`; the roster refresh that never refreshed; the roster error banner that destroyed the list; and, from the full sweep, the four causes in §8 — three UI fields the server has no column for, five components that report success or "no data" on a refusal, three date pickers floored in UTC, and the training flow whose buttons key off aliases nothing populates |
 | 1b Vectors | Both door fail-open sites; the inactive-member divergence between the RFID and QR paths |
 | 6 Full stack | The migration no non-UTF-8 database can apply; the 401-for-an-insufficient-role, which logs the user out; the config loader exiting 0 after refusing to start; **a 404 on every deep link, including the QR door URL** |
 | 7 Seeded fuzz | Two different error envelopes across every guarded route; six handlers answering 500 for a row that does not exist; a 500 for a repository nobody configured; four routes that can never succeed |
@@ -500,6 +500,150 @@ somebody should read it, confirm the fix, and delete the assertion. Each one
 says so in its own failure message.
 
 None of these was fixed here, and each says why.
+
+### The frontend sweep: four causes, about forty faces
+
+Writing a tier-2 spec for all forty components produced far more findings than
+the tier usually does, and listing them one by one would suggest forty unrelated
+problems. They are not. Four causes account for most of them, and each is fixed
+in one place.
+
+Every finding below is pinned in the named spec, so each fails the day it is
+fixed. None was fixed here.
+
+**Cause 1 — `utils/api.ts` swallows rejections, and callers do not check.**
+Most of the typed client's methods end in `.catch(...)` returning
+`{ success: false, error }`, so the promise resolves on failure. A caller that
+does not read `.success` cannot tell a refusal from a success.
+
+- `ToolCreateModal` and `ToolEditModal` `await` the write and emit `created` /
+  `updated` regardless. A refused create or edit is announced as a success, the
+  parent refreshes a list that has not changed, and nothing is shown.
+- `ToolEventHistory` sets `events = response.data || []` without reading the
+  flag, so a 403 renders as "No events recorded for this tool." — a confident
+  wrong answer rather than a blank.
+- `ToolTrainingCard` sets `error` and renders it nowhere, so a refused overview
+  says "No training steps configured for this tool." while the header reads
+  "Loading..." permanently.
+- `ToolTrainingSetupModal` ignores the tool update, then creates steps anyway.
+- Several components' `catch` blocks are unreachable for the same reason, and
+  three of them read `err.response.data.message` where the envelope fills
+  `error`, so even reached they would discard the server's words.
+
+*Why not fixed:* the honest fix is at the client — stop swallowing, or return a
+discriminated result callers cannot ignore — and it touches every call site.
+That is one change to design, not fourteen patches.
+
+**Cause 2 — `types/training.ts` describes a server that does not exist.**
+`TrainingStep` invents `passing_score` and `is_active`, neither of which is a
+column in `training_steps`, and renames `expires_after_days` to `expiry_days`.
+`TrainingStepWithProgress` adds `progress` and `can_start` as aliases for
+`user_progress` and `is_available`, and nothing populates an alias.
+
+- `EditTrainingStepModal` sends four fields the server's update request does not
+  declare; serde drops them and answers 200. The "Active (visible to users)"
+  checkbox controls nothing that exists.
+- `CompleteTrainingModal`'s entire validation keys off `passing_score`, so the
+  score input never renders and the minimum-score guard never fires. An
+  instructor cannot record a score on a modal built around recording one.
+- `ToolTrainingSetupModal` collects a passing score and shows it back on its
+  review page; it goes nowhere.
+- **`ToolTrainingModal`'s Start, Mark Complete and Retry buttons key off
+  `can_start` and `progress`, so none of them renders for anyone, on any step.**
+  Fed the alias names, all three appear and work. This is the largest single
+  finding of the sweep: the training flow exists on the server and the UI cannot
+  reach it.
+- `getStepStatusClass` reads `progress` while `getStepNumberClass` reads
+  `user_progress`, so the two disagree about the same step — which is the
+  evidence that one is reading the wrong field rather than both being wrong.
+
+*Why not fixed:* aligning the types is mechanical, but deciding what
+`passing_score` and `is_active` should *mean* — add the columns, or delete the
+UI — is a product question.
+
+**Cause 3 — user-facing dates computed in UTC.**
+Five components build a date with `new Date().toISOString().split('T')[0]`,
+which is the date in UTC rather than the user's date. West of UTC they disagree
+for the last hours of every day.
+
+- `EditTrainerModal`, `AssignTrainerModal` and `TrainerManagement` floor a date
+  picker at the UTC date, so a trainer cannot be given an expiry of today.
+- `RecordTrainingModal` defaults the *training date* to it, and floors the
+  picker with the same value — so an instructor recording an evening session is
+  handed tomorrow's date and nothing objects.
+- `ToolTrainingModal`'s inline record form does the same.
+
+Three of those also send a bare calendar date where `api/trainers.rs` declares
+`Option<DateTime<Utc>>`, which serde cannot parse.
+
+*Why not fixed:* one helper, five call sites, and a decision about whether the
+site timezone or the browser's should win. The suite now pins
+`TZ=America/Chicago` so the tests can tell the two apart at all —
+`tests/unit/suite-environment.spec.ts`.
+
+**Cause 4 — no `try/finally` around a busy flag.**
+Five components set `saving`/`busy`/`loading` true, await, and clear it on the
+next line. A rejection strands the flag and disables the control for the life of
+the page. `MfaSettings` has it in three handlers at once, so a network error on
+Set up authenticator, Confirm or Regenerate recovery codes **locks the entire
+page** with nothing on screen to say why — while `addWebauthn`, in the same
+file, does the same work inside `try/finally` and recovers correctly. Ten
+components have the sibling shape in their loaders: no `try/catch`, so a
+rejected load spins forever and the rejection escapes to an
+`app.config.errorHandler` that `src/main.ts` never sets.
+
+*Why not fixed:* trivial per site, and there are fifteen. Worth doing in one
+pass rather than fifteen.
+
+### Frontend findings that stand on their own
+
+Not attributable to the four causes above.
+
+- **A `javascript:` URL can be saved as a homepage link.** Neither
+  `HomeLinkManagement` nor `api/home_links.rs:239` checks the scheme, and
+  `HomeView.vue:85` renders it as `:href`. Vue does not sanitise an href
+  binding, so it becomes a live script handler on the *public* home page. Admin
+  to set, but it turns "an admin may curate links" into persistent script
+  execution against every visitor.
+- **A webhook URL is an SSRF read primitive.** `api/webhooks.rs:166` validates
+  only the scheme. The server fetches the URL and stores the response:
+  `WebhookDelivery.response_body` is returned to the admin UI. Pointing a
+  webhook at a link-local or loopback address and firing a test delivery reads
+  it back out of the Deliveries tab. Admin-gated, and webhooks legitimately
+  point anywhere — so this is a design to decide on rather than an outright
+  bug, but it should be decided.
+- **`ScheduleManagement` edits and deletes the wrong window.** The editor sorts
+  each day's windows by start time; the handlers map the clicked row back to the
+  array by counting in array order. When the two disagree, the × removes a
+  different window than the one it sits beside, and an edit lands on a window
+  the user never touched — producing an invalid interval the validator then
+  reports by name.
+- **`DoorManagement` posts a rule that can never match.** The rule kind and
+  value are separate refs and nothing resets the value when the kind changes, so
+  switching from `role` to `user` posts a user rule whose value is the string
+  "Member".
+- **`ProfileConfigAdmin` does not show the configuration.** Every display reads
+  `editConfig`, which is empty until Edit is pressed, so the page claims
+  profiles are disabled and no fields exist whatever the server returned.
+- **`TrainerManagement`'s Activate button is unreachable.** `includeInactive` is
+  set nowhere, so the list never contains an inactive trainer, and Activate
+  renders only for one.
+- **`AuditLogTable` cannot page or filter.** The endpoint returns no total, so
+  `totalPages` is always 1 and the pagination block never renders — an admin
+  sees the fifty most recent events and has no control that reaches page two.
+  The filter offers 9 of the server's 66 event types, missing every door,
+  device and MFA event.
+- **`PrerequisitesModal`'s two write paths both address the wrong thing.** Add
+  posts to a route that does not exist; remove sends a `training_steps` id where
+  the server deletes from `training_prerequisites`, matching nothing and
+  answering 200.
+- **`AssignTrainerModal` never announces success**, and `ToolTrainingCard`
+  carries a red debug banner — both in components nothing imports, recorded in
+  `tests/structure/components-are-reachable.spec.ts` so the specs cannot claim
+  users are hitting them.
+- **Two components render a `console.log` per step per render**, and
+  `DeviceManagement` reports five of six write failures through `alert()` with
+  the axios message rather than the server's.
 
 ### Login is case-sensitive, on username and on email
 
