@@ -57,7 +57,11 @@ describe('the server never asks comrak to pass raw HTML through', () => {
         continue // api/pages.rs may not exist; pages.rs is asserted above
       }
       for (const line of text.split('\n')) {
-        const code = line.split('//')[0]
+        // `?? line` rather than a non-null assertion: split always yields at
+        // least one element, but under `noUncheckedIndexedAccess` that is a
+        // claim the type system will not take on trust, and asserting it away
+        // would be the wrong habit in a file that exists to check claims.
+        const code = line.split('//')[0] ?? line
         if (/\bunsafe_\b/.test(code)) offenders.push(`${file}: ${line.trim()}`)
       }
     }

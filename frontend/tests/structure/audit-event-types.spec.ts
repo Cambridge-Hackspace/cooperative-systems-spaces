@@ -40,7 +40,9 @@ function serverEventTypes(): string[] {
   expect(end, 'could not find the end of impl AuditEventType').toBeGreaterThan(-1)
 
   const body = rest.slice(0, end)
-  const found = [...body.matchAll(/=> "([a-z_]+)"/g)].map((m) => m[1])
+  const found = [...body.matchAll(/=> "([a-z_]+)"/g)]
+    .map((m) => m[1])
+    .filter((v): v is string => v !== undefined)
   // Anti-vacuity: a regex that matched nothing would make every assertion below
   // pass while checking nothing at all.
   expect(found.length, 'no event types parsed out of AuditEventType::as_str').toBeGreaterThan(20)
@@ -51,7 +53,9 @@ function serverEventTypes(): string[] {
 function offeredEventTypes(): string[] {
   const source = read('src/components/AuditLogTable.vue')
   const template = source.slice(0, source.indexOf('</template>'))
-  const found = [...template.matchAll(/<option value="([a-z_]+)"/g)].map((m) => m[1])
+  const found = [...template.matchAll(/<option value="([a-z_]+)"/g)]
+    .map((m) => m[1])
+    .filter((v): v is string => v !== undefined)
   expect(found.length, 'no filter options parsed out of AuditLogTable.vue').toBeGreaterThan(0)
   return [...new Set(found)].sort()
 }
