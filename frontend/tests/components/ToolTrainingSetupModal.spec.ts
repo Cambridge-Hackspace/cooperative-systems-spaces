@@ -191,7 +191,7 @@ describe('what it creates', () => {
     expect(w.emitted('close')).toHaveLength(1)
   })
 
-  // Recorded: `passing_score`, `expiry_days` and `is_active` are sent on every
+  // Recorded: `passing_score`, `expires_after_days` and `is_active` are sent on every
   // step and none of them exist on the server -- `training_steps` has no such
   // columns and `CreateTrainingStepRequest` no such fields. See the
   // EditTrainingStepModal spec for the field-by-field comparison. The wizard
@@ -204,7 +204,7 @@ describe('what it creates', () => {
     await buttonNamed(w, 'Create Training Setup').trigger('click')
     await flushPromises()
 
-    for (const key of ['passing_score', 'expiry_days', 'is_active']) {
+    for (const key of ['passing_score', 'expires_after_days', 'is_active']) {
       expect(Object.keys(createdSteps()[0]), `${key} is still sent`).toContain(key)
     }
   })

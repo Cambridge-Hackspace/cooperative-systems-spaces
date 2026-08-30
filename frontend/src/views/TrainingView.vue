@@ -50,8 +50,8 @@
               <span v-if="step.passing_score" class="passing-score">
                 Passing Score: {{ step.passing_score }}%
               </span>
-              <span v-if="step.expiry_days" class="expiry">
-                Expires: {{ step.expiry_days }} days
+              <span v-if="step.expires_after_days" class="expiry">
+                Expires: {{ step.expires_after_days }} days
               </span>
               <span :class="step.is_active ? 'status-active' : 'status-inactive'">
                 {{ step.is_active ? 'Active' : 'Inactive' }}

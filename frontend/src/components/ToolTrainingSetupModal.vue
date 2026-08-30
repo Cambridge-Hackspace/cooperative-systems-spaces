@@ -115,7 +115,7 @@
                   <div class="form-group">
                     <label>Certification Expires After (days):</label>
                     <input
-                      v-model.number="step.expiry_days"
+                      v-model.number="step.expires_after_days"
                       type="number"
                       class="form-control input"
                       min="1"
@@ -207,7 +207,9 @@
                     <div class="step-meta">
                       <span>{{ formatAssessmentType(step.assessment_type) }}</span>
                       <span v-if="step.passing_score">• {{ step.passing_score }}% required</span>
-                      <span v-if="step.expiry_days">• Expires in {{ step.expiry_days }} days</span>
+                      <span v-if="step.expires_after_days"
+                        >• Expires in {{ step.expires_after_days }} days</span
+                      >
                       <span :class="step.is_active ? 'text-success' : 'text-muted'">
                         • {{ step.is_active ? 'Active' : 'Inactive' }}
                       </span>
@@ -285,7 +287,7 @@ interface TrainingStepConfig {
   description: string
   assessment_type: AssessmentType
   passing_score?: number
-  expiry_days?: number
+  expires_after_days?: number
   is_active: boolean
   prerequisites: number[]
 }
@@ -320,7 +322,7 @@ const trainingConfig = reactive<TrainingConfig>({
       description: '',
       assessment_type: AssessmentType.Practical,
       passing_score: 80,
-      expiry_days: undefined,
+      expires_after_days: undefined,
       is_active: true,
       prerequisites: [],
     },
@@ -380,7 +382,7 @@ const addStep = () => {
     description: '',
     assessment_type: AssessmentType.Practical,
     passing_score: 80,
-    expiry_days: undefined,
+    expires_after_days: undefined,
     is_active: true,
     prerequisites: [],
   })
@@ -453,7 +455,7 @@ const createTrainingSetup = async () => {
           description: stepConfig.description,
           assessment_type: stepConfig.assessment_type,
           passing_score: stepConfig.passing_score,
-          expiry_days: stepConfig.expiry_days,
+          expires_after_days: stepConfig.expires_after_days,
           is_active: stepConfig.is_active,
         }
 

@@ -44,7 +44,7 @@ const TRAINEE: User = {
   meta: {},
 }
 
-/** What the server actually sends: no passing_score, no expiry_days. */
+/** What the server actually sends: no passing_score, no expires_after_days. */
 function serverStep(over: Partial<TrainingStep> = {}): TrainingStep {
   return {
     id: 'step-1',
@@ -141,7 +141,7 @@ describe('against the step the server actually sends', () => {
   })
 
   it('mentions an expiry only when the step has one, which it never does', () => {
-    // `expiry_days` is the same story as `passing_score`: the server column is
+    // `expires_after_days` is the same story as `passing_score`: the server column is
     // `expires_after_days` and this name is never populated. So the "expires
     // after N days" line in the summary is unreachable too.
     expect(modal().find('.training-summary').text()).not.toContain('day')
@@ -149,7 +149,7 @@ describe('against the step the server actually sends', () => {
 })
 
 describe('against the step the code was written for', () => {
-  const scored = () => serverStep({ passing_score: 80, expiry_days: 365 })
+  const scored = () => serverStep({ passing_score: 80, expires_after_days: 365 })
 
   it('shows the score field and the expiry line once the fields are present', () => {
     const w = modal(scored())

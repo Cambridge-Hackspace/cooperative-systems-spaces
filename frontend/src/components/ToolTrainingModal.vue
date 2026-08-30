@@ -353,8 +353,8 @@
                       <span v-if="stepWithProgress.step.passing_score" class="passing-score">
                         {{ stepWithProgress.step.passing_score }} % required
                       </span>
-                      <span v-if="stepWithProgress.step.expiry_days" class="expiry-info">
-                        Valid for {{ stepWithProgress.step.expiry_days }} days
+                      <span v-if="stepWithProgress.step.expires_after_days" class="expiry-info">
+                        Valid for {{ stepWithProgress.step.expires_after_days }} days
                       </span>
                     </div>
 

@@ -30,7 +30,7 @@ export interface TrainingStep {
   description: string
   assessment_type: AssessmentType
   passing_score?: number
-  expiry_days?: number
+  expires_after_days?: number
   is_active: boolean
   created_at: string
   updated_at: string
@@ -43,7 +43,7 @@ export interface CreateTrainingStepRequest {
   description: string
   assessment_type: AssessmentType
   passing_score?: number
-  expiry_days?: number
+  expires_after_days?: number
   is_active?: boolean
 }
 
@@ -53,7 +53,7 @@ export interface UpdateTrainingStepRequest {
   description?: string
   assessment_type?: AssessmentType
   passing_score?: number
-  expiry_days?: number
+  expires_after_days?: number
   is_active?: boolean
 }
 

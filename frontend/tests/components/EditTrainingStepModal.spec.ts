@@ -10,7 +10,7 @@
 //   assessment_type     assessment_type                      assessment_type
 //   step_number         --                                   step_number
 //   passing_score       --                                   --
-//   expiry_days         expires_after_days                   expires_after_days
+//   expires_after_days         expires_after_days                   expires_after_days
 //   is_active           --                                   --
 //   --                  training_materials_url               training_materials_url
 //   --                  requires_assessment                  requires_assessment
@@ -46,7 +46,7 @@ const TOOL = { id: 'tool-1', name: 'Lathe' } as unknown as Tool
 // rather than derived, so this is a claim about the contract and not a
 // restatement of whatever the component happens to send.
 const SERVER_READS = ['step_name', 'description', 'assessment_type']
-const SERVER_IGNORES = ['step_number', 'passing_score', 'expiry_days', 'is_active']
+const SERVER_IGNORES = ['step_number', 'passing_score', 'expires_after_days', 'is_active']
 
 function step(over: Partial<TrainingStep> = {}): TrainingStep {
   return {
@@ -57,7 +57,7 @@ function step(over: Partial<TrainingStep> = {}): TrainingStep {
     description: 'Guards, speeds, and what not to wear.',
     assessment_type: AssessmentType.Practical,
     passing_score: 80,
-    expiry_days: 365,
+    expires_after_days: 365,
     is_active: true,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
@@ -104,7 +104,7 @@ describe('what the form starts with', () => {
     )
     expect((w.find('#assessment_type').element as HTMLSelectElement).value).toBe('practical')
     expect((w.find('#passing_score').element as HTMLInputElement).value).toBe('80')
-    expect((w.find('#expiry_days').element as HTMLInputElement).value).toBe('365')
+    expect((w.find('#expires_after_days').element as HTMLInputElement).value).toBe('365')
     expect((w.find('.checkbox').element as HTMLInputElement).checked).toBe(true)
   })
 
@@ -181,23 +181,29 @@ describe('what the form sends', () => {
   // update four fields this form never offers, and one of them --
   // `expires_after_days` -- is the field the form's "Expires After (days)" box
   // is plainly meant to be editing under a different name.
-  it('never sends the four fields the server can actually update', async () => {
+  it('now sends the expiry under the name the server reads', async () => {
+    // Was `expiry_days`, which `UpdateTrainingStepRequest` does not declare, so
+    // the "Expires After (days)" box edited nothing. The field is
+    // `expires_after_days` on both sides now.
     const w = modal()
-    await w.find('#expiry_days').setValue('90')
+    await w.find('#expires_after_days').setValue('90')
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(sent().expiry_days).toBe(90)
-    for (const key of [
-      'expires_after_days',
-      'training_materials_url',
-      'requires_assessment',
-      'duration_minutes',
-    ]) {
+    expect(sent().expires_after_days).toBe(90)
+    expect(Object.keys(sent())).not.toContain('expiry_days')
+  })
+
+  it('still sends none of the other three fields the server can update', async () => {
+    const w = modal()
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    for (const key of ['training_materials_url', 'requires_assessment', 'duration_minutes']) {
       expect(
         Object.keys(sent()),
-        `${key} is now sent -- if the request was aligned, this test should ` +
-          'assert it rather than its absence'
+        `${key} is now sent -- if the form grew a control for it, this test ` +
+          'should assert the value rather than its absence'
       ).not.toContain(key)
     }
   })
@@ -208,13 +214,13 @@ describe('what the form sends', () => {
   // matching server fields are `Option<i32>`, which cannot deserialise `""`.
   it('sends an empty string, not nothing, when a number field is cleared', async () => {
     const w = modal()
-    await w.find('#expiry_days').setValue('')
+    await w.find('#expires_after_days').setValue('')
     await w.find('#passing_score').setValue('')
     await w.find('form').trigger('submit')
     await flushPromises()
 
     expect(
-      sent().expiry_days,
+      sent().expires_after_days,
       'a cleared number field now sends something else -- if it was fixed to ' +
         'send undefined or null, delete this test'
     ).toBe('')

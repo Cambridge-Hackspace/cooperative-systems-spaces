@@ -60,8 +60,8 @@
             <h5>Training Completion Summary</h5>
             <ul>
               <li>Trainee has successfully completed the training requirements</li>
-              <li v-if="step.expiry_days">
-                Certification will expire in {{ step.expiry_days }} days
+              <li v-if="step.expires_after_days">
+                Certification will expire in {{ step.expires_after_days }} days
               </li>
               <li v-if="form.assessment_score">Final score: {{ form.assessment_score }}%</li>
               <li>This will unlock access to the next training step (if applicable)</li>

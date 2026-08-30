@@ -100,8 +100,8 @@
                 <span class="assessment-type">{{
                   formatAssessmentType(stepWithProgress.step.assessment_type)
                 }}</span>
-                <span v-if="stepWithProgress.step.expiry_days" class="expiry-info">
-                  Expires after {{ stepWithProgress.step.expiry_days }} days
+                <span v-if="stepWithProgress.step.expires_after_days" class="expiry-info">
+                  Expires after {{ stepWithProgress.step.expires_after_days }} days
                 </span>
               </div>
             </div>

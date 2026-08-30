@@ -73,10 +73,10 @@
           </div>
 
           <div class="form-group">
-            <label for="expiry_days">Expires After (days):</label>
+            <label for="expires_after_days">Expires After (days):</label>
             <input
-              id="expiry_days"
-              v-model.number="form.expiry_days"
+              id="expires_after_days"
+              v-model.number="form.expires_after_days"
               type="number"
               class="form-control"
               min="1"
@@ -139,7 +139,7 @@ const form = reactive<UpdateTrainingStepRequest>({
   description: '',
   assessment_type: AssessmentType.Practical,
   passing_score: undefined,
-  expiry_days: undefined,
+  expires_after_days: undefined,
   is_active: true,
 })
 
@@ -150,7 +150,7 @@ const populateForm = (step: TrainingStep) => {
   form.description = step.description
   form.assessment_type = step.assessment_type
   form.passing_score = step.passing_score
-  form.expiry_days = step.expiry_days
+  form.expires_after_days = step.expires_after_days
   form.is_active = step.is_active
 }
 
