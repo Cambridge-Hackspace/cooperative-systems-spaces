@@ -163,13 +163,77 @@ fn validate_event_types(event_types: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// AWS publishes its IMDS over IPv6 at this address, which is a unique-local
+/// address rather than a link-local one -- so a check that blocked only
+/// `fe80::/10` would leave the exact target this exists to protect reachable.
+const AWS_IMDS_V6: std::net::Ipv6Addr =
+    std::net::Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x254);
+
+/// Is this address one of the cloud metadata endpoints, or link-local?
+///
+/// `169.254.169.254` is the metadata service on AWS, GCP, Azure, DigitalOcean
+/// and Oracle. A single successful read there can return instance credentials,
+/// so it is the one target where the difference between "an admin learned
+/// something" and "an admin took over the account" is one request.
+fn is_link_local(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Ipv4(v4) => v4.is_link_local(),
+        url::Host::Ipv6(v6) => {
+            // `is_unicast_link_local` is unstable, so the `fe80::/10` test is
+            // written out. The first ten bits are the prefix.
+            let seg = v6.segments()[0];
+            (seg & 0xffc0) == 0xfe80 || *v6 == AWS_IMDS_V6
+        }
+        url::Host::Domain(_) => false,
+    }
+}
+
+/// Reject a webhook URL that is obviously not a webhook destination.
+///
+/// The scheme check is the old one: a `javascript:` or `file:` URL is never a
+/// delivery target. What is new is the link-local block, and its scope is worth
+/// being precise about, because this is a partial defence and pretending
+/// otherwise would be worse than not having it.
+///
+/// **What it stops.** A literal link-local or cloud-metadata address. The
+/// server fetches webhook URLs and records the outcome -- `status_code`,
+/// `error`, and on a failure the response body -- back into a table the admin
+/// UI displays. Pointing a webhook at `169.254.169.254` and reading the answer
+/// out of the Deliveries tab is a credential read, not merely an information
+/// leak.
+///
+/// **What it does not stop, deliberately.** RFC1918 and loopback are still
+/// permitted. A hackspace webhook plausibly points at a Matrix server, a
+/// printer or a Home Assistant box on the LAN, and blocking `10.0.0.0/8` would
+/// break the primary use case to inconvenience an attacker who already holds an
+/// admin account. Loopback is a narrower call and arguably should go too, but
+/// it is a separate decision and is not being made silently here.
+///
+/// **What it cannot stop.** A hostname that *resolves* to a link-local address.
+/// This inspects the literal in the URL; nothing re-checks after DNS, and a
+/// name whose A record is 169.254.169.254 passes. Closing that needs the check
+/// at connection time inside the HTTP client, which is a different and larger
+/// change. This is a guard against the obvious, and the obvious is what gets
+/// tried.
 fn validate_url(url: &str) -> Result<(), ApiError> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    let parsed = url::Url::parse(url)
+        .map_err(|_| ApiError::BadRequest("Webhook URL is not a valid URL".to_string()))?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
         return Err(ApiError::BadRequest(
             "Webhook URL must start with http:// or https://".to_string(),
         ));
     }
-    Ok(())
+
+    match parsed.host() {
+        Some(host) if is_link_local(&host) => Err(ApiError::BadRequest(
+            "Webhook URL may not address a link-local or cloud metadata endpoint".to_string(),
+        )),
+        Some(_) => Ok(()),
+        None => Err(ApiError::BadRequest(
+            "Webhook URL must name a host".to_string(),
+        )),
+    }
 }
 
 /// Prettify an event type string into a human label (e.g. user_login -> "User Login").
@@ -518,4 +582,107 @@ async fn list_deliveries(
             .db
             .list_webhook_deliveries(q.webhook_id, limit, offset)?;
     Ok(Json(ApiResponse::success(deliveries)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_url;
+
+    fn rejected(url: &str) -> bool {
+        validate_url(url).is_err()
+    }
+
+    #[test]
+    fn an_ordinary_destination_is_permitted() {
+        assert!(validate_url("https://matrix.example.org/_matrix/hook").is_ok());
+        assert!(validate_url("http://example.org:8080/hook").is_ok());
+    }
+
+    // Deliberately still permitted. A hackspace webhook plausibly points at a
+    // Matrix server, a printer or a Home Assistant box on the LAN, and blocking
+    // these would break the primary use case to inconvenience somebody who
+    // already holds an admin account.
+    #[test]
+    fn a_private_address_is_still_permitted() {
+        assert!(validate_url("http://10.0.0.9:8080/hook").is_ok());
+        assert!(validate_url("http://192.168.1.50/hook").is_ok());
+        assert!(validate_url("http://172.16.4.4/hook").is_ok());
+    }
+
+    #[test]
+    fn the_cloud_metadata_address_is_refused() {
+        assert!(rejected("http://169.254.169.254/latest/meta-data/"));
+        assert!(rejected("https://169.254.169.254/"));
+        assert!(rejected("http://169.254.169.254:80/computeMetadata/v1/"));
+    }
+
+    // The whole 169.254.0.0/16 block, not just the famous address: the metadata
+    // service is not the only thing that answers on link-local, and an
+    // allowlist of one address is a denylist wearing a disguise.
+    #[test]
+    fn the_rest_of_the_link_local_range_is_refused_too() {
+        assert!(rejected("http://169.254.0.1/"));
+        assert!(rejected("http://169.254.255.254/"));
+    }
+
+    // `169.254.169.254` is also `2852039166`, `0xa9fea9fe` and `0251.0376.0251.0376`.
+    // The URL parser normalises all of them to the same address, which is why
+    // the check inspects the parsed host rather than the string -- a
+    // `starts_with` test on the text would miss every one of these.
+    #[test]
+    fn an_encoded_metadata_address_is_refused() {
+        for url in [
+            "http://2852039166/",
+            "http://0xa9fea9fe/",
+            "http://0251.0376.0251.0376/",
+        ] {
+            assert!(rejected(url), "{url} was permitted");
+        }
+    }
+
+    #[test]
+    fn userinfo_does_not_smuggle_a_host_past_the_check() {
+        // `http://example.org@169.254.169.254/` addresses the metadata service,
+        // with `example.org` as a username. Reading the host is what tells them
+        // apart.
+        assert!(rejected("http://example.org@169.254.169.254/"));
+    }
+
+    #[test]
+    fn ipv6_link_local_and_the_aws_v6_metadata_address_are_refused() {
+        assert!(rejected("http://[fe80::1]/"));
+        assert!(rejected("http://[fe80::200:5aee:feaa:20a2]/"));
+        // AWS publishes IMDS over IPv6 at a unique-local address, so a check
+        // that stopped at fe80::/10 would leave the target reachable.
+        assert!(rejected("http://[fd00:ec2::254]/"));
+    }
+
+    #[test]
+    fn another_unique_local_address_is_still_permitted() {
+        // fd00::/8 is where self-hosted IPv6 LANs live. Only the one AWS
+        // publishes IMDS on is refused.
+        assert!(validate_url("http://[fd12:3456::1]/hook").is_ok());
+    }
+
+    #[test]
+    fn a_non_http_scheme_is_refused() {
+        assert!(rejected("file:///etc/passwd"));
+        assert!(rejected("javascript:alert(1)"));
+        assert!(rejected("ftp://example.org/"));
+    }
+
+    #[test]
+    fn something_that_is_not_a_url_is_refused_rather_than_parsed_loosely() {
+        assert!(rejected(""));
+        assert!(rejected("not a url"));
+        assert!(rejected("http://"));
+    }
+
+    // Stated as a limit rather than left to be discovered: this reads the
+    // literal in the URL, and nothing re-checks after DNS. A name whose A
+    // record is 169.254.169.254 passes.
+    #[test]
+    fn a_hostname_is_not_resolved_and_therefore_not_checked() {
+        assert!(validate_url("http://metadata.example.org/").is_ok());
+    }
 }
