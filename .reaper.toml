@@ -166,6 +166,40 @@ cores   = 6
 ram_gb  = 12
 disk_gb = 96
 
+[profiles.devlive]
+# A semi-live instance to develop against, not a test run.
+#
+# Brings the stack up and leaves it up: `down` is absent from the stage list on
+# purpose, and so is every assertion tier. What you get is Postgres, mosquitto
+# and css-server on the session's own address, plus one admin account.
+#
+#   reaper test --profile devlive     # bring it up, print the URL
+#   reaper renew                      # before the ttl runs out
+#   reaper down                       # destroy the VM, the database and all
+#
+# CSS_E2E_BIND=0.0.0.0 is the whole difference from a battery run. The default
+# everywhere else is 127.0.0.1, so a test stack stays unreachable off the box
+# and cannot be collided with; a development instance has to be reachable or it
+# is of no use. write_stack_config asks the routing table what address to put
+# in site_url when this is set.
+#
+# ttl is long because losing the instance mid-afternoon is worse than holding a
+# VM: this is where somebody is clicking through their own change.
+#
+# What this is NOT: production-shaped. The cluster is deliberately hostile --
+# LATIN1, lc_collate=C, TZ=America/Chicago -- because that is what the battery
+# needs to catch encoding and ordering bugs. It is excellent for finding real
+# defects and a poor model of css-aio-01. `--profile utf8` is the friendlier
+# cluster if that matters for what you are checking.
+#
+# WebAuthn will not work over the session's IP. relying_party_id is `localhost`
+# because WebauthnBuilder validates via rp_origin.domain(), which is None for an
+# IP literal -- so a passkey cannot be registered or used against http://<ip>.
+# TOTP and recovery codes are unaffected.
+ttl        = "10h"
+warm_cache = true
+env = { CSS_E2E_STAGES = "preflight,up,devseed", CSS_E2E_BIND = "0.0.0.0" }
+
 [profiles.dev]
 ttl        = "4h"
 warm_cache = true

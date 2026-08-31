@@ -46,6 +46,17 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 STAGES_ALL="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
+# Stages that exist and are deliberately NOT part of `all` or `default`.
+#
+# `--only ...,devseed` reaches them; `--only all` does not. devseed claims the
+# one address `[initial_setup]` grants admin to, so running it inside the
+# battery would hand drivers/lib.mjs's adminAccount() an address it can neither
+# claim nor sign into -- the contract tier would then fail for a reason that was
+# the fixture's. Opt-in is the whole point, so it cannot live in STAGES_ALL.
+STAGES_EXTRA="devseed"
+# Everything a stage name is allowed to be. Both validation sites read this.
+STAGES_VALID="${STAGES_ALL},${STAGES_EXTRA}"
+
 PROVISION="podman"
 ENGINE=""
 STAGES="${STAGES_DEFAULT}"
@@ -95,7 +106,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --list-stages)
-      printf '%s\n' "${STAGES_ALL//,/$'\n'}"
+      printf '%s\n' "${STAGES_VALID//,/$'\n'}"
       exit 0
       ;;
     -h | --help)
@@ -117,9 +128,9 @@ done
 # `.reaper.toml`'s [profiles.hunt] named `journeys`, a stage that does not
 # exist, and would have reported exactly that.
 for _stage in ${STAGES//,/ }; do
-  case ",${STAGES_ALL}," in
+  case ",${STAGES_VALID}," in
     *",${_stage},"*) ;;
-    *) die "no such stage: ${_stage}. Valid: ${STAGES_ALL}" ;;
+    *) die "no such stage: ${_stage}. Valid: ${STAGES_VALID}" ;;
   esac
 done
 unset _stage
@@ -136,8 +147,8 @@ has_stage() { [[ ",${STAGES}," == *",$1,"* ]]; }
 # Every named stage must exist. A typo that silently ran nothing would be
 # indistinguishable from a pass.
 for want in ${STAGES//,/ }; do
-  [[ ",${STAGES_ALL}," == *",${want},"* ]] \
-    || die "no such stage: '${want}'. Implemented: ${STAGES_ALL}"
+  [[ ",${STAGES_VALID}," == *",${want},"* ]] \
+    || die "no such stage: '${want}'. Implemented: ${STAGES_VALID}"
 done
 
 FAILED_STAGES=""
@@ -1272,6 +1283,97 @@ produce it either, the exemption is stale and should be deleted."
   done
 
   emit_junit logs
+}
+# ===========================================================================
+# devseed -- a usable login on a live instance, for development only.
+#
+# Deliberately NOT in STAGES_ALL or STAGES_DEFAULT. Only one address grants
+# admin (`[initial_setup] setup_admin_email`), and only the first caller to
+# register it gets the role -- so a battery run that had already seeded would
+# hand `adminAccount()` in drivers/lib.mjs an address it cannot claim and
+# cannot sign into, and the contract tier would fail for a reason that was the
+# fixture's. Reachable through `--only ...,devseed` and nowhere else.
+#
+# The account is created through the shipping register endpoint, not SQL. That
+# is the same rule the battery follows: if registration is broken, seeding must
+# fail rather than paper over it with an INSERT.
+stage_devseed() {
+  cases_begin devseed
+  stack_paths
+
+  if ! server_ready; then
+    record_case "devseed/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/stack-is-up" ok
+
+  local user="${CSS_DEV_ADMIN_USER:-admin}"
+  local pass="${CSS_DEV_ADMIN_PASS:-password123!}"
+  local mail
+  # The address the config grants admin to. Read from the generated config
+  # rather than restated here: two copies of this would drift and the failure
+  # would be a member account that looks like an admin bug.
+  mail="$(awk -F'"' '/^setup_admin_email/ {print $2; exit}' "${STACK_DIR}/config.toml")"
+  if [[ -z ${mail} ]]; then
+    record_case "devseed/admin-address" fail "no setup_admin_email in the generated config"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/admin-address" ok "${mail}"
+
+  local base="http://127.0.0.1:${SERVER_PORT}"
+  local body code
+  body="$(curl -s -o "${OUT}/devseed-register.json" -w '%{http_code}' \
+    -X POST "${base}/api/auth/register" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"${user}\",\"email\":\"${mail}\",\"password\":\"${pass}\",\"full_name\":\"Dev Admin\"}" || echo 000)"
+  code="${body}"
+
+  if [[ ${code} == "201" || ${code} == "200" ]]; then
+    record_case "devseed/registered" ok "${user}"
+  elif [[ ${code} == "409" ]]; then
+    # Already there from an earlier devseed on the same database. Not a
+    # failure, but the login check below still has to pass or the credentials
+    # this stage advertises are not the credentials that work.
+    record_case "devseed/registered" ok "${user} already existed"
+  else
+    record_case "devseed/registered" fail "register -> ${code}: $(head -c 300 "${OUT}/devseed-register.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
+  # The account is only useful if it can sign in and is actually an admin.
+  # Asserting the role is the point: a seed that silently produced a member
+  # would look fine until the first admin page 403s.
+  code="$(curl -s -o "${OUT}/devseed-login.json" -w '%{http_code}' \
+    -X POST "${base}/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username_or_email\":\"${user}\",\"password\":\"${pass}\"}" || echo 000)"
+  if [[ ${code} != "200" ]]; then
+    record_case "devseed/login" fail "login as ${user} -> ${code}: $(head -c 300 "${OUT}/devseed-login.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/login" ok
+
+  if grep -q '"role":"Admin"' "${OUT}/devseed-login.json" \
+    || grep -q '"role": *"Admin"' "${OUT}/devseed-login.json"; then
+    record_case "devseed/is-admin" ok
+  else
+    record_case "devseed/is-admin" fail \
+      "signed in as ${mail} but the response does not say role Admin; setup_admin_email may not match"
+    emit_junit devseed
+    return 1
+  fi
+
+  log ""
+  log "  dev instance ready:  http://${STACK_HOST}:${SERVER_PORT}"
+  log "  sign in:             ${user} / ${pass}"
+  log "  tear down:           reaper down"
+  log ""
+
+  emit_junit devseed
 }
 # ===========================================================================
 stage_down() {
