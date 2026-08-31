@@ -1747,33 +1747,27 @@ impl DatabaseManager {
             return Ok(true); // No training required
         }
 
-        // Get all required training steps for this tool
-        use crate::schema::training_steps;
-        let mut conn = self.get_connection()?;
-
-        let required_steps: Vec<uuid::Uuid> = training_steps::table
-            .filter(training_steps::tool_id.eq(tool_id))
-            .select(training_steps::id)
-            .load::<uuid::Uuid>(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-
-        // Check if user has completed all required steps with valid (non-expired) certifications
-        for step_id in required_steps {
-            // Check for any completed training for this step
-            let has_completed_training = crate::schema::user_training_progress::table
-                .filter(crate::schema::user_training_progress::user_id.eq(user_id))
-                .filter(crate::schema::user_training_progress::training_step_id.eq(step_id))
-                .count()
-                .get_result::<i64>(&mut conn)
-                .map_err(DatabaseError::Diesel)?
-                > 0;
-
-            if !has_completed_training {
-                return Ok(false); // Missing training for this step
-            }
-        }
-
-        Ok(true) // All required training is complete and valid
+        // One rule, one implementation.
+        //
+        // This used to re-derive the answer with a bare existence test --
+        // `count() > 0` against user_training_progress, reading neither
+        // `status` nor `expires_at` -- while the toolguard sync path asked
+        // `user_has_completed_all_training_steps`, which reads both.
+        //
+        // They disagreed in the direction that matters. `start_training_session`
+        // is self-serve for your own user and upserts, so a member could grant
+        // themselves web-reported access to any tool by pressing Start Training
+        // once per step. An expired certification still read as access, and so
+        // did a `failed` step. The physical guard refused all three, so the web
+        // UI told members they could use machines the door would not open.
+        //
+        // Deliberately still not identical to the sync path: that one keys off
+        // `tool_has_training_steps` and ignores `tool.requires_training`, so a
+        // tool with the flag off and steps configured is answered differently
+        // there than here. Changing what the physical guard permits is a
+        // separate decision and is not being made silently inside a fix to the
+        // web path. checks/tests/tool_access_agrees.rs pins both halves.
+        self.user_has_completed_all_training_steps(user_id, tool_id)
     }
 
     // Placeholder implementations for complex training methods
