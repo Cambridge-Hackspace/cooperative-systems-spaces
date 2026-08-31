@@ -176,6 +176,21 @@ That last one is the asymmetry to remember when reading a green pipeline: CI
 covers eleven of the twelve tiers, and the twelfth says so out loud rather than
 passing quietly.
 
+**And it now costs more than it used to.** Tier 10 owns the only completed
+WebAuthn ceremonies in the repository — `passkey.spec.ts` needs a browser for
+the virtual authenticator and the real stack for `webauthn-rs` to verify against,
+which is exactly the pair of requirements no CI job satisfies. So a green
+pipeline is not evidence that a passkey works, and the pre-push loop is the only
+thing that checks it.
+
+That is worth fixing rather than only recording. The shape of the fix is a CI
+job that has both halves: the `stack` job's `services:` Postgres plus the
+`browser-fake` job's Playwright container, running `--only up,mfa,audit`. It is
+not done here because it is a workflow change with its own failure modes — a job
+that silently skips the audit stage would be worse than the honest skip that
+exists now — and because it should be measured against the runner this project
+actually uses rather than written blind.
+
 **Which machine.** The Linux jobs run on `${{ vars.CI_RUNNER || 'ubuntu-latest' }}`.
 Unset means GitHub-hosted, which is what a fork or a clone gets with no
 configuration at all. Set the repository or organization variable `CI_RUNNER` to
