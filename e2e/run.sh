@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -644,6 +644,37 @@ stage_contract() {
 
   collect_server_log
   emit_junit contract "driver=contract.mjs"
+}
+
+# ===========================================================================
+# mfa -- Tier 6, the second factor against a real HMAC and a real database
+# ===========================================================================
+# The only stage that can answer whether a second factor actually gates the
+# JWT. Everything cheaper stops one step short of it: the unit tests verify a
+# code against a secret with no user, the contract matrix proves the eleven MFA
+# routes refuse an anonymous caller but never that one accepts a legitimate
+# credential, and the browser tier runs against a fake that accepts a constant.
+#
+# Placed after `contract` because it registers its own accounts and needs
+# nothing the earlier stages leave behind, and before `fuzz` because fuzz
+# hammers the same endpoints with hostile input -- a real defect found here
+# reads far better than the same defect found as a 500 in a fuzz log.
+stage_mfa() {
+  cases_begin mfa
+  stack_paths
+
+  if ! server_ready; then
+    record_case "mfa/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit mfa
+    return 1
+  fi
+  record_case "mfa/stack-is-up" ok
+
+  run_node mfa.mjs >"${OUT}/logs/mfa.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit mfa "driver=mfa.mjs"
 }
 
 # ===========================================================================

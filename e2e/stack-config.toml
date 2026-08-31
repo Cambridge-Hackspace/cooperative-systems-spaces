@@ -117,6 +117,45 @@ password_min_length = 8
 session_timeout_minutes = 1440
 password_reset_enabled = true
 
+[auth.mfa]
+# On, and that is load-bearing rather than decorative. With `enabled = false`
+# the whole enrollment surface answers 403 before it does anything, so the
+# `mfa` stage would report a tidy row of refusals and prove nothing -- which is
+# why the driver checks this flag first and fails loudly rather than skipping.
+#
+# `OptIn`, not `RequiredForAll`: enforcement decides only who is *told* to
+# enroll, and turning it up would put a `must_enroll_mfa` flag on every account
+# the other twelve stages create, for no assertion any of them makes. The
+# enforcement table itself is settled exhaustively in
+# `server/src/config.rs`'s `mfa_enforcement_tests`, which needs no stack.
+enabled = true
+enforcement = "OptIn"
+allow_totp = true
+allow_webauthn = true
+issuer = "CSS E2E"
+recovery_code_count = 10
+# `localhost`, and NOT the 127.0.0.1 the drivers actually connect to, which
+# looks like an inconsistency and is not.
+#
+# `WebauthnBuilder::new` validates that the rp_id is the effective domain of the
+# origin, and it does so through `Url::domain()` -- which returns `None` for an
+# IP literal, because an IP address is not a domain. So
+# `relying_party_origin = "http://127.0.0.1:4399"` fails that check however the
+# rp_id is written, `MfaService::new` logs and sets `webauthn: None`, and every
+# passkey endpoint answers 403 "WebAuthn disabled" while looking configured.
+#
+# That failure is silent by design -- it is the fail-soft path, so a deployment
+# that fat-fingers this loses passkeys and keeps TOTP rather than failing to
+# boot -- which is exactly why the stage asserts a ceremony actually starts
+# rather than trusting the file. `a_misconfigured_relying_party_disables_
+# webauthn_instead_of_panicking` in server/src/mfa.rs pins the same behavior.
+#
+# Nothing here opens a browser at this origin: the value's only job is to let
+# the instance build so `register/begin` and `start_passkey_authentication` run.
+relying_party_id = "localhost"
+relying_party_name = "CSS E2E"
+relying_party_origin = "http://localhost:@SERVER_PORT@"
+
 [registration_challenge]
 enabled = false
 hint = ""
