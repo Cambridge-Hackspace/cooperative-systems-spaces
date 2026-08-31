@@ -1944,3 +1944,202 @@ mod tests {
         assert!(err.to_string().contains("jwt_secret"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tier 1: MFA enrollment enforcement.
+// ---------------------------------------------------------------------------
+// `is_required_for` is the whole of the enrollment policy. It decides the
+// `must_enroll_mfa` flag on the login response and the `must_enroll` field the
+// settings page reads, and it is fifteen (enforcement x role) answers behind
+// one `match` with a short-circuit in front of it.
+//
+// A partial table here would be worse than none: the enforcement variants are
+// exactly the kind of thing that gets extended -- "required for staff, but not
+// on the kiosk" -- and the failure mode of getting one cell wrong is either a
+// role that is silently never asked to enroll, or a role locked out of a system
+// it was never meant to be locked out of. So the table is exhaustive, and the
+// two `match`es below are wildcard-free so that adding a variant to either enum
+// fails to compile here rather than defaulting quietly to someone's guess.
+#[cfg(test)]
+mod mfa_enforcement_tests {
+    use super::{AuthMfaConfig, MfaEnforcement};
+    use crate::models::UserRole;
+
+    const ALL_ROLES: [UserRole; 5] = [
+        UserRole::Unknown,
+        UserRole::Newbie,
+        UserRole::Member,
+        UserRole::Staff,
+        UserRole::Admin,
+    ];
+
+    const ALL_ENFORCEMENTS: [MfaEnforcement; 3] = [
+        MfaEnforcement::OptIn,
+        MfaEnforcement::RequiredForStaff,
+        MfaEnforcement::RequiredForAll,
+    ];
+
+    /// Wildcard-free on purpose: a new `UserRole` variant fails to compile
+    /// here, which forces whoever adds it to decide what MFA policy it carries
+    /// and to add it to `ALL_ROLES` above.
+    fn role_name(role: &UserRole) -> &'static str {
+        match role {
+            UserRole::Unknown => "Unknown",
+            UserRole::Newbie => "Newbie",
+            UserRole::Member => "Member",
+            UserRole::Staff => "Staff",
+            UserRole::Admin => "Admin",
+        }
+    }
+
+    /// Likewise for the enforcement setting.
+    fn enforcement_name(e: &MfaEnforcement) -> &'static str {
+        match e {
+            MfaEnforcement::OptIn => "OptIn",
+            MfaEnforcement::RequiredForStaff => "RequiredForStaff",
+            MfaEnforcement::RequiredForAll => "RequiredForAll",
+        }
+    }
+
+    fn config(enabled: bool, enforcement: MfaEnforcement) -> AuthMfaConfig {
+        AuthMfaConfig {
+            enabled,
+            enforcement,
+            ..AuthMfaConfig::default()
+        }
+    }
+
+    /// The whole policy, written out rather than derived. A table computed from
+    /// `is_required_for` would agree with it however it changed.
+    fn expected(enforcement: MfaEnforcement, role: &UserRole) -> bool {
+        match (enforcement, role_name(role)) {
+            (MfaEnforcement::OptIn, _) => false,
+            (MfaEnforcement::RequiredForStaff, "Staff" | "Admin") => true,
+            (MfaEnforcement::RequiredForStaff, _) => false,
+            (MfaEnforcement::RequiredForAll, _) => true,
+        }
+    }
+
+    #[test]
+    fn the_enrollment_policy_is_exactly_this_table() {
+        for enforcement in ALL_ENFORCEMENTS {
+            for role in &ALL_ROLES {
+                let cfg = config(true, enforcement);
+                assert_eq!(
+                    cfg.is_required_for(role),
+                    expected(enforcement, role),
+                    "{} + {} answered the wrong way",
+                    enforcement_name(&enforcement),
+                    role_name(role),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opt_in_never_requires_anybody() {
+        // The default, and the one that must never start demanding enrollment
+        // by accident: `MfaEnforcement::default()` is `OptIn`, so this is what
+        // every deployment that has not thought about MFA gets.
+        assert_eq!(MfaEnforcement::default(), MfaEnforcement::OptIn);
+        let cfg = config(true, MfaEnforcement::OptIn);
+        for role in &ALL_ROLES {
+            assert!(
+                !cfg.is_required_for(role),
+                "OptIn required enrollment of {}",
+                role_name(role)
+            );
+        }
+    }
+
+    #[test]
+    fn required_for_staff_means_staff_and_admin_and_nobody_else() {
+        let cfg = config(true, MfaEnforcement::RequiredForStaff);
+        assert!(cfg.is_required_for(&UserRole::Staff));
+        assert!(cfg.is_required_for(&UserRole::Admin));
+        for role in [UserRole::Unknown, UserRole::Newbie, UserRole::Member] {
+            assert!(
+                !cfg.is_required_for(&role),
+                "RequiredForStaff required enrollment of {}",
+                role_name(&role)
+            );
+        }
+    }
+
+    #[test]
+    fn required_for_all_includes_the_roles_that_are_easy_to_forget() {
+        // `Unknown` is the defensive default a user gets when their role could
+        // not be read, and `Newbie` is the role a self-registration lands in.
+        // Both are easy to leave out of a "required for all" and neither should
+        // be.
+        let cfg = config(true, MfaEnforcement::RequiredForAll);
+        for role in &ALL_ROLES {
+            assert!(
+                cfg.is_required_for(role),
+                "RequiredForAll exempted {}",
+                role_name(role)
+            );
+        }
+    }
+
+    #[test]
+    fn the_master_toggle_beats_every_enforcement_setting() {
+        // The short-circuit, and the reason it matters: with MFA switched off,
+        // every enrollment route answers 403. A deployment that left
+        // `enforcement = "RequiredForAll"` behind while turning `enabled` off
+        // would otherwise tell every user they must enroll, through the only
+        // door that is bolted shut. That is a total lockout of the settings
+        // page, delivered by a configuration change that reads like a
+        // switch-off.
+        for enforcement in ALL_ENFORCEMENTS {
+            let cfg = config(false, enforcement);
+            for role in &ALL_ROLES {
+                assert!(
+                    !cfg.is_required_for(role),
+                    "MFA is disabled but {} + {} still demanded enrollment",
+                    enforcement_name(&enforcement),
+                    role_name(role)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_config_demands_nothing_of_anybody() {
+        // What a fresh install gets: disabled, opt-in. Both halves matter, and
+        // a change to either is a change to what every existing deployment does
+        // on its next restart.
+        let cfg = AuthMfaConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.enforcement, MfaEnforcement::OptIn);
+        assert!(
+            cfg.allow_totp,
+            "TOTP is the fallback when there is no passkey"
+        );
+        assert_eq!(
+            cfg.recovery_code_count, 10,
+            "the count is what a user is handed once and never shown again"
+        );
+        for role in &ALL_ROLES {
+            assert!(!cfg.is_required_for(role));
+        }
+    }
+
+    #[test]
+    fn the_enforcement_setting_survives_a_config_round_trip() {
+        // The variants are serialized into config.toml by name. A rename would
+        // silently fall back to the serde default on the next load, quietly
+        // downgrading a deployment from RequiredForAll to OptIn.
+        for enforcement in ALL_ENFORCEMENTS {
+            let cfg = config(true, enforcement);
+            let text = toml::to_string(&cfg).expect("serializes");
+            let back: AuthMfaConfig = toml::from_str(&text).expect("deserializes");
+            assert_eq!(
+                back.enforcement,
+                enforcement,
+                "{} did not survive a round trip through TOML",
+                enforcement_name(&enforcement)
+            );
+        }
+    }
+}

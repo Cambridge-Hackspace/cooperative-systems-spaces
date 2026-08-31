@@ -37,6 +37,17 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@MQTT_PORT@", "1883"),
 ];
 
+/// The value `substituted()` puts in for one placeholder, by name rather than
+/// by position -- so reordering SUBSTITUTIONS cannot quietly change what an
+/// assertion below is comparing against.
+fn substitution_for(token: &str) -> &'static str {
+    SUBSTITUTIONS
+        .iter()
+        .find(|(t, _)| *t == token)
+        .map(|(_, v)| *v)
+        .unwrap_or_else(|| panic!("{token} is not in SUBSTITUTIONS"))
+}
+
 fn substituted() -> String {
     let mut out = TEMPLATE.to_string();
     for (token, value) in SUBSTITUTIONS {
@@ -94,6 +105,46 @@ fn the_stack_config_parses_as_an_app_config() {
         config.toolguard.enabled,
         "the toolguard endpoints are the subject of the authentication fix the \
          contract stage asserts"
+    );
+    assert!(
+        config.auth.mfa.enabled,
+        "the mfa stage enrolls a second factor and then checks that a password \
+         alone stops issuing a token; with MFA switched off the whole \
+         enrollment surface answers 403 before doing anything, and the stage \
+         would report a row of refusals as though it had proved something"
+    );
+    assert!(
+        config.auth.mfa.allow_totp,
+        "the mfa stage's only enrollable factor is TOTP -- no stage can drive a \
+         real authenticator -- so with TOTP disallowed there is nothing for it \
+         to enroll"
+    );
+    assert_eq!(
+        config.auth.mfa.enforcement,
+        css_server::config::MfaEnforcement::OptIn,
+        "anything stricter puts must_enroll_mfa on every account the other \
+         stages create, which no assertion of theirs wants and which would make \
+         a login response shape depend on this file"
+    );
+    assert_eq!(
+        config.auth.mfa.relying_party_id, "localhost",
+        "the rp_id must be the effective domain of the origin above, or the \
+         same silent 403 applies"
+    );
+    assert_eq!(
+        config.auth.mfa.recovery_code_count, 10,
+        "the mfa stage asserts the exact count issued at enrollment and the \
+         exact remainder after spending one; a different count here makes those \
+         two assertions disagree with the driver rather than with the server"
+    );
+    assert_eq!(
+        config.auth.mfa.relying_party_origin,
+        format!("http://localhost:{}", substitution_for("@SERVER_PORT@")),
+        "the WebAuthn relying party origin must be a *domain*, not the \
+         127.0.0.1 the drivers connect to: `WebauthnBuilder::new` validates the \
+         rp_id through `Url::domain()`, which is None for an IP literal, so an \
+         IP origin makes the instance fail to build and every passkey endpoint \
+         answer 403 while looking configured"
     );
 }
 

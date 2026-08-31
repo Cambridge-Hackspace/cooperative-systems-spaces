@@ -90,6 +90,7 @@ const KNOWN_PATHS: RegExp[] = [
   /^\/calendar\/events$/,
   /^\/public\/(schedules|home-links)$/,
   /^\/auth\/(login|logout|me)$/,
+  /^\/auth\/mfa\/verify$/,
   /^\/profiles\/config$/,
   /^\/profiles\/[^/]+$/,
   /^\/tools$/,
@@ -332,7 +333,31 @@ const api: Connect.NextHandleFunction = (req, res) => {
     if (path === '/auth/login' && method === 'POST') {
       const session = world.login(asText(body.username_or_email), asText(body.password))
       if (!session) return err(res, 401, 'Wrong credentials')
+      if (session.kind === 'mfa') {
+        // Shaped exactly like `build_login_challenge`'s return: `mfa_required`
+        // is what `isMfaChallenge` keys off, and it must be the boolean rather
+        // than the string, or the client takes the token branch with no token.
+        return ok(res, {
+          mfa_required: true,
+          challenge_token: session.challengeToken,
+          methods: session.methods,
+          webauthn_options: null,
+        })
+      }
       return ok(res, { token: session.token, user: session.user, expires_in: 86400 })
+    }
+
+    // Public on the real server -- `Guard::Public` in the contract tier's route
+    // table -- because the caller has no token yet. It is the challenge token,
+    // not a credential, that says who they are.
+    if (path === '/auth/mfa/verify' && method === 'POST') {
+      const outcome = world.verifyMfa(
+        asText(body.challenge_token),
+        asText(body.method),
+        asText(body.code)
+      )
+      if ('error' in outcome) return err(res, outcome.status, outcome.error)
+      return ok(res, { token: outcome.token, user: outcome.user, expires_in: 86400 })
     }
 
     if (path === '/auth/logout' && method === 'POST') {

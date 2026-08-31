@@ -65,6 +65,25 @@ export interface Armed {
 
 const PASSWORD = 'fake-password'
 
+/**
+ * The code this fake accepts as a valid authenticator code.
+ *
+ * A constant, and deliberately not a real HMAC. The fake's rule is that it
+ * decides *what to answer* and never *whether an answer is valid* -- but TOTP
+ * is the one place where honoring that literally would mean reimplementing
+ * RFC 6238 in the fake, which is exactly the "agrees with its own copy of the
+ * rules" failure the header warns about.
+ *
+ * So the split is drawn differently here: **the cryptography is not this
+ * tier's question.** Whether a code verifies is settled deterministically in
+ * `server/src/mfa.rs` (skew, digits, wrong secret) and end to end against a
+ * real HMAC in the stack battery's `mfa` stage. What this tier owns is the
+ * protocol around it -- that a challenge does not authenticate, that a wrong
+ * code does not, that a spent challenge cannot be reused -- and none of that
+ * depends on how the six digits were derived.
+ */
+const VALID_TOTP = '123456'
+
 function user(over: Partial<User> = {}): User {
   return {
     id: '00000000-0000-4000-8000-000000000001',
@@ -92,6 +111,16 @@ export class World {
   doorRules: Array<Record<string, unknown>> = []
   /** Tokens the fake has issued, mapped to the user they belong to. */
   sessions = new Map<string, string>()
+  /**
+   * Outstanding MFA challenges, mapped to the user awaiting verification.
+   *
+   * A map rather than a single value because the store on the real server is
+   * one too, and because a spec that abandons one challenge and starts another
+   * must not find the first still spendable.
+   */
+  challenges = new Map<string, string>()
+  /** Unspent recovery codes for the enrolled user. Consumed on use. */
+  recoveryCodes: string[] = []
   armed: Armed[] = []
   /** Every request the fake has seen, so a spec can assert on retries. */
   requests: Array<{ method: string; path: string }> = []
@@ -110,7 +139,19 @@ export class World {
         email: 'alan@fake.invalid',
         role: UserRole.Newbie,
       }),
+      // The only user in the world with a second factor. Without one, the
+      // browser tier never takes the challenge branch of `/auth/login` --
+      // which is how the entire MFA login flow went untested at this tier
+      // while `mfa_enrolled_at: null` sat in the fixture looking deliberate.
+      user({
+        id: 'enrolled-1',
+        username: 'hedy',
+        email: 'hedy@fake.invalid',
+        mfa_enrolled_at: '2026-01-02T00:00:00Z',
+      }),
     ]
+    this.challenges.clear()
+    this.recoveryCodes = ['ABCD-EFGH-JKLM', 'NPQR-STUV-WXYZ']
     this.profileFields = [
       {
         key: 'card_id',
@@ -192,16 +233,77 @@ export class World {
     return this.users.find((u) => u.id === id)
   }
 
-  login(usernameOrEmail: string, password: string): { token: string; user: User } | null {
+  login(
+    usernameOrEmail: string,
+    password: string
+  ):
+    | { kind: 'ok'; token: string; user: User }
+    | { kind: 'mfa'; challengeToken: string; methods: string[] }
+    | null {
     if (password !== PASSWORD) return null
     const found = this.users.find(
       (u) => u.username === usernameOrEmail || u.email === usernameOrEmail
     )
     if (!found) return null
-    const token = `fake-token-${found.id}-${this.sessions.size}`
-    this.sessions.set(token, found.id)
-    return { token, user: found }
+
+    // The branch the real server takes at api/auth.rs:242. A user with a
+    // second factor gets a challenge, never a token -- so nothing in
+    // `sessions` is created here, and there is nothing for the client to
+    // mistake for a session.
+    if (found.mfa_enrolled_at) {
+      const challengeToken = `fake-challenge-${found.id}-${this.challenges.size}`
+      this.challenges.set(challengeToken, found.id)
+      const methods = ['totp']
+      if (this.recoveryCodes.length > 0) methods.push('recovery')
+      return { kind: 'mfa', challengeToken, methods }
+    }
+
+    return { kind: 'ok', ...this.issueSession(found) }
+  }
+
+  private issueSession(u: User): { token: string; user: User } {
+    const token = `fake-token-${u.id}-${this.sessions.size}`
+    this.sessions.set(token, u.id)
+    return { token, user: u }
+  }
+
+  /**
+   * Complete a challenge, or refuse it.
+   *
+   * The challenge is consumed **before** the code is judged, which is what the
+   * real server does: `verify_login` calls `take_login` at the top, so a wrong
+   * code costs the user the whole challenge and not just the attempt. Getting
+   * this wrong in the fake would hide the finding pinned in
+   * `tests/e2e/mfa-login.spec.ts`.
+   */
+  verifyMfa(
+    challengeToken: string,
+    method: string,
+    code: string
+  ): { token: string; user: User } | { error: string; status: number } {
+    const userId = this.challenges.get(challengeToken)
+    if (!userId) {
+      return { error: 'Unknown or expired challenge_token', status: 401 }
+    }
+    this.challenges.delete(challengeToken)
+
+    const found = this.users.find((u) => u.id === userId)
+    if (!found) return { error: 'User no longer exists', status: 401 }
+
+    if (method === 'totp') {
+      if (code !== VALID_TOTP) return { error: 'Invalid TOTP code', status: 401 }
+      return this.issueSession(found)
+    }
+    if (method === 'recovery') {
+      const i = this.recoveryCodes.indexOf(code)
+      if (i < 0) return { error: 'Invalid recovery code', status: 401 }
+      // Single use, like the real `mark_recovery_code_used`.
+      this.recoveryCodes.splice(i, 1)
+      return this.issueSession(found)
+    }
+    return { error: `Unknown method: ${method}`, status: 400 }
   }
 }
 
 export const PASSWORD_FOR_SPECS = PASSWORD
+export const VALID_TOTP_FOR_SPECS = VALID_TOTP

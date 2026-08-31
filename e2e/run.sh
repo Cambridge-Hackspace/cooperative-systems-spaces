@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -647,6 +647,37 @@ stage_contract() {
 }
 
 # ===========================================================================
+# mfa -- Tier 6, the second factor against a real HMAC and a real database
+# ===========================================================================
+# The only stage that can answer whether a second factor actually gates the
+# JWT. Everything cheaper stops one step short of it: the unit tests verify a
+# code against a secret with no user, the contract matrix proves the eleven MFA
+# routes refuse an anonymous caller but never that one accepts a legitimate
+# credential, and the browser tier runs against a fake that accepts a constant.
+#
+# Placed after `contract` because it registers its own accounts and needs
+# nothing the earlier stages leave behind, and before `fuzz` because fuzz
+# hammers the same endpoints with hostile input -- a real defect found here
+# reads far better than the same defect found as a 500 in a fuzz log.
+stage_mfa() {
+  cases_begin mfa
+  stack_paths
+
+  if ! server_ready; then
+    record_case "mfa/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit mfa
+    return 1
+  fi
+  record_case "mfa/stack-is-up" ok
+
+  run_node mfa.mjs >"${OUT}/logs/mfa.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit mfa "driver=mfa.mjs"
+}
+
+# ===========================================================================
 # fuzz -- Tier 7, seeded, against the live stack
 # ===========================================================================
 # The cheapest defect-per-line in this suite. Three oracles that need no model
@@ -1038,6 +1069,19 @@ stage_audit() {
   fi
   record_case "audit/playwright-installed" ok
 
+  # Two origins for one server, and they are not interchangeable.
+  #
+  # CSS_BASE_URL is 127.0.0.1 because that is what the server binds and what
+  # every other spec in tests/live uses. CSS_RP_ORIGIN is `localhost` because
+  # the WebAuthn relying party is configured for a *domain* -- an IP literal
+  # fails `Url::domain()` in `WebauthnBuilder::new` -- and a browser refuses an
+  # rp_id that is not a suffix of the page's own domain, before the server is
+  # ever contacted. So the passkey spec must load the page from the name the
+  # relying party names, and it gets that name from here rather than guessing.
+  #
+  # Kept in step with `relying_party_origin` in e2e/stack-config.toml by hand;
+  # server/tests/stack_config_parses.rs asserts that file's value, and
+  # tests/live/passkey.spec.ts asserts the application actually answers here.
   log "running the live browser audit"
   local rc=0
   pm run --rm --network host \
@@ -1046,6 +1090,7 @@ stage_audit() {
     -e CI=1 \
     -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
+    -e CSS_RP_ORIGIN="http://localhost:${SERVER_PORT}" \
     "${IMG_PLAYWRIGHT}" \
     npx playwright test --config playwright.live.config.ts \
     >"${OUT}/logs/audit.log" 2>&1 || rc=$?
@@ -1321,9 +1366,12 @@ done
   # --- what this run is not claiming ---------------------------------------
   echo "## Narrowings in force"
   echo
-  echo "- Tiers 5, 9, 10 and 11 have no stage here. They are absent from"
-  echo "  STAGES_ALL rather than present-and-skipped, so this run makes no claim"
-  echo "  about them at all. TESTING.md \S2 is the tier-by-tier status."
+  echo "- The WebAuthn ceremonies are completed against Chromium's virtual"
+  echo "  authenticator, not against hardware. The keys, signatures and CTAP2"
+  echo "  responses are real and webauthn-rs verifies them as it does in"
+  echo "  production; what is simulated is the device. So this proves the server"
+  echo "  accepts a conformant authenticator, not that any particular YubiKey or"
+  echo "  platform authenticator behaves conformantly."
   if [[ ${PG_ENCODING} != "UTF8" ]]; then
     echo "- The invite-redemption race was NOT exercised: a device invite code is"
     echo "  eight emoji and this cluster (${PG_ENCODING}) cannot store one. The"
