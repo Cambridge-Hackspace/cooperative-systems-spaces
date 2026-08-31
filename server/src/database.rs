@@ -1942,17 +1942,24 @@ impl DatabaseManager {
             crate::models::TrainingStatus::Failed
         };
 
-        // Calculate expiry date if training was passed
+        // One load, two values derived from it: how long the certification
+        // lasts, and what documentation the trainee was agreeing to at the
+        // moment they agreed.
+        let step = self.get_training_step_by_id(request.training_step_id)?;
+
         let expires_at = if request.passed {
-            // Get the training step to check expiry days
-            if let Some(step) = self.get_training_step_by_id(request.training_step_id)? {
-                step.calculate_expiry_date()
-            } else {
-                None
-            }
+            step.as_ref().and_then(|s| s.calculate_expiry_date())
         } else {
             None
         };
+
+        // Snapshotted on every completion that has a document, not only on a
+        // self-attestation. training_steps.training_materials_url is mutable,
+        // and a trainer signing somebody off against a written procedure has
+        // exactly the same problem if the procedure is edited afterwards: the
+        // record would silently come to mean something nobody agreed to.
+        let acknowledged_materials_url =
+            step.as_ref().and_then(|s| s.training_materials_url.clone());
 
         let res = diesel::update(
             user_training_progress::table
@@ -1965,6 +1972,7 @@ impl DatabaseManager {
             user_training_progress::expires_at.eq(expires_at),
             user_training_progress::assessment_score.eq(request.assessment_score),
             user_training_progress::notes.eq(&request.notes),
+            user_training_progress::acknowledged_materials_url.eq(acknowledged_materials_url),
             user_training_progress::updated_at.eq(chrono::Utc::now()),
         ))
         .returning(crate::models::UserTrainingProgress::as_returning())

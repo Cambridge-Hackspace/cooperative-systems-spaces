@@ -225,6 +225,7 @@ diesel::table! {
         created_by -> Uuid,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        self_attestable -> Bool,
     }
 }
 
@@ -258,6 +259,7 @@ diesel::table! {
         notes -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        acknowledged_materials_url -> Nullable<Text>,
     }
 }
 

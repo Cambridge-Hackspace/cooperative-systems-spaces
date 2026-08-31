@@ -32,6 +32,7 @@ pub struct CreateTrainingStepRequest {
     pub assessment_type: Option<AssessmentType>,
     pub duration_minutes: Option<i32>,
     pub expires_after_days: Option<i32>,
+    pub self_attestable: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,6 +44,7 @@ pub struct UpdateTrainingStepRequest {
     pub assessment_type: Option<AssessmentType>,
     pub duration_minutes: Option<i32>,
     pub expires_after_days: Option<i32>,
+    pub self_attestable: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,6 +104,32 @@ pub struct TrainingHistoryRecord {
     pub notes: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
+}
+
+/// Refuse a step that is both self-attestable and assessed.
+///
+/// Self-attestation is a member recording that they read something. An
+/// assessment is somebody else judging whether they can do something. A step
+/// claiming both would let a member certify themselves as having passed a
+/// practical -- which is precisely the case the completion gate exists to
+/// prevent, arriving through the step editor instead of the API.
+///
+/// Both arguments are the *effective* values for the step, not necessarily the
+/// ones a given request carried; see `update_training_step` for why that
+/// distinction matters.
+fn reject_self_attestable_assessment(
+    self_attestable: Option<bool>,
+    requires_assessment: Option<bool>,
+) -> Result<(), ApiError> {
+    if self_attestable == Some(true) && requires_assessment == Some(true) {
+        return Err(ApiError::BadRequest(
+            "A training step cannot be self-service and require an assessment. \
+             Self-service records that the trainee read something; an assessment \
+             records that somebody else judged them competent."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 // ==================== ROUTER ====================
@@ -273,6 +301,8 @@ async fn create_training_step(
     _staff: StaffUser,
     Json(payload): Json<CreateTrainingStepRequest>,
 ) -> Result<Json<ApiResponse<TrainingStep>>, ApiError> {
+    reject_self_attestable_assessment(payload.self_attestable, payload.requires_assessment)?;
+
     let new_step = NewTrainingStep {
         tool_id: payload.tool_id,
         step_number: payload.step_number,
@@ -284,6 +314,7 @@ async fn create_training_step(
         duration_minutes: payload.duration_minutes,
         expires_after_days: payload.expires_after_days,
         created_by: _staff.0.id,
+        self_attestable: payload.self_attestable,
     };
 
     let step_name = payload.step_name.clone();
@@ -356,6 +387,24 @@ async fn update_training_step(
     Path(step_id): Path<Uuid>,
     Json(payload): Json<UpdateTrainingStepRequest>,
 ) -> Result<Json<ApiResponse<TrainingStep>>, ApiError> {
+    // Against the row as it will be, not as this request describes it. Both
+    // fields are Option, and None means "leave alone" -- so a request carrying
+    // only `self_attestable: true` says nothing about assessment, and checking
+    // the payload alone would let it land on a step that already requires one.
+    let existing = state
+        .db
+        .get_training_step_by_id(step_id)
+        .map_err(|e| ApiError::from_db("Failed to load training step", e))?
+        .ok_or_else(|| ApiError::NotFound("Training step not found".to_string()))?;
+    reject_self_attestable_assessment(
+        Some(payload.self_attestable.unwrap_or(existing.self_attestable)),
+        Some(
+            payload
+                .requires_assessment
+                .unwrap_or(existing.requires_assessment),
+        ),
+    )?;
+
     let update_step = UpdateTrainingStep {
         step_name: payload.step_name,
         description: payload.description,
@@ -364,6 +413,7 @@ async fn update_training_step(
         assessment_type: payload.assessment_type,
         duration_minutes: payload.duration_minutes,
         expires_after_days: payload.expires_after_days,
+        self_attestable: payload.self_attestable,
     };
 
     let updated_step = state
@@ -749,12 +799,45 @@ async fn complete_training_session(
     Path(target_user_id): Path<Uuid>,
     Json(payload): Json<CompleteTrainingRequest>,
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
-    // Validate that user can complete this training
+    // Loaded because the gate below turns on a property of the step, and
+    // because a completion for a step that does not exist should say so rather
+    // than surfacing as a failed UPDATE.
+    //
+    // `database::complete_training_session` loads the same row again for the
+    // expiry and the acknowledged URL, so this is two reads of one row per
+    // completion. Left as it is: threading the step down would put an argument
+    // on that method purely to save a primary-key lookup on a path that runs
+    // once per person per training step.
+    let step = state
+        .db
+        .get_training_step_by_id(payload.training_step_id)
+        .map_err(|e| ApiError::from_db("Failed to load training step", e))?
+        .ok_or_else(|| ApiError::NotFound("Training step not found".to_string()))?;
+
+    // Three gates, and deliberately not the same rule as start_training_session:
+    //
+    //   staff             -- may complete anyone's anything.
+    //   instructor        -- certified for *this step*, so may sign off a trainee.
+    //   self-attestation  -- the subject themselves, on a self-attestable step.
+    //
+    // The third is narrow on purpose, and every clause of it is load-bearing.
+    // It applies only to the caller's own training, so it is not a route to
+    // completing somebody else's. It applies only to a step that somebody with
+    // staff rights marked self-attestable, so it is not available by default.
+    // And a self-attestable step can never require an assessment
+    // (reject_self_attestable_assessment), so this cannot become a member
+    // certifying themselves as competent at a machine.
+    //
+    // Which authority a caller used does not change what the act *is*: a person
+    // completing their own self-attestable step is attesting, whatever their
+    // role, and is held to the attestation rules below.
+    let is_self_attestation = step.self_attestable && user.0.id == target_user_id;
     let can_complete = user.0.role.can_access_staff()
         || state
             .db
             .is_certified_instructor(user.0.id, payload.training_step_id)
-            .map_err(|e| ApiError::from_db("Failed to check instructor status", e))?;
+            .map_err(|e| ApiError::from_db("Failed to check instructor status", e))?
+        || is_self_attestation;
 
     if !can_complete {
         return Err(ApiError::Forbidden(
@@ -762,30 +845,83 @@ async fn complete_training_session(
         ));
     }
 
+    if is_self_attestation {
+        // Reading a document is not graded. Accepting a score here would let a
+        // member post themselves a 100 on their own record.
+        if payload.assessment_score.is_some() {
+            return Err(ApiError::BadRequest(
+                "A self-service confirmation cannot carry an assessment score".to_string(),
+            ));
+        }
+        // Refused rather than silently overridden. `passed: false` on an
+        // attestation has no meaning -- you either confirm you read it or you
+        // do not send anything -- and quietly rewriting a caller's field is how
+        // a record ends up saying something nobody submitted.
+        if !payload.passed {
+            return Err(ApiError::BadRequest(
+                "A self-service confirmation cannot be recorded as not passed".to_string(),
+            ));
+        }
+    }
+
     let progress = state
         .db
         .complete_training_session(target_user_id, &payload)
         .map_err(|e| ApiError::from_db("Failed to complete training session", e))?;
 
-    // Log the training session completion to audit logs
-    if let Err(e) = state
-        .audit_logger
-        .log_event(
-            crate::models::AuditEventType::TrainingSessionCompleted,
-            Some(target_user_id),
-            Some(user.0.id),
+    // Two event types, because they are two different facts and a report that
+    // cannot tell them apart is not worth producing. Subject and actor are
+    // already separate fields on every audit row; an acknowledgment is the case
+    // where they are the same person, and the URL is what makes the row mean
+    // anything a year later.
+    let (event, detail) = if is_self_attestation {
+        (
+            crate::models::AuditEventType::TrainingDocumentationAcknowledged,
             serde_json::json!({
+                "summary": format!(
+                    "Confirmed having read the documentation for: {}",
+                    step.step_name
+                ),
+                "training_step_id": payload.training_step_id,
+                "step_name": step.step_name.clone(),
+                "acknowledged_materials_url": step.training_materials_url.clone(),
+                "notes": payload.notes.clone(),
+            }),
+        )
+    } else {
+        (
+            crate::models::AuditEventType::TrainingSessionCompleted,
+            serde_json::json!({
+                "summary": format!(
+                    "Training session completed with status: {:?}",
+                    payload.passed
+                ),
                 "training_step_id": payload.training_step_id,
                 "instructor_id": user.0.id,
                 "assessment_score": payload.assessment_score,
                 "passed": payload.passed,
                 "notes": payload.notes.clone()
             }),
+        )
+    };
+
+    // The sentence goes in `event_data`, not in the last argument. That
+    // argument is `user_agent`, and six other call sites in this file pass a
+    // human summary to it -- so audit rows in this system carry
+    // "Training step 'X' created" in the column that is supposed to say which
+    // client made the request. A record kept in order to be produced later
+    // should not have a field that says something untrue about the request, so
+    // this call site does not join them. The other six are pinned by
+    // checks/tests/audit_user_agent.rs rather than changed here.
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            event,
+            Some(target_user_id),
+            Some(user.0.id),
+            detail,
             None,
-            Some(format!(
-                "Training session completed with status: {:?}",
-                payload.passed
-            )),
+            None,
         )
         .await
     {
