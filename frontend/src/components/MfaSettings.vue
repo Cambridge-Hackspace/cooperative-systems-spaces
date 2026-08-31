@@ -73,10 +73,11 @@
                 </p>
               </div>
 
-              <label class="label"
+              <label class="label" for="mfa-totp-confirm"
                 ><span class="label-text">Enter the current 6-digit code to confirm</span></label
               >
               <input
+                id="mfa-totp-confirm"
                 v-model="totpConfirmCode"
                 type="text"
                 inputmode="numeric"
@@ -133,8 +134,11 @@
 
           <div class="flex items-end gap-2 mt-3">
             <div class="form-control flex-1">
-              <label class="label py-1"><span class="label-text">Label for this key</span></label>
+              <label class="label py-1" for="mfa-key-label"
+                ><span class="label-text">Label for this key</span></label
+              >
               <input
+                id="mfa-key-label"
                 v-model="newKeyLabel"
                 type="text"
                 class="input input-bordered input-sm"

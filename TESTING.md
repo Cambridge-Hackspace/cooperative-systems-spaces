@@ -60,7 +60,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Running.** A seeded driver takes 200 weighted actions through the shipping API — registrations, role changes, deactivations, deletions, door rules, profile-config writes, and three nemesis classes in the same pool — maintaining a shadow model and checking all six invariants every 20 actions. A recent run: 29 users, 24 door rules, 10 checks, no violation. Two of the six invariants cannot currently mean what they were written to mean, and say so rather than passing quietly: `deactivations-held` is vacuous because deactivated users are not listed at all, and `invites-are-single-use` can only check its count half because nothing links a device to its invite. Both are §8 findings, not test debt. |
-| 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Running.** 14 tests across desktop and phone viewports, against the real server over everything the earlier stages created. Injects nothing — that is Tier 5's job and doing it here would produce findings belonging to whichever stage noticed first. The oracle is a watchdog: every test records what the browser actually received and fails on any 5xx or uncaught page error, so a server error on a page that still looks fine is caught. The watchdog self-tests, because every other assertion in the file passes by it staying silent. |
+| 10 Live browser audit | Does the UI hold up over a world somebody else built? | **Running.** 22 tests across desktop and phone viewports, against the real server over everything the earlier stages created. Injects nothing — that is Tier 5's job and doing it here would produce findings belonging to whichever stage noticed first. The oracle is a watchdog: every test records what the browser actually received and fails on any 5xx or uncaught page error, so a server error on a page that still looks fine is caught. The watchdog self-tests, because every other assertion in the file passes by it staying silent. This tier also owns the only completed WebAuthn ceremonies in the repository: `passkey.spec.ts` attaches Chromium's virtual authenticator over CDP and enrolls a passkey, then signs in with it, so `finish_passkey_registration` and `finish_passkey_authentication` are verified against real signatures. |
 | 11 Human evidence | Does this make sense to a newcomer? | **Running.** Two halves. The contrast audit: WCAG relative luminance over all fourteen themes, OKLCH converted for daisyUI's built-ins, the reference implementation checked against three known answers — it found **36 semantic/base pairings below AA**, pinned as a ratchet. And the transcript: the journey driver records what a person would have been shown at each step, and a zero-dependency reader renders it as prose plus every distinct message with how often and to whom. It asserts almost nothing on purpose — the question has no oracle — but it made a real finding on its first run (§8, the generic conflict message). Runs on the workstation, where `css-server` cannot be built. |
 
 **Formatting and linting are complete and gating.** `rustfmt`, `prettier`,
@@ -480,23 +480,29 @@ never built server-side.
 the frontend can call it, and it can never succeed. Recorded by the fuzz tier's
 known-findings list rather than ignored.
 
-**No WebAuthn ceremony is exercised anywhere.** Every other branch of the MFA
-feature is now covered — the challenge store, TOTP against a real HMAC,
-recovery codes, enrollment enforcement, the login gate end to end — but the two
-passkey ceremonies are not. `webauthn-rs` is exercised only as far as
-`start_passkey_registration` and `start_passkey_authentication`, which are pure
-and run in the unit tests; `finish_passkey_registration` and
-`finish_passkey_authentication` need a signed assertion from an authenticator,
-and there is no authenticator in any of the three environments.
+**The WebAuthn ceremonies run against a virtual authenticator, not hardware.**
+This was the one uncovered branch, and it is now covered:
+`frontend/tests/live/passkey.spec.ts` attaches Chromium's virtual authenticator
+over the DevTools Protocol and completes both ceremonies against the real stack,
+so `finish_passkey_registration` and `finish_passkey_authentication` are
+exercised for real. The keys are real P-256 keys, the signatures are real, and
+`webauthn-rs` verifies them exactly as it does in production.
 
-The standing-in-the-way is specific and the fix is known: Chromium's
-`WebAuthn.addVirtualAuthenticator` over CDP, which Playwright can reach through
-`context.newCDPSession`. That would cover both ceremonies for real, in the
-browser tier, with no hardware. It is Chromium-only, so it would run in one
-project of two, and it is a unit of work in its own right rather than a line —
-which is why it is named here instead of being half-done. Until then, three
-places say so rather than implying coverage: the headers of
-`MfaSettings.spec.ts` and `tests/e2e/mfa-login.spec.ts`, and this paragraph.
+What remains narrowed is the device. A virtual authenticator is conformant by
+construction, and real ones are not: the interesting failures with hardware are
+vendor quirks — a key that refuses `credProtect`, one that reports UV it did not
+perform, one whose attestation format the server does not know. None of that is
+reachable without the hardware in the room, and no test suite substitutes for
+trying a real key once.
+
+Two smaller consequences worth writing down. The spec is Chromium-only, because
+the virtual authenticator is a Chromium DevTools domain; both Playwright
+projects in this repository are Chromium, so nothing is lost today, but adding a
+WebKit or Firefox project would silently reduce what runs. And the passkey spec
+loads the page from `localhost` while every other live spec uses `127.0.0.1` —
+not a style difference: a browser refuses an rp_id that is not a suffix of the
+page's domain, `WebauthnBuilder::new` refuses an origin that is not a domain at
+all, and those two constraints meet at exactly one value.
 
 **Clippy still does not run in CI.** The build is warning-free now — the last
 four went with the `AuthError` response deletion, an unmutated lock guard and a

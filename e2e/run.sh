@@ -1069,6 +1069,19 @@ stage_audit() {
   fi
   record_case "audit/playwright-installed" ok
 
+  # Two origins for one server, and they are not interchangeable.
+  #
+  # CSS_BASE_URL is 127.0.0.1 because that is what the server binds and what
+  # every other spec in tests/live uses. CSS_RP_ORIGIN is `localhost` because
+  # the WebAuthn relying party is configured for a *domain* -- an IP literal
+  # fails `Url::domain()` in `WebauthnBuilder::new` -- and a browser refuses an
+  # rp_id that is not a suffix of the page's own domain, before the server is
+  # ever contacted. So the passkey spec must load the page from the name the
+  # relying party names, and it gets that name from here rather than guessing.
+  #
+  # Kept in step with `relying_party_origin` in e2e/stack-config.toml by hand;
+  # server/tests/stack_config_parses.rs asserts that file's value, and
+  # tests/live/passkey.spec.ts asserts the application actually answers here.
   log "running the live browser audit"
   local rc=0
   pm run --rm --network host \
@@ -1077,6 +1090,7 @@ stage_audit() {
     -e CI=1 \
     -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
+    -e CSS_RP_ORIGIN="http://localhost:${SERVER_PORT}" \
     "${IMG_PLAYWRIGHT}" \
     npx playwright test --config playwright.live.config.ts \
     >"${OUT}/logs/audit.log" 2>&1 || rc=$?
@@ -1352,12 +1366,12 @@ done
   # --- what this run is not claiming ---------------------------------------
   echo "## Narrowings in force"
   echo
-  echo "- No WebAuthn ceremony is completed anywhere in this run. The passkey"
-  echo "  endpoints are driven as far as register/begin and every refusal"
-  echo "  around register/finish, but finishing one needs a signed assertion"
-  echo "  from a real authenticator and there is none in any environment this"
-  echo "  suite runs in. TESTING.md \S7 names the virtual authenticator that"
-  echo "  would close it."
+  echo "- The WebAuthn ceremonies are completed against Chromium's virtual"
+  echo "  authenticator, not against hardware. The keys, signatures and CTAP2"
+  echo "  responses are real and webauthn-rs verifies them as it does in"
+  echo "  production; what is simulated is the device. So this proves the server"
+  echo "  accepts a conformant authenticator, not that any particular YubiKey or"
+  echo "  platform authenticator behaves conformantly."
   if [[ ${PG_ENCODING} != "UTF8" ]]; then
     echo "- The invite-redemption race was NOT exercised: a device invite code is"
     echo "  eight emoji and this cluster (${PG_ENCODING}) cannot store one. The"

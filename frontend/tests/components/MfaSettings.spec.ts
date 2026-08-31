@@ -22,9 +22,12 @@
 //   * `tests/e2e/mfa-login.spec.ts`         -- a real browser, real reload.
 //   * `e2e/drivers/mfa.mjs`                 -- a real HMAC, real database.
 //
-// What none of them prove: that any WebAuthn ceremony works. The browser API is
-// mocked out here and in the browser tier alike. Driving a real one needs a
-// virtual authenticator; TESTING.md records that as the one uncovered branch.
+// What none of THOSE prove: that a WebAuthn ceremony works. The browser API is
+// mocked out here and in the fake-API tier alike, so what is asserted is that
+// the component calls it with the options the server sent and does the right
+// thing with each outcome. The ceremonies themselves are completed in
+// `tests/live/passkey.spec.ts`, which attaches Chromium's virtual authenticator
+// over CDP and runs them against the real stack.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -169,6 +172,38 @@ describe('what the server configuration allows', () => {
     expect((await settings({ recovery_codes_remaining: 3 })).text()).toContain(
       'Regenerate recovery codes'
     )
+  })
+})
+
+describe('the fields a person types into', () => {
+  it('associates both inputs with their labels', async () => {
+    // The same defect as the two on the login form, in the same feature: a
+    // `<label>` with no `for` whose input is a sibling is associated with
+    // nothing, so a screen reader announces an unlabeled text field and
+    // clicking the label focuses nothing.
+    //
+    // This is also what lets the live passkey tier address the key-label field
+    // by `getByLabel`, which is the same thing assistive technology does -- so
+    // the selector there is the accessibility assertion rather than a separate
+    // one somebody has to remember to write.
+    // Both fields have to be on screen at once, and the confirm field only
+    // exists once a setup is in progress -- so the setup call is arranged
+    // rather than left at its reset default, which resolves undefined and
+    // renders nothing.
+    mocks.totpSetup.mockResolvedValue({
+      success: true,
+      data: { secret_base32: 'JBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/css:me' },
+    })
+    const w = await settings({ totp_enrolled: false })
+    await buttonNamed(w, 'Set up authenticator').trigger('click')
+    await flushPromises()
+
+    for (const id of ['mfa-totp-confirm', 'mfa-key-label']) {
+      const label = w.find(`label[for="${id}"]`)
+      expect(label.exists(), `no label is associated with #${id}`).toBe(true)
+      expect(label.text().trim().length).toBeGreaterThan(0)
+      expect(w.find(`#${id}`).exists(), `#${id} does not exist`).toBe(true)
+    }
   })
 })
 

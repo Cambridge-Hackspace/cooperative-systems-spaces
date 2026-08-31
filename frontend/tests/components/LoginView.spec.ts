@@ -14,10 +14,11 @@
 // the session is authenticated yet, and a stubbed store cannot disagree with
 // anything.
 //
-// What this does NOT prove: that any WebAuthn ceremony works. `webauthnGet` is
+// What this does NOT prove: that a WebAuthn ceremony works. `webauthnGet` is
 // mocked, so what is asserted is that the view calls it with the options the
-// server sent and does the right thing with each of its two outcomes. A real
-// authenticator needs a virtual-authenticator browser session; see TESTING.md.
+// server sent and does the right thing with each of its two outcomes. The
+// ceremony itself -- a real P-256 signature, verified by webauthn-rs -- is
+// completed against the real stack in `tests/live/passkey.spec.ts`.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'

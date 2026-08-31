@@ -424,13 +424,14 @@ main(async () => {
   // -----------------------------------------------------------------------
   // The passkey enrollment ceremony, as far as it can be driven without one
   // -----------------------------------------------------------------------
-  // `finish_passkey_registration` needs a signed attestation from a real
-  // authenticator, and there is none in any environment this suite runs in --
-  // so what is asserted here is everything *around* the signature: the
-  // ceremony starts, the options are well formed, the challenge token is
-  // single-use, it is bound to the user who started it, and every refusal is a
-  // 4xx rather than a 500. TESTING.md §7 names the virtual authenticator that
-  // would close the remaining gap.
+  // `finish_passkey_registration` needs a signed attestation, which no HTTP
+  // driver can produce -- so what is asserted here is everything *around* the
+  // signature: the ceremony starts, the options are well formed, the challenge
+  // token is single-use, it is bound to the user who started it, and every
+  // refusal is a 4xx rather than a 500. The signature half is completed in
+  // frontend/tests/live/passkey.spec.ts, in the audit stage, against Chromium's
+  // virtual authenticator. The two halves are deliberately in different tiers:
+  // the refusals need no browser and should not pay for one.
   const wList = await GET('/api/auth/mfa/webauthn', { token: recJwt })
   assertEq('mfa/webauthn-credentials-can-be-listed', 200, wList.status)
   ok(
