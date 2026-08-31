@@ -103,10 +103,11 @@
           </div>
 
           <div v-if="method === 'totp'">
-            <label class="label"
+            <label class="label" for="mfa-totp-code"
               ><span class="label-text">6-digit code from your authenticator</span></label
             >
             <input
+              id="mfa-totp-code"
               v-model="totpCode"
               type="text"
               inputmode="numeric"
@@ -138,8 +139,11 @@
           </div>
 
           <div v-else-if="method === 'recovery'">
-            <label class="label"><span class="label-text">One of your recovery codes</span></label>
+            <label class="label" for="mfa-recovery-code"
+              ><span class="label-text">One of your recovery codes</span></label
+            >
             <input
+              id="mfa-recovery-code"
               v-model="recoveryCode"
               type="text"
               autocomplete="one-time-code"
