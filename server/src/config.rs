@@ -1251,8 +1251,8 @@ impl ConfigManager {
 
         info!("Reloading configuration from: {}", config_path.display());
 
-        let new_config =
-            AppConfig::from_file(config_path).with_context(|| "Failed to reload configuration")?;
+        let new_config = AppConfig::from_file_for_reload(config_path)
+            .with_context(|| "Failed to reload configuration")?;
 
         // Validate the new configuration
         validate_config(&new_config)?;
@@ -1447,6 +1447,241 @@ mod tests {
 
         // Compare (using debug format since we don't implement PartialEq)
         assert_eq!(format!("{:?}", config), format!("{:?}", loaded_config));
+    }
+
+    // -----------------------------------------------------------------------
+    // The live reload path
+    // -----------------------------------------------------------------------
+    // `ConfigManager::reload_config` is wired to `POST /api/admin/reload-config`
+    // and runs against a server that is already serving traffic. That is a
+    // different situation from boot and it needs a different loader.
+    //
+    // `from_file` responds to a missing field by merging in defaults, backing
+    // the old file up, and rewriting the original in place. At boot that is a
+    // service: nothing is serving yet, and the alternative is a deployment that
+    // will not start. On a live reload it is a surprise -- the admin edited the
+    // file by hand thirty seconds ago, and the endpoint answers "failed to
+    // reload" while their edit has been replaced by a wall of defaults and
+    // survives only in a timestamped backup they have no reason to look for.
+    //
+    // `from_file_for_reload` exists for exactly this and says so in its own doc
+    // comment. It was introduced *and wired up* in one commit; a later merge
+    // kept the function and dropped the call site, leaving a reload-safety
+    // helper with no callers anywhere in the tree. See issue #9.
+
+    /// A valid configuration on disk, and a manager pointed at it.
+    fn manager_on_disk(dir: &std::path::Path) -> (ConfigManager, std::path::PathBuf) {
+        let path = dir.join("config.toml");
+        let config = AppConfig::default();
+        config.to_file(&path).expect("write the fixture config");
+        let manager = ConfigManager::new(config, Some(path.clone()));
+        (manager, path)
+    }
+
+    /// Every `*.backup` sibling, which is what the boot loader's recovery path
+    /// leaves behind and the reload path must not.
+    fn backups_beside(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let dir = path.parent().expect("the config has a parent directory");
+        std::fs::read_dir(dir)
+            .expect("read the config directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|p| p.to_string_lossy().contains(".backup"))
+            .collect()
+    }
+
+    /// Remove a required field from a serialized configuration.
+    ///
+    /// The assertion that the removal changed something is not decoration; it
+    /// is the same guard the boot-loader tests above carry. A fixture that
+    /// removes a line the serializer never emits parses cleanly, and the test
+    /// then passes for the wrong reason while looking like it proves something.
+    fn without_a_required_field(text: &str) -> String {
+        let broken: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("lookahead_days"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            text.lines().count(),
+            broken.lines().count(),
+            "the fixture removed nothing; AppConfig no longer serializes lookahead_days"
+        );
+        broken
+    }
+
+    /// **The regression test for issue #9.**
+    ///
+    /// Mutation check: change `from_file_for_reload` back to `from_file` in
+    /// `reload_config` and this fails on the file-contents assertion, naming
+    /// the rewrite.
+    #[test]
+    fn a_failed_reload_does_not_rewrite_the_operators_file() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (manager, path) = manager_on_disk(dir.path());
+
+        // Anti-vacuity: the untouched fixture reloads cleanly, so a failure
+        // below is attributable to the field this test removes rather than to a
+        // fixture that never validated in the first place.
+        manager
+            .reload_config()
+            .expect("the untouched fixture must reload");
+
+        let broken =
+            without_a_required_field(&std::fs::read_to_string(&path).expect("read the fixture"));
+        std::fs::write(&path, &broken).expect("write the broken config");
+
+        let err = manager
+            .reload_config()
+            .expect_err("a reload of a config missing a required field must fail");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            broken,
+            "the reload rewrote the operator's config file in place"
+        );
+        assert!(
+            backups_beside(&path).is_empty(),
+            "the reload took the boot-time recovery path and left {:?}",
+            backups_beside(&path)
+        );
+        assert!(
+            err.downcast_ref::<ConfigRewritten>().is_none(),
+            "a live reload returned ConfigRewritten, which only the boot loader \
+             should ever produce"
+        );
+    }
+
+    /// A failed reload leaves the server running on what it already had.
+    ///
+    /// The in-memory configuration is still valid -- it is what the process
+    /// booted with -- so a bad edit must not be able to degrade a running
+    /// server, only to be rejected.
+    #[test]
+    fn a_failed_reload_leaves_the_running_configuration_in_place() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (manager, path) = manager_on_disk(dir.path());
+
+        let before = manager.get_config();
+        let broken =
+            without_a_required_field(&std::fs::read_to_string(&path).expect("read the fixture"));
+        std::fs::write(&path, &broken).expect("write the broken config");
+
+        manager
+            .reload_config()
+            .expect_err("a config missing a required field must not load");
+
+        assert_eq!(
+            format!("{:?}", manager.get_config()),
+            format!("{:?}", before),
+            "a rejected reload changed the running configuration"
+        );
+    }
+
+    /// A file that is not TOML at all is rejected without a rewrite.
+    ///
+    /// Distinct from the missing-field case: that one is a config a version
+    /// upgrade left incomplete, and merging defaults into it is defensible at
+    /// boot. This one is a typo, and rewriting it would replace whatever the
+    /// operator meant to write.
+    #[test]
+    fn a_reload_of_invalid_toml_does_not_rewrite_it() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (manager, path) = manager_on_disk(dir.path());
+
+        manager
+            .reload_config()
+            .expect("the untouched fixture must reload");
+
+        std::fs::write(&path, "this is not toml = = =").expect("write");
+
+        manager
+            .reload_config()
+            .expect_err("invalid TOML must not load");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            "this is not toml = = =",
+            "the reload modified a file it could not parse"
+        );
+        assert!(
+            backups_beside(&path).is_empty(),
+            "invalid TOML was treated as a missing-field migration"
+        );
+    }
+
+    /// The other half: a valid edit has to actually take effect.
+    ///
+    /// Without this, `reload_config` could satisfy every assertion above by
+    /// never reading the file at all.
+    #[test]
+    fn a_successful_reload_replaces_the_running_configuration() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (manager, path) = manager_on_disk(dir.path());
+
+        assert_ne!(
+            manager.get_config().site.site_name,
+            "Renamed By Reload",
+            "the fixture already carries the value this test writes"
+        );
+
+        let mut edited = manager.get_config();
+        edited.site.site_name = "Renamed By Reload".to_string();
+        edited.to_file(&path).expect("write the edited config");
+
+        manager
+            .reload_config()
+            .expect("a valid edit must reload cleanly");
+
+        assert_eq!(
+            manager.get_config().site.site_name,
+            "Renamed By Reload",
+            "the reload reported success without picking up the edit"
+        );
+        assert!(
+            backups_beside(&path).is_empty(),
+            "a successful reload should not back anything up"
+        );
+    }
+
+    /// The structural companion, and the one that survives a merge.
+    ///
+    /// Issue #9 was not a mistake in either loader -- both behave correctly for
+    /// what they were written to do. It was a merge that kept one branch's
+    /// function split alongside the other branch's call site, and no warning
+    /// fires for a `pub fn` with no callers in a library crate. The behavioral
+    /// tests above catch the defect; this one catches the shape of it, in the
+    /// place a future merge would reintroduce it.
+    #[test]
+    fn the_reload_path_calls_the_reload_loader() {
+        const SOURCE: &str = include_str!("config.rs");
+
+        let after = SOURCE
+            .split_once("pub fn reload_config")
+            .expect("config.rs no longer defines reload_config; rewrite this check")
+            .1;
+        let body = after
+            .split_once("\n    }\n")
+            .expect("reload_config's body is not delimited as expected; rewrite this check")
+            .0;
+
+        // Anti-vacuity: a body located incorrectly would be empty, and an empty
+        // body satisfies the negative assertion below while proving nothing.
+        assert!(
+            body.contains("config_path"),
+            "reload_config's body was not located correctly; this check needs \
+             rewriting rather than deleting"
+        );
+        assert!(
+            body.contains("from_file_for_reload("),
+            "reload_config does not use the reload loader -- see issue #9"
+        );
+        assert!(
+            !body.contains("from_file("),
+            "reload_config calls the boot loader `from_file`, which rewrites a \
+             config missing a field in place. Correct at boot, wrong for a live \
+             reload against a server that is serving traffic. See issue #9."
+        );
     }
 
     /// A configuration missing a required field must come back as an error.
