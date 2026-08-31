@@ -217,9 +217,77 @@ test.describe('a passkey, end to end', () => {
     ).not.toBeNull()
   })
 
+  test('a tampered signature is refused by the server, not by the browser', async ({
+    page,
+  }, testInfo) => {
+    // The assertion that actually proves `finish_passkey_authentication`
+    // *verifies* rather than merely parses.
+    //
+    // The `clearCredentials` test below is weaker than it looks, and its own
+    // comment says so: with no matching credential the browser rejects the
+    // ceremony before a single byte reaches the server, so what it proves is
+    // that the browser discriminates. Useful -- an application that signed
+    // somebody in anyway would be a real defect -- but it is not evidence
+    // about the server.
+    //
+    // So this one lets the ceremony succeed completely and corrupts the
+    // signature in flight. The credential is real, the challenge is real, the
+    // authenticator data is untouched, and only the signature is wrong: the
+    // exact shape of an attacker replaying a captured assertion against a
+    // fresh challenge. It has to be refused, and it has to be refused with a
+    // 4xx -- a 500 here would mean a bad signature crashes the verifier, which
+    // the watchdog in the afterEach would also catch.
+    await attachAuthenticator(page)
+    const username = await registerMember(page, `tamper_${testInfo.project.name}`)
+    await signInWithPassword(page, username)
+    await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 20_000 })
+    await enrollPasskey(page)
+
+    let tampered = false
+    await page.route('**/api/auth/mfa/verify', async (route) => {
+      const body = route.request().postDataJSON() as {
+        response?: { response?: { signature?: string } }
+      }
+      const inner = body?.response?.response
+      const sig = inner?.signature
+      if (!inner || typeof sig !== 'string' || sig.length < 8) {
+        // Refuse to continue silently. A shape change here would otherwise
+        // turn this test into "the login worked", which is the opposite of
+        // what it exists to assert.
+        throw new Error(
+          `expected a base64url signature at response.response.signature, got ` +
+            `${JSON.stringify(body).slice(0, 300)}`
+        )
+      }
+      // Flip one character to another base64url character, keeping the length
+      // and the alphabet -- so it still decodes, and the request reaches
+      // signature verification rather than dying in deserialization.
+      const at = Math.floor(sig.length / 2)
+      const swapped = sig[at] === 'A' ? 'B' : 'A'
+      inner.signature = sig.slice(0, at) + swapped + sig.slice(at + 1)
+      tampered = true
+      await route.continue({ postData: JSON.stringify(body) })
+    })
+
+    await page.evaluate(() => window.localStorage.clear())
+    await signInWithPassword(page, username)
+    await expect(page.getByText(/two-factor verification/i)).toBeVisible({ timeout: 20_000 })
+    await page.getByRole('button', { name: /use security key/i }).click()
+
+    await expect(page.locator('.alert-error')).toBeVisible({ timeout: 20_000 })
+    expect(tampered, 'the verify request was never intercepted, so nothing was tampered').toBe(true)
+    expect(
+      await page.evaluate(() => window.localStorage.getItem('css_token')),
+      'the server accepted an assertion whose signature had been altered'
+    ).toBeNull()
+  })
+
   test('a key from another account does not open this one', async ({ page }, testInfo) => {
-    // The assertion that makes the two above mean something. A server that
-    // accepted any well-formed assertion would pass both of them.
+    // The browser's half of the discrimination: an authenticator that holds no
+    // credential matching the allow-list cannot produce an assertion at all.
+    // This is deliberately NOT the evidence that the server verifies anything
+    // -- the rejection happens client-side, before the request is made. The
+    // tampered-signature test above is what covers the server.
     const { client, authenticatorId } = await attachAuthenticator(page)
 
     const mine = await registerMember(page, `own_${testInfo.project.name}`)
