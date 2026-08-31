@@ -1297,6 +1297,34 @@ produce it either, the exemption is stale and should be deleted."
 # The account is created through the shipping register endpoint, not SQL. That
 # is the same rule the battery follows: if registration is broken, seeding must
 # fail rather than paper over it with an INSERT.
+# Create one tool. Prints its id, or nothing.
+#
+# `grep -o` rather than a JSON parser because preflight asserts there is no jq
+# and no python3 on the runner, deliberately -- the suite may not quietly
+# acquire a dependency the next template gap would hide. The id is the first
+# "id" in the body: the envelope is {"success":..,"data":{"id":..}}, and `id` is
+# the first field of the Tool struct.
+devseed_tool() { # devseed_tool <base> <token> <name> <category> <location>
+  local base="$1" token="$2" name="$3" category="$4" location="$5"
+  curl -s -X POST "${base}/api/tools" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"name\":\"${name}\",\"category\":\"${category}\",\"location\":\"${location}\",\"requires_training\":true}" \
+    | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//'
+}
+
+# Create one training step. Returns non-zero unless the server said success.
+devseed_step() { # devseed_step <base> <token> <tool_id> <n> <name> <url> <self>
+  local base="$1" token="$2" tool_id="$3" n="$4" name="$5" url="$6" self="$7"
+  local materials=""
+  [[ -n ${url} ]] && materials=",\"training_materials_url\":\"${url}\""
+  curl -s -X POST "${base}/api/training/steps" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"tool_id\":\"${tool_id}\",\"step_number\":${n},\"step_name\":\"${name}\",\"self_attestable\":${self}${materials}}" \
+    | grep -q '"success":true'
+}
+
 stage_devseed() {
   cases_begin devseed
   stack_paths
@@ -1367,9 +1395,74 @@ stage_devseed() {
     return 1
   fi
 
+  # A small inventory, so the instance comes up with something on it rather
+  # than an empty database somebody fills by hand every time.
+  #
+  # Step 1 of each tool is self-service -- what issue #2 added -- and is the
+  # only way to see the member-facing half without a second account. Step 2 is
+  # instructor-led, so the tool stays gated after the box is ticked: a member
+  # who confirms the reading is not thereby cleared for the machine, and that
+  # distinction is the thing most worth being able to see.
+  local token
+  token="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "${OUT}/devseed-login.json" | head -1)"
+  if [[ -z ${token} ]]; then
+    record_case "devseed/token" fail "signed in, but no token in the response body"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/token" ok
+
+  local tools_made=0 steps_made=0 name category location doc tool_id
+  while IFS='|' read -r name category location doc; do
+    [[ -z ${name} ]] && continue
+    tool_id="$(devseed_tool "${base}" "${token}" "${name}" "${category}" "${location}")"
+    if [[ -z ${tool_id} ]]; then
+      record_case "devseed/tool" fail "creating ${name} returned no id"
+      continue
+    fi
+    tools_made=$((tools_made + 1))
+
+    if devseed_step "${base}" "${token}" "${tool_id}" 1 \
+      "I have read the safety documentation" "${doc}" true; then
+      steps_made=$((steps_made + 1))
+    else
+      record_case "devseed/step" fail "self-service step rejected for ${name}"
+    fi
+
+    if devseed_step "${base}" "${token}" "${tool_id}" 2 \
+      "Supervised first use" "" false; then
+      steps_made=$((steps_made + 1))
+    else
+      record_case "devseed/step" fail "instructor-led step rejected for ${name}"
+    fi
+  done <<'INVENTORY'
+Lathe|metalworking|Metal Shop|/wiki/safety/lathe
+Table saw|woodworking|Wood Shop|/wiki/safety/table-saw
+Laser cutter|laser_cutting|Laser Bay|/wiki/safety/laser-cutter
+MIG welder|welding|Weld Bay|https://example.invalid/welding.pdf
+Bench grinder|metalworking|Metal Shop|/wiki/safety/grinder
+INVENTORY
+
+  # Asserted, not assumed. A seed that silently created nothing leaves an
+  # instance that looks like the feature is missing.
+  #
+  # Exact counts, which assumes an empty database. That holds because `run`
+  # rolls back to the pristine snapshot before every session, unlike the
+  # registration above, which tolerates a 409 because the admin address is
+  # claimed once per cluster rather than once per run.
+  if [[ ${tools_made} -eq 5 && ${steps_made} -eq 10 ]]; then
+    record_case "devseed/inventory" ok "${tools_made} tool(s), ${steps_made} step(s)"
+  else
+    record_case "devseed/inventory" fail \
+      "expected 5 tools and 10 steps, got ${tools_made} and ${steps_made}"
+    emit_junit devseed
+    return 1
+  fi
+
   log ""
   log "  dev instance ready:  http://${STACK_HOST}:${SERVER_PORT}"
   log "  sign in:             ${user} / ${pass}"
+  log "  seeded:              ${tools_made} tools, ${steps_made} training steps"
   log "  tear down:           reaper down"
   log ""
 
