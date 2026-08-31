@@ -1352,9 +1352,12 @@ done
   # --- what this run is not claiming ---------------------------------------
   echo "## Narrowings in force"
   echo
-  echo "- Tiers 5, 9, 10 and 11 have no stage here. They are absent from"
-  echo "  STAGES_ALL rather than present-and-skipped, so this run makes no claim"
-  echo "  about them at all. TESTING.md \S2 is the tier-by-tier status."
+  echo "- No WebAuthn ceremony is completed anywhere in this run. The passkey"
+  echo "  endpoints are driven as far as register/begin and every refusal"
+  echo "  around register/finish, but finishing one needs a signed assertion"
+  echo "  from a real authenticator and there is none in any environment this"
+  echo "  suite runs in. TESTING.md \S7 names the virtual authenticator that"
+  echo "  would close it."
   if [[ ${PG_ENCODING} != "UTF8" ]]; then
     echo "- The invite-redemption race was NOT exercised: a device invite code is"
     echo "  eight emoji and this cluster (${PG_ENCODING}) cannot store one. The"
