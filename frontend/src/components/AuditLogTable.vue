@@ -23,6 +23,9 @@
           <option value="profile_config_updated">Profile Config Updated</option>
           <option value="profile_config_rolled_back">Profile Config Rolled Back</option>
           <option value="failed_login_attempt">Failed Login</option>
+          <option value="training_documentation_acknowledged">
+            Safety Documentation Acknowledged
+          </option>
         </select>
       </div>
 

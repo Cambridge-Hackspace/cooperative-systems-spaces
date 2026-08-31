@@ -13,7 +13,11 @@ import { describe, expect, it } from 'vitest'
  *     admin picks it, gets an empty table, and reasonably concludes the events
  *     did not happen.
  *   - A type the server writes with no matching option cannot be isolated at
- *     all. That is the state today, for fifty-seven of the sixty-six.
+ *     all. That is the state today, for fifty-seven of the sixty-nine.
+ *
+ *     `training_documentation_acknowledged` is deliberately not among them.
+ *     It is the record issue #2 exists to produce, and a record that cannot
+ *     be isolated in the audit log is not usable as one.
  *
  * The first is asserted as a hard rule: every offered option must exist on the
  * server. The second is asserted as a ratchet, because closing it is a product

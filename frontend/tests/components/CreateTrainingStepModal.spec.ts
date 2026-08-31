@@ -212,3 +212,68 @@ describe('dismissing', () => {
     expect(w.emitted('close')).toHaveLength(2)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Issue #2: the safety document, and who may confirm having read it.
+// ---------------------------------------------------------------------------
+describe('the safety documentation field', () => {
+  it('sends the URL and the self-service flag', async () => {
+    createTrainingStep.mockResolvedValue({ success: true, data: { id: 'step-1' } })
+
+    const w = modal()
+    await fillMinimum(w)
+    await w.find('#training_materials_url').setValue('/wiki/safety/lathe')
+    await w.find('#self_attestable').setValue(true)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    const sent = createTrainingStep.mock.calls[0][0] as Record<string, unknown>
+    expect(sent.training_materials_url).toBe('/wiki/safety/lathe')
+    expect(sent.self_attestable).toBe(true)
+  })
+
+  it('defaults to no document and not self-service', async () => {
+    // The default matters more than it looks. A step that arrived
+    // self-attestable by default would let a member clear themselves for a
+    // machine by ticking a box nobody meant to offer.
+    createTrainingStep.mockResolvedValue({ success: true, data: { id: 'step-1' } })
+
+    const w = modal()
+    await fillMinimum(w)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    const sent = createTrainingStep.mock.calls[0][0] as Record<string, unknown>
+    expect(sent.self_attestable).toBe(false)
+    expect(sent.training_materials_url).toBe('')
+  })
+
+  it('refuses a URL that could execute, without calling the server', async () => {
+    // ToolTrainingModal renders this value as an href, and Vue does not
+    // sanitise an href binding. The server stores the string as given, so this
+    // refusal is the check rather than a convenience on top of one.
+    const w = modal()
+    await fillMinimum(w)
+    await w.find('#training_materials_url').setValue('javascript:alert(1)')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(createTrainingStep).not.toHaveBeenCalled()
+    expect(w.text()).toContain('cannot be used')
+  })
+
+  it('accepts a blank document, which is what most steps have', async () => {
+    // `isSafeLinkUrl('')` is false -- a curated home link with no URL is
+    // meaningless -- so reusing it unwrapped here would reject every step that
+    // is just a trainer standing next to somebody. See lib/trainingMaterials.
+    createTrainingStep.mockResolvedValue({ success: true, data: { id: 'step-1' } })
+
+    const w = modal()
+    await fillMinimum(w)
+    await w.find('#training_materials_url').setValue('   ')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(createTrainingStep).toHaveBeenCalledTimes(1)
+  })
+})

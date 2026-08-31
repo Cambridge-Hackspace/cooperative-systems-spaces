@@ -230,7 +230,7 @@ describe('the event-type filter', () => {
   // so the two fail independently. Note that the *gap* has not narrowed: the
   // two profile-config options added since this was pinned came with two new
   // server variants, so the ratchet there still reads 57.
-  it('offers eleven of the event types the server can write', async () => {
+  it('offers twelve of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -240,8 +240,10 @@ describe('the event-type filter', () => {
     expect(
       offered,
       'the filter list changed -- update tests/structure/audit-event-types.spec.ts, ' +
-        'which holds the comparison against the server enum'
-    ).toHaveLength(11)
+        'which holds the comparison against the server enum. Went from eleven ' +
+        'to twelve when training_documentation_acknowledged was added: a record ' +
+        'kept so it can be produced later is not usable if it cannot be found.'
+    ).toHaveLength(12)
   })
 
   it('titles every option it does offer', async () => {

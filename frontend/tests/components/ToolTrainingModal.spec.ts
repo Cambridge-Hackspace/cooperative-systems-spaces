@@ -32,9 +32,15 @@ const mocks = vi.hoisted(() => ({
   createTrainingRecord: vi.fn(),
   getTrainingHistory: vi.fn(),
   getUsersForTraining: vi.fn(),
+  startTrainingSession: vi.fn(),
+  completeTrainingSession: vi.fn(),
 }))
 vi.mock('@/utils/api', () => ({
-  trainingApi: { getToolTrainingOverview: mocks.getToolTrainingOverview },
+  trainingApi: {
+    getToolTrainingOverview: mocks.getToolTrainingOverview,
+    startTrainingSession: mocks.startTrainingSession,
+    completeTrainingSession: mocks.completeTrainingSession,
+  },
   trainerApi: {
     checkTrainerAuthorization: mocks.checkTrainerAuthorization,
     createTrainingRecord: mocks.createTrainingRecord,
@@ -55,7 +61,7 @@ vi.mock('@/stores/auth', () => ({
 }))
 
 import ToolTrainingModal from '@/components/ToolTrainingModal.vue'
-import { UserRole, type Tool } from '@/types'
+import { UserRole, type Tool, type User } from '@/types'
 import {
   AssessmentType,
   TrainingStatus,
@@ -122,6 +128,10 @@ const stubs = {
   },
   TrainerManagement: { props: ['tool'], template: '<div class="trainer-management" />' },
   RecordTrainingModal: { props: ['tool'], template: '<div class="record-modal" />' },
+  // Rendered by the internal-document branch. Stubbed as an anchor so `to` is
+  // observable as an attribute, and because tests/setup.ts turns an unresolved
+  // component into a failure rather than console noise.
+  RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
 }
 
 beforeEach(() => {
@@ -131,6 +141,8 @@ beforeEach(() => {
   mocks.getTrainingHistory.mockResolvedValue({ success: true, data: [] })
   mocks.getUsersForTraining.mockResolvedValue({ success: true, data: { items: [] } })
   mocks.createTrainingRecord.mockResolvedValue({ success: true })
+  mocks.startTrainingSession.mockResolvedValue({ success: true, data: {} })
+  mocks.completeTrainingSession.mockResolvedValue({ success: true, data: {} })
   authState.user = { id: 'u1', role: UserRole.Member }
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -488,5 +500,235 @@ describe('closing', () => {
     const w = await modal()
     await w.find('.close-btn').trigger('click')
     expect(w.emitted('close')).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Issue #2: the safety documentation, and confirming you have read it.
+// ---------------------------------------------------------------------------
+// Two things that did not exist before. The server has always sent
+// `training_materials_url` on every step -- it is on `TrainingStep` in
+// models/training.rs and in every step the overview endpoint returns -- but the
+// TypeScript interface omitted it, so the frontend discarded it and no UI ever
+// showed a member the document they were being asked to have read.
+//
+// The confirmation itself is a separate control from Mark Complete on purpose.
+// That one is `v-if="... && isInstructor"`, and `isInstructor` is literally
+// `canManageTraining`, so reusing it would show the box to staff and to nobody
+// else -- the exact inversion of what a member-facing attestation is for.
+
+async function modalAs(
+  role: UserRole,
+  ov: ToolTrainingOverview,
+  subjectId?: string
+): Promise<Wrapper> {
+  authState.user = { id: 'u1', role }
+  mocks.getToolTrainingOverview.mockResolvedValue({ success: true, data: ov })
+  // Cast for the same reason TOOL is cast: the component reads one field of it,
+  // and writing out nine more would be nine more chances to describe a user the
+  // server does not send.
+  const user = subjectId ? ({ id: subjectId } as unknown as User) : undefined
+  const w = mount(ToolTrainingModal, {
+    props: { tool: TOOL, ...(user ? { user } : {}) },
+    global: { stubs },
+  })
+  await flushPromises()
+  return w
+}
+
+const oneStep = (over: Partial<TrainingStep>) =>
+  overview({ steps: [serverStep(1, { step: step(1, over), is_available: true })] })
+
+describe('the safety document on a step', () => {
+  it('renders a relative URL through the router rather than as a page load', async () => {
+    const w = await modalAs(UserRole.Member, oneStep({ training_materials_url: '/wiki/safety' }))
+    const link = w.find('[data-test="step-materials"] a')
+
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/wiki/safety')
+    // The router-link branch, not the anchor branch: an internal page should
+    // not open in a new tab or leave the app.
+    expect(link.attributes('target')).toBeUndefined()
+  })
+
+  it('renders an external URL as an anchor that cannot reach back', async () => {
+    const w = await modalAs(
+      UserRole.Member,
+      oneStep({ training_materials_url: 'https://example.org/manual.pdf' })
+    )
+    const link = w.find('[data-test="step-materials"] a')
+
+    expect(link.attributes('href')).toBe('https://example.org/manual.pdf')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(
+      link.attributes('rel'),
+      'a target=_blank link without noopener hands the opened page a reference ' +
+        'back into this one'
+    ).toContain('noopener')
+  })
+
+  it('renders no link at all for a scheme that could execute', async () => {
+    // The step editor validates, but it is not the only way this column gets
+    // written -- the API accepts the field directly -- and Vue does not
+    // sanitise an href binding. So the render side checks too.
+    for (const hostile of ['javascript:alert(1)', 'data:text/html,<script>x</script>']) {
+      const w = await modalAs(UserRole.Member, oneStep({ training_materials_url: hostile }))
+      expect(
+        w.find('[data-test="step-materials"]').exists(),
+        `${hostile} was rendered as a link`
+      ).toBe(false)
+    }
+  })
+
+  it('renders nothing when the step carries no document', async () => {
+    const w = await modalAs(UserRole.Member, oneStep({}))
+    expect(w.find('[data-test="step-materials"]').exists()).toBe(false)
+  })
+})
+
+describe('confirming you have read the documentation', () => {
+  it('offers the confirmation only on a self-service step', async () => {
+    const plain = await modalAs(UserRole.Member, oneStep({}))
+    expect(plain.find('[data-test="attest"]').exists()).toBe(false)
+
+    const selfServe = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    expect(selfServe.find('[data-test="attest"]').exists()).toBe(true)
+  })
+
+  it('offers it to a member, who is offered Mark Complete by nothing', async () => {
+    // The whole point. `isInstructor` is `canManageTraining`, so a control
+    // hung off it is invisible to exactly the people this feature is for.
+    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+
+    expect(w.find('[data-test="attest"]').exists()).toBe(true)
+    expect(labels(w)).not.toContain('Mark Complete')
+  })
+
+  it('withholds Start Training on a self-service step', async () => {
+    // Start would create an in-progress row the member cannot then complete by
+    // any other route, which is a dead end that looks like a broken button.
+    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    expect(labels(w)).not.toContain('Start Training')
+  })
+
+  it('does not offer it while viewing somebody else, even to an admin', async () => {
+    // The server refuses a self-attestation for another user, but an admin
+    // passes the staff gate -- so a box rendered here would record an
+    // attestation in a name that is not the ticker's. This is the UI half of
+    // that rule and the only half that applies to staff.
+    const w = await modalAs(UserRole.Admin, oneStep({ self_attestable: true }), 'someone')
+    expect(w.find('[data-test="attest"]').exists()).toBe(false)
+  })
+
+  it('starts then completes, in that order, for the signed-in user', async () => {
+    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    await w.find('[data-test="attest-box"]').trigger('change')
+    await flushPromises()
+
+    expect(mocks.startTrainingSession).toHaveBeenCalledTimes(1)
+    expect(mocks.completeTrainingSession).toHaveBeenCalledTimes(1)
+    // Completion is an UPDATE server-side, so the progress row has to exist
+    // first. Order is the assertion, not an implementation detail.
+    expect(mocks.startTrainingSession.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.completeTrainingSession.mock.invocationCallOrder[0]
+    )
+
+    expect(mocks.startTrainingSession.mock.calls[0]?.[0]).toBe('u1')
+    expect(mocks.completeTrainingSession.mock.calls[0]?.[0]).toBe('u1')
+  })
+
+  it('sends passed, and never a score', async () => {
+    // The server refuses a self-attestation carrying `assessment_score`. This
+    // asserts the client does not send one at all, so that refusal is a
+    // backstop rather than something a user can trip.
+    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    await w.find('[data-test="attest-box"]').trigger('change')
+    await flushPromises()
+
+    const sent = mocks.completeTrainingSession.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(sent.training_step_id).toBe('step-1')
+    expect(sent.passed).toBe(true)
+    expect(Object.keys(sent)).not.toContain('assessment_score')
+  })
+
+  it('reloads the overview so the tool gate reflects the new state', async () => {
+    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    mocks.getToolTrainingOverview.mockClear()
+
+    await w.find('[data-test="attest-box"]').trigger('change')
+    await flushPromises()
+
+    expect(mocks.getToolTrainingOverview).toHaveBeenCalledTimes(1)
+  })
+
+  const alreadyConfirmed = () =>
+    overview({
+      steps: [
+        serverStep(1, {
+          step: step(1, { self_attestable: true }),
+          is_available: true,
+          user_progress: progress(TrainingStatus.Completed),
+        }),
+      ],
+    })
+
+  it('shows a completed confirmation as done and disabled', async () => {
+    const w = await modalAs(UserRole.Member, alreadyConfirmed())
+
+    expect(w.find('[data-test="attest-box"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-test="attest"]').text()).toContain('Confirmed')
+  })
+
+  it('renders the date it was confirmed, and nothing where there is none', async () => {
+    // `toContain('Confirmed')` passes whatever follows the word, which is how
+    // an unguarded formatDate(undefined) -- "Confirmed Invalid Date" -- got
+    // past the assertion above. This one reads what comes after it.
+    const dated = overview({
+      steps: [
+        serverStep(1, {
+          step: step(1, { self_attestable: true }),
+          is_available: true,
+          user_progress: {
+            ...progress(TrainingStatus.Completed),
+            completed_at: '2026-03-04T15:00:00Z',
+          },
+        }),
+      ],
+    })
+    const withDate = await modalAs(UserRole.Member, dated)
+    expect(withDate.find('[data-test="attest"]').text()).toContain('Mar 4, 2026')
+
+    // A row with no completed_at is not a shape the server sends, but it is the
+    // shape a defensive render has to survive.
+    const undated = await modalAs(UserRole.Member, alreadyConfirmed())
+    expect(undated.find('[data-test="attest"]').text().trim()).toBe('Confirmed')
+  })
+
+  it('sends nothing on a re-tick even if the disabled attribute is bypassed', async () => {
+    // `trigger('change')` would prove nothing here: vue-test-utils declines to
+    // fire events on a disabled element, so the assertion would pass with the
+    // handler's own guard deleted -- which is exactly what a mutation check
+    // caught it doing. Dispatching the DOM event directly gets past the
+    // attribute and reaches the handler, which is the thing under test.
+    const w = await modalAs(UserRole.Member, alreadyConfirmed())
+
+    w.find('[data-test="attest-box"]').element.dispatchEvent(new Event('change'))
+    await flushPromises()
+
+    expect(mocks.startTrainingSession).not.toHaveBeenCalled()
+    expect(mocks.completeTrainingSession).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a refusal instead of showing the step as confirmed', async () => {
+    mocks.completeTrainingSession.mockResolvedValue({
+      success: false,
+      error: 'A self-service confirmation cannot carry an assessment score',
+    })
+    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+
+    await w.find('[data-test="attest-box"]').trigger('change')
+    await flushPromises()
+
+    expect(w.text()).toContain('A self-service confirmation cannot carry an assessment score')
   })
 })
