@@ -50,13 +50,13 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 
 | Tier | Question only it answers | State |
 |---|---|---|
-| 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** 151 Rust tests and 172 TypeScript, from 44 Rust and 0 TypeScript. About a third of the Rust tests run on the workstation; the rest need Linux. |
+| 1 Pure unit | Is this calculation right, at its boundaries? | **Substantial.** From 44 Rust tests and 0 TypeScript to 255 `#[test]`s across the workspace and 96 in `frontend/tests/unit`. About a third of the Rust tests run on the workstation; the rest need Linux. The most recent addition is the MFA primitives (+39 Rust, +15 TypeScript): the challenge store's single-use guarantee, the TOTP skew window pinned at a fixed instant so it asserts the tolerance rather than the clock, recovery-code hashing, the fifteen-cell enrollment-enforcement table, and the auth store's challenge branch — none of which had a single test before. |
 | 1b Cross-implementation vectors | Do two independent implementations agree? | **Started.** `contracts/door_rules.json` — 10 cases read by `server/tests/door_vectors.rs` and `edge/tests/door_vectors.rs`, with the edge half fed from the server's *declared* output. It found the inactive-member divergence. The five ToolGuard wire-type copies are not unified, but `checks/tests/toolguard_wire_types.rs` now records exactly how they disagree and fails on a sixth. `wire_kinds.json` is not written. |
-| 2 Component conformance | Did the rendered output drift? | **Complete.** All 40 components have a spec, plus two views: 54 files, 903 cases. Every assertion mutation-checked, each mutation guarded so one that fails to apply errors rather than passes. It produced roughly forty findings, listed in §8 grouped by cause; the largest is that ToolTrainingModal's three action buttons cannot render at all. |
+| 2 Component conformance | Did the rendered output drift? | **Complete.** All 40 components have a spec, plus three views: 44 files, 865 cases (`LoginView` is the newest, and the first coverage the login form has ever had). Every assertion mutation-checked, each mutation guarded so one that fails to apply errors rather than passes. It produced roughly forty findings, listed in §8 grouped by cause; the largest is that ToolTrainingModal's three action buttons cannot render at all. |
 | 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 63 cases in `checks/`, plus 26 in `frontend/tests/structure/` — including four ratchets the tier-2 sweep motivated: the audit-log filter against the server enum, the components nothing imports, the frontend stubs, and the database writers that discard their row count. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
-| 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 32 tests across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. |
-| 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Twelve stages: preflight, up, schema, restart, contract, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. |
+| 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 24 specs across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. The fake now models an MFA-enrolled user, which is what lets the browser tier assert that a reload mid-challenge lands back on the login form rather than inside the application. |
+| 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Thirteen stages: preflight, up, schema, restart, contract, mfa, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. `mfa` is the only stage that can answer whether a second factor actually gates the JWT, and it generates its TOTP codes from a second, independent implementation of RFC 6238 checked against the specification's own vectors — so an accepted code is two implementations agreeing, not the server agreeing with itself. |
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Running.** A seeded driver takes 200 weighted actions through the shipping API — registrations, role changes, deactivations, deletions, door rules, profile-config writes, and three nemesis classes in the same pool — maintaining a shadow model and checking all six invariants every 20 actions. A recent run: 29 users, 24 door rules, 10 checks, no violation. Two of the six invariants cannot currently mean what they were written to mean, and say so rather than passing quietly: `deactivations-held` is vacuous because deactivated users are not listed at all, and `invites-are-single-use` can only check its count half because nothing links a device to its invite. Both are §8 findings, not test debt. |
@@ -480,6 +480,24 @@ never built server-side.
 the frontend can call it, and it can never succeed. Recorded by the fuzz tier's
 known-findings list rather than ignored.
 
+**No WebAuthn ceremony is exercised anywhere.** Every other branch of the MFA
+feature is now covered — the challenge store, TOTP against a real HMAC,
+recovery codes, enrollment enforcement, the login gate end to end — but the two
+passkey ceremonies are not. `webauthn-rs` is exercised only as far as
+`start_passkey_registration` and `start_passkey_authentication`, which are pure
+and run in the unit tests; `finish_passkey_registration` and
+`finish_passkey_authentication` need a signed assertion from an authenticator,
+and there is no authenticator in any of the three environments.
+
+The standing-in-the-way is specific and the fix is known: Chromium's
+`WebAuthn.addVirtualAuthenticator` over CDP, which Playwright can reach through
+`context.newCDPSession`. That would cover both ceremonies for real, in the
+browser tier, with no hardware. It is Chromium-only, so it would run in one
+project of two, and it is a unit of work in its own right rather than a line —
+which is why it is named here instead of being half-done. Until then, three
+places say so rather than implying coverage: the headers of
+`MfaSettings.spec.ts` and `tests/e2e/mfa-login.spec.ts`, and this paragraph.
+
 **Clippy still does not run in CI.** The build is warning-free now — the last
 four went with the `AuthError` response deletion, an unmutated lock guard and a
 vestigial database handle — so `-D warnings` is finally possible. Turning it on
@@ -581,19 +599,26 @@ site timezone or the browser's should win. The suite now pins
 `TZ=America/Chicago` so the tests can tell the two apart at all —
 `tests/unit/suite-environment.spec.ts`.
 
-**Cause 4 — no `try/finally` around a busy flag.**
-Five components set `saving`/`busy`/`loading` true, await, and clear it on the
-next line. A rejection strands the flag and disables the control for the life of
-the page. `MfaSettings` has it in three handlers at once, so a network error on
-Set up authenticator, Confirm or Regenerate recovery codes **locks the entire
-page** with nothing on screen to say why — while `addWebauthn`, in the same
-file, does the same work inside `try/finally` and recovers correctly. Ten
-components have the sibling shape in their loaders: no `try/catch`, so a
-rejected load spins forever and the rejection escapes to an
-`app.config.errorHandler` that `src/main.ts` never sets.
+**Cause 4 — no `try/finally` around a busy flag — fixed in `ca54bea`.**
+Fifteen sites across seven components set `saving`/`busy`/`loading` true,
+awaited, and cleared it on the next line. A rejection stranded the flag and
+disabled the control for the life of the page. `MfaSettings` had it in three
+handlers at once, so a network error on Set up authenticator, Confirm or
+Regenerate recovery codes locked the entire page with nothing on screen to say
+why — while `addWebauthn`, in the same file, did the same work inside
+`try/finally` and recovered correctly. Ten components had the sibling shape in
+their loaders: no `try/catch`, so a rejected load spun forever and the rejection
+escaped to an `app.config.errorHandler` that `src/main.ts` never sets.
 
-*Why not fixed:* trivial per site, and there are fifteen. Worth doing in one
-pass rather than fifteen.
+*Fixed in one pass, as this entry said it should be:* every loader now catches,
+every catch says something, and the sixteen pinned tests were rewritten to
+assert the fix. Five silent refusals went with them — a refused places config
+that looked like the module being switched off, a refused door-event history
+that looked like a door nobody had ever opened, and three more.
+
+*This entry is kept rather than deleted* because the shape recurs, and because
+the ten loaders it names are why `src/main.ts` still has no
+`app.config.errorHandler` — which is a gap in its own right.
 
 ### Frontend findings that stand on their own
 
@@ -644,6 +669,85 @@ Not attributable to the four causes above.
 - **Two components render a `console.log` per step per render**, and
   `DeviceManagement` reports five of six write failures through `alert()` with
   the axios message rather than the server's.
+
+### A mistyped MFA code costs the whole login, and nothing says so
+
+`verify_login` calls `take_login` at the *top* of the handler, before it looks
+at the code — so the challenge is consumed whether the code was right or wrong.
+
+**Burning it is the correct security choice.** It is the only thing between a
+captured `challenge_token` and an unlimited grind through a six-digit space:
+`/api/auth/mfa/verify` has no rate limit of its own, and adding one is strictly
+more machinery than destroying the challenge.
+
+The defect is that the frontend does not reflect it. `LoginView` shows the
+server's "Invalid TOTP code" and leaves `pendingMfa` set, so the user is looking
+at a form with a cursor in it and a token that has already been destroyed. The
+retry any human would make then fails with **"Unknown or expired
+challenge_token"** — a different message, and a misleading one: nothing expired,
+and there is no way for the user to learn that one wrong digit sent them back to
+the password prompt.
+
+*Why not fixed:* the repair is a product decision rather than a typo. Either the
+view clears `pendingMfa` on a rejected code and says "that code was not
+accepted, please sign in again" — honest, and the smaller change — or `/verify`
+allows a bounded number of attempts against one challenge, which is kinder and
+costs a rate limiter. Pinned from both sides: `e2e/drivers/mfa.mjs`
+(`mfa/a-wrong-code-destroys-the-challenge`) at the server, and
+`tests/e2e/mfa-login.spec.ts` in the browser, where the pin walks through the
+exact two-click sequence a user performs.
+
+### Recovery codes outlive the factor they belonged to
+
+`totp_disable` deletes the TOTP row and recomputes the enrollment flag, but
+never touches `user_recovery_codes`. A member who deliberately turns their
+second factor off leaves nine unspent Argon2-hashed codes behind in the
+database.
+
+Not currently exploitable, and the reason is worth writing down because it is
+not a property of `totp_disable` at all: with no factor enrolled,
+`recompute_user_mfa_enrolled` clears `mfa_enrolled_at`, so login never issues a
+challenge and no endpoint will accept them; and re-enrolling calls
+`replace_user_recovery_codes`, which overwrites the set. Both of those could
+change without anybody thinking about this function.
+
+*Why not fixed:* credential material that survives the credential it belonged to
+should be someone's deliberate decision, and the decision has a real question in
+it — whether disabling one factor should invalidate the recovery set shared by
+all of them. Pinned by
+`mfa/disabling-totp-leaves-the-recovery-codes-in-the-database`.
+
+### Offering the wrong kind of challenge token destroys it
+
+`MfaService::take` removes the entry from the map *before* it discovers the
+variant is not the one that was asked for, and then returns `None`. So
+presenting a WebAuthn-registration token to `/verify` — or a login token to
+`register/finish` — does not merely fail: it consumes the ceremony, and the
+legitimate call that follows fails too, with "Unknown or expired
+challenge_token".
+
+Not a privilege escalation: the tokens are 48 random alphanumerics, so nobody is
+guessing one to grief a stranger. It is a client-bug amplifier, and it is
+invisible in the logs, because the second failure looks like an expiry — the one
+explanation that is certainly wrong.
+
+*Why not fixed:* the repair is a choice between `take` peeking before removing
+and separating the two token namespaces, and both are defensible. Pinned in both
+directions by `asking_for_the_wrong_kind_of_challenge_destroys_it` in
+`server/src/mfa.rs`.
+
+### Recovery codes are case- and dash-sensitive
+
+The codes are displayed in uppercase with dashes and hashed exactly as
+generated. `verify_recovery_path` trims the input and does nothing else, so a
+member typing their printed code in lowercase — which is what a phone keyboard
+offers by default — is refused, and the refusal is indistinguishable from a
+wrong code. The attempt is not free, either: per the finding above, it costs
+them the whole login.
+
+*Why not fixed:* one line, but which line is a real question — normalize in the
+API layer, or widen `verify_recovery_code`? — and the same question applies to
+the dashes. Pinned by `recovery_codes_are_case_sensitive`.
 
 ### Login is case-sensitive, on username and on email
 

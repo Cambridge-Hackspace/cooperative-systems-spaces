@@ -1,23 +1,30 @@
-// Tier 2: MfaSettings.
+// Tier 2: MfaSettings -- the enrollment surface.
 //
-// Five actions -- begin TOTP, confirm TOTP, disable TOTP, add a security key,
+// Six actions -- begin TOTP, confirm TOTP, disable TOTP, add a security key,
 // remove one, regenerate recovery codes -- against one `busy` flag and one
-// `flash` string. The flag is the interesting part, because only one of the six
-// handlers puts it in a `finally`:
+// `flash` string.
 //
-//     async function beginTotp() {
-//       busy.value = true
-//       const r = await mfaApi.totpSetup()   // <- a rejection escapes here
-//       busy.value = false                   // <- and this never runs
+// The `busy` flag was this file's headline finding: five of the six handlers
+// set it true, awaited, and cleared it on the next line, so a rejection
+// stranded the flag and every primary button on the page stayed disabled for
+// the life of it. `addWebauthn` alone did the same work inside try/finally,
+// which is what made it an oversight rather than a design. **That was fixed in
+// ca54bea** and the assertions at the bottom of this file now pin the fix
+// rather than the defect -- see the note there.
 //
-// `addWebauthn` has try/finally. `beginTotp`, `confirmTotp` and `regenRecovery`
-// do not, so a network error on any of the three leaves `busy` stuck true and
-// every primary button on the page permanently disabled, with nothing on screen
-// to say why. That is the headline finding, pinned below.
+// WHAT THIS FILE DOES NOT COVER, and where it is covered instead. This is
+// enrollment only: setting a factor up while already signed in. The half that
+// matters more -- whether a second factor actually gates the JWT -- is not here
+// and cannot be, because this component never sees a login.
 //
-// What this spec does NOT prove: that any WebAuthn ceremony works. The browser
-// API is mocked out entirely -- a real authenticator is a Tier 10 concern and
-// is not exercised anywhere in this repository.
+//   * `tests/unit/auth-store-login.spec.ts` -- the store's challenge branch.
+//   * `tests/components/LoginView.spec.ts`  -- the challenge form.
+//   * `tests/e2e/mfa-login.spec.ts`         -- a real browser, real reload.
+//   * `e2e/drivers/mfa.mjs`                 -- a real HMAC, real database.
+//
+// What none of them prove: that any WebAuthn ceremony works. The browser API is
+// mocked out here and in the browser tier alike. Driving a real one needs a
+// virtual authenticator; TESTING.md records that as the one uncovered branch.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -416,13 +423,10 @@ describe('the flash message', () => {
 })
 
 describe('what a network error does to the page', () => {
-  // FINDING, pinned, and the headline. `beginTotp`, `confirmTotp` and
-  // `regenRecovery` set `busy = true`, await, and set it back to false on the
-  // next line -- so a rejection skips the reset and `busy` stays true for the
-  // life of the page. Every primary button is `:disabled="... || busy"`, so the
-  // whole page locks, and nothing is shown to explain it. `addWebauthn` does
-  // the same work inside try/finally and recovers correctly, which is what
-  // makes this an oversight rather than a design.
+  // These two were the "locking" cases: before ca54bea, a rejection in either
+  // handler stranded `busy` and disabled every primary button on the page. They
+  // now assert the recovery, like the Confirm case below -- the name is kept
+  // only because it says what the arrangement is for.
   const locking: [string, () => void][] = [
     ['Set up authenticator', () => mocks.totpSetup.mockRejectedValue(new Error('Network Error'))],
     [
