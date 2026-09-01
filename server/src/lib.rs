@@ -35,6 +35,7 @@ pub mod database;
 pub mod devices_inbound;
 pub mod devices_transport;
 pub mod doors;
+pub mod mail;
 pub mod mfa;
 pub mod models;
 pub mod mqtt;
@@ -56,6 +57,7 @@ use crate::database::DatabaseManager;
 use crate::devices_inbound::DeviceInbound;
 use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 use crate::doors::DoorService;
+use crate::mail::MailService;
 use crate::mfa::MfaService;
 use crate::mqtt::MqttService;
 use crate::pages::PagesService;
@@ -71,6 +73,9 @@ pub struct AppState {
     pub audit_logger: AuditLogger,
     pub throttle_service: Arc<RegistrationThrottleService>,
     pub recaptcha_service: Arc<RecaptchaService>,
+    /// Outbound SMTP. Reads `[email]` live, so a reloaded config takes effect
+    /// on the next send rather than at the next restart.
+    pub mail_service: Arc<MailService>,
     pub calendar_service: Arc<tokio::sync::RwLock<CalendarService>>,
     pub pages_service: Arc<tokio::sync::RwLock<PagesService>>,
     pub mqtt_service: Option<Arc<MqttService>>,
