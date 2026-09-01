@@ -56,7 +56,7 @@ applies, because a suite nobody has watched pass is a suite of unknown value.
 | 3 Source-as-data | Does the code's structure still hold its claims? | **Substantial.** 63 cases in `checks/`, plus 26 in `frontend/tests/structure/` — including four ratchets the tier-2 sweep motivated: the audit-log filter against the server enum, the components nothing imports, the frontend stubs, and the database writers that discard their row count. This tier has found more real defects than any other, and the whole crate runs in under a second on any host — including the one where `css-server` cannot be built at all. |
 | 4 Server contract | Do the authorization rules hold, in isolation? | **Complete for what it can reach.** 991 route × credential pairs asserted in-process against a deliberately dead pool, plus the 24 device pairs it explicitly defers, which the stack tier asserts. |
 | 5 Browser vs fake API | What does the app do when a request *fails*? | **Running.** 24 specs across two viewports, green. A fake API as a Vite middleware — so it imports the real validator and shares one origin with the real bundle — with four injection shapes. It found the config-shape freeze that no other tier could see, and getting `abortNext` to actually abort took three attempts: Chromium retries an idempotent GET when a connection closes before any bytes, so only a *truncated* response is a real transport failure. The fake now models an MFA-enrolled user, which is what lets the browser tier assert that a reload mid-challenge lands back on the login form rather than inside the application. |
-| 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Thirteen stages: preflight, up, schema, restart, contract, mfa, fuzz, concurrency, health, devices, browser, logs, down. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. `mfa` is the only stage that can answer whether a second factor actually gates the JWT, and it generates its TOTP codes from a second, independent implementation of RFC 6238 checked against the specification's own vectors — so an accepted code is two implementations agreeing, not the server agreeing with itself. |
+| 6 Full stack | Does it work against a real database, broker, charset? | **Running, green.** Fourteen stages: preflight, up, schema, restart, contract, mfa, **mail**, fuzz, concurrency, health, devices, browser, logs, down. `mail` is the newest and **has not yet been executed** -- it was written on a branch where the only reaper session was serving a live dev instance that a stack bring-up would have displaced, so it is linted and not run. That is the one claim in this row not backed by a green run. Postgres LATIN1 / lc_collate=C / lc_ctype=C, `TZ=America/Chicago`, mosquitto, and the real release binary. It found the migration this schema could not apply, the 401-for-a-role defect, and the 404 on every deep link. `devices` runs both edge binaries, which is the only way to exercise a `#[cfg]` branch; `logs` treats the server's own ERROR output as an oracle. `mfa` is the only stage that can answer whether a second factor actually gates the JWT, and it generates its TOTP codes from a second, independent implementation of RFC 6238 checked against the specification's own vectors — so an accepted code is two implementations agreeing, not the server agreeing with itself. |
 | 7 Seeded fuzz | Does any ordinary-but-untried request crash it? | **Running.** Three oracles over all 164 endpoints, seeded and replayable. |
 | 8 Concurrency | Does the invariant survive simultaneous writers? | **Running.** Both known races, each asserted on the resource and paired with a sequential sibling. |
 | 9 Simulated users | What breaks only after history accumulates? | **Running.** A seeded driver takes 200 weighted actions through the shipping API — registrations, role changes, deactivations, deletions, door rules, profile-config writes, and three nemesis classes in the same pool — maintaining a shadow model and checking all six invariants every 20 actions. A recent run: 29 users, 24 door rules, 10 checks, no violation. Two of the six invariants cannot currently mean what they were written to mean, and say so rather than passing quietly: `deactivations-held` is vacuous because deactivated users are not listed at all, and `invites-are-single-use` can only check its count half because nothing links a device to its invite. Both are §8 findings, not test debt. |
@@ -525,6 +525,59 @@ vestigial database handle — so `-D warnings` is finally possible. Turning it o
 is its own unit of work, because `clippy::pedantic` on 19.6k never-linted lines
 produces a commit carrying forty `#[allow]`s, which is the weakening this
 methodology forbids wearing the costume of progress.
+
+---
+
+### Transactional email: five things no tier here establishes
+
+The `mail` stage proves the server speaks SMTP and that a reset link works
+exactly once. Five properties sit outside what any of it can say, and each is
+a decision rather than an oversight.
+
+**The reset request leaks timing.** The response body, status and message are
+identical for a real and a made-up address -- the stage compares two live
+responses byte for byte -- and the found branch still hashes, writes twice and
+opens an SMTP connection. Closing that needs either a fixed-delay response or a
+background send, and a background send would reintroduce exactly the
+fire-and-forget pattern `mail.rs` was written to avoid. Recorded rather than
+papered over.
+
+**There is no per-IP throttle**, on this endpoint or any other. The throttle is
+keyed by address, so one caller can walk a list of addresses without ever
+tripping it. No handler in this codebase extracts the client address -- every
+`log_event` call passes `None` for `ip_address` -- and wiring `ConnectInfo`
+means confronting the reverse-proxy `X-Forwarded-For` question, which is its own
+change with its own way of being wrong.
+
+**The throttle is per-process and in memory.** A restart clears it and a second
+replica does not share it. That is pre-existing -- registration has always been
+throttled this way -- but account recovery is a more attractive target than
+registration, so it is worth stating where it now also applies.
+
+**A reset cannot revoke a session that is already open.** JWTs here are
+stateless with no revocation list, so somebody who changes their password
+because they think their account is compromised has not signed the other party
+out. Fixing it needs a token-version column on `users` and a check in the
+extractor, which is a separate issue.
+
+**The sink proves acceptance, not delivery.** It takes everything, so the stage
+establishes that a well-formed message was handed to a relay -- not that a real
+one would accept it, and not that it would pass SPF or DKIM alignment at the
+receiver. Live credentials were exercised by hand against Mailgun from
+css-aio-01 during this work, which is where the sandbox-domain and
+domain-alignment constraints in issue #15 come from; none of that is automated
+and none of it could be without sending real mail from CI.
+
+**And one thing no test can catch at all:** the `UPDATE users SET
+email_verified_at = NOW()` backfill in
+`2026-09-01-120000-0000_add_password_reset_and_email_verification`. Every test
+database is created from zero migrations and populated afterwards, so `users` is
+empty when the `ALTER TABLE` runs and the backfill is a no-op in precisely the
+environments that exercise it. It matters only where it is not tested, and
+without it an operator who turns `require_email_verification` on locks every
+pre-existing account out of the instance, their own included. The mitigation is
+a `validate_config` rule that refuses that flag with no mailer configured, which
+turns the likeliest route into the lockout into a refusal to start.
 
 ---
 
