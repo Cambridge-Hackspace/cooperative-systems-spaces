@@ -208,16 +208,16 @@ describe('who is offered as an instructor', () => {
 })
 
 describe('what the form sends', () => {
-  it('omits the instructor entirely when the select is never touched', async () => {
+  it('sends only the step when nothing optional was filled in', async () => {
     startTrainingSession.mockResolvedValue({ success: true })
     const w = await modal()
     await w.find('form').trigger('submit')
     await flushPromises()
 
+    // No `notes: ''` either. The column is nullable and an empty note is not
+    // the same fact as no note.
     expect(startTrainingSession).toHaveBeenCalledWith('trainee', {
       training_step_id: 'step-1',
-      instructor_id: undefined,
-      notes: '',
     })
   })
 
@@ -226,7 +226,14 @@ describe('what the form sends', () => {
   // string is not a Uuid, so it is a deserialization failure rather than
   // self-study. The two ways to express "no instructor" are not equivalent,
   // and the one a user has to click is the broken one.
-  it('sends an empty string when self-study is chosen deliberately', async () => {
+  // FIXED. This used to pin the defect: choosing "Self-study (No instructor)"
+  // -- which is `<option value="">` -- set instructor_id to the empty string,
+  // and the server field is `Option<Uuid>`, which answers 422 to "". Leaving
+  // the dropdown alone worked, because the form initialises the field to
+  // undefined, so the failure needed somebody to actively pick the option that
+  // means "none". Reported from the dev instance by somebody doing exactly
+  // that.
+  it('omits the instructor when self-study is chosen deliberately', async () => {
     startTrainingSession.mockResolvedValue({ success: true })
     const w = await modal()
 
@@ -234,13 +241,56 @@ describe('what the form sends', () => {
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    const sent = startTrainingSession.mock.calls[0][1] as { instructor_id?: string }
+    const sent = startTrainingSession.mock.calls[0][1] as Record<string, unknown>
     expect(
-      sent.instructor_id,
-      'self-study now sends something other than "" -- if it was fixed to send ' +
-        'undefined or null, delete this test; the server takes Option<Uuid> and ' +
-        '"" is not one'
-    ).toBe('')
+      Object.keys(sent),
+      'the server takes Option<Uuid>; "" is not one, and neither is null-as-a-string'
+    ).not.toContain('instructor_id')
+    expect(sent.training_step_id).toBe('step-1')
+  })
+
+  it('still sends a real instructor when one is picked', async () => {
+    // The anti-vacuity half: a fix that dropped the field unconditionally would
+    // pass the test above and silently discard every instructor-led session.
+    // The roster has to be populated for that to mean anything -- the default
+    // fixture returns none, and the guard below caught this test asserting
+    // against an empty dropdown.
+    getAllUsers.mockResolvedValue({
+      success: true,
+      data: { items: [user('inst-1', UserRole.Staff)] },
+    })
+    startTrainingSession.mockResolvedValue({ success: true })
+    const w = await modal()
+
+    const option = w.findAll('#instructor option').find((o) => o.attributes('value'))
+    const id = option?.attributes('value')
+    expect(id, 'no instructor option to pick, so this test proves nothing').toBeTruthy()
+
+    await w.find('#instructor').setValue(id)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(
+      (startTrainingSession.mock.calls[0][1] as { instructor_id?: string }).instructor_id
+    ).toBe(id)
+  })
+
+  it('sends a note that was written, and omits one that was not', async () => {
+    startTrainingSession.mockResolvedValue({ success: true })
+    const w = await modal()
+    await w.find('#notes').setValue('  brought their own PPE  ')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    const sent = startTrainingSession.mock.calls[0][1] as Record<string, unknown>
+    expect(sent.notes).toBe('brought their own PPE')
+
+    startTrainingSession.mockClear()
+    const blank = await modal()
+    await blank.find('#notes').setValue('   ')
+    await blank.find('form').trigger('submit')
+    await flushPromises()
+    expect(Object.keys(startTrainingSession.mock.calls[0][1] as object)).not.toContain('notes')
   })
 
   it('sends the chosen instructor and the notes', async () => {

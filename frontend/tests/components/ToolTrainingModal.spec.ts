@@ -732,3 +732,84 @@ describe('confirming you have read the documentation', () => {
     expect(w.text()).toContain('A self-service confirmation cannot carry an assessment score')
   })
 })
+
+// ---------------------------------------------------------------------------
+// The subject of the child modals.
+// ---------------------------------------------------------------------------
+// Reported from the running dev instance: choosing "self-study (no instructor)"
+// and pressing Start Training threw
+// `can't access property "id", $.user is undefined`.
+//
+// `ToolTrainingModal`'s `user` prop is optional and names somebody *else* --
+// staff looking at a member. ToolCard, which is the only route a member has to
+// this modal, does not pass it. The template then handed it straight down as
+// `:user="user!"`, and a non-null assertion is a compile-time claim that does
+// nothing at runtime: StartTrainingModal declares `user` required, received
+// `undefined`, and `props.user.id` threw.
+//
+// It was invisible until recently for the reason recorded at the top of this
+// file -- the Start button keyed off an alias nothing populated, so it never
+// rendered for anyone. Making it appear is what made this reachable.
+
+describe('who the child modals act on', () => {
+  // `props()` on a stub is typed `any`, so the shape is named here rather than
+  // cast at every read -- an `any` flowing into a const is what the lint rule
+  // is for, and casting at the assertion would hide it just as well.
+  type Subject = { id: string } | undefined
+  const startSubject = (w: Wrapper) =>
+    w.findComponent(stubs.StartTrainingModal).props('user') as Subject
+  const completeSubject = (w: Wrapper) =>
+    w.findComponent(stubs.CompleteTrainingModal).props('user') as Subject
+
+  async function press(w: Wrapper, label: string) {
+    const b = w.findAll('button').find((x) => x.text().trim() === label)
+    if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
+    await b.trigger('click')
+    await nextTick()
+  }
+
+  it('passes the signed-in user to Start Training when mounted the way ToolCard mounts it', async () => {
+    // No `user` prop, which is the member's path and the one that threw.
+    const w = await modalAs(UserRole.Member, oneStep({}))
+    await press(w, 'Start Training')
+
+    const passed = startSubject(w)
+    expect(
+      passed,
+      'the subject is undefined, so StartTrainingModal will throw on props.user.id'
+    ).toBeTruthy()
+    expect(passed?.id).toBe('u1')
+  })
+
+  it('passes the named subject when staff are looking at somebody else', async () => {
+    // The case the prop exists for: the modal must not silently retarget a
+    // staff member's own account when they are acting for a trainee.
+    const w = await modalAs(UserRole.Staff, oneStep({}), 'someone-else')
+    await press(w, 'Start Training')
+
+    expect(startSubject(w)?.id).toBe('someone-else')
+  })
+
+  it('passes the signed-in user to Mark Complete too', async () => {
+    // Same template, same assertion, same bug -- and reachable for staff, who
+    // are the only ones offered this button.
+    const inProgress = overview({
+      steps: [
+        serverStep(1, { is_available: true, user_progress: progress(TrainingStatus.InProgress) }),
+      ],
+    })
+    const w = await modalAs(UserRole.Staff, inProgress)
+    await press(w, 'Mark Complete')
+
+    const passed = completeSubject(w)
+    expect(passed).toBeTruthy()
+    expect(passed?.id).toBe('u1')
+  })
+
+  it('renders no stray markup after the child modals', async () => {
+    // There was a second `/>` after CompleteTrainingModal, which the template
+    // compiler treats as text -- so the modal body carried a literal "/>".
+    const w = await modalAs(UserRole.Member, oneStep({}))
+    expect(w.text()).not.toContain('/>')
+  })
+})

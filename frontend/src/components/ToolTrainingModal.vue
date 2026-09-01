@@ -511,21 +511,31 @@
     </div>
 
     <!-- Start Training Modal -->
+    <!--
+      `subjectUser`, not `user`. The `user` prop is optional and ToolCard --
+      the only route a member has to this modal -- does not pass it, so these
+      were `:user="user!"` asserting a value that was `undefined` on every
+      member's path. A non-null assertion is a compile-time claim and does
+      nothing at runtime, so StartTrainingModal took `undefined` for a required
+      prop and threw on `props.user.id`.
+
+      Guarded in the `v-if` rather than asserted, so the template states the
+      condition it depends on instead of promising it.
+    -->
     <StartTrainingModal
-      v-if="showStartModal"
-      :step="selectedStep!"
-      :user="user!"
+      v-if="showStartModal && selectedStep && subjectUser"
+      :step="selectedStep"
+      :user="subjectUser"
       @close="showStartModal = false"
       @started="onTrainingStarted"
     />
     <!-- Complete Training Modal -->
     <CompleteTrainingModal
-      v-if="showCompleteModal"
-      :step="selectedStep!"
-      :user="user!"
+      v-if="showCompleteModal && selectedStep && subjectUser"
+      :step="selectedStep"
+      :user="subjectUser"
       @close="showCompleteModal = false"
       @completed="onTrainingCompleted"
-    />
     />
 
     <!-- Training Setup Modal -->
@@ -675,7 +685,12 @@ const attesting = ref<string | null>(null)
 // Whose training this modal is showing. `loadTrainingOverview` accepts the
 // string 'me', but the write endpoints take `Path<Uuid>` and would reject it,
 // so the id has to be real for anything that records something.
-const subjectId = computed(() => props.user?.id ?? auth.user?.id ?? null)
+const subjectId = computed(() => subjectUser.value?.id ?? null)
+
+// Whose training this modal acts on. The `user` prop names somebody else --
+// staff looking at a member -- and is absent on the path a member takes to
+// their own, where the subject is whoever is signed in.
+const subjectUser = computed(() => props.user ?? auth.user ?? null)
 const viewingSelf = computed(
   () => !!auth.user && !!subjectId.value && subjectId.value === auth.user.id
 )
