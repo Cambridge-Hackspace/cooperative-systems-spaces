@@ -60,8 +60,14 @@
               :disabled="authStore.isLoading"
               required
             />
-            <label class="label">
-              <a href="#" class="label-text-alt link link-hover">Forgot password?</a>
+            <label v-if="resetOffered" class="label">
+              <router-link
+                to="/forgot-password"
+                class="label-text-alt link link-hover"
+                data-test="forgot-password"
+              >
+                Forgot password?
+              </router-link>
             </label>
           </div>
 
@@ -180,15 +186,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 import { mfaApi } from '@/utils/api'
 import { get as webauthnGet } from '@github/webauthn-json'
 import type { LoginRequest } from '@/types'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
+
+// Offer recovery only where it can actually work.
+//
+// The server already ANDs `password_reset_enabled` with `email.enabled` before
+// sending this, so one flag is enough here. A server predating the email work
+// sends no auth block at all, which reads as false -- the right answer, since
+// it has no reset endpoints either.
+const resetOffered = computed(() => configStore.config?.auth?.password_reset_enabled === true)
 
 const credentials = ref<LoginRequest>({ username_or_email: '', password: '' })
 

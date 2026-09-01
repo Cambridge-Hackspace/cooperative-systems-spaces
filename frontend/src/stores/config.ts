@@ -50,7 +50,20 @@ export interface PublicToolGuardConfig {
   profile_field: string
 }
 
+export interface PublicAuthConfig {
+  // Already ANDed with email.enabled server-side, so this is "can a member
+  // actually recover an account", not "did the operator tick the box". The
+  // shipped defaults are true and false respectively, so trusting the raw flag
+  // would put a link on the login page to an endpoint that answers 403.
+  password_reset_enabled: boolean
+  require_email_verification: boolean
+}
+
 export interface PublicConfig {
+  // Optional for the same reason as the flags below: a server older than this
+  // change emits no auth block, and the login page must not offer recovery it
+  // cannot deliver.
+  auth?: PublicAuthConfig
   registration_challenge: PublicRegistrationChallengeConfig
   tools: PublicToolConfig
   site: PublicSiteConfig

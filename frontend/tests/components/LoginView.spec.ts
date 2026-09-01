@@ -46,6 +46,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import LoginView from '@/views/LoginView.vue'
+import { useConfigStore, type PublicConfig } from '@/stores/config'
 import { UserRole, type User } from '@/types'
 
 const USER = {
@@ -59,7 +60,10 @@ const USER = {
   updated_at: '2026-01-01T00:00:00Z',
 } as User
 
-const stubs = { 'router-link': { props: ['to'], template: '<a><slot /></a>' } }
+// The stub renders `to` as an href, so a test can assert where a link goes.
+// Without that it renders an anchor pointing nowhere -- which is exactly the
+// defect this file now has a regression test for, reproduced in the harness.
+const stubs = { 'router-link': { props: ['to'], template: '<a :href="to"><slot /></a>' } }
 
 function challenge(methods: Array<'totp' | 'webauthn' | 'recovery'>, options: unknown = null) {
   return {
@@ -445,5 +449,54 @@ describe('verifying with a security key', () => {
 
     expect(mocks.webauthnGet).not.toHaveBeenCalled()
     expect(mocks.verify).not.toHaveBeenCalled()
+  })
+})
+
+describe('the forgot-password link', () => {
+  // The regression test for the dead link.
+  //
+  // `LoginView.vue` rendered `<a href="#">Forgot password?</a>` from the first
+  // release. A member who forgot their password saw the affordance, clicked it,
+  // and nothing happened -- and nothing at any tier noticed, because an anchor
+  // that goes nowhere is indistinguishable from one that goes somewhere unless
+  // a test asks where it goes.
+
+  /** A public config with just enough of the shape to answer this question. */
+  function withAuthConfig(auth: PublicConfig['auth']) {
+    useConfigStore().config = { auth } as PublicConfig
+  }
+
+  it('points at the reset page when recovery is available', async () => {
+    withAuthConfig({ password_reset_enabled: true, require_email_verification: false })
+    const w = mountLogin()
+    await flushPromises()
+
+    const link = w.get('[data-test="forgot-password"]')
+    expect(
+      link.attributes('href'),
+      'the control must navigate to the reset page. An `href="#"` here is the ' +
+        'original defect: it looks like an affordance and does nothing.'
+    ).toBe('/forgot-password')
+  })
+
+  it('is withheld when the deployment cannot send mail', async () => {
+    // The server ANDs password_reset_enabled with email.enabled before sending
+    // this, so false here means "asking would 403". Offering the link anyway
+    // would be the same promise-without-a-product one layer up.
+    withAuthConfig({ password_reset_enabled: false, require_email_verification: false })
+    const w = mountLogin()
+    await flushPromises()
+
+    expect(w.find('[data-test="forgot-password"]').exists()).toBe(false)
+  })
+
+  it('is withheld by a server too old to say', async () => {
+    // No auth block at all. `undefined` must read as "no", not as "probably":
+    // such a server has no reset endpoints either.
+    useConfigStore().config = {} as PublicConfig
+    const w = mountLogin()
+    await flushPromises()
+
+    expect(w.find('[data-test="forgot-password"]').exists()).toBe(false)
   })
 })
