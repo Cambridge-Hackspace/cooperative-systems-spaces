@@ -26,7 +26,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { assertEq, main, ok, POST, RUN_TAG, PASSWORD, account, login } from './lib.mjs'
+import { assertEq, main, ok, record, POST, RUN_TAG, PASSWORD, account, login } from './lib.mjs'
 
 const MAILDIR = join(process.env.CSS_STACK_DIR ?? '/stack', 'mail')
 
@@ -64,9 +64,33 @@ async function waitForMessage(predicate, timeoutMs = 5000) {
 const subjectIs = (subject) => (m) => m.text.includes(`Subject: ${subject}`)
 const addressedTo = (addr) => (m) => m.text.includes(`X-Sink-Rcpt-To: <${addr}>`)
 
+/**
+ * Undo quoted-printable, the way a mail client does.
+ *
+ * lettre sends the body `Content-Transfer-Encoding: quoted-printable`, which
+ * does two things that matter here: it encodes `=` as `=3D`, so `?token=`
+ * arrives as `?token=3D`, and it soft-wraps at 76 columns with a trailing `=`,
+ * which lands in the middle of a 64-character token.
+ *
+ * The sink stores what arrived rather than decoding it, deliberately -- a test
+ * double that quietly normalizes its input cannot show you what the server
+ * actually put on the wire. Decoding belongs here, where a mail client would do
+ * it.
+ *
+ * This was a defect in the first version of this driver, and it cost three
+ * failing cases that all looked like a broken server: the raw text was scanned
+ * for a token, `3Da4af97b292910fb85effeb74c9565f` came back -- the `=3D` prefix
+ * plus everything up to the soft break -- and the server correctly refused it.
+ */
+function decodeQuotedPrintable(text) {
+  return text
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+}
+
 /** The reset or confirmation token out of a link in a message body. */
 function tokenIn(text) {
-  const match = text.match(/[?&]token=([A-Za-z0-9]+)/)
+  const match = decodeQuotedPrintable(text).match(/[?&]token=([0-9a-f]+)/)
   return match ? match[1] : null
 }
 
@@ -132,7 +156,20 @@ await main(async () => {
   ok('mail/reset-link-arrives', resetMail !== null, `no reset message for ${user.email}`)
 
   const token = resetMail ? tokenIn(resetMail.text) : null
-  ok('mail/reset-link-carries-a-token', typeof token === 'string' && token.length >= 32)
+
+  // Exactly 64 lowercase hex, not "at least 32".
+  //
+  // The loose version of this assertion is why the first run of this stage
+  // reported three failures instead of one: a quoted-printable soft break cut
+  // the token in half, the truncation was 32 characters, `>= 32` accepted it,
+  // and the real cause only became visible three assertions later as a 400 from
+  // the server. An assertion that passes on a corrupted value defers the
+  // diagnosis to whatever fails next.
+  ok(
+    'mail/reset-link-carries-a-whole-token',
+    typeof token === 'string' && /^[0-9a-f]{64}$/.test(token),
+    `expected 64 hex characters, got ${token === null ? 'no match' : `${token.length}: ${token}`}`
+  )
 
   if (token) {
     const NEW_PASSWORD = 'e2e-reset-password-5678'
@@ -160,18 +197,32 @@ await main(async () => {
 
     // The single most important assertion in this file. The claim is one
     // filtered UPDATE, which reads correctly whether or not it is correct.
-    const replay = await POST('/api/auth/password-reset/consume', {
-      body: { token, new_password: 'e2e-should-not-work-9999' },
-    })
-    assertEq(
-      'mail/token-works-exactly-once',
-      400,
-      replay.status,
-      'a spent reset token was accepted a second time'
-    )
-    // 400 and not 401: the API client signs the user out on any 401, so a stale
-    // link would present as a mysterious session expiry.
-    ok('mail/replay-is-not-a-401', replay.status !== 401)
+    //
+    // Guarded on the first consume having actually succeeded, because otherwise
+    // it is vacuous -- and it *was* vacuous on this stage's first run. A
+    // corrupted token made the first consume answer 400, the replay answered
+    // 400 for the same uninteresting reason, and this passed while proving
+    // nothing about single use at all. A test whose premise failed must say so
+    // rather than report the conclusion it never reached.
+    if (consumed.status !== 200) {
+      record(
+        'mail/token-works-exactly-once',
+        'skip',
+        `the first consume answered ${consumed.status}, so a second 400 would ` +
+          'prove nothing about single use'
+      )
+    } else {
+      const replay = await POST('/api/auth/password-reset/consume', {
+        body: { token, new_password: 'e2e-should-not-work-9999' },
+      })
+      assertEq(
+        'mail/token-works-exactly-once',
+        400,
+        replay.status,
+        'a spent reset token was accepted a second time'
+      )
+      ok('mail/replay-is-not-a-401', replay.status !== 401)
+    }
   }
 
   // ----------------------------------------------------------------------

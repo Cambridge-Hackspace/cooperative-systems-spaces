@@ -441,10 +441,7 @@ async fn password_reset_request(
             config.site.site_url.trim_end_matches('/'),
             plaintext
         );
-        let body = format!(
-            "Somebody asked to reset the password for your {} account.\n\n             To choose a new one, open this link:\n\n{}\n\n             The link works once and expires in {} minutes. If you did not ask \n             for this, you can ignore this message -- your password has not \n             changed.\n",
-            config.site.site_name, link, RESET_TOKEN_TTL_MINUTES
-        );
+        let body = reset_email_body(&config.site.site_name, &link);
 
         // The send result is used, never discarded -- but it is used to inform
         // the operator, not the requester.
@@ -476,7 +473,14 @@ async fn password_reset_request(
                         Some(user.id),
                         serde_json::json!({
                             "purpose": "password_reset",
-                            "error": e.to_string(),
+                            // Named `detail` rather than `error`: this is an audit payload,
+                            // not a response body, and an object with an `error` key reads
+                            // as an error envelope to a reader and to
+                            // checks/tests/one_error_envelope.rs alike. The cause belongs
+                            // here -- an operator asking why a member never received their
+                            // reset has nowhere else to look -- it just should not wear the
+                            // envelope's clothes.
+                            "detail": e.to_string(),
                         }),
                         None,
                         None,
@@ -645,10 +649,7 @@ async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
         config.site.site_url.trim_end_matches('/'),
         plaintext
     );
-    let body = format!(
-        "Welcome to {}.\n\nPlease confirm this address by opening this link:\n\n{}\n\n         The link works once and expires in {} hours.\n",
-        config.site.site_name, link, VERIFICATION_TOKEN_TTL_HOURS
-    );
+    let body = verification_email_body(&config.site.site_name, &link);
 
     match state
         .mail_service
@@ -678,7 +679,14 @@ async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
                     Some(user.id),
                     serde_json::json!({
                         "purpose": "email_verification",
-                        "error": e.to_string(),
+                        // Named `detail` rather than `error`: this is an audit payload,
+                        // not a response body, and an object with an `error` key reads
+                        // as an error envelope to a reader and to
+                        // checks/tests/one_error_envelope.rs alike. The cause belongs
+                        // here -- an operator asking why a member never received their
+                        // reset has nowhere else to look -- it just should not wear the
+                        // envelope's clothes.
+                        "detail": e.to_string(),
                     }),
                     None,
                     None,
@@ -787,4 +795,105 @@ async fn resend_verification(
         (),
         VERIFICATION_REQUESTED_MESSAGE.to_string(),
     )))
+}
+
+/// The body of a password reset message.
+///
+/// Built by joining lines rather than from one multi-line string literal, and
+/// that is not a style preference. The first version used `\n` escapes with
+/// backslash continuations inside an indented `format!`, and the continuation
+/// lines' own source indentation ended up *in the message*: members received
+/// paragraphs indented thirteen spaces, mid-sentence. Nothing in the type
+/// system or the formatter objects to that, and it is invisible in the source
+/// unless you already know to look. Joining lines makes the leading whitespace
+/// of each line something you have to write on purpose.
+fn reset_email_body(site_name: &str, link: &str) -> String {
+    [
+        format!("Somebody asked to reset the password for your {site_name} account."),
+        String::new(),
+        "To choose a new one, open this link:".to_string(),
+        String::new(),
+        link.to_string(),
+        String::new(),
+        format!("The link works once and expires in {RESET_TOKEN_TTL_MINUTES} minutes."),
+        "If you did not ask for this you can ignore this message; your password".to_string(),
+        "has not changed.".to_string(),
+    ]
+    .join("\n")
+}
+
+/// The body of an address confirmation message. Same construction, same reason.
+fn verification_email_body(site_name: &str, link: &str) -> String {
+    [
+        format!("Welcome to {site_name}."),
+        String::new(),
+        "Please confirm this address by opening this link:".to_string(),
+        String::new(),
+        link.to_string(),
+        String::new(),
+        format!("The link works once and expires in {VERIFICATION_TOKEN_TTL_HOURS} hours."),
+    ]
+    .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defect this file's message builders were rewritten for.
+    ///
+    /// The first version of the reset body was one multi-line string literal
+    /// inside an indented `format!`, and each continuation line carried its own
+    /// source indentation into the message. Members received paragraphs
+    /// indented thirteen spaces mid-sentence, and it was invisible until a
+    /// message was read out of an SMTP sink rather than out of the source.
+    #[test]
+    fn no_message_line_begins_with_whitespace() {
+        for (what, body) in [
+            (
+                "reset",
+                reset_email_body("Test Space", "https://example.invalid/r?token=abc"),
+            ),
+            (
+                "verification",
+                verification_email_body("Test Space", "https://example.invalid/v?token=abc"),
+            ),
+        ] {
+            for (n, line) in body.lines().enumerate() {
+                assert!(
+                    line.is_empty() || !line.starts_with(char::is_whitespace),
+                    "{what} message line {} is indented, which reaches the member \
+                     exactly as written: {line:?}\n\nfull body:\n{body}",
+                    n + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_link_survives_intact_and_alone_on_its_line() {
+        // On its own line because a mail client's autolinker stops at
+        // whitespace, and a URL with anything appended to it is a link the
+        // member has to repair by hand.
+        let link = "https://example.invalid/reset-password?token=deadbeef";
+        let body = reset_email_body("Test Space", link);
+
+        assert!(
+            body.lines().any(|l| l == link),
+            "the reset link is not alone on any line:\n{body}"
+        );
+    }
+
+    #[test]
+    fn the_body_says_how_long_the_link_lasts() {
+        // Anti-vacuity for the two tests above: both would pass over an empty
+        // string, and a builder that returned one would be worse than either
+        // defect they guard.
+        let body = reset_email_body("Test Space", "https://example.invalid/x");
+        assert!(body.contains(&RESET_TOKEN_TTL_MINUTES.to_string()));
+        assert!(
+            body.len() > 120,
+            "the reset body is too short to be a message: {body:?}"
+        );
+    }
 }
