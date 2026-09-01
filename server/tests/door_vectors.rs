@@ -66,6 +66,11 @@ fn user_from(v: &Value, profile_field: &str) -> User {
         profile: serde_json::json!({ profile_field: cards }),
         meta: Value::Null,
         mfa_enrolled_at: None,
+        // Irrelevant to door access, and stated rather than defaulted: this
+        // fixture builds the struct field by field on purpose, so that a new
+        // column arriving on `users` fails here and somebody has to decide
+        // whether the door rules care about it.
+        email_verified_at: None,
     }
 }
 

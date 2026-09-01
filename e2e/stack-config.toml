@@ -32,16 +32,28 @@ debug = false
 secret_key = "e2e-secret-key-not-a-production-value"
 https = false
 
+# Pointed at css-smtp-sink, and enabled.
+#
+# Deliberately not switched off here. The reasoning is the one already recorded
+# for mosquitto in stack.sh: turning a feature off in one environment means that
+# environment never executes the code most likely to break, and the first
+# anybody hears of a regression is a session run or a deployment. The mailer is
+# the newest subsystem in the server and the one with the least coverage
+# anywhere else, so it is exactly the wrong thing to disable here.
+#
+# No username, so no AUTH is offered -- the sink advertises neither AUTH nor
+# STARTTLS, so a server that started requiring either would fail loudly here
+# rather than quietly downgrading.
 [email]
-host = "localhost"
-port = 587
+host = "127.0.0.1"
+port = @SMTP_PORT@
 username = ""
 password = ""
 use_tls = false
 use_ssl = false
 from_email = "noreply@example.invalid"
 from_name = "CSS E2E"
-enabled = false
+enabled = true
 
 [theme]
 primary_color = "#007bff"

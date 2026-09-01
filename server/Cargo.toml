@@ -11,6 +11,14 @@ path = "src/main.rs"
 name = "css-webhook-recvr"
 path = "src/bin/webhook_recvr.rs"
 
+# The stack tier's mail destination. Same reasoning as css-webhook-recvr: an
+# in-repo binary built alongside the server needs no container image, so it adds
+# no digest to pin in both e2e/images.env and .reaper.toml, and nothing to pull
+# in CI.
+[[bin]]
+name = "css-smtp-sink"
+path = "src/bin/smtp_sink.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }

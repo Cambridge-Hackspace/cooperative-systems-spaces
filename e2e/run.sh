@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 PROVISION="podman"
 ENGINE=""
@@ -409,6 +409,19 @@ stage_up() {
     return 1
   fi
 
+  # Before the server, because css-server's [email] points at it and a mailer
+  # whose relay refuses the connection is indistinguishable, from the outside,
+  # from a mailer that was never asked to send.
+  start_smtp_sink
+  if wait_for "css-smtp-sink" 20 tcp_open "${SMTP_PORT}"; then
+    record_case "up/smtp-sink" ok
+  else
+    record_case "up/smtp-sink" fail "never accepted a connection on ${SMTP_PORT}"
+    collect_stack_logs
+    emit_junit up
+    return 1
+  fi
+
   write_stack_config
   record_case "up/config-written" ok
 
@@ -683,6 +696,35 @@ stage_mfa() {
 # The cheapest defect-per-line in this suite. Three oracles that need no model
 # of any endpoint -- no 5xx, well-formed envelope, still alive -- applied to
 # all 164 of them. The driver carries the reasoning and the replay caveat.
+stage_mail() {
+  cases_begin mail
+  stack_paths
+
+  if ! server_ready; then
+    record_case "mail/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit mail
+    return 1
+  fi
+  record_case "mail/stack-is-up" ok
+
+  # Recorded as its own case rather than left for the driver to discover. A sink
+  # that never started makes every assertion below fail with "no message
+  # arrived", which reads as a broken mailer rather than a missing fixture.
+  if tcp_open "${SMTP_PORT}"; then
+    record_case "mail/sink-is-up" ok
+  else
+    record_case "mail/sink-is-up" fail "nothing is listening on ${SMTP_PORT}"
+    emit_junit mail
+    return 1
+  fi
+
+  run_node mail.mjs >"${OUT}/logs/mail.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit mail "driver=mail.mjs"
+}
+
 stage_fuzz() {
   cases_begin fuzz
   stack_paths
@@ -1281,6 +1323,7 @@ stage_down() {
   stop_server
   stop_edge
   stop_mosquitto
+  stop_smtp_sink
   stack_rm_quiet
   record_case "down/torn-down" ok
   emit_junit down

@@ -69,6 +69,7 @@ STACK_DIR=""
 PG_PORT="${CSS_E2E_PG_PORT:-5432}"
 MQTT_PORT="${CSS_E2E_MQTT_PORT:-1883}"
 SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
+SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
 PG_USER="css_user"
 PG_PASS="css_pass"
 PG_DB="css"
@@ -323,6 +324,33 @@ stop_mosquitto() {
   fi
 }
 
+# Somewhere for the mailer to deliver.
+#
+# A host process in BOTH provisioning modes, unlike mosquitto, and the asymmetry
+# is worth a sentence: mosquitto needs a container under podman because it is
+# not installed on the host, whereas css-smtp-sink is built from this repository
+# into e2e/artifacts alongside css-server. There is nothing to pull and no image
+# to pin, which is the whole reason it exists as an in-repo binary rather than
+# as a mail-catcher image -- the same reasoning as css-webhook-recvr.
+#
+# Bound to loopback: it accepts and stores anything sent to it, so it has no
+# business being reachable from off the machine.
+start_smtp_sink() {
+  log "starting css-smtp-sink on ${SMTP_PORT}"
+  mkdir -p "${STACK_DIR}/mail"
+  SMTP_SINK_BIND="127.0.0.1:${SMTP_PORT}" \
+    SMTP_SINK_MAILDIR="${STACK_DIR}/mail" \
+    "${ROOT}/e2e/artifacts/css-smtp-sink" >"${OUT}/logs/smtp-sink.log" 2>&1 &
+  echo $! >"${STACK_DIR}/smtp-sink.pid"
+}
+
+stop_smtp_sink() {
+  if [[ -f "${STACK_DIR}/smtp-sink.pid" ]]; then
+    kill "$(cat "${STACK_DIR}/smtp-sink.pid")" 2>/dev/null || true
+    rm -f "${STACK_DIR}/smtp-sink.pid"
+  fi
+}
+
 # The runtime image: the shipping Dockerfile's runtime stage, minus the parts
 # that only matter in production. Built here rather than pulled because there is
 # no published image carrying these binaries, and built from a digest-pinned
@@ -359,6 +387,7 @@ write_stack_config() {
     -e "s|@PG_PORT@|${PG_PORT}|g" \
     -e "s|@PG_DB@|${PG_DB}|g" \
     -e "s|@MQTT_PORT@|${MQTT_PORT}|g" \
+    -e "s|@SMTP_PORT@|${SMTP_PORT}|g" \
     "${ROOT}/e2e/stack-config.toml" >"${STACK_DIR}/config.toml"
 
   # A token that survived substitution would reach the server as literal text
