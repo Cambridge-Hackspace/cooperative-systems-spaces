@@ -1,3 +1,4 @@
+mod account_tokens;
 mod devices;
 mod doors;
 mod home_links;
@@ -14,6 +15,7 @@ pub mod trainers;
 mod training;
 mod webhooks;
 
+pub use account_tokens::*;
 pub use devices::*;
 pub use doors::*;
 pub use home_links::*;
@@ -126,6 +128,16 @@ pub struct User {
     /// Set when the user confirms their first MFA method; cleared when the
     /// last method is removed. Used to short-circuit `has any MFA?` checks.
     pub mfa_enrolled_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the address was confirmed. `None` means unconfirmed.
+    ///
+    /// Last in the struct because `ALTER TABLE ADD COLUMN` appends physically
+    /// and `Queryable` loads positionally -- a field inserted in the middle
+    /// here would silently start reading the wrong column.
+    ///
+    /// Accounts predating the column were backfilled as confirmed by the
+    /// migration, so turning `auth.require_email_verification` on does not lock
+    /// out an existing membership.
+    pub email_verified_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]

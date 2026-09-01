@@ -49,6 +49,7 @@ pub mod schema;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod throttle;
+pub mod tokens;
 pub mod webhooks;
 
 use crate::calendar::CalendarService;

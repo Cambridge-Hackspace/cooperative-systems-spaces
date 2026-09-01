@@ -340,6 +340,7 @@ diesel::table! {
         profile -> Jsonb,
         meta -> Jsonb,
         mfa_enrolled_at -> Nullable<Timestamptz>,
+        email_verified_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -495,6 +496,28 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    password_reset_tokens (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        token_hash -> Text,
+        expires_at -> Timestamptz,
+        used_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    email_verification_tokens (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        token_hash -> Text,
+        expires_at -> Timestamptz,
+        used_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(space_device_auth -> space_devices (device_id));
 diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));
@@ -536,6 +559,8 @@ diesel::joinable!(door_checkins -> doors (door_id));
 diesel::joinable!(door_checkins -> users (user_id));
 diesel::joinable!(door_checkins -> door_access_events (door_access_event_id));
 diesel::joinable!(profile_config_versions -> users (created_by));
+diesel::joinable!(password_reset_tokens -> users (user_id));
+diesel::joinable!(email_verification_tokens -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
@@ -569,4 +594,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     webhook_auth_links,
     webhook_deliveries,
     profile_config_versions,
+    password_reset_tokens,
+    email_verification_tokens,
 );
