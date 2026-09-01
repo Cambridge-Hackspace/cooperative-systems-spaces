@@ -1376,6 +1376,23 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         }
     }
 
+    // The lockout guard.
+    //
+    // require_email_verification with no mailer means nobody can confirm an
+    // address, so nobody who registers after the flag is set can ever log in,
+    // and the operator has no way to tell that is why. Refused at boot and at
+    // reload rather than warned about: a server that will not start with a
+    // message naming both settings is a far better outcome than one that
+    // starts and quietly refuses everyone.
+    if config.auth.require_email_verification && !config.email.enabled {
+        return Err(anyhow::anyhow!(
+            "auth.require_email_verification is true but email.enabled is false. \
+             Nobody could confirm an address, so no account created after this \
+             point could ever sign in. Configure [email] and enable it, or turn \
+             require_email_verification off."
+        ));
+    }
+
     // Validate initial setup admin email format
     if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
         return Err(anyhow::anyhow!(
@@ -1719,6 +1736,45 @@ mod tests {
     /// first successful bring-up found the same code path in production, where
     /// it told the container runtime the server had finished normally after
     /// refusing to start.
+    #[test]
+    fn requiring_confirmed_addresses_without_a_mailer_is_refused() {
+        // The lockout guard, and the reason it is an error rather than a
+        // warning. With no mailer nobody can confirm an address, so nobody who
+        // registers after the flag is set could ever sign in -- and the
+        // operator would have nothing to tell them why. Refusing to start names
+        // both settings.
+        //
+        // Mutation check: change the condition in `validate_config` to `false`
+        // and this fails.
+        let mut config = AppConfig::default();
+        config.auth.require_email_verification = true;
+        config.email.enabled = false;
+
+        let err = validate_config(&config)
+            .expect_err("requiring confirmation with no way to confirm is unusable");
+        let text = err.to_string();
+        assert!(
+            text.contains("require_email_verification") && text.contains("email.enabled"),
+            "the refusal must name both settings, since either one is a valid \
+             thing to change: {text}"
+        );
+    }
+
+    #[test]
+    fn requiring_confirmed_addresses_with_a_mailer_is_fine() {
+        // Anti-vacuity for the test above: if `validate_config` started
+        // refusing `require_email_verification` outright, that test would still
+        // pass while the feature had become unusable.
+        let mut config = AppConfig::default();
+        config.auth.require_email_verification = true;
+        config.email.enabled = true;
+        config.email.host = "smtp.example.invalid".to_string();
+        config.email.from_email = "noreply@example.invalid".to_string();
+
+        validate_config(&config)
+            .expect("a configured mailer is exactly what makes the flag usable");
+    }
+
     #[test]
     fn a_disabled_mailer_is_never_refused_however_empty_it_is() {
         // Anti-vacuity for the two tests below. The shipped default has

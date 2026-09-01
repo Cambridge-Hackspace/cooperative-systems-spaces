@@ -76,8 +76,27 @@ pub struct PublicToolGuardConfig {
     pub profile_field: String,
 }
 
+/// The authentication facts a signed-out visitor legitimately needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicAuthConfig {
+    /// Whether to offer account recovery at all.
+    ///
+    /// Both halves, ANDed. `password_reset_enabled` is the operator's intent
+    /// and `email.enabled` is whether it can be carried out; the shipped
+    /// defaults are true and false respectively, so the pair out of the box is
+    /// "wanted but impossible". Sending the raw flag would put a link on the
+    /// login page to an endpoint that answers 403 -- the same promise without a
+    /// product that this whole feature exists to stop making.
+    pub password_reset_enabled: bool,
+    /// Whether a new account must confirm its address before signing in, so
+    /// the registration page can say so before somebody waits for a login that
+    /// will not work.
+    pub require_email_verification: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicConfig {
+    pub auth: PublicAuthConfig,
     pub registration_challenge: PublicRegistrationChallengeConfig,
     pub tools: PublicToolConfig,
     pub site: PublicSiteConfig,
@@ -91,6 +110,10 @@ pub struct PublicConfig {
 fn build_public_config(state: &AppState) -> PublicConfig {
     let config = state.config_manager.get_config();
     PublicConfig {
+        auth: PublicAuthConfig {
+            password_reset_enabled: config.auth.password_reset_enabled && config.email.enabled,
+            require_email_verification: config.auth.require_email_verification,
+        },
         registration_challenge: PublicRegistrationChallengeConfig {
             enabled: config.registration_challenge.enabled,
             hint: config.registration_challenge.hint.clone(),

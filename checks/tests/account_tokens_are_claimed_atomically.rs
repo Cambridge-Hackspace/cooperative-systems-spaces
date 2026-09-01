@@ -77,6 +77,8 @@ const CLAIMS: &[&str] = &[
 const RECOVERY_HANDLERS: &[&str] = &[
     "async fn password_reset_request(",
     "async fn password_reset_consume(",
+    "async fn verify_email(",
+    "async fn resend_verification(",
 ];
 
 #[test]

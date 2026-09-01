@@ -59,18 +59,56 @@ struct Flag {
     consumer: &'static str,
     /// Signature of the function whose body must contain the read.
     within: &'static str,
+    /// The line that closes it: `"\n}"` for a free function, `"\n    }"` for a
+    /// method inside an `impl`.
+    ///
+    /// Carried per flag rather than assumed, because assuming it is how the
+    /// first version of this list silently truncated `login` at the first
+    /// four-space brace in its body -- an inner `if` block -- and reported a
+    /// gate that was plainly there as missing.
+    closes_with: &'static str,
+    /// Smallest plausible size for that function's body, in bytes.
+    ///
+    /// Per flag rather than one global floor. `reset_available` is legitimately
+    /// two lines, and lowering a shared floor to accommodate it would slacken
+    /// the guard for `login` and `send`, where a body that parsed to 130 bytes
+    /// really would mean the extractor had lost it.
+    min_bytes: usize,
     /// What breaks if nothing reads it. Quoted in the failure.
     consequence: &'static str,
 }
 
-const FLAGS: &[Flag] = &[Flag {
-    token: "email.enabled",
-    consumer: "server/src/mail.rs",
-    within: "pub async fn send(",
-    consequence: "a deployment with `enabled = false` would send mail anyway, and \
-                  the caller could not tell a switched-off mailer from a delivered \
-                  message",
-}];
+const FLAGS: &[Flag] = &[
+    Flag {
+        token: "email.enabled",
+        consumer: "server/src/mail.rs",
+        within: "pub async fn send(",
+        closes_with: "\n    }",
+        min_bytes: 400,
+        consequence: "a deployment with `enabled = false` would send mail anyway, and \
+                      the caller could not tell a switched-off mailer from a delivered \
+                      message",
+    },
+    Flag {
+        token: "config.auth.password_reset_enabled",
+        consumer: "server/src/api/auth.rs",
+        within: "fn reset_available(",
+        closes_with: "\n}",
+        min_bytes: 100,
+        consequence: "an operator who turned account recovery off would still have \
+                      working reset endpoints",
+    },
+    Flag {
+        token: "config.auth.require_email_verification",
+        consumer: "server/src/api/auth.rs",
+        within: "async fn login(",
+        closes_with: "\n}",
+        min_bytes: 400,
+        consequence: "an operator who required confirmed addresses would get \
+                      unconfirmed accounts signing in, which is the state this \
+                      setting has been in since it was added",
+    },
+];
 
 /// Files whose mention of a flag is not a use of it.
 ///
@@ -140,21 +178,20 @@ fn code(rel: &str) -> String {
     out
 }
 
-/// The body of a method, from its signature to the first line that is a lone
-/// `}` at four-space indent -- the shape of a method inside an `impl`.
-fn method_body(source: &str, signature: &str) -> String {
+/// The body of a function, from its signature to the line that closes it.
+fn function_body(source: &str, signature: &str, closes_with: &str) -> String {
     let start = source
         .find(signature)
         .unwrap_or_else(|| panic!("no `{signature}` found; the signature changed"));
     let rest = &source[start..];
-    let end = rest.find("\n    }").unwrap_or(rest.len());
+    let end = rest.find(closes_with).unwrap_or(rest.len());
     rest[..end].to_string()
 }
 
 #[test]
 fn every_flag_is_read_by_the_function_that_acts_on_it() {
     for flag in FLAGS {
-        let body = method_body(&code(flag.consumer), flag.within);
+        let body = function_body(&code(flag.consumer), flag.within, flag.closes_with);
         assert!(
             body.contains(flag.token),
             "`{}` is not read inside `{}` in {}.\n\n\
@@ -187,16 +224,16 @@ fn the_scraper_reads_real_source() {
             module.len()
         );
 
-        let body = method_body(&module, flag.within);
+        let body = function_body(&module, flag.within, flag.closes_with);
         assert!(
-            body.len() > 200,
-            "`{}` in {} parsed as {} bytes, which is too short to be the \
-             function. The extractor is finding the signature and then losing \
-             the body, which would make the assertion above run over almost \
-             nothing.",
+            body.len() >= flag.min_bytes,
+            "`{}` in {} parsed as {} bytes, below its floor of {}. The extractor \
+             is finding the signature and then losing the body, which would make \
+             the assertion above run over almost nothing.",
             flag.within,
             flag.consumer,
-            body.len()
+            body.len(),
+            flag.min_bytes
         );
     }
 }

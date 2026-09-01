@@ -9,13 +9,14 @@ use crate::{
     api::{
         errors::ApiError,
         responses::{
-            ApiResponse, LoginRequest, LoginResponse, PasswordResetConsumeRequest,
-            PasswordResetRequest, RegisterRequest, UserResponse,
+            ApiResponse, EmailVerificationRequest, LoginRequest, LoginResponse,
+            PasswordResetConsumeRequest, PasswordResetRequest, RegisterRequest,
+            ResendVerificationRequest, UserResponse,
         },
     },
     auth::{AuthService, AuthUser, PasswordHashUtil},
     models::{AuditEventType, NewUser, UpdateUser},
-    tokens::{generate_token, hash_token, RESET_TOKEN_TTL_MINUTES},
+    tokens::{generate_token, hash_token, RESET_TOKEN_TTL_MINUTES, VERIFICATION_TOKEN_TTL_HOURS},
     AppState,
 };
 
@@ -27,6 +28,8 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/logout", post(logout))
         .route("/password-reset/request", post(password_reset_request))
         .route("/password-reset/consume", post(password_reset_consume))
+        .route("/email/verify", post(verify_email))
+        .route("/email/resend", post(resend_verification))
         .nest("/mfa", crate::api::mfa::mfa_routes())
 }
 
@@ -211,6 +214,13 @@ async fn register(
         tracing::warn!("Failed to log user registration: {}", e);
     }
 
+    // Always issued, whether or not require_email_verification is on. Turning
+    // the flag on later then needs no second backfill, and an operator who
+    // turns it on has a membership that has already had the chance to confirm.
+    // A deployment with the mailer off does nothing here and does not fail the
+    // registration over a message it was never going to send.
+    issue_verification_mail(&state, &created_user).await;
+
     let message = if should_be_admin {
         "Admin user registered successfully".to_string()
     } else {
@@ -242,6 +252,26 @@ async fn login(
     let user = auth_service
         .authenticate_user(&payload.username_or_email, &payload.password)
         .map_err(ApiError::from)?;
+
+    // Confirmed address required, if the operator asked for that.
+    //
+    // In the handler rather than inside `authenticate_user`, deliberately.
+    // `authenticate_user` takes no config, and moving a policy decision into it
+    // would apply it to every caller -- including the MFA verify path, which
+    // completes a login that already passed this gate.
+    //
+    // 403 rather than 401 for two reasons: a 401 trips the frontend's logout
+    // interceptor, and a distinct status lets the login view offer "resend the
+    // confirmation" instead of "wrong password". The mild disclosure -- a 403
+    // proves the account exists -- is reachable only by somebody who already
+    // supplied the correct password, so it tells them nothing they did not have.
+    if config.auth.require_email_verification && user.email_verified_at.is_none() {
+        return Err(ApiError::Forbidden(
+            "Your email address has not been confirmed. Check your inbox for the \
+             confirmation link, or ask for a new one."
+                .to_string(),
+        ));
+    }
 
     // If the user has confirmed any MFA method, issue a challenge instead of
     // a token. They complete login via /api/auth/mfa/verify.
@@ -326,6 +356,10 @@ const RESET_THROTTLE_SECONDS: u32 = 900;
 /// built out of a helpful error message.
 const RESET_REQUESTED_MESSAGE: &str =
     "If an account exists for that address, a password reset link has been sent.";
+
+/// The one thing `/email/resend` ever says, for the same reason.
+const VERIFICATION_REQUESTED_MESSAGE: &str =
+    "If that address needs confirming, a new link has been sent.";
 
 /// Is account recovery available at all on this deployment?
 ///
@@ -573,5 +607,184 @@ async fn password_reset_consume(
     Ok(Json(ApiResponse::success_with_message(
         (),
         "Your password has been changed. You can now sign in with it.".to_string(),
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Email confirmation
+// ---------------------------------------------------------------------------
+
+/// Issue a confirmation token and mail it.
+///
+/// Shared by registration and by `/email/resend`, so the two cannot drift into
+/// sending different links with different lifetimes.
+///
+/// Returns `Ok(())` when there was nothing to do -- a deployment with the
+/// mailer switched off does not fail a registration over a message it was
+/// never going to send. Any real failure is audited as `EmailSendFailed`, which
+/// is how an operator finds out, since neither caller may vary its response.
+async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
+    let config = state.config_manager.get_config();
+    if !config.email.enabled {
+        return;
+    }
+
+    let (plaintext, digest) = generate_token();
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(VERIFICATION_TOKEN_TTL_HOURS);
+
+    if let Err(e) = state
+        .db
+        .create_email_verification_token(user.id, digest, expires_at)
+    {
+        tracing::error!("could not store an email verification token: {e}");
+        return;
+    }
+
+    let link = format!(
+        "{}/verify-email?token={}",
+        config.site.site_url.trim_end_matches('/'),
+        plaintext
+    );
+    let body = format!(
+        "Welcome to {}.\n\nPlease confirm this address by opening this link:\n\n{}\n\n         The link works once and expires in {} hours.\n",
+        config.site.site_name, link, VERIFICATION_TOKEN_TTL_HOURS
+    );
+
+    match state
+        .mail_service
+        .send(&user.email, "Confirm your email address", &body)
+        .await
+    {
+        Ok(()) => {
+            let _ = state
+                .audit_logger
+                .log_event(
+                    AuditEventType::EmailVerificationSent,
+                    Some(user.id),
+                    Some(user.id),
+                    serde_json::json!({ "address": user.email }),
+                    None,
+                    None,
+                )
+                .await;
+        }
+        Err(e) => {
+            tracing::error!("email verification mail failed: {e}");
+            let _ = state
+                .audit_logger
+                .log_event(
+                    AuditEventType::EmailSendFailed,
+                    Some(user.id),
+                    Some(user.id),
+                    serde_json::json!({
+                        "purpose": "email_verification",
+                        "error": e.to_string(),
+                    }),
+                    None,
+                    None,
+                )
+                .await;
+        }
+    }
+}
+
+/// `POST /api/auth/email/verify`
+///
+/// Public, because an unconfirmed user cannot log in to obtain a credential --
+/// which is the whole situation this endpoint exists to resolve.
+///
+/// 400 for every token failure, for the reason recorded on
+/// `password_reset_consume`: the frontend logs out on any 401.
+async fn verify_email(
+    State(state): State<AppState>,
+    Json(payload): Json<EmailVerificationRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let claimed = state
+        .db
+        .claim_email_verification_token(&hash_token(payload.token.trim()))
+        .map_err(|e| ApiError::from_db("Failed to claim a verification token", e))?;
+
+    let Some(user_id) = claimed else {
+        return Err(ApiError::BadRequest(
+            "This confirmation link is invalid or has expired. Ask for a new one.".to_string(),
+        ));
+    };
+
+    state
+        .db
+        .mark_email_verified(user_id)
+        .map_err(|e| ApiError::from_db("Failed to record a confirmed address", e))?;
+
+    let _ = state
+        .audit_logger
+        .log_event(
+            AuditEventType::EmailVerified,
+            Some(user_id),
+            Some(user_id),
+            serde_json::json!({}),
+            None,
+            None,
+        )
+        .await;
+
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        "Your email address is confirmed. You can now sign in.".to_string(),
+    )))
+}
+
+/// `POST /api/auth/email/resend`
+///
+/// Required for the feature to be usable at all: without it, a confirmation
+/// mail that never arrived leaves a permanently dead account with no remedy
+/// short of an administrator editing the database.
+///
+/// Same uniform answer as the reset request, for the same reason, and the same
+/// unconditional throttle so a 429 cannot become the oracle the response is not.
+async fn resend_verification(
+    State(state): State<AppState>,
+    Json(payload): Json<ResendVerificationRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let config = state.config_manager.get_config();
+    if !config.email.enabled {
+        return Err(ApiError::Forbidden(
+            "Email confirmation is not available on this instance".to_string(),
+        ));
+    }
+
+    let address = payload.email.trim().to_lowercase();
+    let throttle_identifier = format!("email-verify:{address}");
+
+    if let Err(remaining_seconds) = state.throttle_service.check_attempt(
+        &throttle_identifier,
+        RESET_THROTTLE_ATTEMPTS,
+        RESET_THROTTLE_SECONDS,
+    ) {
+        return Err(ApiError::TooManyRequests(format!(
+            "Too many confirmation requests. Try again in {remaining_seconds} seconds"
+        )));
+    }
+    state.throttle_service.record_failed_attempt(
+        &throttle_identifier,
+        RESET_THROTTLE_ATTEMPTS,
+        RESET_THROTTLE_SECONDS,
+    );
+
+    let found = state
+        .db
+        .find_user_by_email(&address)
+        .map_err(|e| ApiError::from_db("Failed to look up an address for confirmation", e))?;
+
+    // An already-confirmed account is deliberately not told apart from an
+    // unknown one, and neither is told apart from a fresh send.
+    if let Some(user) = found {
+        if user.email_verified_at.is_none() {
+            issue_verification_mail(&state, &user).await;
+        }
+    }
+
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        VERIFICATION_REQUESTED_MESSAGE.to_string(),
     )))
 }

@@ -120,6 +120,10 @@ pub struct UserResponse {
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub meta: serde_json::Value,
+    /// Whether the address has been confirmed. Exposed so the profile page can
+    /// show the state and offer a resend, rather than the frontend having to
+    /// infer it from a login failure.
+    pub email_verified: bool,
 }
 
 impl From<crate::models::User> for UserResponse {
@@ -130,6 +134,7 @@ impl From<crate::models::User> for UserResponse {
             email: user.email,
             full_name: user.full_name,
             is_active: user.is_active,
+            email_verified: user.email_verified_at.is_some(),
             role: user.role,
             created_at: user.created_at,
             updated_at: user.updated_at,
