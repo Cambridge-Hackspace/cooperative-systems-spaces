@@ -8,10 +8,14 @@ use axum::{
 use crate::{
     api::{
         errors::ApiError,
-        responses::{ApiResponse, LoginRequest, LoginResponse, RegisterRequest, UserResponse},
+        responses::{
+            ApiResponse, LoginRequest, LoginResponse, PasswordResetConsumeRequest,
+            PasswordResetRequest, RegisterRequest, UserResponse,
+        },
     },
     auth::{AuthService, AuthUser, PasswordHashUtil},
-    models::NewUser,
+    models::{AuditEventType, NewUser, UpdateUser},
+    tokens::{generate_token, hash_token, RESET_TOKEN_TTL_MINUTES},
     AppState,
 };
 
@@ -21,6 +25,8 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/login", post(login))
         .route("/me", get(me))
         .route("/logout", post(logout))
+        .route("/password-reset/request", post(password_reset_request))
+        .route("/password-reset/consume", post(password_reset_consume))
         .nest("/mfa", crate::api::mfa::mfa_routes())
 }
 
@@ -298,5 +304,274 @@ async fn logout() -> Result<Json<ApiResponse<()>>, ApiError> {
     Ok(Json(ApiResponse::success_with_message(
         (),
         "Logout successful. Please remove the token from client storage.".to_string(),
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Password reset
+// ---------------------------------------------------------------------------
+
+/// Attempts allowed before a reset address is locked out, and for how long.
+///
+/// Constants rather than config: no operator has asked to tune them, and every
+/// config field costs two tracked files, a check, and a `PublicConfig`
+/// question.
+const RESET_THROTTLE_ATTEMPTS: u32 = 3;
+const RESET_THROTTLE_SECONDS: u32 = 900;
+
+/// The one thing `/password-reset/request` ever says.
+///
+/// A single constant, referenced twice, so the two branches cannot drift into
+/// saying subtly different things -- which is how an enumeration oracle gets
+/// built out of a helpful error message.
+const RESET_REQUESTED_MESSAGE: &str =
+    "If an account exists for that address, a password reset link has been sent.";
+
+/// Is account recovery available at all on this deployment?
+///
+/// Both halves matter. `password_reset_enabled` is the operator's intent;
+/// `email.enabled` is whether the intent can be carried out. The flag defaults
+/// to true and the mailer defaults to off, so the shipped pair is "wanted but
+/// impossible" -- and offering a form that cannot work is the same broken
+/// promise this whole feature exists to stop making.
+fn reset_available(config: &crate::config::AppConfig) -> bool {
+    config.auth.password_reset_enabled && config.email.enabled
+}
+
+/// `POST /api/auth/password-reset/request`
+///
+/// Answers identically whether or not the address belongs to an account. That
+/// is the entire security design of this endpoint, and it constrains
+/// everything else in it:
+///
+///   - the status, body and message are the same on both branches;
+///   - a failed send does **not** become a 5xx, because a 500 that is only
+///     reachable when the account exists is a perfect enumeration oracle built
+///     out of good intentions. The operator learns about it from the
+///     `email_send_failed` audit row instead, which is a better channel anyway;
+///   - the throttle records an attempt whether or not the account was found,
+///     because a 429 that only ever appears for real addresses is the same
+///     oracle wearing a different hat.
+///
+/// What it does **not** close is timing: the found branch hashes, writes twice
+/// and opens an SMTP connection. Closing that needs either a fixed-delay
+/// response or a background send, and a background send would reintroduce
+/// exactly the fire-and-forget pattern the mailer was written to avoid. It is
+/// recorded as a known limit rather than papered over.
+async fn password_reset_request(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let config = state.config_manager.get_config();
+    if !reset_available(&config) {
+        return Err(ApiError::Forbidden(
+            "Password reset is not available on this instance".to_string(),
+        ));
+    }
+
+    let address = payload.email.trim().to_lowercase();
+    let throttle_identifier = format!("password-reset:{address}");
+
+    if let Err(remaining_seconds) = state.throttle_service.check_attempt(
+        &throttle_identifier,
+        RESET_THROTTLE_ATTEMPTS,
+        RESET_THROTTLE_SECONDS,
+    ) {
+        return Err(ApiError::TooManyRequests(format!(
+            "Too many password reset requests. Try again in {remaining_seconds} seconds"
+        )));
+    }
+    // Unconditionally, before the lookup: see the doc comment.
+    state.throttle_service.record_failed_attempt(
+        &throttle_identifier,
+        RESET_THROTTLE_ATTEMPTS,
+        RESET_THROTTLE_SECONDS,
+    );
+
+    let found = state
+        .db
+        .find_user_by_email(&address)
+        .map_err(|e| ApiError::from_db("Failed to look up a reset address", e))?;
+
+    if let Some(user) = found {
+        let (plaintext, digest) = generate_token();
+        let expires_at = chrono::Utc::now() + chrono::Duration::minutes(RESET_TOKEN_TTL_MINUTES);
+
+        state
+            .db
+            .create_password_reset_token(user.id, digest, expires_at)
+            .map_err(|e| ApiError::from_db("Failed to store a reset token", e))?;
+
+        let link = format!(
+            "{}/reset-password?token={}",
+            config.site.site_url.trim_end_matches('/'),
+            plaintext
+        );
+        let body = format!(
+            "Somebody asked to reset the password for your {} account.\n\n             To choose a new one, open this link:\n\n{}\n\n             The link works once and expires in {} minutes. If you did not ask \n             for this, you can ignore this message -- your password has not \n             changed.\n",
+            config.site.site_name, link, RESET_TOKEN_TTL_MINUTES
+        );
+
+        // The send result is used, never discarded -- but it is used to inform
+        // the operator, not the requester.
+        match state
+            .mail_service
+            .send(&user.email, "Reset your password", &body)
+            .await
+        {
+            Ok(()) => {
+                let _ = state
+                    .audit_logger
+                    .log_event(
+                        AuditEventType::PasswordResetRequested,
+                        Some(user.id),
+                        Some(user.id),
+                        serde_json::json!({ "found": true }),
+                        None,
+                        None,
+                    )
+                    .await;
+            }
+            Err(e) => {
+                tracing::error!("password reset mail failed: {e}");
+                let _ = state
+                    .audit_logger
+                    .log_event(
+                        AuditEventType::EmailSendFailed,
+                        Some(user.id),
+                        Some(user.id),
+                        serde_json::json!({
+                            "purpose": "password_reset",
+                            "error": e.to_string(),
+                        }),
+                        None,
+                        None,
+                    )
+                    .await;
+            }
+        }
+    } else {
+        // Recorded with no subject, because there is none. This row is the only
+        // place the answer the requester is denied gets written down.
+        let _ = state
+            .audit_logger
+            .log_event(
+                AuditEventType::PasswordResetRequested,
+                None,
+                None,
+                serde_json::json!({ "found": false }),
+                None,
+                None,
+            )
+            .await;
+    }
+
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        RESET_REQUESTED_MESSAGE.to_string(),
+    )))
+}
+
+/// `POST /api/auth/password-reset/consume`
+///
+/// Deliberately returns **no** token. The user is sent to the login form.
+///
+/// That is not a usability oversight, it is what preserves MFA. If this issued
+/// a session, anyone controlling a mailbox would obtain full account access
+/// without ever passing a second factor -- a password reset would be a silent
+/// MFA bypass. Sending the user through `POST /api/auth/login` means
+/// `mfa_enrolled_at` is honored by construction rather than by somebody
+/// remembering to check it here. For the same reason this must never clear
+/// `mfa_enrolled_at` or delete an MFA row.
+///
+/// Every token failure is **400, never 401**. Two reasons, and the first is
+/// concrete: `frontend/src/utils/api.ts` calls `authStore.logout()` on any 401
+/// from any endpoint, so a signed-in user who pastes a stale link would be
+/// signed out, and would experience it as a mysterious session expiry rather
+/// than as a stale link. The second is that the token is a parameter of the
+/// request, not a credential authenticating the caller.
+async fn password_reset_consume(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetConsumeRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    let config = state.config_manager.get_config();
+    if !reset_available(&config) {
+        return Err(ApiError::Forbidden(
+            "Password reset is not available on this instance".to_string(),
+        ));
+    }
+
+    // Validated before the lookup: it costs nothing, needs no database, and
+    // putting it first is what makes it assertable in the offline contract
+    // tier, where every query reaches a dead pool.
+    if payload.new_password.len() < config.auth.password_min_length {
+        return Err(ApiError::ValidationError(format!(
+            "Password must be at least {} characters long",
+            config.auth.password_min_length
+        )));
+    }
+
+    let claimed = state
+        .db
+        .claim_password_reset_token(&hash_token(payload.token.trim()))
+        .map_err(|e| ApiError::from_db("Failed to claim a reset token", e))?;
+
+    let Some(user_id) = claimed else {
+        let _ = state
+            .audit_logger
+            .log_event(
+                AuditEventType::PasswordResetFailed,
+                None,
+                None,
+                serde_json::json!({ "reason": "unknown, expired, or already used" }),
+                None,
+                None,
+            )
+            .await;
+        // One message for all three causes. Telling the requester which of them
+        // applied would say whether the token ever existed.
+        return Err(ApiError::BadRequest(
+            "This password reset link is invalid or has expired. Request a new one.".to_string(),
+        ));
+    };
+
+    let password_hash = PasswordHashUtil::hash(&payload.new_password)
+        .map_err(|_| ApiError::InternalServerError("Failed to hash password".to_string()))?;
+
+    state
+        .db
+        .update_user(
+            user_id,
+            &UpdateUser {
+                username: None,
+                email: None,
+                password_hash: Some(password_hash),
+                full_name: None,
+                is_active: None,
+                role: None,
+                profile: None,
+                meta: None,
+                updated_at: Some(chrono::Utc::now().naive_utc()),
+            },
+        )
+        .map_err(|e| ApiError::from_db("Failed to set a password from a reset token", e))?;
+
+    let _ = state
+        .audit_logger
+        .log_event(
+            AuditEventType::PasswordResetCompleted,
+            Some(user_id),
+            Some(user_id),
+            serde_json::json!({
+                "note": "password changed without the previous one being presented",
+            }),
+            None,
+            None,
+        )
+        .await;
+
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        "Your password has been changed. You can now sign in with it.".to_string(),
     )))
 }

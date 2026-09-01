@@ -70,6 +70,32 @@ pub struct LoginResponse {
     pub must_enroll_mfa: Option<bool>,
 }
 
+// Account recovery and email confirmation.
+//
+// Four request bodies for four public endpoints. None of them carries a
+// credential -- the token *is* the credential, and it arrives in the body
+// rather than a header precisely so it is never a session.
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetConsumeRequest {
+    pub token: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmailVerificationRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResendVerificationRequest {
+    pub email: String,
+}
+
 // Register request model
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {

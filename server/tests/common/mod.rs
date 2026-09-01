@@ -122,6 +122,8 @@ pub const ROUTES: &[R] = &[
     R("DELETE", "/api/auth/mfa/webauthn/00000000-0000-4000-8000-000000000001", Guard::Auth), // mfa::webauthn_remove
     R("POST", "/api/auth/mfa/webauthn/register/begin", Guard::Auth), // mfa::webauthn_register_begin
     R("POST", "/api/auth/mfa/webauthn/register/finish", Guard::Auth), // mfa::webauthn_register_finish
+    R("POST", "/api/auth/password-reset/consume", Guard::Public), // auth::password_reset_consume
+    R("POST", "/api/auth/password-reset/request", Guard::Public), // auth::password_reset_request
     R("POST", "/api/auth/register", Guard::Public), // auth::register
     R("GET", "/api/calendar/events", Guard::Public), // calendar::get_calendar_events
     R("GET", "/api/calendar/events/refresh", Guard::Public), // calendar::refresh_calendar_events
