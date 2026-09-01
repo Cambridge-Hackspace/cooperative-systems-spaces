@@ -229,8 +229,10 @@ describe('the event-type filter', () => {
   // `tests/structure/audit-event-types.spec.ts`; this asserts only the count,
   // so the two fail independently. Note that the *gap* has not narrowed: the
   // two profile-config options added since this was pinned came with two new
-  // server variants, so the ratchet there still reads 57.
-  it('offers eleven of the event types the server can write', async () => {
+  // server variants, and the six transactional-email options came with six, so
+  // the ratchet there still reads 57. An option added without a server variant
+  // would be caught by the other file's first test instead.
+  it('offers seventeen of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -241,7 +243,7 @@ describe('the event-type filter', () => {
       offered,
       'the filter list changed -- update tests/structure/audit-event-types.spec.ts, ' +
         'which holds the comparison against the server enum'
-    ).toHaveLength(11)
+    ).toHaveLength(17)
   })
 
   it('titles every option it does offer', async () => {
