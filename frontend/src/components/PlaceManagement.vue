@@ -193,7 +193,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import { placesApi } from '@/utils/api'
 import type { Place, PlaceConfig } from '@/types'
 import PlaceNode from './PlaceNode.vue'
@@ -416,5 +417,7 @@ async function onDelete(p: Place) {
   } else notify(r.error || 'Failed to delete (move/delete children first?)', false)
 }
 
-onMounted(loadAll)
+// A place deleted from the Doors tab's reach, or a hierarchy changed on the
+// Graph tab, should be visible on returning here.
+useReloadOnReactivate(loadAll)
 </script>

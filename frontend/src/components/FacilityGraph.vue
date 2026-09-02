@@ -57,7 +57,8 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
+import { onBeforeUnmount, ref, watch, nextTick } from 'vue'
+import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import cytoscape, { type Core, type ElementDefinition } from 'cytoscape'
 import { placesApi, doorsApi } from '@/utils/api'
 import type { Door, Place } from '@/types'
@@ -328,7 +329,9 @@ watch(layoutName, () => {
   cy.layout(layoutOptions(layoutName.value)).run()
 })
 
-onMounted(load)
+// The graph draws places *and* doors, so it is stale with respect to both
+// sibling tabs. It is also the tab somebody opens last, to check their work.
+useReloadOnReactivate(load)
 onBeforeUnmount(() => {
   if (cy) {
     cy.destroy()
