@@ -338,8 +338,32 @@ stop_mosquitto() {
 start_smtp_sink() {
   log "starting css-smtp-sink on ${SMTP_PORT}"
   mkdir -p "${STACK_DIR}/mail"
+
+  # A throwaway certificate for STARTTLS, generated per run.
+  #
+  # `use_tls = true` on 587 is what a real deployment uses, and it is the branch
+  # of MailService::transport most likely to break against a real relay --
+  # certificate verification, the upgrade handshake, and lettre's Tls::Required
+  # refusing to fall back. Without a certificate here that path would be
+  # "covered" by a unit test asserting which enum variant gets picked, which is
+  # a different claim entirely.
+  #
+  # The SAN is the IP because that is what [email] host names and what lettre
+  # will verify against; a CN-only certificate is not accepted by OpenSSL 3.
+  # Two days of validity because nothing should ever reuse it, and it never
+  # leaves this machine.
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+    -keyout "${STACK_DIR}/smtp-key.pem" \
+    -out "${STACK_DIR}/smtp-cert.pem" \
+    -subj "/CN=127.0.0.1" \
+    -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" \
+    >"${OUT}/logs/smtp-cert.log" 2>&1 \
+    || die "could not generate the SMTP sink's certificate; see logs/smtp-cert.log"
+
   SMTP_SINK_BIND="127.0.0.1:${SMTP_PORT}" \
     SMTP_SINK_MAILDIR="${STACK_DIR}/mail" \
+    SMTP_SINK_TLS_CERT="${STACK_DIR}/smtp-cert.pem" \
+    SMTP_SINK_TLS_KEY="${STACK_DIR}/smtp-key.pem" \
     "${ROOT}/e2e/artifacts/css-smtp-sink" >"${OUT}/logs/smtp-sink.log" 2>&1 &
   echo $! >"${STACK_DIR}/smtp-sink.pid"
 }
@@ -419,6 +443,7 @@ start_server() {
       FRONTEND_PATH="${frontend}" \
       RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       TZ="${STACK_TZ}" \
+      SSL_CERT_FILE="${STACK_DIR}/smtp-cert.pem" \
       "${ROOT}/e2e/artifacts/css-server" >"${OUT}/logs/css-server.log" 2>&1 &
     echo $! >"${STACK_DIR}/server.pid"
   else
@@ -427,6 +452,7 @@ start_server() {
       -e FRONTEND_PATH=/frontend \
       -e RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       -e TZ="${STACK_TZ}" \
+      -e SSL_CERT_FILE=/stack/smtp-cert.pem \
       -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
       -v "${STACK_DIR}:/stack" \
       -v "${frontend}:/frontend:ro" \

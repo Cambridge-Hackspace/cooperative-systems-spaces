@@ -79,6 +79,13 @@ lettre = { version = "0.11", default-features = false, features = [
     "hostname",
 ] }
 
+# Server-side TLS for css-smtp-sink's STARTTLS.
+#
+# Already in the tree -- reqwest's default-tls and lettre both pull it -- so
+# naming it directly adds no build and no system library. The sink needs the
+# server half of it, which nothing else here uses.
+native-tls = "0.2"
+
 # Multi-factor auth
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }

@@ -41,15 +41,22 @@ https = false
 # the newest subsystem in the server and the one with the least coverage
 # anywhere else, so it is exactly the wrong thing to disable here.
 #
-# No username, so no AUTH is offered -- the sink advertises neither AUTH nor
-# STARTTLS, so a server that started requiring either would fail loudly here
-# rather than quietly downgrading.
+# use_tls = true, so the stack exercises STARTTLS -- the transport a real
+# deployment on port 587 uses, and the one most likely to break against a real
+# relay. The sink offers STARTTLS with a certificate stack.sh generates per run;
+# css-server trusts it through SSL_CERT_FILE, so verification stays ON. A test
+# that reached TLS by switching verification off would be proving the opposite
+# of what it looks like it proves.
+#
+# No username, so no AUTH is offered. The sink advertises no AUTH at all, so a
+# server that started requiring it would fail loudly here rather than quietly
+# sending credentials nowhere.
 [email]
 host = "127.0.0.1"
 port = @SMTP_PORT@
 username = ""
 password = ""
-use_tls = false
+use_tls = true
 use_ssl = false
 from_email = "noreply@example.invalid"
 from_name = "CSS E2E"

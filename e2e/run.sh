@@ -160,7 +160,10 @@ stage_preflight() {
   # on the host rather than in the toolchain image. preflight found that on the
   # first real run, which is what it is for.
   local t
-  for t in sed grep awk tr sort comm install find; do
+  # `openssl` joined this list with the SMTP sink's STARTTLS support: stack.sh
+  # generates the sink a certificate per run, and without one the `up` stage
+  # dies with a message about a certificate rather than about a missing tool.
+  for t in sed grep awk tr sort comm install find openssl; do
     if command -v "${t}" >/dev/null 2>&1; then
       record_case "tool/${t}" ok
     else

@@ -23,12 +23,25 @@
 // establishes that a well-formed message was handed over -- not that a real
 // relay would take it, and not that it would survive SPF or DKIM alignment.
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { assertEq, main, ok, record, POST, RUN_TAG, PASSWORD, account, login } from './lib.mjs'
+import {
+  assertEq,
+  main,
+  ok,
+  record,
+  POST,
+  RUN_TAG,
+  PASSWORD,
+  account,
+  adminAccount,
+  login,
+} from './lib.mjs'
 
-const MAILDIR = join(process.env.CSS_STACK_DIR ?? '/stack', 'mail')
+const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
+const MAILDIR = join(STACK_DIR, 'mail')
+const CONFIG = join(STACK_DIR, 'config.toml')
 
 /** Every message the sink has stored, newest last. */
 function messages() {
@@ -224,6 +237,67 @@ await main(async () => {
       ok('mail/replay-is-not-a-401', replay.status !== 401)
     }
   }
+
+  // ----------------------------------------------------------------------
+  // Both transports, and that a reload actually reaches the mailer
+  // ----------------------------------------------------------------------
+  //
+  // `use_tls = true` is what the stack runs, so every message above already
+  // travelled over STARTTLS with certificate verification ON -- css-server
+  // trusts the sink's per-run certificate through SSL_CERT_FILE rather than by
+  // having verification switched off, which would prove the opposite of what it
+  // looks like it proves.
+  //
+  // The plaintext branch is reached by rewriting the config and reloading,
+  // which also settles a claim `mail.rs` makes in its own doc comment and
+  // nothing tested: that it reads `[email]` per send, so an operator fixing SMTP
+  // settings does not have to restart the server.
+  if (resetMail) {
+    ok(
+      'mail/reset-arrived-over-starttls',
+      resetMail.text.includes('X-Sink-Transport: starttls'),
+      'the stack is configured use_tls = true, so this message should have ' +
+        'travelled over STARTTLS. Arriving in the clear means the transport ' +
+        'selection silently fell back.'
+    )
+  }
+
+  const admin = await adminAccount('mail')
+  const original = readFileSync(CONFIG, 'utf8')
+  let restored = false
+
+  const setUseTls = async (value) => {
+    writeFileSync(CONFIG, original.replace(/^use_tls = .*/m, `use_tls = ${value}`))
+    const reloaded = await POST('/api/admin/reload-config', { token: admin.token })
+    return reloaded.status
+  }
+
+  try {
+    assertEq('mail/config-reload-accepted', 200, await setUseTls(false))
+
+    const plainUser = await account('mailplain')
+    await POST('/api/auth/password-reset/request', { body: { email: plainUser.email } })
+    const plainMail = await waitForMessage(
+      (m) => addressedTo(plainUser.email)(m) && subjectIs('Reset your password')(m)
+    )
+
+    ok('mail/plaintext-branch-delivers', plainMail !== null, 'no message arrived over plaintext')
+    if (plainMail) {
+      ok(
+        'mail/reload-changed-the-transport',
+        plainMail.text.includes('X-Sink-Transport: plain'),
+        'the message still arrived over STARTTLS after the config was reloaded ' +
+          'with use_tls = false, so MailService is not reading [email] per send'
+      )
+    }
+  } finally {
+    // Restored whatever happened, so a failure here does not leave every later
+    // stage sending over a transport nobody chose.
+    writeFileSync(CONFIG, original)
+    const status = await POST('/api/admin/reload-config', { token: admin.token })
+    restored = status.status === 200
+  }
+  ok('mail/config-restored', restored, 'the stack config was left modified')
 
   // ----------------------------------------------------------------------
   // The throttle is not itself an oracle

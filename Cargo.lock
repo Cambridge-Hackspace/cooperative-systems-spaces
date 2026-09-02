@@ -2955,6 +2955,7 @@ dependencies = [
  "jsonwebtoken",
  "lettre",
  "log",
+ "native-tls",
  "paho-mqtt",
  "prometheus",
  "rand 0.8.5",
