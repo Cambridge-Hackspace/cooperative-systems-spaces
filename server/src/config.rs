@@ -1351,6 +1351,48 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         return Err(anyhow::anyhow!("Server bind address cannot be empty"));
     }
 
+    // A mailer that is switched on and cannot possibly send is worse than one
+    // that is switched off: the first reports "check your email" to a member
+    // who will never receive one. Refused at load and at reload, so an operator
+    // who breaks it while editing finds out immediately rather than at the
+    // first password reset.
+    //
+    // An empty `password` is deliberately NOT refused -- submission relays that
+    // permit unauthenticated senders are legitimate, and `MailService` only
+    // offers AUTH when a username is set.
+    if config.email.enabled {
+        if config.email.host.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "email.enabled is true but email.host is empty, so no message \
+                 could ever be delivered. Set a host, or set email.enabled = false."
+            ));
+        }
+        if !config.email.from_email.contains('@') {
+            return Err(anyhow::anyhow!(
+                "email.enabled is true but email.from_email ({:?}) is not an \
+                 email address. Every message would be rejected by the relay.",
+                config.email.from_email
+            ));
+        }
+    }
+
+    // The lockout guard.
+    //
+    // require_email_verification with no mailer means nobody can confirm an
+    // address, so nobody who registers after the flag is set can ever log in,
+    // and the operator has no way to tell that is why. Refused at boot and at
+    // reload rather than warned about: a server that will not start with a
+    // message naming both settings is a far better outcome than one that
+    // starts and quietly refuses everyone.
+    if config.auth.require_email_verification && !config.email.enabled {
+        return Err(anyhow::anyhow!(
+            "auth.require_email_verification is true but email.enabled is false. \
+             Nobody could confirm an address, so no account created after this \
+             point could ever sign in. Configure [email] and enable it, or turn \
+             require_email_verification off."
+        ));
+    }
+
     // Validate initial setup admin email format
     if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
         return Err(anyhow::anyhow!(
@@ -1694,6 +1736,90 @@ mod tests {
     /// first successful bring-up found the same code path in production, where
     /// it told the container runtime the server had finished normally after
     /// refusing to start.
+    #[test]
+    fn requiring_confirmed_addresses_without_a_mailer_is_refused() {
+        // The lockout guard, and the reason it is an error rather than a
+        // warning. With no mailer nobody can confirm an address, so nobody who
+        // registers after the flag is set could ever sign in -- and the
+        // operator would have nothing to tell them why. Refusing to start names
+        // both settings.
+        //
+        // Mutation check: change the condition in `validate_config` to `false`
+        // and this fails.
+        let mut config = AppConfig::default();
+        config.auth.require_email_verification = true;
+        config.email.enabled = false;
+
+        let err = validate_config(&config)
+            .expect_err("requiring confirmation with no way to confirm is unusable");
+        let text = err.to_string();
+        assert!(
+            text.contains("require_email_verification") && text.contains("email.enabled"),
+            "the refusal must name both settings, since either one is a valid \
+             thing to change: {text}"
+        );
+    }
+
+    #[test]
+    fn requiring_confirmed_addresses_with_a_mailer_is_fine() {
+        // Anti-vacuity for the test above: if `validate_config` started
+        // refusing `require_email_verification` outright, that test would still
+        // pass while the feature had become unusable.
+        let mut config = AppConfig::default();
+        config.auth.require_email_verification = true;
+        config.email.enabled = true;
+        config.email.host = "smtp.example.invalid".to_string();
+        config.email.from_email = "noreply@example.invalid".to_string();
+
+        validate_config(&config)
+            .expect("a configured mailer is exactly what makes the flag usable");
+    }
+
+    #[test]
+    fn a_disabled_mailer_is_never_refused_however_empty_it_is() {
+        // Anti-vacuity for the two tests below. The shipped default has
+        // `enabled = false` with a `localhost` host and an example.com sender;
+        // if validation ever started rejecting that, every existing deployment
+        // would fail to boot on upgrade.
+        let mut config = AppConfig::default();
+        config.email.enabled = false;
+        config.email.host = String::new();
+        config.email.from_email = String::new();
+
+        validate_config(&config).expect("a disabled mailer imposes no requirements");
+    }
+
+    #[test]
+    fn an_enabled_mailer_with_no_host_is_refused() {
+        // Mutation check: delete the `email.host` arm in `validate_config` and
+        // this fails. The defect it guards is a deployment that reports "check
+        // your email" to a member who will never receive one.
+        let mut config = AppConfig::default();
+        config.email.enabled = true;
+        config.email.host = "   ".to_string();
+
+        let err = validate_config(&config)
+            .expect_err("an enabled mailer with no host cannot deliver anything");
+        assert!(
+            err.to_string().contains("email.host"),
+            "the refusal should name the field an operator has to fix, got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_enabled_mailer_with_a_nonsense_sender_is_refused() {
+        let mut config = AppConfig::default();
+        config.email.enabled = true;
+        config.email.from_email = "not an address".to_string();
+
+        let err = validate_config(&config)
+            .expect_err("a sender that is not an address is refused by every relay");
+        assert!(
+            err.to_string().contains("from_email"),
+            "the refusal should name the field an operator has to fix, got: {err}"
+        );
+    }
+
     #[test]
     fn a_config_missing_a_field_is_an_error_and_not_an_exit() {
         let dir = tempfile::tempdir().expect("a temp dir");

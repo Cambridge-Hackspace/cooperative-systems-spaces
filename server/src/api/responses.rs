@@ -70,6 +70,32 @@ pub struct LoginResponse {
     pub must_enroll_mfa: Option<bool>,
 }
 
+// Account recovery and email confirmation.
+//
+// Four request bodies for four public endpoints. None of them carries a
+// credential -- the token *is* the credential, and it arrives in the body
+// rather than a header precisely so it is never a session.
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetConsumeRequest {
+    pub token: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmailVerificationRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResendVerificationRequest {
+    pub email: String,
+}
+
 // Register request model
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -94,6 +120,10 @@ pub struct UserResponse {
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub meta: serde_json::Value,
+    /// Whether the address has been confirmed. Exposed so the profile page can
+    /// show the state and offer a resend, rather than the frontend having to
+    /// infer it from a login failure.
+    pub email_verified: bool,
 }
 
 impl From<crate::models::User> for UserResponse {
@@ -104,6 +134,7 @@ impl From<crate::models::User> for UserResponse {
             email: user.email,
             full_name: user.full_name,
             is_active: user.is_active,
+            email_verified: user.email_verified_at.is_some(),
             role: user.role,
             created_at: user.created_at,
             updated_at: user.updated_at,

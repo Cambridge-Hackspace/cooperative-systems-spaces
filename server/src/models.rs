@@ -1,3 +1,4 @@
+mod account_tokens;
 mod devices;
 mod doors;
 mod home_links;
@@ -14,6 +15,7 @@ pub mod trainers;
 mod training;
 mod webhooks;
 
+pub use account_tokens::*;
 pub use devices::*;
 pub use doors::*;
 pub use home_links::*;
@@ -126,6 +128,16 @@ pub struct User {
     /// Set when the user confirms their first MFA method; cleared when the
     /// last method is removed. Used to short-circuit `has any MFA?` checks.
     pub mfa_enrolled_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the address was confirmed. `None` means unconfirmed.
+    ///
+    /// Last in the struct because `ALTER TABLE ADD COLUMN` appends physically
+    /// and `Queryable` loads positionally -- a field inserted in the middle
+    /// here would silently start reading the wrong column.
+    ///
+    /// Accounts predating the column were backfilled as confirmed by the
+    /// migration, so turning `auth.require_email_verification` on does not lock
+    /// out an existing membership.
+    pub email_verified_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -306,6 +318,27 @@ pub enum AuditEventType {
     HomeLinkCreated,
     HomeLinkUpdated,
     HomeLinkDeleted,
+    // Transactional email and account recovery
+    //
+    // Appended at the tail of all three lists rather than filed next to the
+    // other user events, so that a concurrent branch inserting near the
+    // training group does not collide here. Grouping by subject would be
+    // tidier; not conflicting with work already in review is worth more.
+    /// A reset was asked for. The payload records whether an account was
+    /// found -- this is the one place that answer is written down, because the
+    /// endpoint deliberately will not tell the requester.
+    PasswordResetRequested,
+    /// A password was changed without the old one being presented.
+    PasswordResetCompleted,
+    /// A reset token was rejected: unknown, expired, or already spent. Volume
+    /// here is the only brute-force signal a public endpoint gives off.
+    PasswordResetFailed,
+    EmailVerificationSent,
+    EmailVerified,
+    /// The mailer could not deliver. The request that triggered it cannot
+    /// report this -- saying so would turn a send failure into an account
+    /// enumeration oracle -- so this row is how an operator finds out.
+    EmailSendFailed,
 }
 
 impl AuditEventType {
@@ -380,6 +413,12 @@ impl AuditEventType {
             Self::HomeLinkCreated => "home_link_created",
             Self::HomeLinkUpdated => "home_link_updated",
             Self::HomeLinkDeleted => "home_link_deleted",
+            Self::PasswordResetRequested => "password_reset_requested",
+            Self::PasswordResetCompleted => "password_reset_completed",
+            Self::PasswordResetFailed => "password_reset_failed",
+            Self::EmailVerificationSent => "email_verification_sent",
+            Self::EmailVerified => "email_verified",
+            Self::EmailSendFailed => "email_send_failed",
         }
     }
 
@@ -457,6 +496,12 @@ impl AuditEventType {
             HomeLinkCreated,
             HomeLinkUpdated,
             HomeLinkDeleted,
+            PasswordResetRequested,
+            PasswordResetCompleted,
+            PasswordResetFailed,
+            EmailVerificationSent,
+            EmailVerified,
+            EmailSendFailed,
         ]
     }
 }

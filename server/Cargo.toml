@@ -11,6 +11,14 @@ path = "src/main.rs"
 name = "css-webhook-recvr"
 path = "src/bin/webhook_recvr.rs"
 
+# The stack tier's mail destination. Same reasoning as css-webhook-recvr: an
+# in-repo binary built alongside the server needs no container image, so it adds
+# no digest to pin in both e2e/images.env and .reaper.toml, and nothing to pull
+# in CI.
+[[bin]]
+name = "css-smtp-sink"
+path = "src/bin/smtp_sink.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }
@@ -54,6 +62,29 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+
+# Outbound email (SMTP)
+#
+# `default-features = false` is load-bearing: lettre's defaults pick a TLS
+# backend on your behalf, and a mailer that silently chose one would be a
+# second TLS stack nobody decided to add. native-tls is deliberate --
+# webauthn-rs 0.5 already forces openssl/openssl-sys into this binary, so
+# libssl is a requirement the runtime image carries either way, whereas rustls
+# would put a third rustls major into a lock that already carries two.
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "builder",
+    "tokio1",
+    "tokio1-native-tls",
+    "hostname",
+] }
+
+# Server-side TLS for css-smtp-sink's STARTTLS.
+#
+# Already in the tree -- reqwest's default-tls and lettre both pull it -- so
+# naming it directly adds no build and no system library. The sink needs the
+# server half of it, which nothing else here uses.
+native-tls = "0.2"
 
 # Multi-factor auth
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }

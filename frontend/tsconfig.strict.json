@@ -45,9 +45,17 @@
   // **Growing this list is the unit of work.** The next step is one component
   // at a time: add `src/components/<name>.vue` here, fix what it reports, and
   // when nine are done put `tests/components/**` back.
+  //
+  // The three account-recovery views were written under strict and added here
+  // when they landed, which is the cheap version of that work: a new file costs
+  // nothing to hold to the standard, and the expensive part of this ratchet is
+  // only ever retrofitting old ones.
   "include": [
     "src/types/**/*.ts",
     "src/components/schedule_templates.ts",
+    "src/views/ForgotPasswordView.vue",
+    "src/views/ResetPasswordView.vue",
+    "src/views/VerifyEmailView.vue",
     "tests/unit/**/*.ts",
     "tests/structure/**/*.ts"
   ]

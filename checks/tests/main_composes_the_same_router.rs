@@ -67,6 +67,12 @@ const SEPARATE_BINARIES: &[&str] = &[
     // at. Covered by the `webhooks` stage, which asserts what it received rather
     // than what the dispatcher claimed to send.
     "bin/webhook_recvr.rs",
+    // The standalone SMTP sink the stack battery points [email] at. It composes
+    // no HTTP routes at all -- it speaks SMTP over a raw socket -- but it lives
+    // under bin/ and this list is what says a binary there is deliberate.
+    // Covered by the `mail` stage, which asserts what arrived rather than what
+    // the mailer claimed to send.
+    "bin/smtp_sink.rs",
 ];
 
 /// Every `.route("...")` literal in a file, comments stripped.

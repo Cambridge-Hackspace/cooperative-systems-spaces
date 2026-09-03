@@ -109,6 +109,8 @@ pub const ROUTES: &[R] = &[
     R("PATCH", "/api/admin/webhooks/auth-headers/00000000-0000-4000-8000-000000000001", Guard::Admin), // webhooks::update_auth_header
     R("GET", "/api/admin/webhooks/deliveries", Guard::Admin), // webhooks::list_deliveries
     R("GET", "/api/admin/webhooks/event-types", Guard::Admin), // webhooks::list_event_types
+    R("POST", "/api/auth/email/resend", Guard::Public), // auth::resend_verification
+    R("POST", "/api/auth/email/verify", Guard::Public), // auth::verify_email
     R("POST", "/api/auth/login", Guard::Public), // auth::login
     R("POST", "/api/auth/logout", Guard::Public), // auth::logout
     R("GET", "/api/auth/me", Guard::Auth), // auth::me
@@ -122,6 +124,8 @@ pub const ROUTES: &[R] = &[
     R("DELETE", "/api/auth/mfa/webauthn/00000000-0000-4000-8000-000000000001", Guard::Auth), // mfa::webauthn_remove
     R("POST", "/api/auth/mfa/webauthn/register/begin", Guard::Auth), // mfa::webauthn_register_begin
     R("POST", "/api/auth/mfa/webauthn/register/finish", Guard::Auth), // mfa::webauthn_register_finish
+    R("POST", "/api/auth/password-reset/consume", Guard::Public), // auth::password_reset_consume
+    R("POST", "/api/auth/password-reset/request", Guard::Public), // auth::password_reset_request
     R("POST", "/api/auth/register", Guard::Public), // auth::register
     R("GET", "/api/calendar/events", Guard::Public), // calendar::get_calendar_events
     R("GET", "/api/calendar/events/refresh", Guard::Public), // calendar::refresh_calendar_events

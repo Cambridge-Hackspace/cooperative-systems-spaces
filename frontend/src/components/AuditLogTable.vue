@@ -23,6 +23,12 @@
           <option value="profile_config_updated">Profile Config Updated</option>
           <option value="profile_config_rolled_back">Profile Config Rolled Back</option>
           <option value="failed_login_attempt">Failed Login</option>
+          <option value="password_reset_requested">Password Reset Requested</option>
+          <option value="password_reset_completed">Password Reset Completed</option>
+          <option value="password_reset_failed">Password Reset Failed</option>
+          <option value="email_verification_sent">Verification Email Sent</option>
+          <option value="email_verified">Email Verified</option>
+          <option value="email_send_failed">Email Send Failed</option>
           <option value="training_documentation_acknowledged">
             Safety Documentation Acknowledged
           </option>
@@ -393,6 +399,12 @@ const getEventBadgeClass = (eventType: string): string => {
     profile_config_updated: 'badge-secondary',
     profile_config_rolled_back: 'badge-warning',
     failed_login_attempt: 'badge-error',
+    password_reset_requested: 'badge-info',
+    password_reset_completed: 'badge-warning',
+    password_reset_failed: 'badge-error',
+    email_verification_sent: 'badge-info',
+    email_verified: 'badge-success',
+    email_send_failed: 'badge-error',
   }
   return typeMap[eventType] || 'badge-ghost'
 }

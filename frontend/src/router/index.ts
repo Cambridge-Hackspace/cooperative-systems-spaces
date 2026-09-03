@@ -72,6 +72,30 @@ const router = createRouter({
       },
     },
     {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: () => import('@/views/ForgotPasswordView.vue'),
+      meta: {
+        requiresGuest: true,
+      },
+    },
+    {
+      // No meta at all, deliberately -- not even requiresGuest.
+      //
+      // These two are reached by opening a link from an email, and the person
+      // doing that may well still have a live session in that browser. Under
+      // requiresGuest the navigation guard would bounce them to the home page,
+      // and the emailed link would appear to do nothing whatsoever.
+      path: '/reset-password',
+      name: 'reset-password',
+      component: () => import('@/views/ResetPasswordView.vue'),
+    },
+    {
+      path: '/verify-email',
+      name: 'verify-email',
+      component: () => import('@/views/VerifyEmailView.vue'),
+    },
+    {
       path: '/profile/mfa',
       name: 'profile-mfa',
       component: () => import('@/components/MfaSettings.vue'),

@@ -587,6 +587,32 @@ export const mfaApi = {
   },
 }
 
+/**
+ * Account recovery and email confirmation.
+ *
+ * Every call here is unauthenticated -- the token in the body is the
+ * credential, and none of these ever carries a session. `mfaApi.verify` is the
+ * existing precedent for that shape.
+ *
+ * Note what is deliberately absent: a `validate(token)` call. Answering "is
+ * this token good?" without spending it would be a free oracle on a public
+ * endpoint, and the only thing it buys is a slightly better message.
+ */
+export const accountApi = {
+  requestPasswordReset(email: string) {
+    return apiClient.post<void>('/auth/password-reset/request', { email })
+  },
+  consumePasswordReset(token: string, new_password: string) {
+    return apiClient.post<void>('/auth/password-reset/consume', { token, new_password })
+  },
+  verifyEmail(token: string) {
+    return apiClient.post<void>('/auth/email/verify', { token })
+  },
+  resendVerification(email: string) {
+    return apiClient.post<void>('/auth/email/resend', { email })
+  },
+}
+
 // Webhooks API functions (admin only)
 export const webhooksApi = {
   // --- Auth headers (reusable write-only credentials) ---

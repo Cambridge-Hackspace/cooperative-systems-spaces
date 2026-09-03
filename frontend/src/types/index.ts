@@ -38,6 +38,15 @@ export interface User {
   updated_at: string
   /** Set when the user has at least one confirmed MFA method. */
   mfa_enrolled_at?: string | null
+  /**
+   * Whether the address has been confirmed.
+   *
+   * Optional because a server older than the email work does not send it, and
+   * because `undefined` and `false` must not be treated alike: the first means
+   * "this deployment does not track confirmation", the second means "not
+   * confirmed".
+   */
+  email_verified?: boolean
   profile: Record<string, unknown>
   meta: Record<string, unknown>
 }

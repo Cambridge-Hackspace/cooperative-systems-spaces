@@ -17,6 +17,7 @@ use css_server::config::{load_config, ConfigManager};
 use css_server::database::{initialize_database, DatabaseManager};
 use css_server::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 use css_server::doors::DoorService;
+use css_server::mail::MailService;
 use css_server::mfa::MfaService;
 use css_server::mqtt::MqttService;
 use css_server::pages::PagesService;
@@ -157,6 +158,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
+    let mail_service = Arc::new(MailService::new(config_manager.clone()));
     let recaptcha_service = Arc::new(RecaptchaService::new(
         app_config
             .registration_challenge
@@ -278,6 +280,7 @@ async fn main() -> Result<(), anyhow::Error> {
         audit_logger,
         throttle_service,
         recaptcha_service,
+        mail_service,
         calendar_service,
         pages_service,
         mqtt_service: mqtt_service_arc,

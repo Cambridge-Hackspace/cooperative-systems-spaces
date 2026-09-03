@@ -55,6 +55,14 @@ pub fn test_config() -> AppConfig {
          shared /tmp path, so a fixture that leaves them set reaches the network"
     );
 
+    assert!(
+        !config.email.enabled,
+        "email must stay disabled: MailService opens an SMTP connection on every \
+         send, so a fixture that enables it reaches the network -- and would do \
+         so from the offline contract tier, whose whole premise is that nothing \
+         it touches can talk to anything"
+    );
+
     config
 }
 
@@ -81,6 +89,9 @@ pub async fn app_state() -> AppState {
         audit_logger: AuditLogger::new(db.clone()),
         throttle_service: Arc::new(RegistrationThrottleService::new()),
         recaptcha_service: Arc::new(RecaptchaService::new(String::new())),
+        // `test_config()` leaves `email.enabled` false, so no fixture can reach
+        // the network through this. Asserted below rather than assumed.
+        mail_service: Arc::new(crate::mail::MailService::new(config_manager.clone())),
         calendar_service: Arc::new(tokio::sync::RwLock::new(CalendarService::new(
             config.calendar.clone(),
         ))),

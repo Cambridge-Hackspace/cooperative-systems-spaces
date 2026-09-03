@@ -35,7 +35,14 @@ use css_checks::repo_root;
 /// of every ratchet expressed as a single number.
 const BUDGET: &[(&str, usize)] = &[
     ("admin.rs", 3),
-    ("auth.rs", 3),
+    // 3 -> 4 with the arrival of password reset. The fourth is
+    // `PasswordHashUtil::hash` failing while consuming a reset token, which is
+    // not a DatabaseError at all -- an Argon2 failure is genuinely the server's
+    // problem, and 500 is the honest answer. The same call in
+    // `users::change_own_password` is one of the three already counted here.
+    // Every database error on the reset path goes through `ApiError::from_db`,
+    // which keeps the classification.
+    ("auth.rs", 4),
     ("calendar.rs", 0),
     ("config.rs", 0),
     // 1, and it is the deliberate kind this check's own message describes.

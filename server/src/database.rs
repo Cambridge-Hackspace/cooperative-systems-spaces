@@ -2872,6 +2872,154 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    // --- account tokens: password reset and email confirmation -----------
+    //
+    // Both flows keep the same shape, and both consume their token with a
+    // single filtered UPDATE rather than a read followed by a write. The
+    // reasoning is the one recorded at api/devices.rs:229-247, where a
+    // check-then-claim let one device invite mint two devices: between the
+    // SELECT that finds the row unused and the UPDATE that spends it, another
+    // request can do the same. Here the consequence is worse than a duplicate
+    // device -- two concurrent requests could each set a different password
+    // from one emailed link, and only one of the two people would know which
+    // won.
+    //
+    // The expiry check is inside the statement for the same reason. A
+    // preceding `if row.expires_at > now` is a race with the clock as well as
+    // with other writers.
+
+    /// Store a reset token, invalidating any the user already had.
+    ///
+    /// Old tokens are spent rather than deleted, so a reset that was requested
+    /// twice leaves a trail of both. Invalidating them keeps at most one live
+    /// credential per account, and makes "I clicked the older email" fail
+    /// cleanly instead of succeeding confusingly.
+    pub fn create_password_reset_token(
+        &self,
+        uid: uuid::Uuid,
+        hash: String,
+        expiry: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::password_reset_tokens::dsl::*;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::update(
+                password_reset_tokens
+                    .filter(user_id.eq(uid))
+                    .filter(used_at.is_null()),
+            )
+            .set(used_at.eq(Some(chrono::Utc::now())))
+            .execute(conn)?;
+
+            diesel::insert_into(password_reset_tokens)
+                .values(crate::models::NewPasswordResetToken {
+                    user_id: uid,
+                    token_hash: hash,
+                    expires_at: expiry,
+                })
+                .execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Spend a reset token, returning the user it belonged to.
+    ///
+    /// `Ok(None)` covers unknown, expired and already-spent alike -- the caller
+    /// must not distinguish them for the requester, and there is nothing useful
+    /// it could do differently.
+    pub fn claim_password_reset_token(
+        &self,
+        hash: &str,
+    ) -> Result<Option<uuid::Uuid>, DatabaseError> {
+        use crate::schema::password_reset_tokens::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(
+            password_reset_tokens
+                .filter(token_hash.eq(hash))
+                .filter(used_at.is_null())
+                .filter(expires_at.gt(chrono::Utc::now())),
+        )
+        .set(used_at.eq(Some(chrono::Utc::now())))
+        .returning(user_id)
+        .get_result::<uuid::Uuid>(&mut conn)
+        .optional()
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Store an email confirmation token, invalidating any the user already had.
+    pub fn create_email_verification_token(
+        &self,
+        uid: uuid::Uuid,
+        hash: String,
+        expiry: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::email_verification_tokens::dsl::*;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::update(
+                email_verification_tokens
+                    .filter(user_id.eq(uid))
+                    .filter(used_at.is_null()),
+            )
+            .set(used_at.eq(Some(chrono::Utc::now())))
+            .execute(conn)?;
+
+            diesel::insert_into(email_verification_tokens)
+                .values(crate::models::NewEmailVerificationToken {
+                    user_id: uid,
+                    token_hash: hash,
+                    expires_at: expiry,
+                })
+                .execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Spend an email confirmation token, returning the user it belonged to.
+    pub fn claim_email_verification_token(
+        &self,
+        hash: &str,
+    ) -> Result<Option<uuid::Uuid>, DatabaseError> {
+        use crate::schema::email_verification_tokens::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(
+            email_verification_tokens
+                .filter(token_hash.eq(hash))
+                .filter(used_at.is_null())
+                .filter(expires_at.gt(chrono::Utc::now())),
+        )
+        .set(used_at.eq(Some(chrono::Utc::now())))
+        .returning(user_id)
+        .get_result::<uuid::Uuid>(&mut conn)
+        .optional()
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Record that a user's address has been confirmed.
+    ///
+    /// Idempotent by construction: confirming twice is not an error, and the
+    /// second call simply refreshes the timestamp.
+    pub fn mark_email_verified(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set(email_verified_at.eq(Some(chrono::Utc::now())))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            // Reported rather than discarded, per
+            // checks/tests/writes_report_what_they_changed.rs: a confirmation
+            // that updated nothing means the account went away between claiming
+            // the token and writing the result, and silently returning Ok would
+            // leave the address unconfirmed with the token already spent.
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
     // --- users.mfa_enrolled_at -------------------------------------------
 
     pub fn set_user_mfa_enrolled(
