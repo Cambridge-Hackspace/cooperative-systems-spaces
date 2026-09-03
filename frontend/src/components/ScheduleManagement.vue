@@ -170,7 +170,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import { schedulesApi } from '@/utils/api'
 import type { DayOfWeek, Schedule, ScheduleInterval } from '@/types'
 import { ALL_DAYS, SCHEDULE_TEMPLATES } from './schedule_templates'
@@ -406,5 +407,5 @@ async function onDelete(s: Schedule) {
   } else notify(r.error || 'Failed to delete', false)
 }
 
-onMounted(load)
+useReloadOnReactivate(load)
 </script>

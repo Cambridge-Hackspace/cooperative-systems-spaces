@@ -19,7 +19,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { defineComponent, h, KeepAlive, nextTick } from 'vue'
 
 const mocks = vi.hoisted(() => ({
   listDoors: vi.fn(),
@@ -599,5 +599,153 @@ describe('what a network error does', () => {
 
     expect(w.find('.modal-action .btn-primary').attributes('disabled')).toBeUndefined()
     expect(w.find('.alert-error').text()).toContain('Network Error')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Issue #11: the Facility tabs are cached, so a tab's data is loaded once ever
+// ---------------------------------------------------------------------------
+//
+// `FacilityManagement.vue` wraps its `v-if` tab chain in `<KeepAlive>`. That is
+// the right call -- it keeps a half-filled form and a scroll position across a
+// tab switch -- but it means `onMounted` fires exactly once per page load, and
+// nothing else ever reloads. Every dependency a tab has on another tab's data
+// is therefore stale from the moment somebody edits it.
+//
+// The reported symptom is the sharpest version of that: add rooms on Places,
+// open "+ New door", and be told there are no places to pick from. A manual
+// refresh fixes it, which is the tell -- refreshing is the only thing that
+// remounts the component.
+//
+// These mount DoorManagement inside a KeepAlive that toggles, which is exactly
+// what the tab host does to it.
+
+/**
+ * A stand-in for the facility tab host: one KeepAlive, one toggled child.
+ *
+ * Built with a render function rather than a template string. Registering an
+ * SFC import in a `components` option is an assignment of an error-typed value
+ * under the type-aware lint rules -- `.vue` resolves through a shim that
+ * eslint's project cannot see -- whereas passing it to `h()` is a call, which
+ * is fine. It also skips the runtime template compiler entirely.
+ */
+const TabHost = defineComponent({
+  props: { showing: { type: Boolean, required: true } },
+  setup(props) {
+    return () =>
+      h(KeepAlive, null, {
+        default: () =>
+          props.showing
+            ? h(DoorManagement, { embedded: true })
+            : h('div', { 'data-t': 'another-tab' }),
+      })
+  },
+})
+
+/** The same `stubs` the rest of this file mounts with, through the tab host. */
+const mountHost = () =>
+  mount(TabHost, {
+    props: { showing: true },
+    global: { stubs },
+  })
+
+/**
+ * `buttonNamed` is typed for a wrapper around DoorManagement itself; these
+ * tests hold a wrapper around the tab host. Same three lines, correct type --
+ * cheaper and clearer than casting one wrapper into the other.
+ */
+function hostButton(w: ReturnType<typeof mountHost>, label: string) {
+  const b = w.findAll('button').find((btn) => btn.text().trim() === label)
+  if (!b) throw new Error(`no button labeled ${JSON.stringify(label)}`)
+  return b
+}
+
+async function switchAway(w: ReturnType<typeof mountHost>) {
+  await w.setProps({ showing: false })
+  await flushPromises()
+}
+
+async function switchBack(w: ReturnType<typeof mountHost>) {
+  await w.setProps({ showing: true })
+  await flushPromises()
+}
+
+describe('returning to a cached tab', () => {
+  it('is genuinely cached, so the fix cannot be "it remounts anyway"', async () => {
+    // Anti-vacuity, and it pins the premise of everything below. If KeepAlive
+    // were ever removed, the two tests after this would pass for a reason
+    // unrelated to the code they guard -- a remount reloads everything -- and
+    // the reader should learn that from a failure here rather than by trusting
+    // a green suite.
+    //
+    // Asserted on preserved UI state rather than on a request count. Counting
+    // requests cannot distinguish "mounted again" from "refreshed on
+    // activation" now that the fix makes both fetch the same things, and an
+    // open form surviving a tab switch is exactly what KeepAlive is *for*.
+    const w = mountHost()
+    await flushPromises()
+
+    await hostButton(w, '+ New door').trigger('click')
+    await nextTick()
+    expect(w.text()).toContain('New door')
+
+    await switchAway(w)
+    await switchBack(w)
+
+    expect(
+      w.text(),
+      'the half-filled form did not survive a tab switch, so the component ' +
+        'remounted and KeepAlive is not in play -- this file is no longer ' +
+        'testing what it says it tests'
+    ).toContain('New door')
+  })
+
+  it('reloads the places another tab owns', async () => {
+    const w = mountHost()
+    await flushPromises()
+    expect(mocks.listPlaces).toHaveBeenCalledTimes(1)
+
+    await switchAway(w)
+    await switchBack(w)
+
+    expect(
+      mocks.listPlaces,
+      'coming back to this tab did not re-query places, so a room added on the ' +
+        'Places tab in between is invisible here until the page is refreshed'
+    ).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops warning about no places once some exist', async () => {
+    // The reported bug, end to end within the component: open the form with no
+    // places and see the banner, add places elsewhere, come back, and the
+    // banner should be gone.
+    mocks.listPlaces.mockResolvedValue({ success: true, data: [] })
+
+    const w = mountHost()
+    await flushPromises()
+
+    const openForm = async () => {
+      await hostButton(w, '+ New door').trigger('click')
+      await nextTick()
+    }
+
+    await openForm()
+    expect(
+      w.text(),
+      'the premise: with no places, the form must warn. If this ever stops ' +
+        'being true the test below proves nothing.'
+    ).toContain('You need at least one place')
+
+    // Somebody adds rooms on the Places tab.
+    mocks.listPlaces.mockResolvedValue({ success: true, data: PLACES })
+    await switchAway(w)
+    await switchBack(w)
+    await openForm()
+
+    expect(
+      w.text(),
+      'the form still says there are no places after rooms were added on ' +
+        'another tab -- issue #11'
+    ).not.toContain('You need at least one place')
   })
 })
