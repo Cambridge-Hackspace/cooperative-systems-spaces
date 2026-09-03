@@ -1,18 +1,15 @@
--- Six event types for transactional email and account recovery.
+-- Restore the CHECK constraint and drop the lookup table.
 --
--- Restated in full, as every migration that has touched this constraint has
--- had to be: the check is redefined, not appended to, so the last migration to
--- run is the whole list. Adding a variant in Rust and not here is the accident
--- checks/tests/audit_event_types.rs exists to catch -- every audit write in
--- this codebase discards its Result, so a type the constraint does not list
--- produces no error anywhere. The row is simply never written.
+-- The list below is the sixty-eight values this migration's up.sql seeded, so
+-- reverting lands exactly on the schema that preceded it.
 --
--- This migration does nothing but the constraint, deliberately. A concurrent
--- branch is adding an event type of its own, and only the lexicographically
--- last migration containing ADD CONSTRAINT is read. Keeping the restatement in
--- a single-purpose file means reconciling the two lists at merge is a one-line
--- edit here rather than surgery on a migration that also creates tables.
-ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_event_type_check;
+-- Reverting is expected to FAIL, loudly, if a later migration added an event
+-- type and rows were written using it. Diesel reverts in reverse order, and a
+-- later migration's own down.sql deletes its row from audit_event_types but
+-- cannot delete the audit_logs rows that reference it -- nor should it, since
+-- those are the records this table exists to keep. A revert that stops there
+-- is reporting a real conflict rather than hiding one.
+ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_event_type_fkey;
 
 ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_event_type_check
 CHECK (event_type IN (
@@ -51,8 +48,7 @@ CHECK (event_type IN (
     -- Home link
     'home_link_created','home_link_updated','home_link_deleted',
     -- Profile config (split out of admin_config_reload)
-    'profile_config_updated','profile_config_rolled_back',
-    -- Transactional email and account recovery
-    'password_reset_requested','password_reset_completed','password_reset_failed',
-    'email_verification_sent','email_verified','email_send_failed'
+    'profile_config_updated','profile_config_rolled_back'
 ));
+
+DROP TABLE audit_event_types;
