@@ -511,13 +511,64 @@ stage_schema() {
   # schema's.
   for t in users doors door_access_rules door_access_events door_checkins \
     schedules tools space_devices space_device_auth space_device_auth_requests \
-    profile_config_versions webhooks audit_logs places home_links; do
+    profile_config_versions webhooks audit_logs audit_event_types places \
+    home_links; do
     if [[ "$(sql_ro "SELECT to_regclass('public.${t}') IS NOT NULL" | tr -d ' ')" == "t" ]]; then
       record_case "schema/table/${t}" ok
     else
       record_case "schema/table/${t}" fail "not present after migration"
     fi
   done
+
+  # --- the audit event-type lookup table is populated and enforcing --------
+  # checks/tests/audit_event_types.rs proves the *migrations* say the right
+  # thing; it reads SQL as text and never opens a database. These three prove
+  # the database agrees, which is a different claim and the one that decides
+  # whether an audit row is actually written.
+  #
+  # Every audit write is `let _ = create_audit_log(..)`. An empty lookup table
+  # or a missing foreign key produces no error anywhere -- the first silently
+  # rejects every audit row, the second silently accepts anything -- so neither
+  # has a symptom that any other stage would notice.
+  local registered fk_count check_count
+  registered="$(sql_ro "SELECT count(*) FROM audit_event_types" | tr -d ' ')"
+  if [[ ${registered} -ge 60 ]]; then
+    record_case "schema/audit-event-types-seeded" ok
+  else
+    record_case "schema/audit-event-types-seeded" fail \
+      "audit_event_types holds ${registered} rows; the seed did not run, and every \
+audit write naming an unregistered type is being discarded in silence"
+  fi
+
+  fk_count="$(sql_ro "SELECT count(*) FROM pg_constraint \
+    WHERE conrelid = 'public.audit_logs'::regclass AND contype = 'f' \
+    AND confrelid = 'public.audit_event_types'::regclass" | tr -d ' ')"
+  if [[ ${fk_count} -ge 1 ]]; then
+    record_case "schema/audit-event-type-fk-present" ok
+  else
+    record_case "schema/audit-event-type-fk-present" fail \
+      "audit_logs has no foreign key to audit_event_types, so nothing constrains \
+event_type at all and a typo would be stored rather than rejected"
+  fi
+
+  # The CHECK this replaced must stay gone. A migration that restated it --
+  # which is exactly what a branch written before the lookup table would do --
+  # would re-impose its own frozen list on top of the table and silently forbid
+  # every event type added since.
+  check_count="$(sql_ro "SELECT count(*) FROM pg_constraint \
+    WHERE conrelid = 'public.audit_logs'::regclass AND contype = 'c' \
+    AND conname = 'audit_logs_event_type_check'" | tr -d ' ')"
+  # `== "0"` and not `-eq 0`: bash evaluates an empty string as arithmetic zero,
+  # so `-eq 0` would report ok when the query above failed and returned nothing
+  # -- a check that passes hardest exactly when it has stopped working. The two
+  # comparisons above are safe from this because an empty string is not >= 1.
+  if [[ ${check_count} == "0" ]]; then
+    record_case "schema/audit-event-type-check-retired" ok
+  else
+    record_case "schema/audit-event-type-check-retired" fail \
+      "audit_logs_event_type_check is back alongside the lookup table; whichever \
+list it froze now overrides the table, and event types added since are dropped"
+  fi
 
   # --- the profile-config bootstrap ran exactly once ----------------------
   # main.rs:145 inserts a version when `get_latest_profile_config_version()`
