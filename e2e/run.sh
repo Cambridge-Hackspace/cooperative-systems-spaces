@@ -46,6 +46,17 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 STAGES_ALL="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
+# Stages that exist and are deliberately NOT part of `all` or `default`.
+#
+# `--only ...,devseed` reaches them; `--only all` does not. devseed claims the
+# one address `[initial_setup]` grants admin to, so running it inside the
+# battery would hand drivers/lib.mjs's adminAccount() an address it can neither
+# claim nor sign into -- the contract tier would then fail for a reason that was
+# the fixture's. Opt-in is the whole point, so it cannot live in STAGES_ALL.
+STAGES_EXTRA="devseed"
+# Everything a stage name is allowed to be. Both validation sites read this.
+STAGES_VALID="${STAGES_ALL},${STAGES_EXTRA}"
+
 PROVISION="podman"
 ENGINE=""
 STAGES="${STAGES_DEFAULT}"
@@ -95,7 +106,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --list-stages)
-      printf '%s\n' "${STAGES_ALL//,/$'\n'}"
+      printf '%s\n' "${STAGES_VALID//,/$'\n'}"
       exit 0
       ;;
     -h | --help)
@@ -117,9 +128,9 @@ done
 # `.reaper.toml`'s [profiles.hunt] named `journeys`, a stage that does not
 # exist, and would have reported exactly that.
 for _stage in ${STAGES//,/ }; do
-  case ",${STAGES_ALL}," in
+  case ",${STAGES_VALID}," in
     *",${_stage},"*) ;;
-    *) die "no such stage: ${_stage}. Valid: ${STAGES_ALL}" ;;
+    *) die "no such stage: ${_stage}. Valid: ${STAGES_VALID}" ;;
   esac
 done
 unset _stage
@@ -136,8 +147,8 @@ has_stage() { [[ ",${STAGES}," == *",$1,"* ]]; }
 # Every named stage must exist. A typo that silently ran nothing would be
 # indistinguishable from a pass.
 for want in ${STAGES//,/ }; do
-  [[ ",${STAGES_ALL}," == *",${want},"* ]] \
-    || die "no such stage: '${want}'. Implemented: ${STAGES_ALL}"
+  [[ ",${STAGES_VALID}," == *",${want},"* ]] \
+    || die "no such stage: '${want}'. Implemented: ${STAGES_VALID}"
 done
 
 FAILED_STAGES=""
@@ -1323,6 +1334,190 @@ produce it either, the exemption is stale and should be deleted."
   done
 
   emit_junit logs
+}
+# ===========================================================================
+# devseed -- a usable login on a live instance, for development only.
+#
+# Deliberately NOT in STAGES_ALL or STAGES_DEFAULT. Only one address grants
+# admin (`[initial_setup] setup_admin_email`), and only the first caller to
+# register it gets the role -- so a battery run that had already seeded would
+# hand `adminAccount()` in drivers/lib.mjs an address it cannot claim and
+# cannot sign into, and the contract tier would fail for a reason that was the
+# fixture's. Reachable through `--only ...,devseed` and nowhere else.
+#
+# The account is created through the shipping register endpoint, not SQL. That
+# is the same rule the battery follows: if registration is broken, seeding must
+# fail rather than paper over it with an INSERT.
+# Create one tool. Prints its id, or nothing.
+#
+# `grep -o` rather than a JSON parser because preflight asserts there is no jq
+# and no python3 on the runner, deliberately -- the suite may not quietly
+# acquire a dependency the next template gap would hide. The id is the first
+# "id" in the body: the envelope is {"success":..,"data":{"id":..}}, and `id` is
+# the first field of the Tool struct.
+devseed_tool() { # devseed_tool <base> <token> <name> <category> <location>
+  local base="$1" token="$2" name="$3" category="$4" location="$5"
+  curl -s -X POST "${base}/api/tools" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"name\":\"${name}\",\"category\":\"${category}\",\"location\":\"${location}\",\"requires_training\":true}" \
+    | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//'
+}
+
+# Create one training step. Returns non-zero unless the server said success.
+devseed_step() { # devseed_step <base> <token> <tool_id> <n> <name> <url> <self>
+  local base="$1" token="$2" tool_id="$3" n="$4" name="$5" url="$6" self="$7"
+  local materials=""
+  [[ -n ${url} ]] && materials=",\"training_materials_url\":\"${url}\""
+  curl -s -X POST "${base}/api/training/steps" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"tool_id\":\"${tool_id}\",\"step_number\":${n},\"step_name\":\"${name}\",\"self_attestable\":${self}${materials}}" \
+    | grep -q '"success":true'
+}
+
+stage_devseed() {
+  cases_begin devseed
+  stack_paths
+
+  if ! server_ready; then
+    record_case "devseed/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/stack-is-up" ok
+
+  local user="${CSS_DEV_ADMIN_USER:-admin}"
+  local pass="${CSS_DEV_ADMIN_PASS:-password123!}"
+  local mail
+  # The address the config grants admin to. Read from the generated config
+  # rather than restated here: two copies of this would drift and the failure
+  # would be a member account that looks like an admin bug.
+  mail="$(awk -F'"' '/^setup_admin_email/ {print $2; exit}' "${STACK_DIR}/config.toml")"
+  if [[ -z ${mail} ]]; then
+    record_case "devseed/admin-address" fail "no setup_admin_email in the generated config"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/admin-address" ok "${mail}"
+
+  local base="http://127.0.0.1:${SERVER_PORT}"
+  local body code
+  body="$(curl -s -o "${OUT}/devseed-register.json" -w '%{http_code}' \
+    -X POST "${base}/api/auth/register" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"${user}\",\"email\":\"${mail}\",\"password\":\"${pass}\",\"full_name\":\"Dev Admin\"}" || echo 000)"
+  code="${body}"
+
+  if [[ ${code} == "201" || ${code} == "200" ]]; then
+    record_case "devseed/registered" ok "${user}"
+  elif [[ ${code} == "409" ]]; then
+    # Already there from an earlier devseed on the same database. Not a
+    # failure, but the login check below still has to pass or the credentials
+    # this stage advertises are not the credentials that work.
+    record_case "devseed/registered" ok "${user} already existed"
+  else
+    record_case "devseed/registered" fail "register -> ${code}: $(head -c 300 "${OUT}/devseed-register.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
+  # The account is only useful if it can sign in and is actually an admin.
+  # Asserting the role is the point: a seed that silently produced a member
+  # would look fine until the first admin page 403s.
+  code="$(curl -s -o "${OUT}/devseed-login.json" -w '%{http_code}' \
+    -X POST "${base}/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username_or_email\":\"${user}\",\"password\":\"${pass}\"}" || echo 000)"
+  if [[ ${code} != "200" ]]; then
+    record_case "devseed/login" fail "login as ${user} -> ${code}: $(head -c 300 "${OUT}/devseed-login.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/login" ok
+
+  if grep -q '"role":"Admin"' "${OUT}/devseed-login.json" \
+    || grep -q '"role": *"Admin"' "${OUT}/devseed-login.json"; then
+    record_case "devseed/is-admin" ok
+  else
+    record_case "devseed/is-admin" fail \
+      "signed in as ${mail} but the response does not say role Admin; setup_admin_email may not match"
+    emit_junit devseed
+    return 1
+  fi
+
+  # A small inventory, so the instance comes up with something on it rather
+  # than an empty database somebody fills by hand every time.
+  #
+  # Step 1 of each tool is self-service -- what issue #2 added -- and is the
+  # only way to see the member-facing half without a second account. Step 2 is
+  # instructor-led, so the tool stays gated after the box is ticked: a member
+  # who confirms the reading is not thereby cleared for the machine, and that
+  # distinction is the thing most worth being able to see.
+  local token
+  token="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "${OUT}/devseed-login.json" | head -1)"
+  if [[ -z ${token} ]]; then
+    record_case "devseed/token" fail "signed in, but no token in the response body"
+    emit_junit devseed
+    return 1
+  fi
+  record_case "devseed/token" ok
+
+  local tools_made=0 steps_made=0 name category location doc tool_id
+  while IFS='|' read -r name category location doc; do
+    [[ -z ${name} ]] && continue
+    tool_id="$(devseed_tool "${base}" "${token}" "${name}" "${category}" "${location}")"
+    if [[ -z ${tool_id} ]]; then
+      record_case "devseed/tool" fail "creating ${name} returned no id"
+      continue
+    fi
+    tools_made=$((tools_made + 1))
+
+    if devseed_step "${base}" "${token}" "${tool_id}" 1 \
+      "I have read the safety documentation" "${doc}" true; then
+      steps_made=$((steps_made + 1))
+    else
+      record_case "devseed/step" fail "self-service step rejected for ${name}"
+    fi
+
+    if devseed_step "${base}" "${token}" "${tool_id}" 2 \
+      "Supervised first use" "" false; then
+      steps_made=$((steps_made + 1))
+    else
+      record_case "devseed/step" fail "instructor-led step rejected for ${name}"
+    fi
+  done <<'INVENTORY'
+Lathe|metalworking|Metal Shop|/wiki/safety/lathe
+Table saw|woodworking|Wood Shop|/wiki/safety/table-saw
+Laser cutter|laser_cutting|Laser Bay|/wiki/safety/laser-cutter
+MIG welder|welding|Weld Bay|https://example.invalid/welding.pdf
+Bench grinder|metalworking|Metal Shop|/wiki/safety/grinder
+INVENTORY
+
+  # Asserted, not assumed. A seed that silently created nothing leaves an
+  # instance that looks like the feature is missing.
+  #
+  # Exact counts, which assumes an empty database. That holds because `run`
+  # rolls back to the pristine snapshot before every session, unlike the
+  # registration above, which tolerates a 409 because the admin address is
+  # claimed once per cluster rather than once per run.
+  if [[ ${tools_made} -eq 5 && ${steps_made} -eq 10 ]]; then
+    record_case "devseed/inventory" ok "${tools_made} tool(s), ${steps_made} step(s)"
+  else
+    record_case "devseed/inventory" fail \
+      "expected 5 tools and 10 steps, got ${tools_made} and ${steps_made}"
+    emit_junit devseed
+    return 1
+  fi
+
+  log ""
+  log "  dev instance ready:  http://${STACK_HOST}:${SERVER_PORT}"
+  log "  sign in:             ${user} / ${pass}"
+  log "  seeded:              ${tools_made} tools, ${steps_made} training steps"
+  log "  tear down:           reaper down"
+  log ""
+
+  emit_junit devseed
 }
 # ===========================================================================
 stage_down() {

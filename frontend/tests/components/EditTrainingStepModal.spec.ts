@@ -12,11 +12,17 @@
 //   passing_score       --                                   --
 //   expires_after_days         expires_after_days                   expires_after_days
 //   is_active           --                                   --
-//   --                  training_materials_url               training_materials_url
+//   training_materials_url  training_materials_url           training_materials_url
+//   self_attestable     self_attestable                      self_attestable
 //   --                  requires_assessment                  requires_assessment
 //   --                  duration_minutes                     duration_minutes
 //
 // (api/training.rs:38, models/training.rs:179, schema.rs `training_steps`.)
+//
+// training_materials_url and self_attestable were added for issue #2 -- the
+// safety-documentation link and the confirmation a member can give themselves.
+// The first had existed on the server and in the column since the training
+// system shipped; only the form was missing.
 //
 // Serde ignores unknown fields, so the four on the left with no match are
 // dropped in silence and the request answers 200. `passing_score` and
@@ -105,7 +111,7 @@ describe('what the form starts with', () => {
     expect((w.find('#assessment_type').element as HTMLSelectElement).value).toBe('practical')
     expect((w.find('#passing_score').element as HTMLInputElement).value).toBe('80')
     expect((w.find('#expires_after_days').element as HTMLInputElement).value).toBe('365')
-    expect((w.find('.checkbox').element as HTMLInputElement).checked).toBe(true)
+    expect((w.find('#is_active').element as HTMLInputElement).checked).toBe(true)
   })
 
   it('reloads when a different step is handed in', async () => {
@@ -194,18 +200,61 @@ describe('what the form sends', () => {
     expect(Object.keys(sent())).not.toContain('expiry_days')
   })
 
-  it('still sends none of the other three fields the server can update', async () => {
+  it('still sends neither of the two fields the server can update', async () => {
+    // Was three. `training_materials_url` left this list when the form grew a
+    // control for it, which is what the message below asked whoever did that to
+    // do -- asserting the value rather than its absence, two tests down.
     const w = modal()
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    for (const key of ['training_materials_url', 'requires_assessment', 'duration_minutes']) {
+    for (const key of ['requires_assessment', 'duration_minutes']) {
       expect(
         Object.keys(sent()),
         `${key} is now sent -- if the form grew a control for it, this test ` +
           'should assert the value rather than its absence'
       ).not.toContain(key)
     }
+  })
+
+  it('sends the documentation URL and the self-service flag', async () => {
+    const w = modal(step({ training_materials_url: '/wiki/safety/lathe', self_attestable: true }))
+    await nextTick()
+
+    expect((w.find('#training_materials_url').element as HTMLInputElement).value).toBe(
+      '/wiki/safety/lathe'
+    )
+    expect((w.find('#self_attestable').element as HTMLInputElement).checked).toBe(true)
+
+    await w.find('#training_materials_url').setValue('https://example.org/lathe.pdf')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(sent().training_materials_url).toBe('https://example.org/lathe.pdf')
+    expect(sent().self_attestable).toBe(true)
+  })
+
+  it('refuses a documentation URL that could execute, without calling the server', async () => {
+    // ToolTrainingModal renders this value as an href and Vue does not sanitise
+    // one. The server is not the backstop here -- it stores the string as given
+    // -- so this refusal is the check, not a convenience.
+    const w = modal()
+    await w.find('#training_materials_url').setValue('javascript:alert(1)')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.updateTrainingStep).not.toHaveBeenCalled()
+    expect(w.text()).toContain('cannot be used')
+  })
+
+  it('greys out self-service on a step that requires an assessment', async () => {
+    // The server refuses the pairing outright. This is the form declining to
+    // offer it, which is the only reason a member would ever see the refusal.
+    const w = modal(step({ requires_assessment: true }))
+    await nextTick()
+
+    expect(w.find('#self_attestable').attributes('disabled')).toBeDefined()
+    expect(w.text()).toContain('requires an assessment')
   })
 
   // FINDING, pinned. `v-model.number` on an emptied number input yields the

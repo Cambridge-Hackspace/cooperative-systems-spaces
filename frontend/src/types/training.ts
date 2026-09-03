@@ -28,10 +28,25 @@ export interface TrainingStep {
   step_number: number
   step_name: string // Changed from 'title' to match backend
   description: string
+  // The safety documentation for this step: a path on this site such as
+  // `/wiki/safety/lathe`, or an external link. The server has always sent this
+  // -- it is on `TrainingStep` in models/training.rs and in every step the
+  // overview endpoint returns -- but this interface omitted it, so the frontend
+  // discarded it and no UI ever showed a member the document.
+  training_materials_url?: string
   assessment_type: AssessmentType
+  // Server-sent, and not settable from either step form -- neither sends it,
+  // so a step created through this UI always has the column default. Read here
+  // only so the editor can grey out self-service on a step that does require an
+  // assessment, which the server refuses anyway.
+  requires_assessment?: boolean
   passing_score?: number
   expires_after_days?: number
   is_active: boolean
+  // Whether the trainee may confirm this step themselves. False for every step
+  // unless staff turn it on, and never true on a step requiring an assessment
+  // -- the server refuses that pairing at create and update.
+  self_attestable?: boolean
   created_at: string
   updated_at: string
 }
@@ -41,20 +56,24 @@ export interface CreateTrainingStepRequest {
   step_number: number
   step_name: string // Changed from 'title' to match backend
   description: string
+  training_materials_url?: string
   assessment_type: AssessmentType
   passing_score?: number
   expires_after_days?: number
   is_active?: boolean
+  self_attestable?: boolean
 }
 
 export interface UpdateTrainingStepRequest {
   step_number?: number
   step_name?: string // Changed from 'title' to match backend
   description?: string
+  training_materials_url?: string
   assessment_type?: AssessmentType
   passing_score?: number
   expires_after_days?: number
   is_active?: boolean
+  self_attestable?: boolean
 }
 
 export interface TrainingPrerequisite {
@@ -80,6 +99,10 @@ export interface UserTrainingProgress {
   expires_at?: string
   assessment_score?: number
   notes?: string
+  // The documentation URL as it stood when this step was completed. The step's
+  // own `training_materials_url` is mutable, so reading the current one would
+  // report what the document says now, not what was agreed to.
+  acknowledged_materials_url?: string
   created_at: string
   updated_at: string
   // Additional fields for compatibility

@@ -95,8 +95,38 @@
           </div>
 
           <div class="form-group">
+            <label for="training_materials_url">Safety Documentation:</label>
+            <input
+              id="training_materials_url"
+              v-model="form.training_materials_url"
+              type="text"
+              class="form-control input"
+              placeholder="/wiki/safety/lathe or https://example.org/manual.pdf"
+            />
+            <small class="field-hint"
+              >A page on this site, or an external link. Shown to members on the step.</small
+            >
+          </div>
+
+          <div class="form-group">
             <label class="checkbox-label">
-              <input v-model="form.is_active" type="checkbox" class="checkbox" />
+              <input
+                id="self_attestable"
+                v-model="form.self_attestable"
+                type="checkbox"
+                class="checkbox"
+              />
+              <span class="checkbox-text px-4">Self-service (members confirm this themselves)</span>
+            </label>
+            <small class="field-hint"
+              >Records the confirmation in the member's own name. For reading documentation, not for
+              anything a trainer has to judge.</small
+            >
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input id="is_active" v-model="form.is_active" type="checkbox" class="checkbox" />
               <span class="checkbox-text px-4">Active (visible to users)</span>
             </label>
           </div>
@@ -121,6 +151,7 @@
 import { ref, reactive } from 'vue'
 import { trainingApi } from '../utils/api'
 import { Tool, CreateTrainingStepRequest, TrainingStep, AssessmentType } from '../types'
+import { materialsUrlError } from '@/lib/trainingMaterials'
 
 interface Props {
   tools: Tool[]
@@ -140,14 +171,22 @@ const form = reactive<CreateTrainingStepRequest>({
   step_number: 1,
   step_name: '',
   description: '',
+  training_materials_url: '',
   assessment_type: AssessmentType.Practical,
   passing_score: undefined,
   expires_after_days: undefined,
   is_active: true,
+  self_attestable: false,
 })
 
 // Methods
 const createStep = async () => {
+  const badUrl = materialsUrlError(form.training_materials_url)
+  if (badUrl) {
+    error.value = badUrl
+    return
+  }
+
   try {
     loading.value = true
     error.value = ''

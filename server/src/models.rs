@@ -245,6 +245,13 @@ pub enum AuditEventType {
     TrainerRemoved,
     InstructorCertified,
     InstructorRevoked,
+    /// A trainee confirming, in their own name, that they have read a
+    /// step's safety documentation. Distinct from
+    /// TrainingSessionCompleted because the actor is the subject: it is
+    /// the difference between a record of what somebody attested to and a
+    /// record of what somebody was signed off for, and only the first is
+    /// worth anything if it is ever produced as evidence.
+    TrainingDocumentationAcknowledged,
     // ToolPass/Tool usage events
     ToolAccessGranted,
     ToolAccessDenied,
@@ -326,6 +333,7 @@ impl AuditEventType {
             Self::TrainerRemoved => "trainer_removed",
             Self::InstructorCertified => "instructor_certified",
             Self::InstructorRevoked => "instructor_revoked",
+            Self::TrainingDocumentationAcknowledged => "training_documentation_acknowledged",
             Self::ToolAccessGranted => "tool_access_granted",
             Self::ToolAccessDenied => "tool_access_denied",
             Self::ToolActivated => "tool_activated",
@@ -402,6 +410,7 @@ impl AuditEventType {
             TrainerRemoved,
             InstructorCertified,
             InstructorRevoked,
+            TrainingDocumentationAcknowledged,
             ToolAccessGranted,
             ToolAccessDenied,
             ToolActivated,

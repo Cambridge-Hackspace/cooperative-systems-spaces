@@ -193,7 +193,14 @@ export async function adminAccount(kind) {
   if (li.status !== 200) {
     throw new Error(
       `the admin address is taken (register said ${reg.status}) and signing in as it ` +
-        `answered ${li.status}: ${li.text.slice(0, 400)}`,
+        `answered ${li.status}: ${li.text.slice(0, 400)}\n\n` +
+        'A 401 here usually means the devseed stage claimed this address first. ' +
+        'It registers the same admin with its own password, which this fixture ' +
+        'does not know, so every driver that calls adminAccount() then fails ' +
+        'with this message and none of them mention devseed. It is why devseed ' +
+        'is in STAGES_EXTRA rather than STAGES_ALL. Reset the database before ' +
+        'running the battery -- `reaper test` does; `reaper run` on its own ' +
+        'does not.',
     )
   }
   const user = li.json.data.user

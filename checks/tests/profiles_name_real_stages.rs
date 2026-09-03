@@ -20,22 +20,38 @@
 
 use css_checks::repo_root;
 
-/// The stage names `e2e/run.sh` knows, read from its own `STAGES_ALL`.
+/// The stage names `e2e/run.sh` accepts, read from its own `STAGES_ALL` and
+/// `STAGES_EXTRA`.
+///
+/// Both, because they are different things and run.sh validates against the
+/// union. `STAGES_ALL` is the battery -- what `--only all` expands to.
+/// `STAGES_EXTRA` is stages that exist and are deliberately excluded from it,
+/// reachable only by naming them: `devseed` claims the single address that
+/// grants admin, so running it inside the battery would break the drivers that
+/// expect to claim it themselves.
+///
+/// Reading only `STAGES_ALL` would reject a profile naming an opt-in stage that
+/// exists and runs -- the opposite of this check's purpose, which is to catch a
+/// name that cannot work.
 ///
 /// Read from the script rather than restated here. A list copied into this file
 /// would agree with itself forever and stop tracking the thing it checks.
 fn known_stages(run_sh: &str) -> Vec<String> {
+    let mut stages = Vec::new();
     for line in run_sh.lines() {
-        if let Some(rest) = line.trim().strip_prefix("STAGES_ALL=") {
-            return rest
-                .trim_matches('"')
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+        let trimmed = line.trim();
+        for key in ["STAGES_ALL=", "STAGES_EXTRA="] {
+            if let Some(rest) = trimmed.strip_prefix(key) {
+                stages.extend(
+                    rest.trim_matches('"')
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
         }
     }
-    Vec::new()
+    stages
 }
 
 #[test]
@@ -49,9 +65,9 @@ fn every_stage_a_profile_names_exists() {
     let known = known_stages(&run_sh);
     assert!(
         known.len() >= 8,
-        "read {} stages from run.sh's STAGES_ALL, which is too few to be right -- \
-         this check reads that assignment by line, so a reformat turns it into a \
-         permanent silent pass: {known:?}",
+        "read {} stages from run.sh's STAGES_ALL and STAGES_EXTRA, which is too few \
+         to be right -- this check reads those assignments by line, so a reformat \
+         turns it into a permanent silent pass: {known:?}",
         known.len()
     );
 
