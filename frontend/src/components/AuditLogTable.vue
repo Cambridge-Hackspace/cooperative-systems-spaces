@@ -29,6 +29,9 @@
           <option value="email_verification_sent">Verification Email Sent</option>
           <option value="email_verified">Email Verified</option>
           <option value="email_send_failed">Email Send Failed</option>
+          <option value="training_documentation_acknowledged">
+            Safety Documentation Acknowledged
+          </option>
         </select>
       </div>
 

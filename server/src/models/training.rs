@@ -155,6 +155,14 @@ pub struct TrainingStep {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Whether the trainee may complete this step themselves.
+    ///
+    /// False for every step that predates this field, and for every step
+    /// created without asking for it. See `complete_training_session`: this is
+    /// the only thing that lets somebody who is neither staff nor a certified
+    /// instructor for the step record its completion, and it may not be set on
+    /// a step that requires an assessment.
+    pub self_attestable: bool,
 }
 
 /// New training step for creation
@@ -171,6 +179,7 @@ pub struct NewTrainingStep {
     pub duration_minutes: Option<i32>,
     pub expires_after_days: Option<i32>,
     pub created_by: Uuid,
+    pub self_attestable: Option<bool>,
 }
 
 /// Update training step request
@@ -184,6 +193,7 @@ pub struct UpdateTrainingStep {
     pub assessment_type: Option<AssessmentType>,
     pub duration_minutes: Option<i32>,
     pub expires_after_days: Option<i32>,
+    pub self_attestable: Option<bool>,
 }
 
 /// Training prerequisite relationship
@@ -222,6 +232,14 @@ pub struct UserTrainingProgress {
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The documentation URL as it stood when this step was completed.
+    ///
+    /// `training_steps.training_materials_url` is mutable, so without a
+    /// snapshot, editing the link -- or replacing the page behind it -- would
+    /// silently rewrite what every prior attestation was an attestation to.
+    /// None on rows completed before this column existed, and on steps that
+    /// carry no documentation.
+    pub acknowledged_materials_url: Option<String>,
 }
 
 /// New user training progress record

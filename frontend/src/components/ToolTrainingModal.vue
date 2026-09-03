@@ -346,6 +346,27 @@
 
                     <p class="step-description">{{ stepWithProgress.step.description }}</p>
 
+                    <p
+                      v-if="documentLink(stepWithProgress.step)"
+                      class="step-materials"
+                      data-test="step-materials"
+                    >
+                      <router-link
+                        v-if="documentIsInternal(stepWithProgress.step)"
+                        :to="documentLink(stepWithProgress.step) as string"
+                      >
+                        Safety documentation
+                      </router-link>
+                      <a
+                        v-else
+                        :href="documentLink(stepWithProgress.step) as string"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Safety documentation
+                      </a>
+                    </p>
+
                     <div class="step-meta">
                       <span class="assessment-type">
                         {{ formatAssessmentType(stepWithProgress.step.assessment_type) }}
@@ -408,13 +429,52 @@
                       v-if="
                         stepWithProgress.is_available &&
                         !stepWithProgress.user_progress &&
-                        canStartTraining
+                        canStartTraining &&
+                        !stepWithProgress.step.self_attestable
                       "
                       class="btn btn-sm btn-primary"
                       @click="startTraining(stepWithProgress.step)"
                     >
                       Start Training
                     </button>
+
+                    <!--
+                      The self-service confirmation. Its own branch, not a reuse
+                      of Mark Complete: that one is `isInstructor`, which is
+                      literally `canManageTraining`, so hanging this off it would
+                      show the box to staff and to nobody else -- the exact
+                      inversion of what it is for.
+
+                      Shown only when the subject is the signed-in user. An
+                      admin viewing somebody else's training must not be able to
+                      tick "I have read this" on their behalf; that would
+                      reintroduce, through the UI, the very thing the server
+                      gate refuses.
+                    -->
+                    <label v-if="canAttest(stepWithProgress)" class="attest" data-test="attest">
+                      <input
+                        type="checkbox"
+                        class="checkbox checkbox-sm"
+                        :checked="isAcknowledged(stepWithProgress)"
+                        :disabled="
+                          isAcknowledged(stepWithProgress) || attesting === stepWithProgress.step.id
+                        "
+                        data-test="attest-box"
+                        @change="acknowledge(stepWithProgress)"
+                      />
+                      <span v-if="isAcknowledged(stepWithProgress)" class="attest-done">
+                        <!--
+                          The date only when there is one. `formatDate` takes a
+                          string, this is `string | undefined`, and the base
+                          tsconfig has strictNullChecks off -- so the unguarded
+                          version type-checked and rendered "Invalid Date".
+                        -->
+                        Confirmed<template v-if="stepWithProgress.user_progress?.completed_at">
+                          {{ formatDate(stepWithProgress.user_progress.completed_at) }}</template
+                        >
+                      </span>
+                      <span v-else>I have read this safety documentation</span>
+                    </label>
 
                     <button
                       v-if="
@@ -451,21 +511,31 @@
     </div>
 
     <!-- Start Training Modal -->
+    <!--
+      `subjectUser`, not `user`. The `user` prop is optional and ToolCard --
+      the only route a member has to this modal -- does not pass it, so these
+      were `:user="user!"` asserting a value that was `undefined` on every
+      member's path. A non-null assertion is a compile-time claim and does
+      nothing at runtime, so StartTrainingModal took `undefined` for a required
+      prop and threw on `props.user.id`.
+
+      Guarded in the `v-if` rather than asserted, so the template states the
+      condition it depends on instead of promising it.
+    -->
     <StartTrainingModal
-      v-if="showStartModal"
-      :step="selectedStep!"
-      :user="user!"
+      v-if="showStartModal && selectedStep && subjectUser"
+      :step="selectedStep"
+      :user="subjectUser"
       @close="showStartModal = false"
       @started="onTrainingStarted"
     />
     <!-- Complete Training Modal -->
     <CompleteTrainingModal
-      v-if="showCompleteModal"
-      :step="selectedStep!"
-      :user="user!"
+      v-if="showCompleteModal && selectedStep && subjectUser"
+      :step="selectedStep"
+      :user="subjectUser"
       @close="showCompleteModal = false"
       @completed="onTrainingCompleted"
-    />
     />
 
     <!-- Training Setup Modal -->
@@ -537,6 +607,7 @@ import EditTrainingStepModal from './EditTrainingStepModal.vue'
 import TrainerManagement from './TrainerManagement.vue'
 import RecordTrainingModal from './RecordTrainingModal.vue'
 import { localDate } from '@/lib/dates'
+import { materialsUrlError } from '@/lib/trainingMaterials'
 
 interface Props {
   tool: Tool
@@ -606,6 +677,83 @@ const isTrainer = computed(() => {
 const canStartTraining = computed(() => {
   return !!auth.user // User must be logged in
 })
+
+// The step whose confirmation is in flight, so one tick cannot be double-fired
+// and the others stay live.
+const attesting = ref<string | null>(null)
+
+// Whose training this modal is showing. `loadTrainingOverview` accepts the
+// string 'me', but the write endpoints take `Path<Uuid>` and would reject it,
+// so the id has to be real for anything that records something.
+const subjectId = computed(() => subjectUser.value?.id ?? null)
+
+// Whose training this modal acts on. The `user` prop names somebody else --
+// staff looking at a member -- and is absent on the path a member takes to
+// their own, where the subject is whoever is signed in.
+const subjectUser = computed(() => props.user ?? auth.user ?? null)
+const viewingSelf = computed(
+  () => !!auth.user && !!subjectId.value && subjectId.value === auth.user.id
+)
+
+const documentLink = (step: TrainingStep): string | null => {
+  const raw = step.training_materials_url?.trim()
+  // The same allowlist the step editor validates against. Checked again on the
+  // way out because the editor is not the only way a row can have been written:
+  // the API accepts this field directly, and Vue does not sanitise an href or a
+  // router-link target.
+  if (!raw || materialsUrlError(raw)) return null
+  return raw
+}
+
+// A relative reference is a page on this site, so it belongs to the router
+// rather than to a full page load. `isSafeLinkUrl` already established there is
+// no scheme to smuggle; this only has to tell the two shapes apart.
+const documentIsInternal = (step: TrainingStep): boolean => {
+  const raw = documentLink(step)
+  return !!raw && raw.startsWith('/')
+}
+
+const isAcknowledged = (s: TrainingStepWithProgress): boolean =>
+  s.user_progress?.status === 'completed'
+
+const canAttest = (s: TrainingStepWithProgress): boolean =>
+  !!s.step.self_attestable && viewingSelf.value
+
+const acknowledge = async (s: TrainingStepWithProgress) => {
+  const userId = subjectId.value
+  if (!userId || !canAttest(s) || isAcknowledged(s)) return
+
+  attesting.value = s.step.id
+  error.value = ''
+  try {
+    // Two calls, because completing is an UPDATE and needs the progress row to
+    // exist. `start_training_session` upserts, so this is safe to repeat and
+    // survives a re-confirmation after the certification expires.
+    const started = await trainingApi.startTrainingSession(userId, {
+      training_step_id: s.step.id,
+    })
+    if (!started.success) {
+      error.value = started.error || 'Failed to record your confirmation'
+      return
+    }
+
+    const finished = await trainingApi.completeTrainingSession(userId, {
+      training_step_id: s.step.id,
+      passed: true,
+    })
+    if (!finished.success) {
+      error.value = finished.error || 'Failed to record your confirmation'
+      return
+    }
+
+    await loadTrainingOverview()
+    emit('training-updated')
+  } catch (err: any) {
+    error.value = err.message || 'Failed to record your confirmation'
+  } finally {
+    attesting.value = null
+  }
+}
 
 // See RecordTrainingModal, which has the same inline form and had the same
 // UTC default and ceiling.

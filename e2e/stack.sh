@@ -68,6 +68,8 @@ stack_require_images() {
 STACK_DIR=""
 PG_PORT="${CSS_E2E_PG_PORT:-5432}"
 MQTT_PORT="${CSS_E2E_MQTT_PORT:-1883}"
+# Set by write_stack_config; the address a human types to reach this stack.
+export STACK_HOST="127.0.0.1"
 SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
 SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
 PG_USER="css_user"
@@ -401,6 +403,32 @@ EOF
 # open, the initial-setup admin address, the timezone -- is stated where a
 # failing assertion can be traced back to it.
 write_stack_config() {
+  # Where the server listens, and what it calls itself.
+  #
+  # Both default to 127.0.0.1, so the substitutions below are no-ops and the
+  # battery's config is byte-identical to what it has always been. `devlive`
+  # sets CSS_E2E_BIND=0.0.0.0 to make the instance reachable off the box; that
+  # is a development convenience and never a test configuration, because a
+  # loopback-only stack is one fewer thing a test run can collide with.
+  #
+  # CSS_E2E_HOST is what the server writes into its own URLs (site_url, the
+  # door QR template, CORS). Binding 0.0.0.0 does not tell it which address a
+  # human will type, so when it is not given we ask the routing table for the
+  # address this machine uses to reach the world.
+  local bind host
+  bind="${CSS_E2E_BIND:-127.0.0.1}"
+  host="${CSS_E2E_HOST:-}"
+  if [[ -z ${host} ]]; then
+    if [[ ${bind} == "0.0.0.0" ]]; then
+      host="$(ip -4 route get 1.1.1.1 2>/dev/null \
+        | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+      host="${host:-127.0.0.1}"
+    else
+      host="${bind}"
+    fi
+  fi
+  export STACK_HOST="${host}"
+
   # Substituted from e2e/stack-config.toml, which is valid TOML on disk and is
   # parsed by server/tests/stack_config_parses.rs before any stack exists.
   sed \
@@ -412,6 +440,8 @@ write_stack_config() {
     -e "s|@PG_DB@|${PG_DB}|g" \
     -e "s|@MQTT_PORT@|${MQTT_PORT}|g" \
     -e "s|@SMTP_PORT@|${SMTP_PORT}|g" \
+    -e "s|^bind_address = \"127\.0\.0\.1:|bind_address = \"${bind}:|" \
+    -e "s|http://127\.0\.0\.1:|http://${host}:|g" \
     "${ROOT}/e2e/stack-config.toml" >"${STACK_DIR}/config.toml"
 
   # A token that survived substitution would reach the server as literal text

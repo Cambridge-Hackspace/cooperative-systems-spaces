@@ -85,8 +85,43 @@
           </div>
 
           <div class="form-group">
+            <label for="training_materials_url">Safety Documentation:</label>
+            <input
+              id="training_materials_url"
+              v-model="form.training_materials_url"
+              type="text"
+              class="form-control input"
+              placeholder="/wiki/safety/lathe or https://example.org/manual.pdf"
+            />
+            <small class="field-hint"
+              >A page on this site, or an external link. Shown to members on the step.</small
+            >
+          </div>
+
+          <div class="form-group">
             <label class="checkbox-label">
-              <input v-model="form.is_active" type="checkbox" class="checkbox" />
+              <input
+                id="self_attestable"
+                v-model="form.self_attestable"
+                type="checkbox"
+                class="checkbox"
+                :disabled="assessmentBlocksSelfService"
+              />
+              <span class="checkbox-text">Self-service (members confirm this themselves)</span>
+            </label>
+            <small v-if="assessmentBlocksSelfService" class="field-hint"
+              >Unavailable: this step requires an assessment, so somebody else has to judge
+              it.</small
+            >
+            <small v-else class="field-hint"
+              >Records the confirmation in the member's own name. For reading documentation, not for
+              anything a trainer has to judge.</small
+            >
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input id="is_active" v-model="form.is_active" type="checkbox" class="checkbox" />
               <span class="checkbox-text">Active (visible to users)</span>
             </label>
           </div>
@@ -111,9 +146,10 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { trainingApi } from '../utils/api'
 import { AssessmentType, Tool, TrainingStep, UpdateTrainingStepRequest } from '../types'
+import { materialsUrlError } from '@/lib/trainingMaterials'
 
 interface Props {
   step: TrainingStep | null
@@ -137,25 +173,42 @@ const form = reactive<UpdateTrainingStepRequest>({
   step_number: 1,
   step_name: '',
   description: '',
+  training_materials_url: '',
   assessment_type: AssessmentType.Practical,
   passing_score: undefined,
   expires_after_days: undefined,
   is_active: true,
+  self_attestable: false,
 })
+
+// Read from the stored step, not the form: this form has never sent
+// `requires_assessment` and still does not, so its value is whatever the server
+// holds. Greying the box out is a courtesy -- the server refuses the pairing on
+// its own, and is the only thing that can, since a form that cannot set the
+// field cannot be trusted to know it.
+const assessmentBlocksSelfService = computed(() => props.step?.requires_assessment === true)
 
 // Methods
 const populateForm = (step: TrainingStep) => {
   form.step_number = step.step_number
   form.step_name = step.step_name
   form.description = step.description
+  form.training_materials_url = step.training_materials_url ?? ''
   form.assessment_type = step.assessment_type
   form.passing_score = step.passing_score
   form.expires_after_days = step.expires_after_days
   form.is_active = step.is_active
+  form.self_attestable = step.self_attestable ?? false
 }
 
 const updateStep = async () => {
   if (!props.step) return
+
+  const badUrl = materialsUrlError(form.training_materials_url)
+  if (badUrl) {
+    error.value = badUrl
+    return
+  }
 
   try {
     loading.value = true

@@ -123,7 +123,26 @@ const startTraining = async () => {
     loading.value = true
     error.value = ''
 
-    const response = await trainingApi.startTrainingSession(props.user.id, form.value)
+    // Built rather than sent whole. "Self-study (No instructor)" is
+    // `<option value="">`, so choosing it deliberately sets instructor_id to
+    // the empty string -- and the field is `Option<Uuid>` server-side, which
+    // refuses "" with a 422. Leaving the dropdown untouched works, because the
+    // form initialises the field to undefined; it is picking the option that
+    // breaks, which is why this survived until somebody chose it.
+    //
+    // Absent is what "no instructor" means. Same for a note nobody wrote: the
+    // column is nullable, and "" is not the same fact as null.
+    const payload: StartTrainingRequest = {
+      training_step_id: form.value.training_step_id,
+    }
+    if (form.value.instructor_id) {
+      payload.instructor_id = form.value.instructor_id
+    }
+    if (form.value.notes?.trim()) {
+      payload.notes = form.value.notes.trim()
+    }
+
+    const response = await trainingApi.startTrainingSession(props.user.id, payload)
 
     if (response.success) {
       emit('started')

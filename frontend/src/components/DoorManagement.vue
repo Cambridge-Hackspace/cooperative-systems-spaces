@@ -435,7 +435,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
+import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import QRCode from 'qrcode'
 import { doorsApi, placesApi, schedulesApi, apiClient } from '@/utils/api'
 import type {
@@ -787,7 +788,10 @@ async function removeRule(rule: DoorAccessRule) {
   }
 }
 
-onMounted(async () => {
+// Reloaded on every return to this tab, not only on mount. Places and
+// schedules are owned by sibling tabs, so anything added there is invisible
+// here until this runs again -- issue #11.
+useReloadOnReactivate(async () => {
   await Promise.all([loadDoors(), loadDevices(), loadUsers(), loadPlaces(), loadSchedules()])
 })
 </script>

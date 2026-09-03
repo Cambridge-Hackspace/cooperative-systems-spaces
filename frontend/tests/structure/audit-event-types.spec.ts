@@ -13,13 +13,18 @@ import { describe, expect, it } from 'vitest'
  *     admin picks it, gets an empty table, and reasonably concludes the events
  *     did not happen.
  *   - A type the server writes with no matching option cannot be isolated at
- *     all. That is the state today, for fifty-seven of the seventy-four.
+ *     all. That is the state today, for fifty-seven of the seventy-five.
  *
  *     (The "sixty-six" this sentence used to read was already wrong when it was
  *     written: the two profile-config variants had landed without it being
- *     updated, so the real total was sixty-eight. The six transactional-email
- *     types added alongside six new options bring it to seventy-four and leave
- *     the ratchet where it was.)
+ *     updated, so the real total was sixty-eight.
+ *     `training_documentation_acknowledged` made sixty-nine and the six
+ *     transactional-email types make seventy-five. Each arrived with a matching
+ *     option, so the ratchet has stayed at fifty-seven throughout.)
+ *
+ *     `training_documentation_acknowledged` is deliberately filterable. It is
+ *     the record issue #2 exists to produce, and a record that cannot be
+ *     isolated in the audit log is not usable as one.
  *
  * The first is asserted as a hard rule: every offered option must exist on the
  * server. The second is asserted as a ratchet, because closing it is a product
