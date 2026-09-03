@@ -31,6 +31,12 @@ pub mod sql_types {
 }
 
 diesel::table! {
+    audit_event_types (name) {
+        name -> Text,
+    }
+}
+
+diesel::table! {
     audit_logs (id) {
         id -> Uuid,
         event_type -> Text,
@@ -538,6 +544,7 @@ diesel::joinable!(door_checkins -> door_access_events (door_access_event_id));
 diesel::joinable!(profile_config_versions -> users (created_by));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    audit_event_types,
     audit_logs,
     space_device_auth,
     space_device_auth_requests,
