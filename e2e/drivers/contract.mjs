@@ -20,7 +20,7 @@
 //     500 is invisible to every tier that runs against a UTF-8 cluster.
 
 import {
-  GET, PUT, POST, DELETE,
+  GET, PUT, POST, DELETE, req, BASE,
   account, login, register,
   assertEq, assertNe, ok, record, main, RUN_TAG, ADMIN_EMAIL,
 } from './lib.mjs'
@@ -349,6 +349,50 @@ main(async () => {
     `${after.status} -- recorded, not asserted: the token is a stateless JWT ` +
     'and logout is a client-side discard. If that ever becomes a revocation ' +
     'this line is where the change should be noticed.')
+
+  // -----------------------------------------------------------------------
+  // CORS: the layer wired to [server] config
+  // -----------------------------------------------------------------------
+  // cors_enabled and cors_origins were config fields nothing read until issue
+  // #21 -- no CorsLayer existed and no Access-Control-* header was ever sent.
+  // This asserts the layer exists and admits exactly the configured origin.
+  //
+  // e2e/stack-config.toml allows one origin: the host:port the drivers connect
+  // to, which is what BASE is -- so BASE's origin is precisely the allowed one
+  // and a made-up origin is the control. Asserting against BASE rather than a
+  // hard-coded string keeps this correct if the stack's port ever moves.
+  //
+  // What this does NOT cover: cors_enabled = false emitting no header at all.
+  // That is build_layer returning None, asserted as a unit test in
+  // server/src/cors.rs. A disabled layer cannot be exercised on a stack whose
+  // config enables it, and standing up a second stack to prove an absence is
+  // not worth it when the None branch is right there to assert directly.
+  const allowedOrigin = new URL(BASE).origin
+  const preflight = await req('OPTIONS', '/api/auth/login', {
+    headers: {
+      Origin: allowedOrigin,
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'authorization,content-type',
+    },
+  })
+  assertEq('contract/cors-preflight-from-the-configured-origin-is-allowed',
+    allowedOrigin, preflight.headers.get('access-control-allow-origin'))
+
+  // The control, and the half that actually matters. An origin the config does
+  // not list must not be echoed back; if it were, the allowlist would be
+  // decorative and any website could read the API with a phished bearer token.
+  // Asserted as "not this origin" rather than "no header at all", because
+  // tower-http omits the header on a miss and the property worth pinning is
+  // that the foreign origin is not granted -- not the mechanism by which.
+  const denied = await req('OPTIONS', '/api/auth/login', {
+    headers: {
+      Origin: 'https://not-allowed.example',
+      'Access-Control-Request-Method': 'POST',
+    },
+  })
+  assertNe('contract/cors-preflight-from-an-unlisted-origin-is-not-allowed',
+    'https://not-allowed.example',
+    denied.headers.get('access-control-allow-origin'))
 
   // Deleting the accounts this run created, through the shipping path, so a
   // cluster without rollback does not accumulate them across runs.
