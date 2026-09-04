@@ -534,34 +534,64 @@ collect_stack_logs() {
 # The driver's contract, in both environments: it writes a TSV of
 # `name<TAB>status<TAB>message` to $CASES_OUT and exits non-zero if any case
 # failed. Nothing parses its stdout, so a driver is free to log.
-# Put a usable node on PATH, or die saying why.
+#
+# Node discovery for the host-run helpers below.
 #
 # e2e/build.sh bootstraps a checksum-pinned Node into $REAPER_CACHE_NODE (or
-# e2e/.node), so the drivers have a toolchain even where the environment
-# supplies none -- the ubuntu-26.04 guest carries podman and no toolchains at
-# all. An already-present `node` wins, which keeps CI on the one its own setup
-# step installed.
+# e2e/.node) so a toolchain exists where the environment supplies none. An
+# already-present `node` wins, which keeps CI on the one its own setup step
+# installed. Note the reaper caveat: that bootstrap runs inside the build
+# container, so on a guest its node is not on the host -- see run_reader_node.
+# The directory holding a bootstrapped node binary, or empty. No die: a caller
+# decides what a missing host node means -- ensure_node treats it as fatal,
+# run_reader_node falls back to a container.
+bootstrapped_node_dir() {
+  local n
+  n="$(find "${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}" -maxdepth 3 -type f -name node -perm -u+x 2>/dev/null | head -1)"
+  [[ -n ${n} ]] && dirname "${n}"
+}
+
 ensure_node() {
   command -v node >/dev/null 2>&1 && return 0
-  local bootstrapped
-  bootstrapped="$(find "${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}" -maxdepth 3 -type f -name node -perm -u+x 2>/dev/null | head -1)"
-  [[ -n ${bootstrapped} ]] \
+  local dir
+  dir="$(bootstrapped_node_dir)"
+  [[ -n ${dir} ]] \
     || die "no node on PATH and none bootstrapped by e2e/build.sh"
-  PATH="$(dirname "${bootstrapped}"):${PATH}"
+  PATH="${dir}:${PATH}"
   export PATH
 }
 
-# Run a plain node script on the host, with no container and no driver-cases
-# protocol.
+# Run the Tier 11 evidence reader over a transcript, printing the rendered
+# document to stdout.
 #
-# Separate from run_node because the two exist for different things. run_node
-# drives the stack and reports through $CASES_OUT; this runs a script that needs
-# nothing but a file -- the Tier 11 reader -- and its whole point is being
-# available on a machine with no engine and no stack, which is where somebody
-# actually sits down to read evidence.
-run_node_host() {
-  ensure_node
-  node "$@"
+# Prefers a node on the host -- the reader's point is running with no engine and
+# no stack, which is where somebody sits down to read evidence (the FreeBSD
+# workstation, a laptop). But `exec = "host"` on a reaper guest has no host
+# node: build.sh bootstraps one, yet build runs inside a container
+# (exec = "container"), so its node lands in that container's cache and never on
+# the guest host -- `find /` on the guest turns up no node at all. Every other
+# driver sidesteps this by running node in the pinned image via run_node; the
+# reader was the one host-node user, and it is why the evidence stage aborted the
+# whole run on a guest even though every tier passed.
+#
+# So: host node if there is one; otherwise the same image run_node uses, with
+# e2e read-only and the stack dir (which holds the transcript) mounted at
+# /stack. `--provision=external` means the caller owns the engine and images, so
+# there is nothing to fall back to -- return non-zero and let the stage record a
+# graceful failure rather than die mid-run.
+run_reader_node() { # run_reader_node <transcript-path-under-stack-dir>
+  local src="$1"
+  if command -v node >/dev/null 2>&1 || [[ -n "$(bootstrapped_node_dir)" ]]; then
+    ensure_node
+    node "${ROOT}/e2e/evidence/transcript.mjs" "${src}"
+  elif [[ ${PROVISION} != "external" ]]; then
+    pm run --rm \
+      -v "${ROOT}/e2e:/e2e:ro" \
+      -v "${STACK_DIR}:/stack" \
+      "${IMG_NODE}" node "/e2e/evidence/transcript.mjs" "/stack/$(basename "${src}")"
+  else
+    return 1
+  fi
 }
 
 run_node() {
