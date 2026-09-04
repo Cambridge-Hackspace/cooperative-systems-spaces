@@ -61,15 +61,26 @@ main(async () => {
 async function inviteRedemption(admin) {
   // A device invite code is eight emoji -- `SpaceDeviceAuthRequest::new_device_code`
   // picks from a ~250-entry emoji alphabet, so that a code can be read aloud
-  // across a workshop. It also means `space_device_auth_requests` cannot be
-  // written at all on a database whose encoding has no emoji, and nothing in
-  // the application or its documentation says the encoding is a requirement.
+  // across a workshop. Whether an invite can be created depends on whether the
+  // cluster can store the code, and that is NOT the same as "is UTF-8":
   //
-  // So on a non-UTF-8 cluster this scenario asserts the finding instead of the
-  // race. That is a narrowing and it covers exactly one scenario: device-invite
-  // redemption on a non-UTF-8 cluster. The profile-config race below runs
-  // either way, and the nightly UTF-8 run exercises this one for real.
-  if (ENCODING !== 'UTF8') {
+  //   * UTF-8: eight emoji store and the invite is created. The race runs.
+  //   * SQL_ASCII: it validates nothing and stores the code's bytes verbatim, so
+  //     the invite is created there too and the race runs, exactly as on UTF-8.
+  //     This held only after device_code was widened to VARCHAR(64): on a
+  //     SQL_ASCII cluster that limit is counted in BYTES, and at VARCHAR(32) a
+  //     code drawing a 6-7-byte variation-selector emoji overflowed 32 bytes and
+  //     the insert failed 22001 -- an intermittent 500 that made this stage
+  //     non-deterministic. See the widen_device_code migration and
+  //     checks/tests/device_code_fits_its_column.rs.
+  //   * LATIN1: the code cannot be represented at all; Postgres rejects it
+  //     (22P05), the handler answers 500, and this scenario asserts that finding
+  //     rather than running a race it cannot set up.
+  //
+  // So the narrowing is exactly the clusters that cannot store the code: LATIN1
+  // and any other non-Unicode encoding. UTF-8 and SQL_ASCII both fall through to
+  // the real race and the sequential sibling below.
+  if (ENCODING !== 'UTF8' && ENCODING !== 'SQL_ASCII') {
     const probe = await POST('/api/admin/devices/invite', {
       token: admin.token,
       body: { expires_in_hours: 1 },

@@ -513,7 +513,12 @@ main(async () => {
     'two devices" cannot be checked through the API. The invariant\'s count ' +
     'half still runs. Recorded in TESTING.md as a gap in the audit trail.')
 
-  const deviceActionsPossible = ENCODING === 'UTF8'
+  // "Can store the eight-emoji code" is the property, not "is UTF-8". SQL_ASCII
+  // stores the code's bytes verbatim (device_code is VARCHAR(64), wide enough
+  // for the 56-byte worst case even byte-counted), so device invites work there
+  // as on UTF-8; only LATIN1 and other non-Unicode encodings cannot represent
+  // the code and drop these actions.
+  const deviceActionsPossible = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
   if (!deviceActionsPossible) {
     record('journeys/device-actions-not-run', 'skip',
       `a device invite code is eight emoji and this cluster (${ENCODING}) can ` +

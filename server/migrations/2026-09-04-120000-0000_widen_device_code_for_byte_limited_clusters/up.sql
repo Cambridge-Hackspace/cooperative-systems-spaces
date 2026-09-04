@@ -1,0 +1,23 @@
+-- Widen device_code so an 8-emoji code fits on any cluster's VARCHAR limit.
+--
+-- device_code is generated server-side (SpaceDeviceAuthRequest::new_device_code)
+-- as eight emoji drawn from an alphabet that mixes 3-byte, 4-byte and 6-7-byte
+-- (variation-selector, e.g. U+2600 U+FE0F) characters, so one code is 24-56
+-- bytes.
+--
+-- On a UTF-8 cluster VARCHAR(32) limits length in CHARACTERS, so eight emoji
+-- (<= 16 code points) always fit. On SQL_ASCII there is no character concept and
+-- the limit is counted in BYTES: a code that happens to draw a variation-selector
+-- emoji overflows 32 bytes and the INSERT fails with SQLSTATE 22001, surfacing as
+-- an intermittent 500 on roughly a third of invites. That made device
+-- registration unreliable on a byte-limited cluster and made the concurrency and
+-- fuzz nightly non-deterministic.
+--
+-- VARCHAR(64) covers the 56-byte worst case with margin on every cluster. The
+-- type stays VARCHAR, so Diesel still maps it to `Varchar` and schema.rs is
+-- unchanged; the UNIQUE constraint and idx_space_device_auth_requests_code widen
+-- with the column. checks/tests/device_code_fits_its_column.rs pins the budget so
+-- a future alphabet or column change that would reintroduce the overflow fails a
+-- fast unit test rather than an intermittent battery run.
+ALTER TABLE space_device_auth_requests
+    ALTER COLUMN device_code TYPE VARCHAR(64);

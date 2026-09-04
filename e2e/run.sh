@@ -1664,7 +1664,12 @@ done
   echo "  production; what is simulated is the device. So this proves the server"
   echo "  accepts a conformant authenticator, not that any particular YubiKey or"
   echo "  platform authenticator behaves conformantly."
-  if [[ ${PG_ENCODING} != "UTF8" ]]; then
+  # Not "!= UTF8". SQL_ASCII stores the eight-emoji code's bytes verbatim
+  # (device_code is VARCHAR(64), wide enough byte-counted), so the invite race
+  # runs there as on UTF-8; only LATIN1 and other non-Unicode encodings cannot
+  # represent the code and assert the finding instead. Printing this narrowing on
+  # SQL_ASCII would claim a coverage gap that is not in force.
+  if [[ ${PG_ENCODING} != "UTF8" && ${PG_ENCODING} != "SQL_ASCII" ]]; then
     echo "- The invite-redemption race was NOT exercised: a device invite code is"
     echo "  eight emoji and this cluster (${PG_ENCODING}) cannot store one. The"
     echo "  finding is asserted instead. To exercise the race itself:"
