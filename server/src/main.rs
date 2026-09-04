@@ -322,13 +322,30 @@ async fn main() -> Result<(), anyhow::Error> {
     //     web_auth_middleware
     // ));
 
+    // CORS applies to the /api nest and nowhere else: it is the only
+    // cross-origin surface a browser calls, and the SPA, /status and /metrics
+    // are served same-origin. `build_layer` returns None when cors_enabled is
+    // false -- the honest form of the pre-existing default, no layer and no
+    // headers -- and `option_layer` makes that None a no-op. It is layered
+    // inline rather than through a `let api = ...` so the nest stays literally
+    // `.nest("/api", api::api_routes()...)`, which the contract-tier parity
+    // check pins (main_composes_the_same_router). An invalid configuration was
+    // already refused by validate_config at load; the `?` here covers the
+    // reload path and keeps this total. See css_server::cors.
+    let cors = css_server::cors::build_layer(&app_config.server)?;
+
     // The SPA fallback below catches everything the router did not match --
     // including, without care, unmatched /api paths. `api::api_routes()` owns
     // its own 404 for exactly that reason; the note is there.
     let app = Router::new()
         .route("/metrics", get(metrics_handler).with_state(prom.clone()))
         .merge(general_route)
-        .nest("/api", api::api_routes().layer(prom.http_layer()))
+        .nest(
+            "/api",
+            api::api_routes()
+                .layer(prom.http_layer())
+                .layer(tower::util::option_layer(cors)),
+        )
         .fallback_service(serve_dir)
         .with_state(app_state);
 

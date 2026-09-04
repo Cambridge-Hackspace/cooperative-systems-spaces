@@ -31,6 +31,7 @@ pub mod api;
 pub mod auth;
 pub mod calendar;
 pub mod config;
+pub mod cors;
 pub mod database;
 pub mod devices_inbound;
 pub mod devices_transport;

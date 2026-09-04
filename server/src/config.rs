@@ -1393,6 +1393,13 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         ));
     }
 
+    // CORS switched on with nothing to allow. The same failure the email guard
+    // above refuses, in a different subsystem: a capability turned on that
+    // cannot do anything except mislead. Refused here rather than defaulted to
+    // a wildcard, because '*' on a bearer-token API is a data exposure, not a
+    // permissive convenience. See `cors::build_layer`.
+    crate::cors::validate(&config.server)?;
+
     // Validate initial setup admin email format
     if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
         return Err(anyhow::anyhow!(
