@@ -1251,11 +1251,12 @@ stage_evidence() {
   fi
   record_case "evidence/transcript-present" ok
 
-  # Rendered on the host with the bootstrapped node -- no container and no
-  # stack. The point of a zero-dependency reader is that the evidence is
-  # readable on the machine somebody is sitting at, including the FreeBSD
-  # workstation where css-server cannot even be built.
-  if run_node_host "${ROOT}/e2e/evidence/transcript.mjs" "${src}" \
+  # Rendered with a host node where there is one -- the point of a
+  # zero-dependency reader is that the evidence is readable on the machine
+  # somebody is sitting at, including the FreeBSD workstation where css-server
+  # cannot even be built. On a reaper guest there is no host node, so
+  # run_reader_node falls back to the pinned node image; see its comment.
+  if run_reader_node "${src}" \
     >"${OUT}/EVIDENCE.md" 2>"${OUT}/logs/evidence.log"; then
     record_case "evidence/rendered" ok "out/EVIDENCE.md"
   else
