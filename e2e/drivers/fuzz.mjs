@@ -195,10 +195,19 @@ const KNOWN = [
     // job may say so", not "this route is allowed to fail". The finding it
     // rests on -- device registration is impossible without a UTF-8 database --
     // is pinned by the concurrency tier and recorded in TESTING.md.
+    //
+    // `only` is LATIN1 and other non-Unicode encodings, NOT every non-UTF-8 one.
+    // SQL_ASCII stores the code's bytes verbatim (device_code is VARCHAR(64),
+    // wide enough for the 56-byte worst case even byte-counted), so there the
+    // invite is created (201) and this 500 does not occur. Folding SQL_ASCII in
+    // with `enc !== 'UTF8'` made this KNOWN entry flaky: it fired
+    // `known-finding-fixed` on a 201 or, unsuppressed, tripped the no-5xx oracle
+    // on the intermittent overflow 500. Both symptoms of the same VARCHAR(32)
+    // byte-overflow, now fixed; see the widen_device_code migration.
     method: 'POST',
     template: '/api/admin/devices/invite',
     status: 500,
-    only: (enc) => enc !== 'UTF8',
+    only: (enc) => enc !== 'UTF8' && enc !== 'SQL_ASCII',
     why:
       'a device invite code is eight emoji and this cluster can store none of ' +
       'them. The server generated the value, so this is genuinely the ' +

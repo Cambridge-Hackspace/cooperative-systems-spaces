@@ -195,7 +195,7 @@ main(async () => {
   // there demanded the server reject input it can handle perfectly well. It
   // failed on the first UTF8 run, correctly.
   //
-  // Both branches are asserted rather than one being skipped. A skip on UTF8
+  // Every branch is asserted rather than any being skipped. A skip on UTF8
   // would leave the more interesting half untested: that the 22P05 handling
   // added for LATIN1 did not start refusing legitimate text everywhere else.
   if (ENCODING === 'UTF8') {
@@ -205,6 +205,29 @@ main(async () => {
       `${emoji.status} -- an emoji is ordinary text on a UTF8 cluster, so ` +
         'registration must succeed. A 4xx here would mean the fix for 22P05 ' +
         'on LATIN1 became a blanket refusal of astral text everywhere.'
+    )
+  } else if (ENCODING === 'SQL_ASCII') {
+    // The premise is false here too, for the opposite reason. SQL_ASCII is
+    // not an encoding but the absence of one: Postgres performs no conversion
+    // and no validation, stores whatever bytes arrive (NUL excepted -- the
+    // case below), and can therefore never raise 22P05. The emoji's UTF-8
+    // bytes go in verbatim and come back verbatim, so acceptance is correct
+    // and a 400 would be the driver demanding a refusal the server has no
+    // grounds to issue. This branch was previously folded into the 4xx one,
+    // and the nightly profile -- the only one that runs SQL_ASCII -- failed
+    // against correct behavior. Issue #20.
+    //
+    // What this proves is storability, not sanity: the cluster stores the
+    // bytes but does not understand them -- length, case folding and
+    // collation are all byte-wise and wrong for multibyte text. The stronger
+    // "the server handles astral text as text" claim belongs to the UTF8
+    // branch above.
+    record(
+      'contract/storable-text-is-accepted',
+      emoji.status < 300 ? 'ok' : 'fail',
+      `${emoji.status} -- SQL_ASCII validates nothing and stores any byte ` +
+        'sequence verbatim, so registration must succeed; 22P05 cannot occur ' +
+        'on this cluster.'
     )
   } else {
     assertEq(
