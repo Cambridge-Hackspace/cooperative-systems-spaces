@@ -1121,12 +1121,10 @@ export const cmi5Api = {
   assignAu(courseId: string, auId: string, body: import('@/types').Cmi5AssignRequest) {
     return apiClient.post<import('@/types').Cmi5AssignableUnit>(
       `/cmi5/courses/${courseId}/aus/${auId}/assign`,
-      body,
+      body
     )
   },
-  async importCourse(
-    file: File,
-  ): Promise<ApiResponse<import('@/types').Cmi5CourseWithAus>> {
+  async importCourse(file: File): Promise<ApiResponse<import('@/types').Cmi5CourseWithAus>> {
     const form = new FormData()
     form.append('file', file)
     try {

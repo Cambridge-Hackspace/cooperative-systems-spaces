@@ -93,7 +93,9 @@ async function onFileChosen(event: Event) {
   try {
     const r = await cmi5Api.importCourse(file)
     if (r.success && r.data) {
-      notify(`Imported "${r.data.course.title ?? r.data.course.course_iri}" (${r.data.aus.length} AU).`)
+      notify(
+        `Imported "${r.data.course.title ?? r.data.course.course_iri}" (${r.data.aus.length} AU).`
+      )
       await loadCourses()
     } else {
       notify(r.error || 'Import failed', false)
@@ -220,20 +222,13 @@ onMounted(async () => {
                   <span class="loading loading-spinner loading-sm"></span>
                 </div>
                 <div v-else class="p-2 space-y-2">
-                  <div
-                    v-for="au in aus"
-                    :key="au.id"
-                    class="flex flex-wrap items-center gap-2"
-                  >
+                  <div v-for="au in aus" :key="au.id" class="flex flex-wrap items-center gap-2">
                     <span class="font-medium">{{ au.title ?? au.au_iri }}</span>
                     <span class="badge badge-ghost">moveOn: {{ au.move_on }}</span>
                     <span v-if="au.mastery_score != null" class="badge badge-ghost">
                       mastery: {{ au.mastery_score }}
                     </span>
-                    <select
-                      v-model="pendingStep[au.id]"
-                      class="select select-bordered select-sm"
-                    >
+                    <select v-model="pendingStep[au.id]" class="select select-bordered select-sm">
                       <option value="">— not gating a tool —</option>
                       <option v-for="step in steps" :key="step.id" :value="step.id">
                         {{ stepLabel(step) }}
