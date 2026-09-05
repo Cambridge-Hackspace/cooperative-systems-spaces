@@ -40,6 +40,12 @@ pub struct CompiledDoor {
     pub allow_cards: Vec<String>,
     #[serde(default)]
     pub deny_cards: Vec<String>,
+    /// When set, the strike is held unlocked (no card required) until this
+    /// instant — the server's Open Access latch. `#[serde(default)]` keeps the
+    /// wire back-compatible: a server that predates this field omits it → `None`
+    /// → normal card-gated behavior.
+    #[serde(default)]
+    pub hold_unlock_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,8 +111,18 @@ impl DoorsState {
         *w = snapshot.doors;
     }
 
-    /// Decide an RFID scan against the current cache. Deny beats allow.
+    /// Decide an RFID scan against the current cache, as of now. Deny beats
+    /// allow. See [`Self::decide_at`] for the time-parameterized core.
     pub fn decide(&self, door_id: Uuid, card_id: &str) -> Decision {
+        self.decide_at(door_id, card_id, Utc::now())
+    }
+
+    /// Decide a scan as of `now`. Split out from [`Self::decide`] so the Open
+    /// Access held-unlock window is testable against a fixed clock (and so the
+    /// golden vectors, whose `now` is frozen, drive the same code production
+    /// runs). Order matters: an explicit `deny_cards` ban wins even during an
+    /// open window, but otherwise a live held-unlock admits any card.
+    pub fn decide_at(&self, door_id: Uuid, card_id: &str, now: DateTime<Utc>) -> Decision {
         let guard = self.inner.read().expect("doors state poisoned");
         let door = match guard.iter().find(|d| d.id == door_id) {
             Some(d) => d,
@@ -117,6 +133,17 @@ impl DoorsState {
         }
         if door.deny_cards.iter().any(|c| c == card_id) {
             return Decision::Deny("Card denied");
+        }
+        // Open Access: while the held-unlock window is live by *this device's*
+        // clock, any card enters. Comparing to the local clock is what makes the
+        // latch self-expire on disconnect (fail-secure + edge-local expiry): a
+        // stale snapshot cannot hold the door open past `hold_unlock_until`.
+        if let Some(until) = door.hold_unlock_until {
+            if now < until {
+                return Decision::Allow {
+                    duration_ms: door.unlock_duration_ms,
+                };
+            }
         }
         if door.allow_cards.iter().any(|c| c == card_id) {
             return Decision::Allow {
@@ -143,6 +170,15 @@ mod tests {
     use uuid::Uuid;
 
     fn snap(door_id: Uuid, allow: &[&str], deny: &[&str]) -> DoorStateSnapshot {
+        snap_held(door_id, allow, deny, None)
+    }
+
+    fn snap_held(
+        door_id: Uuid,
+        allow: &[&str],
+        deny: &[&str],
+        hold_unlock_until: Option<DateTime<Utc>>,
+    ) -> DoorStateSnapshot {
         DoorStateSnapshot {
             snapshot_at: Utc::now(),
             doors: vec![CompiledDoor {
@@ -152,6 +188,7 @@ mod tests {
                 unlock_duration_ms: 4200,
                 allow_cards: allow.iter().map(|s| s.to_string()).collect(),
                 deny_cards: deny.iter().map(|s| s.to_string()).collect(),
+                hold_unlock_until,
             }],
         }
     }
@@ -191,5 +228,65 @@ mod tests {
         snap.doors[0].enabled = false;
         s.apply_snapshot(snap);
         assert!(matches!(s.decide(id, "A1"), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn open_access_admits_any_card_while_window_is_live() {
+        let s = DoorsState::default();
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        // Held open until an hour from `now`; no card is on any list.
+        s.apply_snapshot(snap_held(
+            id,
+            &[],
+            &[],
+            Some(now + chrono::Duration::hours(1)),
+        ));
+        // A card nobody authorized still gets in during the window.
+        match s.decide_at(id, "STRANGER", now) {
+            Decision::Allow { duration_ms } => assert_eq!(duration_ms, 4200),
+            other => panic!("expected Allow during open window, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_access_self_expires_from_local_clock() {
+        // The fail-secure guarantee: once `now` passes `hold_unlock_until`, the
+        // latch is dead even though no fresh snapshot (no closing push) ever
+        // arrived. An unlisted card is then denied.
+        let s = DoorsState::default();
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        s.apply_snapshot(snap_held(
+            id,
+            &[],
+            &[],
+            Some(now - chrono::Duration::seconds(1)),
+        ));
+        assert!(matches!(
+            s.decide_at(id, "STRANGER", now),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn open_access_still_honors_an_explicit_card_ban() {
+        // An explicit deny beats the held-open window: a banned card stays out
+        // even during public hours.
+        let s = DoorsState::default();
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        s.apply_snapshot(snap_held(
+            id,
+            &[],
+            &["BANNED"],
+            Some(now + chrono::Duration::hours(1)),
+        ));
+        assert!(matches!(s.decide_at(id, "BANNED", now), Decision::Deny(_)));
+        // ...while a different card enters freely.
+        assert!(matches!(
+            s.decide_at(id, "GUEST", now),
+            Decision::Allow { .. }
+        ));
     }
 }

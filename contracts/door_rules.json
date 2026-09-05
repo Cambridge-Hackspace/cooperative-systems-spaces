@@ -192,6 +192,165 @@
         "server_compiled": { "allow": ["X9"], "deny": [] },
         "edge_decisions": [{ "card": "X9", "granted": true }]
       }
+    },
+    {
+      "name": "open access holds the door for anyone while its window is open",
+      "_why": "2026-06-01 is a Monday; 10:00 UTC is inside Mon 09:00-17:00. The strike is held open, so any card enters and hold_unlock_until is the window end.",
+      "now": "2026-06-01T10:00:00Z",
+      "tz": "UTC",
+      "users": [],
+      "schedules": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "intervals": [{ "day": "mon", "start": "09:00", "end": "17:00" }]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "open_access",
+          "value": "",
+          "effect": "allow",
+          "schedule_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        }
+      ],
+      "expect": {
+        "server_compiled": {
+          "allow": [],
+          "deny": [],
+          "hold_unlock_until": "2026-06-01T17:00:00Z"
+        },
+        "edge_decisions": [
+          { "card": "GUEST", "granted": true },
+          { "card": "STRANGER", "granted": true }
+        ]
+      }
+    },
+    {
+      "name": "open access outside its window falls back to card rules",
+      "_why": "20:00 UTC is after the Mon 09:00-17:00 window, so no hold; only the standing card rule applies.",
+      "now": "2026-06-01T20:00:00Z",
+      "tz": "UTC",
+      "users": [],
+      "schedules": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "intervals": [{ "day": "mon", "start": "09:00", "end": "17:00" }]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "open_access",
+          "value": "",
+          "effect": "allow",
+          "schedule_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        { "kind": "card", "value": "C1", "effect": "allow", "schedule_id": null }
+      ],
+      "expect": {
+        "server_compiled": {
+          "allow": ["C1"],
+          "deny": [],
+          "hold_unlock_until": null
+        },
+        "edge_decisions": [
+          { "card": "C1", "granted": true },
+          { "card": "STRANGER", "granted": false }
+        ]
+      }
+    },
+    {
+      "name": "a deny open-access rule is inert (allow-only latch)",
+      "_why": "Effect is retained in the UI but only allow holds the door; a deny open-access rule produces no hold and no cards.",
+      "now": "2026-06-01T10:00:00Z",
+      "tz": "UTC",
+      "users": [],
+      "schedules": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "intervals": [{ "day": "mon", "start": "09:00", "end": "17:00" }]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "open_access",
+          "value": "",
+          "effect": "deny",
+          "schedule_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        }
+      ],
+      "expect": {
+        "server_compiled": {
+          "allow": [],
+          "deny": [],
+          "hold_unlock_until": null
+        },
+        "edge_decisions": [{ "card": "STRANGER", "granted": false }]
+      }
+    },
+    {
+      "name": "open access spans adjacent intervals in one schedule",
+      "_why": "Mon 09:00-12:00 and 12:00-17:00 are contiguous, so the hold runs to 17:00, not 12:00.",
+      "now": "2026-06-01T10:00:00Z",
+      "tz": "UTC",
+      "users": [],
+      "schedules": [
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "intervals": [
+            { "day": "mon", "start": "09:00", "end": "12:00" },
+            { "day": "mon", "start": "12:00", "end": "17:00" }
+          ]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "open_access",
+          "value": "",
+          "effect": "allow",
+          "schedule_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        }
+      ],
+      "expect": {
+        "server_compiled": {
+          "allow": [],
+          "deny": [],
+          "hold_unlock_until": "2026-06-01T17:00:00Z"
+        },
+        "edge_decisions": [{ "card": "GUEST", "granted": true }]
+      }
+    },
+    {
+      "name": "a banned card stays out even during open access",
+      "_why": "An explicit deny_cards ban wins over the held-open latch: precedence is deny, then hold, then allow.",
+      "now": "2026-06-01T10:00:00Z",
+      "tz": "UTC",
+      "users": [],
+      "schedules": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "intervals": [{ "day": "mon", "start": "09:00", "end": "17:00" }]
+        }
+      ],
+      "rules": [
+        {
+          "kind": "open_access",
+          "value": "",
+          "effect": "allow",
+          "schedule_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        { "kind": "card", "value": "BANNED", "effect": "deny", "schedule_id": null }
+      ],
+      "expect": {
+        "server_compiled": {
+          "allow": [],
+          "deny": ["BANNED"],
+          "hold_unlock_until": "2026-06-01T17:00:00Z"
+        },
+        "edge_decisions": [
+          { "card": "BANNED", "granted": false },
+          { "card": "GUEST", "granted": true }
+        ]
+      }
     }
   ]
 }

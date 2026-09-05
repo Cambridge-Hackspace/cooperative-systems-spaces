@@ -11,7 +11,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
@@ -30,6 +30,12 @@ pub struct CompiledDoor {
     pub unlock_duration_ms: i32,
     pub allow_cards: Vec<String>,
     pub deny_cards: Vec<String>,
+    /// When set, the door's strike is held unlocked (no card required) until
+    /// this instant -- the Open Access latch (issue #12). `None` = normal
+    /// card-gated behavior. The edge compares this to its own clock, so a
+    /// held window self-expires even if the closing push never arrives
+    /// (fail-secure + edge-local expiry).
+    pub hold_unlock_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +111,7 @@ impl DoorService {
         for door in &doors {
             let rules = self.db.list_rules_for_door(door.id)?;
             let (allow, deny) = self.expand_rules(&rules, &active_users, &schedules, tz);
+            let hold_unlock_until = open_access_hold_until_at(&rules, &schedules, tz, Utc::now());
             compiled.push(CompiledDoor {
                 id: door.id,
                 name: door.name.clone(),
@@ -112,6 +119,7 @@ impl DoorService {
                 unlock_duration_ms: door.unlock_duration_ms,
                 allow_cards: allow.into_iter().collect(),
                 deny_cards: deny.into_iter().collect(),
+                hold_unlock_until,
             });
         }
 
@@ -244,6 +252,11 @@ impl DoorService {
                     Some(required) => role_level(&user.role) >= role_level(&required),
                     None => false,
                 },
+                // Open Access is a door-level held-unlock latch, not a per-user
+                // grant: it never participates in the QR check-in decision. When
+                // its window is open the strike is already held open (see
+                // `open_access_hold_until_at`), so a check-in is moot.
+                DoorRuleKind::OpenAccess => false,
             };
             if !matched {
                 continue;
@@ -434,6 +447,54 @@ pub fn cards_in_profile(profile: &Value, field: &str) -> Vec<String> {
     }
 }
 
+/// The instant an Open Access door's held-unlock window ends, or `None` if no
+/// open-access rule is holding it open at `now`.
+///
+/// Only `allow` open-access rules count — a `deny` open-access rule is inert
+/// (the retained Effect field is a UI affordance, not a force-lock). Across
+/// several simultaneously-active windows the latest end wins, so the door stays
+/// open until the last one closes. An open-access rule with no schedule is
+/// skipped: there is no window end, and the add-rule handler already refuses to
+/// create one (an unscheduled latch would hold the door open forever).
+///
+/// This is the door-level counterpart to `expand_rules_at`; both are pure so the
+/// `contracts/door_rules.json` vectors can drive them without a database.
+pub fn open_access_hold_until_at(
+    rules: &[DoorAccessRule],
+    schedules: &[Schedule],
+    tz: chrono_tz::Tz,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let mut latest: Option<DateTime<Utc>> = None;
+    for rule in rules {
+        if DoorRuleKind::parse(&rule.kind) != Some(DoorRuleKind::OpenAccess) {
+            continue;
+        }
+        if DoorRuleEffect::parse(&rule.effect) != Some(DoorRuleEffect::Allow) {
+            continue; // deny is inert for open access
+        }
+        let sid = match rule.schedule_id {
+            Some(id) => id,
+            None => continue,
+        };
+        let sched = match schedules.iter().find(|s| s.id == sid) {
+            Some(s) => s,
+            None => continue, // read-time race: schedule gone from this snapshot
+        };
+        let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Open-access rule {} has invalid intervals: {}", rule.id, e);
+                continue;
+            }
+        };
+        if let Some(end) = crate::schedules::active_until(&intervals, tz, now) {
+            latest = Some(latest.map_or(end, |cur| cur.max(end)));
+        }
+    }
+    latest
+}
+
 /// Expand access rules into flat allow/deny card sets, as of `now`.
 pub fn expand_rules_at(
     rules: &[DoorAccessRule],
@@ -481,6 +542,12 @@ pub fn expand_rules_at(
         };
 
         match kind {
+            // Open Access adds no cards to either set: it is a door-level
+            // held-unlock latch, compiled separately by
+            // `open_access_hold_until_at` into `CompiledDoor.hold_unlock_until`.
+            // Only `allow` is meaningful there; a `deny` open-access rule is
+            // inert, so it is correct that this arm ignores the effect bucket.
+            DoorRuleKind::OpenAccess => {}
             DoorRuleKind::Card => {
                 bucket.insert(rule.value.clone());
             }

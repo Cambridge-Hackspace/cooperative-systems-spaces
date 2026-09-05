@@ -99,6 +99,64 @@ pub fn matches_at(
         .any(|iv| iv.day == dow && iv.start <= now && now < iv.end)
 }
 
+/// If `ts` (UTC), shifted into `tz`, falls inside an open window, return the
+/// UTC instant that window ends; otherwise `None`.
+///
+/// "The window" is the maximal *contiguous same-day* open span containing `now`:
+/// intervals on the current local day are chained across adjacency and overlap,
+/// so `[09:00-12:00, 12:00-17:00]` yields `17:00` while a genuine gap in
+/// `[09:00-12:00, 13:00-17:00]` yields `12:00` (the door locks over the gap and
+/// the ticker reopens it at 13:00). This is the value published to the edge as
+/// `hold_unlock_until` for an Open Access door.
+///
+/// This weekly-window model cannot express a window crossing midnight (an
+/// interval's `end` must be a same-day `HH:MM` strictly after its `start`), so a
+/// span is always bounded by end-of-day; contiguity is only evaluated within the
+/// local day. That matches how `matches_at` reads the same data.
+pub fn active_until(
+    intervals: &[ScheduleInterval],
+    tz: Tz,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Datelike, LocalResult, TimeZone};
+
+    let local = ts.with_timezone(&tz);
+    let dow = DayOfWeek::from_chrono(local.weekday());
+    let now_t = local.time();
+    let date = local.date_naive();
+
+    // Same-day intervals, earliest start first, so chaining is a single pass.
+    let mut day: Vec<&ScheduleInterval> = intervals.iter().filter(|iv| iv.day == dow).collect();
+    day.sort_by_key(|iv| iv.start);
+
+    // The interval currently containing `now` (end exclusive, as in `matches_at`).
+    let mut end = day
+        .iter()
+        .find(|iv| iv.start <= now_t && now_t < iv.end)?
+        .end;
+
+    // Extend forward across any interval that touches or overlaps the running
+    // end. `end` strictly increases each step, so this terminates.
+    while let Some(iv) = day.iter().find(|iv| iv.start <= end && iv.end > end) {
+        end = iv.end;
+    }
+
+    // Re-anchor the local end-of-window onto the local date and convert to UTC.
+    let naive_end = date.and_time(end);
+    match tz.from_local_datetime(&naive_end) {
+        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => {
+            Some(dt.with_timezone(&chrono::Utc))
+        }
+        // DST spring-forward can make the exact end instant nonexistent. Prefer
+        // holding open a minute longer (fail toward the safe direction for a
+        // *closing* boundary) over locking early.
+        LocalResult::None => tz
+            .from_local_datetime(&(naive_end - chrono::Duration::minutes(1)))
+            .single()
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+    }
+}
+
 /// Resolve a `Tz` from an IANA name. Falls back to UTC with a warning.
 pub fn resolve_tz(name: &str) -> Tz {
     name.parse::<Tz>().unwrap_or_else(|_| {
@@ -168,5 +226,71 @@ mod tests {
         assert!(matches_at(&intervals, tz, inside));
         assert!(!matches_at(&intervals, tz, wrong_day));
         assert!(!matches_at(&intervals, tz, edge));
+    }
+
+    #[test]
+    fn active_until_returns_window_end_in_utc() {
+        // 2026-05-29 is a Friday; CDT = UTC-5. 14:00 CDT = 19:00 UTC, and the
+        // window ends 17:00 CDT = 22:00 UTC.
+        let intervals = vec![iv(DayOfWeek::Fri, "09:00", "17:00")];
+        let tz: Tz = "America/Chicago".parse().unwrap();
+        let inside = Utc.with_ymd_and_hms(2026, 5, 29, 19, 0, 0).unwrap();
+        let expected = Utc.with_ymd_and_hms(2026, 5, 29, 22, 0, 0).unwrap();
+        assert_eq!(active_until(&intervals, tz, inside), Some(expected));
+    }
+
+    #[test]
+    fn active_until_is_none_outside_and_at_exclusive_end() {
+        let intervals = vec![iv(DayOfWeek::Mon, "09:00", "10:00")];
+        let tz = chrono_tz::UTC;
+        // Before the window.
+        let before = Utc.with_ymd_and_hms(2026, 6, 1, 8, 30, 0).unwrap();
+        // After the window.
+        let after = Utc.with_ymd_and_hms(2026, 6, 1, 11, 0, 0).unwrap();
+        // Exactly at the exclusive end — not open.
+        let at_end = Utc.with_ymd_and_hms(2026, 6, 1, 10, 0, 0).unwrap();
+        // Right day-time but wrong weekday.
+        let wrong_day = Utc.with_ymd_and_hms(2026, 6, 2, 9, 30, 0).unwrap();
+        assert_eq!(active_until(&intervals, tz, before), None);
+        assert_eq!(active_until(&intervals, tz, after), None);
+        assert_eq!(active_until(&intervals, tz, at_end), None);
+        assert_eq!(active_until(&intervals, tz, wrong_day), None);
+    }
+
+    #[test]
+    fn active_until_merges_adjacent_and_overlapping_spans() {
+        let tz = chrono_tz::UTC;
+        let now = Utc.with_ymd_and_hms(2026, 6, 1, 10, 0, 0).unwrap(); // Mon 10:00
+        let end_1700 = Utc.with_ymd_and_hms(2026, 6, 1, 17, 0, 0).unwrap();
+
+        // Adjacent: 09-12 then 12-17 chain to 17:00.
+        let adjacent = vec![
+            iv(DayOfWeek::Mon, "09:00", "12:00"),
+            iv(DayOfWeek::Mon, "12:00", "17:00"),
+        ];
+        assert_eq!(active_until(&adjacent, tz, now), Some(end_1700));
+
+        // Overlapping: 09-13 and 12-17 chain to 17:00.
+        let overlapping = vec![
+            iv(DayOfWeek::Mon, "09:00", "13:00"),
+            iv(DayOfWeek::Mon, "12:00", "17:00"),
+        ];
+        assert_eq!(active_until(&overlapping, tz, now), Some(end_1700));
+    }
+
+    #[test]
+    fn active_until_stops_at_a_real_gap() {
+        // A lunch gap must NOT be bridged: at 10:00 the span ends at 12:00, and
+        // the 12:00-13:00 gap reads as closed (the door locks, then reopens).
+        let tz = chrono_tz::UTC;
+        let intervals = vec![
+            iv(DayOfWeek::Mon, "09:00", "12:00"),
+            iv(DayOfWeek::Mon, "13:00", "17:00"),
+        ];
+        let now = Utc.with_ymd_and_hms(2026, 6, 1, 10, 0, 0).unwrap();
+        let gap = Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap();
+        let end_1200 = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        assert_eq!(active_until(&intervals, tz, now), Some(end_1200));
+        assert_eq!(active_until(&intervals, tz, gap), None);
     }
 }
