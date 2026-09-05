@@ -358,14 +358,17 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
-    // 140, up from 139: `PUT /api/users/me/password` is new (self-service
-    // password change). The two training-session routes moved from
-    // `/sessions/{start,complete}` to `/progress/{user_id}/{start,complete}`,
-    // which is net zero. The device surface did not move, which is the number
-    // this test actually exists to hold still.
-    assert_eq!(jwt_routes, 140, "JWT-authenticated routes");
+    // 145, up from 140: five cmi5 admin/management routes -- Staff course
+    // import/list/get/delete and the Admin AU->training-step binding. All are
+    // JWT-guarded; none touch the device surface, which is the number this test
+    // actually exists to hold still and which did not move.
+    //
+    // (140 was up from 139 for `PUT /api/users/me/password`; the two
+    // training-session routes moving to `/progress/{user_id}/{start,complete}`
+    // was net zero.)
+    assert_eq!(jwt_routes, 145, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 140 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 145 * 7 + 6 * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device token can only be rejected on its

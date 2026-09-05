@@ -44,6 +44,9 @@ pub struct Cmi5Course {
 #[diesel(table_name = cmi5_courses)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct NewCmi5Course {
+    /// Set explicitly (not defaulted) so the row id matches the content
+    /// directory the package was extracted to, which is named by this id.
+    pub id: Uuid,
     pub course_iri: String,
     pub title: Option<String>,
     pub description: Option<String>,

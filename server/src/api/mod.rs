@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod calendar;
+pub mod cmi5;
 pub mod config;
 pub mod devices;
 pub mod doors;
@@ -32,6 +33,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/tools", tools::tools_routes())
         .nest("/training", training::training_router())
         .nest("/trainers", trainers::trainers_router())
+        .nest("/cmi5", cmi5::cmi5_router())
         .nest("/config", config::config_routes())
         .nest("/toolguard", toolguard::toolguard_routes())
         .nest("/calendar", calendar::calendar_routes())
