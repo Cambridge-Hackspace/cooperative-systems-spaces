@@ -202,6 +202,30 @@ main(async () => {
   )
   assertEq('cmi5/launchdata-readable', 200, ld.status, 'LMS.LaunchData readable')
 
+  // Export the course, re-import the result, and confirm the AU survives the
+  // round trip: import(export(x)) is x at the tree level.
+  const exp = await fetch(new URL(`/api/cmi5/courses/${course.id}/export`, BASE), {
+    headers: { Authorization: `Bearer ${admin.token}` },
+  })
+  ok('cmi5/export', exp.status === 200, `export -> ${exp.status}`)
+  const exported = new Uint8Array(await exp.arrayBuffer())
+  const reForm = new FormData()
+  reForm.append('file', new Blob([exported], { type: 'application/zip' }), 'reexport.zip')
+  const reimp = await fetch(new URL('/api/cmi5/courses', BASE), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${admin.token}` },
+    body: reForm,
+  })
+  const reJson = await reimp.json().catch(() => null)
+  const reAus = reJson?.data?.aus ?? []
+  assertEq('cmi5/reimport-au-count', 1, reAus.length, 'export then re-import yields one AU')
+  assertEq(
+    'cmi5/reimport-au-iri',
+    aus[0]?.au_iri,
+    reAus[0]?.au_iri,
+    'the AU IRI survives export and re-import',
+  )
+
   // The Stage 4 deferral: a Newbie (default role) must be refused the launch,
   // while the promoted Member above was accepted.
   const newbie = await account('cmi5newbie')

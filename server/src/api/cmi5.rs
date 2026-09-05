@@ -13,7 +13,7 @@
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
@@ -53,6 +53,7 @@ pub fn cmi5_router() -> Router<AppState> {
             "/courses/{course_id}/aus/{au_id}/assign",
             post(assign_au_step),
         )
+        .route("/courses/{course_id}/export", get(export_course))
         // Learner launch (member) and the one-time fetch exchange (public, but
         // gated by the single-use token in its query string).
         .route("/aus/{au_id}/launch", post(launch_au))
@@ -209,6 +210,34 @@ async fn assign_au_step(
     state.db.create_audit_log(&audit)?;
 
     Ok(ApiResponse::success(au))
+}
+
+async fn export_course(
+    State(state): State<AppState>,
+    staff: StaffUser,
+    Path(course_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    let bytes = state.cmi5_service.export_package(course_id)?;
+
+    let audit = NewAuditLog {
+        event_type: AuditEventType::Cmi5CourseExported.as_str().to_string(),
+        user_id: None,
+        actor_id: Some(staff.0.id),
+        event_data: serde_json::json!({ "course_id": course_id, "bytes": bytes.len() }),
+        ip_address: None,
+        user_agent: None,
+    };
+    state.db.create_audit_log(&audit)?;
+
+    let headers = [
+        (header::CONTENT_TYPE, "application/zip".to_string()),
+        (
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"cmi5-{course_id}.zip\""),
+        ),
+    ];
+    Ok((StatusCode::OK, headers, bytes).into_response())
 }
 
 /// Query string of the fetch endpoint: the one-time token lives here, exactly as

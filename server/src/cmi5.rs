@@ -13,13 +13,14 @@
 //! later stage goes through the existing training-completion path so the
 //! tool-access invariant that `tool_access_agrees` guards stays authoritative.
 
-use std::io::{Cursor, Read, Seek};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
 use diesel::prelude::*;
 use uuid::Uuid;
+use zip::write::{SimpleFileOptions, ZipWriter};
 use zip::ZipArchive;
 
 // Leading `::` names the external `cmi5` crate unambiguously, distinct from this
@@ -847,6 +848,25 @@ impl Cmi5Service {
             .optional()?;
         Ok(stmt)
     }
+
+    /// Repackage a course's content directory back into a `.zip`.
+    ///
+    /// The directory holds exactly what was imported — `cmi5.xml` and the content
+    /// files, extracted verbatim — so re-zipping it reproduces a package that
+    /// re-imports to the same course tree (the round-trip the e2e stage checks).
+    /// The name is the course title/id; the caller streams the bytes.
+    pub fn export_package(&self, course_id: Uuid) -> Result<Vec<u8>, Cmi5Error> {
+        let course = self.get_course(course_id)?;
+        let dir = self.course_content_dir(&course.content_path);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = ZipWriter::new(Cursor::new(&mut buf));
+            add_dir_to_zip(&mut writer, &dir, &dir)?;
+            writer.finish().map_err(|e| Cmi5Error::Zip(e.to_string()))?;
+        }
+        Ok(buf)
+    }
 }
 
 /// The 0–100 assessment score a statement carries, from `result.score.scaled`.
@@ -881,6 +901,38 @@ fn extract_all<R: Read + Seek>(archive: &mut ZipArchive<R>, dest: &Path) -> Resu
         }
         let mut out = std::fs::File::create(&out_path).map_err(|e| Cmi5Error::Io(e.to_string()))?;
         std::io::copy(&mut entry, &mut out).map_err(|e| Cmi5Error::Io(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Recursively add every file under `current` to `writer`, named by its path
+/// relative to `base` (forward slashes), for export. Directories are walked;
+/// empty ones are simply not represented, which a cmi5 package does not need.
+fn add_dir_to_zip<W: Write + Seek>(
+    writer: &mut ZipWriter<W>,
+    base: &Path,
+    current: &Path,
+) -> Result<(), Cmi5Error> {
+    let options = SimpleFileOptions::default();
+    let entries = std::fs::read_dir(current).map_err(|e| Cmi5Error::Io(e.to_string()))?;
+    for entry in entries {
+        let path = entry.map_err(|e| Cmi5Error::Io(e.to_string()))?.path();
+        if path.is_dir() {
+            add_dir_to_zip(writer, base, &path)?;
+        } else {
+            let rel = path
+                .strip_prefix(base)
+                .map_err(|e| Cmi5Error::Io(e.to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            writer
+                .start_file(rel, options)
+                .map_err(|e| Cmi5Error::Zip(e.to_string()))?;
+            let data = std::fs::read(&path).map_err(|e| Cmi5Error::Io(e.to_string()))?;
+            writer
+                .write_all(&data)
+                .map_err(|e| Cmi5Error::Io(e.to_string()))?;
+        }
     }
     Ok(())
 }

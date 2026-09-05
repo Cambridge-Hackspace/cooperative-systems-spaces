@@ -146,6 +146,7 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/cmi5/courses", Guard::Staff), // cmi5::import_course
     R("DELETE", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001", Guard::Staff), // cmi5::delete_course
     R("GET", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001", Guard::Staff), // cmi5::get_course
+    R("GET", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001/export", Guard::Staff), // cmi5::export_course
     R("POST", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001/aus/00000000-0000-4000-8000-000000000001/assign", Guard::Admin), // cmi5::assign_au_step
     R("GET", "/api/config/public", Guard::Public), // config::get_public_config
     R("GET", "/api/config/registration", Guard::Public), // config::get_registration_config
