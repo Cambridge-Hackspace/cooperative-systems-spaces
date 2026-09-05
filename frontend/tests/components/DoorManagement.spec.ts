@@ -143,6 +143,18 @@ const detail = (over: Partial<DoorDetail> = {}): DoorDetail => ({
   ...over,
 })
 
+// A real <select> so a schedule can be chosen through the typed DOM API
+// (`.setValue`) rather than an untyped `vm.$emit`, which the type-aware lint
+// rejects. `sched-1` is the only pickable schedule.
+const SchedulePickerStub = {
+  props: ['modelValue', 'schedules'],
+  emits: ['update:modelValue'],
+  template:
+    '<select class="schedule-picker" :value="modelValue" ' +
+    '@change="$emit(\'update:modelValue\', $event.target.value || null)">' +
+    '<option value="">Always</option><option value="sched-1">S1</option></select>',
+}
+
 const stubs = {
   'router-link': { props: ['to'], template: '<a><slot /></a>' },
   PlacePicker: {
@@ -150,11 +162,7 @@ const stubs = {
     emits: ['update:modelValue'],
     template: '<div class="place-picker">{{ modelValue }}</div>',
   },
-  SchedulePicker: {
-    props: ['modelValue', 'schedules'],
-    emits: ['update:modelValue'],
-    template: '<div class="schedule-picker">{{ modelValue }}</div>',
-  },
+  SchedulePicker: SchedulePickerStub,
 }
 
 let confirmResult = true
@@ -332,14 +340,14 @@ describe('creating a door', () => {
 })
 
 describe('the rule editor', () => {
-  it('offers three kinds and two effects', async () => {
+  it('offers four kinds, including open_access', async () => {
     const w = await page([door()])
     await openDetail(w)
     const kinds = w
       .findAll('select')[0]
       .findAll('option')
       .map((o) => o.attributes('value'))
-    expect(kinds).toEqual(['role', 'user', 'card'])
+    expect(kinds).toEqual(['role', 'user', 'card', 'open_access'])
   })
 
   // Recorded as a decision rather than a defect: `UserRole` has five members
@@ -400,6 +408,67 @@ describe('the rule editor', () => {
     await flushPromises()
 
     expect(addedRule()).toMatchObject({ kind: 'user', value: 'u1', effect: 'allow' })
+  })
+
+  // Issue #12: Open Access. Selecting it hides the Value field (there is no
+  // value -- the door is held open on a schedule) while Effect and Schedule stay
+  // operational, and the rule cannot be added without a schedule.
+  it('hides the Value field but keeps Effect and Schedule for Open Access', async () => {
+    const w = await page([door()])
+    await openDetail(w)
+    await w.findAll('select')[0].setValue('open_access')
+    await nextTick()
+
+    // No value control of any shape survives: no role/user select beyond Kind,
+    // no card input.
+    expect(w.find('input[placeholder="card ID"]').exists()).toBe(false)
+    const selectValues = w
+      .findAll('select')
+      .map((s) => s.findAll('option').map((o) => o.attributes('value')))
+    // Only the Kind select (open_access among its options) and the Effect select
+    // (allow/deny) remain; there is no value select.
+    expect(selectValues.some((opts) => opts?.includes('open_access'))).toBe(true)
+    expect(selectValues.some((opts) => opts?.includes('allow') && opts.includes('deny'))).toBe(true)
+    expect(selectValues.some((opts) => opts?.includes('Member'))).toBe(false)
+    // Schedule picker is still rendered and operational.
+    expect(w.find('.schedule-picker').exists()).toBe(true)
+  })
+
+  it('requires a schedule before an Open Access rule can be added', async () => {
+    const w = await page([door()])
+    await openDetail(w)
+    await w.findAll('select')[0].setValue('open_access')
+    await nextTick()
+
+    // No schedule chosen yet -> Add is disabled (a value being blank must NOT be
+    // what enables it here).
+    expect(buttonNamed(w, 'Add rule').attributes('disabled')).toBeDefined()
+
+    // Choosing a schedule (the picker emits an id) enables it.
+    await w.find('.schedule-picker').setValue('sched-1')
+    await nextTick()
+    expect(buttonNamed(w, 'Add rule').attributes('disabled')).toBeUndefined()
+  })
+
+  it('posts an open_access rule with an empty value and the chosen schedule', async () => {
+    const w = await page([door()])
+    await openDetail(w)
+    await w.findAll('select')[0].setValue('open_access')
+    await nextTick()
+    await w.find('.schedule-picker').setValue('sched-1')
+    await nextTick()
+
+    await buttonNamed(w, 'Add rule').trigger('click')
+    await flushPromises()
+
+    // The leftover default value ('Member') must not ride along -- the server
+    // stores open_access with an empty value.
+    expect(addedRule()).toMatchObject({
+      kind: 'open_access',
+      value: '',
+      effect: 'allow',
+      schedule_id: 'sched-1',
+    })
   })
 
   it('will not add a card rule with a blank value', async () => {
