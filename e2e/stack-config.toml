@@ -300,3 +300,15 @@ edge_enabled = true
 mqtt_instance_url = "tcp://127.0.0.1:@MQTT_PORT@"
 mqtt_client_id = "css-e2e-server"
 mqtt_namespace = "css-e2e"
+
+# Enabled so the cmi5 stage can import a package, launch it, drive statements
+# through the embedded LRS, and prove a pass grants tool access. content_dir is
+# an absolute path under /tmp so it is writable wherever the host-run server's
+# working directory happens to be. The default (disabled) leaves the whole
+# surface 404, which is what the offline contract tier already exercises.
+[cmi5]
+enabled = true
+content_dir = "/tmp/css-e2e-cmi5-content"
+max_package_bytes = 10485760
+fetch_ttl_secs = 300
+session_ttl_secs = 14400
