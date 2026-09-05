@@ -173,6 +173,23 @@ const router = createRouter({
       },
     },
     {
+      path: '/admin/cmi5',
+      name: 'admin-cmi5',
+      component: () => import('@/components/Cmi5Management.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
+      path: '/modules',
+      name: 'my-modules',
+      component: () => import('@/views/Cmi5ModulesView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/admin/profile-config',
       name: 'admin-profile-config',
       component: () => import('@/components/ProfileConfigAdmin.vue'),

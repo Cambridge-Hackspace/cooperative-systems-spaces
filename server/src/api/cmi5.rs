@@ -54,8 +54,9 @@ pub fn cmi5_router() -> Router<AppState> {
             post(assign_au_step),
         )
         .route("/courses/{course_id}/export", get(export_course))
-        // Learner launch (member) and the one-time fetch exchange (public, but
-        // gated by the single-use token in its query string).
+        // Learner discovery and launch (member), and the one-time fetch exchange
+        // (public, but gated by the single-use token in its query string).
+        .route("/modules", get(list_my_modules))
         .route("/aus/{au_id}/launch", post(launch_au))
         .route("/fetch", post(fetch_credential))
         // The embedded LRS: statements and the State API. Every handler here
@@ -245,6 +246,15 @@ async fn export_course(
 #[derive(Debug, Deserialize)]
 struct FetchQuery {
     token: Option<String>,
+}
+
+async fn list_my_modules(
+    State(state): State<AppState>,
+    member: MemberUser,
+) -> Result<impl IntoResponse, ApiError> {
+    ensure_enabled(&state)?;
+    let modules = state.cmi5_service.list_learner_modules(member.0.id)?;
+    Ok(ApiResponse::success(modules))
 }
 
 async fn launch_au(

@@ -68,18 +68,28 @@ fn the_grant_goes_through_create_training_record() {
 #[test]
 fn the_cmi5_service_never_writes_the_access_tables_directly() {
     let code = cmi5_service_code();
-    // A raw write to either table would bypass the gate. We look for the table
-    // names appearing as Diesel query targets; the only legitimate mention of
-    // user_training_progress is inside create_training_record, which lives in
-    // database.rs, not here.
+    // Whitespace-collapsed, so a Diesel builder split across lines
+    // (`diesel::update(\n  user_training_progress::table`) is still caught.
+    let flat: String = code.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // A *write* to either access table bypasses the gate: it skips the
+    // training_records audit row and, worse, the toolguard broadcast, so a pass
+    // would not open the door. Reads are fine — `list_learner_modules` reads
+    // user_training_progress to show a learner what they have completed — so this
+    // forbids only the insert/update/delete builders targeting these tables, not
+    // any mention of them. The one legitimate *write* to user_training_progress
+    // is inside create_training_record, which lives in database.rs, not here.
     for table in ["user_training_progress", "user_tool_training"] {
-        assert!(
-            !code.contains(table),
-            "server/src/cmi5.rs references `{table}` directly. The cmi5 grant \
-             must go through create_training_record, not touch the access tables \
-             itself — a direct write skips the training_records audit row and, \
-             worse, the toolguard broadcast, so a pass would not open the door."
-        );
+        for verb in ["insert_into", "update", "delete"] {
+            for pat in [format!("{verb}({table}"), format!("{verb}( {table}")] {
+                assert!(
+                    !flat.contains(&pat),
+                    "server/src/cmi5.rs writes `{table}` directly (`{pat}…`). The \
+                     cmi5 grant must go through create_training_record, not touch \
+                     the access tables itself."
+                );
+            }
+        }
     }
 }
 

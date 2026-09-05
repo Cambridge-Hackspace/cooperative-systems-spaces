@@ -17,8 +17,10 @@ use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use zip::write::{SimpleFileOptions, ZipWriter};
 use zip::ZipArchive;
@@ -37,11 +39,11 @@ use crate::database::DatabaseManager;
 use crate::models::{
     AssignCmi5AuStep, Cmi5AssignableUnit, Cmi5Block, Cmi5Course, Cmi5Registration,
     NewCmi5AssignableUnit, NewCmi5Block, NewCmi5Course, NewCmi5LaunchToken, NewCmi5Registration,
-    NewCmi5StateDocument, NewCmi5Statement, NewTrainingRecord, TrainingStep,
+    NewCmi5StateDocument, NewCmi5Statement, NewTrainingRecord, TrainingStatus, TrainingStep,
 };
 use crate::schema::{
     cmi5_assignable_units, cmi5_blocks, cmi5_courses, cmi5_launch_tokens, cmi5_registrations,
-    cmi5_state_documents, cmi5_statements, training_steps,
+    cmi5_state_documents, cmi5_statements, training_steps, user_training_progress,
 };
 use crate::tokens::{generate_token, hash_token};
 
@@ -131,6 +133,19 @@ pub struct Cmi5SessionContext {
 pub struct LaunchResult {
     pub launch_url: String,
     pub registration_id: Uuid,
+}
+
+/// A launchable cmi5 module as a learner sees it: an AU bound to a training
+/// step, with the tool it gates and whether the learner has already completed it.
+#[derive(Debug, Clone, Serialize)]
+pub struct LearnerModule {
+    pub au_id: Uuid,
+    pub au_title: Option<String>,
+    pub course_id: Uuid,
+    pub course_title: Option<String>,
+    pub tool_id: Uuid,
+    pub training_step_id: Uuid,
+    pub completed: bool,
 }
 
 /// Returned when an accepted statement satisfied an AU and a training-step grant
@@ -866,6 +881,83 @@ impl Cmi5Service {
             writer.finish().map_err(|e| Cmi5Error::Zip(e.to_string()))?;
         }
         Ok(buf)
+    }
+
+    /// The launchable cmi5 modules for a learner: every AU bound to a training
+    /// step whose course is still live, tagged with whether the learner has
+    /// already completed the step. Assembled from a few small queries rather than
+    /// one wide join, which keeps each step obvious.
+    pub fn list_learner_modules(&self, user_id: Uuid) -> Result<Vec<LearnerModule>, Cmi5Error> {
+        let mut conn = self.conn()?;
+
+        // AUs that are bound to a step (an unbound AU is not launchable-to-effect).
+        let aus: Vec<(Uuid, Option<String>, Uuid, Option<Uuid>)> = cmi5_assignable_units::table
+            .filter(cmi5_assignable_units::training_step_id.is_not_null())
+            .select((
+                cmi5_assignable_units::id,
+                cmi5_assignable_units::title,
+                cmi5_assignable_units::course_id,
+                cmi5_assignable_units::training_step_id,
+            ))
+            .load(&mut conn)?;
+        if aus.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let course_ids: Vec<Uuid> = aus.iter().map(|a| a.2).collect();
+        let course_titles: HashMap<Uuid, Option<String>> = cmi5_courses::table
+            .filter(cmi5_courses::id.eq_any(&course_ids))
+            .filter(cmi5_courses::deleted_at.is_null())
+            .select((cmi5_courses::id, cmi5_courses::title))
+            .load::<(Uuid, Option<String>)>(&mut conn)?
+            .into_iter()
+            .collect();
+
+        let step_ids: Vec<Uuid> = aus.iter().filter_map(|a| a.3).collect();
+        let step_tools: HashMap<Uuid, Uuid> = training_steps::table
+            .filter(training_steps::id.eq_any(&step_ids))
+            .select((training_steps::id, training_steps::tool_id))
+            .load::<(Uuid, Uuid)>(&mut conn)?
+            .into_iter()
+            .collect();
+
+        let now = Utc::now();
+        let completed: HashSet<Uuid> = user_training_progress::table
+            .filter(user_training_progress::user_id.eq(user_id))
+            .select((
+                user_training_progress::training_step_id,
+                user_training_progress::status,
+                user_training_progress::expires_at,
+            ))
+            .load::<(Uuid, TrainingStatus, Option<DateTime<Utc>>)>(&mut conn)?
+            .into_iter()
+            .filter(|(_, status, expires_at)| {
+                *status == TrainingStatus::Completed && expires_at.map_or(true, |e| e > now)
+            })
+            .map(|(step_id, _, _)| step_id)
+            .collect();
+
+        let mut modules = Vec::new();
+        for (au_id, au_title, course_id, step_id) in aus {
+            let Some(step_id) = step_id else { continue };
+            // Skip AUs whose course was deleted, or whose step vanished.
+            let Some(course_title) = course_titles.get(&course_id) else {
+                continue;
+            };
+            let Some(&tool_id) = step_tools.get(&step_id) else {
+                continue;
+            };
+            modules.push(LearnerModule {
+                au_id,
+                au_title,
+                course_id,
+                course_title: course_title.clone(),
+                tool_id,
+                training_step_id: step_id,
+                completed: completed.contains(&step_id),
+            });
+        }
+        Ok(modules)
     }
 }
 
