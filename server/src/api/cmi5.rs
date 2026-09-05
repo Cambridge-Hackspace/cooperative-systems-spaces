@@ -506,6 +506,9 @@ impl From<Cmi5Error> for ApiError {
                 ApiError::BadRequest("package has no cmi5.xml at its root".to_string())
             }
             Cmi5Error::Manifest(m) => ApiError::BadRequest(format!("invalid cmi5.xml: {m}")),
+            Cmi5Error::NonConformant(m) => {
+                ApiError::BadRequest(format!("package is not cmi5-conformant: {m}"))
+            }
             Cmi5Error::ZipSlip(name) => ApiError::BadRequest(format!(
                 "package entry '{name}' escapes the content directory"
             )),

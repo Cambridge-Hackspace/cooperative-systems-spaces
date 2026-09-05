@@ -29,9 +29,10 @@ use zip::ZipArchive;
 // module (`crate::cmi5`) and `crate::api::cmi5`.
 use ::cmi5::{
     append_query, build_launch_query, categories, evaluate_move_on, parse_manifest,
-    validate_cmi5_statement, verbs, Account, Activity, Agent, Context, ContextActivities,
-    LangString, LaunchData, LaunchMode, LaunchParams, ManifestError, MoveOn, Node,
-    SessionExpectation, SessionState, Statement, StatementObject, Verb, Violation,
+    validate_cmi5_statement, validate_course_structure, verbs, Account, Activity, Agent,
+    ConformanceError, Context, ContextActivities, LangString, LaunchData, LaunchMode, LaunchParams,
+    ManifestError, MoveOn, Node, SessionExpectation, SessionState, Statement, StatementObject,
+    Verb, Violation,
 };
 
 use crate::config::Cmi5Config;
@@ -62,6 +63,8 @@ pub enum Cmi5Error {
     NoManifest,
     #[error("invalid cmi5.xml: {0}")]
     Manifest(#[from] ManifestError),
+    #[error("package is not cmi5-conformant: {0}")]
+    NonConformant(String),
     #[error("package entry '{0}' escapes the content directory")]
     ZipSlip(String),
     #[error("filesystem error: {0}")]
@@ -219,6 +222,18 @@ impl Cmi5Service {
             s
         };
         let structure = parse_manifest(&manifest_xml)?;
+
+        // Reject a well-formed but non-conformant package before writing anything
+        // to disk: non-IRI or duplicate ids, no AUs, dangling objective refs.
+        let issues = validate_course_structure(&structure);
+        if !issues.is_empty() {
+            let joined = issues
+                .iter()
+                .map(ConformanceError::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(Cmi5Error::NonConformant(joined));
+        }
 
         // The id names both the row and the content directory.
         let course_id = Uuid::new_v4();

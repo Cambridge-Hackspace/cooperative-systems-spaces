@@ -18,7 +18,9 @@ import {
   main,
   ok,
 } from './lib.mjs'
-import { minimalPackage } from './cmi5-fixture.mjs'
+import { buildPackageZip, minimalPackage } from './cmi5-fixture.mjs'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const CMI5_CAT = { id: 'https://w3id.org/xapi/cmi5/context/categories/cmi5' }
 const MOVEON_CAT = { id: 'https://w3id.org/xapi/cmi5/context/categories/moveon' }
@@ -120,6 +122,18 @@ main(async () => {
     'cmi5/launch-params',
     !!fetchUrl && !!actor?.account?.name && !!registration && !!activityId,
     'launch URL must carry fetch/actor/registration/activityId',
+  )
+
+  // The content itself is served (rendered) at the launch URL — the embedded
+  // player and a new-tab launch both just load this. Proves the static content
+  // store is wired, not only the API.
+  const contentRes = await fetch(new URL(launchUrl))
+  const contentBody = await contentRes.text()
+  assertEq('cmi5/content-served', 200, contentRes.status, 'the launched content is served')
+  ok(
+    'cmi5/content-renders',
+    contentBody.includes('hello'),
+    'the AU content body is returned from the content store',
   )
 
   // 5. Fetch: trade the one-time token for a session credential.
@@ -224,6 +238,66 @@ main(async () => {
     aus[0]?.au_iri,
     reAus[0]?.au_iri,
     'the AU IRI survives export and re-import',
+  )
+
+  // Real ADL CATAPULT manifests, imported through the full server pipeline
+  // (parse → extract → persist the tree). A stub index.html stands in for the
+  // real content; what is under test here is that a genuine vendor manifest —
+  // multi-AU-at-root, and a pre/post-test with blocks and objectives — imports
+  // and persists every AU.
+  async function importReal(name, expectedAus) {
+    const manifestPath = fileURLToPath(
+      new URL(`../fixtures/catapult/${name}.cmi5.xml`, import.meta.url),
+    )
+    const manifestXml = readFileSync(manifestPath, 'utf8')
+    const realZip = buildPackageZip([
+      { name: 'cmi5.xml', data: manifestXml },
+      { name: 'index.html', data: '<!doctype html><title>au</title>' },
+    ])
+    const rf = new FormData()
+    rf.append('file', new Blob([realZip], { type: 'application/zip' }), `${name}.zip`)
+    const res = await fetch(new URL('/api/cmi5/courses', BASE), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin.token}` },
+      body: rf,
+    })
+    const json = await res.json().catch(() => null)
+    const importedAus = json?.data?.aus ?? []
+    assertEq(
+      `cmi5/real-${name}`,
+      expectedAus,
+      importedAus.length,
+      `real ADL manifest ${name} imports with ${expectedAus} AUs`,
+    )
+  }
+  await importReal('multi_au_framed', 8)
+  await importReal('pre_post_test_framed', 6)
+
+  // A well-formed but non-conformant package (two AUs sharing an id) is refused
+  // at import, before anything is persisted.
+  const badManifest =
+    '<courseStructure xmlns="https://w3id.org/xapi/profiles/cmi5/v1/CourseStructure.xsd">' +
+    '<course id="https://e2e.invalid/bad"/>' +
+    '<au id="https://e2e.invalid/bad/au" moveOn="Passed"><url>a.html</url></au>' +
+    '<au id="https://e2e.invalid/bad/au" moveOn="Completed"><url>b.html</url></au>' +
+    '</courseStructure>'
+  const badZip = buildPackageZip([
+    { name: 'cmi5.xml', data: badManifest },
+    { name: 'a.html', data: 'x' },
+    { name: 'b.html', data: 'y' },
+  ])
+  const bf = new FormData()
+  bf.append('file', new Blob([badZip], { type: 'application/zip' }), 'bad.zip')
+  const badRes = await fetch(new URL('/api/cmi5/courses', BASE), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${admin.token}` },
+    body: bf,
+  })
+  assertEq(
+    'cmi5/non-conformant-rejected',
+    400,
+    badRes.status,
+    'a package with duplicate AU ids is refused at import',
   )
 
   // The Stage 4 deferral: a Newbie (default role) must be refused the launch,

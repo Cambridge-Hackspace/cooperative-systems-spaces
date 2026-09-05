@@ -17,11 +17,13 @@
 //! of that leaks in here, which is what keeps the spec logic unit-testable on
 //! its own (including on the FreeBSD workstation tier, which has no database).
 
+pub mod conformance;
 pub mod launch;
 pub mod manifest;
 pub mod statement;
 pub mod validation;
 
+pub use conformance::{ConformanceError, validate_course_structure};
 pub use launch::{LaunchData, LaunchMode, LaunchParams, append_query, build_launch_query};
 pub use manifest::{
     AssignableUnit, Block, Course, CourseStructure, LangString, LaunchMethod, ManifestError,

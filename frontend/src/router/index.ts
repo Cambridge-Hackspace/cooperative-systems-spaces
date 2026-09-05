@@ -190,6 +190,14 @@ const router = createRouter({
       },
     },
     {
+      path: '/modules/:auId/play',
+      name: 'cmi5-player',
+      component: () => import('@/views/Cmi5PlayerView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/admin/profile-config',
       name: 'admin-profile-config',
       component: () => import('@/components/ProfileConfigAdmin.vue'),

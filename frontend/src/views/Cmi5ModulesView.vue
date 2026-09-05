@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { cmi5Api } from '@/utils/api'
 import type { Cmi5LearnerModule } from '@/types'
+
+const router = useRouter()
 
 const modules = ref<Cmi5LearnerModule[]>([])
 const loading = ref(false)
@@ -27,15 +30,11 @@ async function load() {
   }
 }
 
-async function launch(module: Cmi5LearnerModule) {
-  const r = await cmi5Api.launch(module.au_id)
-  if (r.success && r.data) {
-    // Open the content in a new tab; it talks to the LRS itself. When the
-    // learner returns, refreshing shows the updated completion state.
-    window.open(r.data.launch_url, '_blank', 'noopener')
-  } else {
-    notify(r.error || 'Could not launch this module', false)
-  }
+function open(module: Cmi5LearnerModule) {
+  // Render the module in the embedded player, which performs the launch and
+  // hosts the content in an iframe. When the learner returns, refreshing this
+  // list shows the updated completion state.
+  void router.push(`/modules/${module.au_id}/play`)
 }
 
 onMounted(load)
@@ -74,7 +73,7 @@ onMounted(load)
             <span v-else class="badge badge-ghost">Not started</span>
           </div>
           <div class="card-actions justify-end mt-2">
-            <button class="btn btn-primary btn-sm" @click="launch(module)">
+            <button class="btn btn-primary btn-sm" @click="open(module)">
               {{ module.completed ? 'Review' : 'Start' }}
             </button>
           </div>
