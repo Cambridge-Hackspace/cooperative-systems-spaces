@@ -96,6 +96,9 @@ const KNOWN_PATHS: RegExp[] = [
   /^\/tools$/,
   /^\/users$/,
   /^\/doors\/[^/]+\/(info|checkin)$/,
+  /^\/cmi5\/modules$/,
+  /^\/cmi5\/aus\/[^/]+\/launch$/,
+  /^\/cmi5\/lrs\/statements$/,
 ]
 
 /** A string, or the empty string. Never "[object Object]". */
@@ -275,6 +278,29 @@ const control: Connect.NextHandleFunction = (req, res) => {
         armed: world.armed,
       })
     }
+    // The cmi5 player's iframe loads this — the fake stand-in for launched
+    // content. Its script reports a pass to the fake LRS, so the browser tier
+    // exercises the full render → content-runs → completion loop against the
+    // fake (the real LRS/grant is the stack battery's cmi5 stage).
+    if (path === '/cmi5-content') {
+      const au = url.searchParams.get('au') ?? ''
+      const html = `<!doctype html><html><head><title>cmi5</title></head><body>
+<h1 id="status">Running…</h1>
+<script>
+  fetch('/api/cmi5/lrs/statements?statementId=s1&au=' + encodeURIComponent(${JSON.stringify(au)}), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ verb: { id: 'http://adlnet.gov/expapi/verbs/passed' } }),
+  })
+    .then((r) => { document.getElementById('status').textContent = r.ok ? 'Completed' : 'Error' })
+    .catch(() => { document.getElementById('status').textContent = 'Error' })
+</script>
+</body></html>`
+      res.statusCode = 200
+      res.setHeader('content-type', 'text/html')
+      res.end(html)
+      return
+    }
     return err(res, 404, `no such control endpoint: ${path}`)
   })
 }
@@ -372,6 +398,18 @@ const api: Connect.NextHandleFunction = (req, res) => {
     if (path === '/public/schedules') return ok(res, [])
     if (path === '/public/home-links') return ok(res, [])
 
+    // The cmi5 LRS is authenticated by the session credential the content holds,
+    // not the user's JWT, so it sits above the credential gate here: the content
+    // running in the player's iframe reports its pass without a user token, and
+    // the module flips to completed. 204, like the real endpoint.
+    if (path === '/cmi5/lrs/statements' && (method === 'PUT' || method === 'POST')) {
+      const au = url.searchParams.get('au')
+      if (au) world.markCmi5Completed(au)
+      res.statusCode = 204
+      res.end()
+      return
+    }
+
     // --- the 404, decided before the credential gate -------------------------
     // The real router mounts `api_routes()` with its own fallback, and axum
     // never runs an extractor for a path that matched no route -- so an unknown
@@ -434,6 +472,16 @@ const api: Connect.NextHandleFunction = (req, res) => {
     }
 
     if (path === '/tools' && method === 'GET') return ok(res, world.tools)
+
+    // cmi5 learner surface.
+    if (path === '/cmi5/modules' && method === 'GET') return ok(res, world.cmi5Modules)
+    const cmi5Launch = path.match(/^\/cmi5\/aus\/([^/]+)\/launch$/)
+    if (cmi5Launch && method === 'POST') {
+      return ok(res, {
+        launch_url: `/__fake/cmi5-content?au=${encodeURIComponent(cmi5Launch[1])}`,
+        registration: 'reg-1',
+      })
+    }
 
     if (path === '/users' && method === 'GET') {
       if (me.role !== UserRole.Admin) return err(res, 403, 'Insufficient permissions')

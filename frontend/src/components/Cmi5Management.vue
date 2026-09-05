@@ -33,6 +33,8 @@ async function loadCourses() {
     const r = await cmi5Api.listCourses()
     if (r.success && r.data) courses.value = r.data
     else notify(r.error || 'Failed to load courses', false)
+  } catch {
+    notify('Failed to load courses', false)
   } finally {
     loading.value = false
   }

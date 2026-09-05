@@ -25,6 +25,8 @@ async function load() {
     const r = await cmi5Api.listMyModules()
     if (r.success && r.data) modules.value = r.data
     else notify(r.error || 'Failed to load modules', false)
+  } catch {
+    notify('Failed to load modules', false)
   } finally {
     loading.value = false
   }
