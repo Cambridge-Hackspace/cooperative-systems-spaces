@@ -24,15 +24,24 @@ use zip::ZipArchive;
 
 // Leading `::` names the external `cmi5` crate unambiguously, distinct from this
 // module (`crate::cmi5`) and `crate::api::cmi5`.
-use ::cmi5::{parse_manifest, LangString, ManifestError, MoveOn, Node};
+use ::cmi5::{
+    append_query, build_launch_query, categories, parse_manifest, verbs, Account, Activity, Agent,
+    Context, ContextActivities, LangString, LaunchData, LaunchMode, LaunchParams, ManifestError,
+    MoveOn, Node, Statement, StatementObject, Verb,
+};
 
 use crate::config::Cmi5Config;
 use crate::database::DatabaseManager;
 use crate::models::{
     AssignCmi5AuStep, Cmi5AssignableUnit, Cmi5Block, Cmi5Course, NewCmi5AssignableUnit,
-    NewCmi5Block, NewCmi5Course, TrainingStep,
+    NewCmi5Block, NewCmi5Course, NewCmi5LaunchToken, NewCmi5Registration, NewCmi5StateDocument,
+    NewCmi5Statement, TrainingStep,
 };
-use crate::schema::{cmi5_assignable_units, cmi5_blocks, cmi5_courses, training_steps};
+use crate::schema::{
+    cmi5_assignable_units, cmi5_blocks, cmi5_courses, cmi5_launch_tokens, cmi5_registrations,
+    cmi5_state_documents, cmi5_statements, training_steps,
+};
+use crate::tokens::{generate_token, hash_token};
 
 /// What can go wrong in a cmi5 service operation. Named per cause so the API
 /// layer can map each to the right status and the tests can assert the specific
@@ -67,6 +76,10 @@ pub enum Cmi5Error {
     StepRequiresAssessment,
     #[error("an AU with moveOn=NotApplicable can never satisfy, so it cannot gate a tool")]
     MoveOnNotApplicable,
+    #[error("the fetch token is unknown, already used, or expired")]
+    FetchTokenInvalid,
+    #[error("serialization error: {0}")]
+    Json(String),
 }
 
 /// The cmi5 service. Holds a database handle and the content-store settings
@@ -77,6 +90,29 @@ pub struct Cmi5Service {
     db: Arc<DatabaseManager>,
     content_dir: PathBuf,
     max_package_bytes: usize,
+    fetch_ttl: chrono::Duration,
+    session_ttl: chrono::Duration,
+}
+
+/// The server-side truth about a launched session, resolved from a session
+/// credential. This is what the LRS routes authorize every statement against.
+#[derive(Debug, Clone)]
+pub struct Cmi5SessionContext {
+    pub registration_id: Uuid,
+    pub user_id: Uuid,
+    pub au_id: Uuid,
+    /// The AU's activity IRI: the only activity this session may write about.
+    pub activity_id: String,
+    /// Normal / Browse / Review. Only Normal may satisfy moveOn.
+    pub launch_mode: String,
+}
+
+/// The result of minting a launch: the URL for the SPA to open, and the
+/// registration it belongs to.
+#[derive(Debug, Clone)]
+pub struct LaunchResult {
+    pub launch_url: String,
+    pub registration_id: Uuid,
 }
 
 impl Cmi5Service {
@@ -85,6 +121,8 @@ impl Cmi5Service {
             db,
             content_dir: PathBuf::from(&config.content_dir),
             max_package_bytes: config.max_package_bytes,
+            fetch_ttl: chrono::Duration::seconds(config.fetch_ttl_secs as i64),
+            session_ttl: chrono::Duration::seconds(config.session_ttl_secs as i64),
         }
     }
 
@@ -282,6 +320,240 @@ impl Cmi5Service {
         })
         .get_result(&mut conn)?;
         Ok(updated)
+    }
+
+    /// Mint a launch for `user_id` against `au_id`.
+    ///
+    /// Creates the registration and a one-time fetch token, writes the
+    /// `LMS.LaunchData` state document and the LMS-issued `launched` statement,
+    /// and returns the fully-formed launch URL. The actor is derived here from
+    /// the authenticated user, never from the request, so a learner cannot launch
+    /// as anyone else. Launch mode is always `Normal` (Browse/Review are not
+    /// offered — they must never lead to a tool grant).
+    pub fn create_launch(
+        &self,
+        au_id: Uuid,
+        user_id: Uuid,
+        site_url: &str,
+    ) -> Result<LaunchResult, Cmi5Error> {
+        let mut conn = self.conn()?;
+
+        let au: Cmi5AssignableUnit = cmi5_assignable_units::table
+            .filter(cmi5_assignable_units::id.eq(au_id))
+            .select(Cmi5AssignableUnit::as_select())
+            .first(&mut conn)
+            .optional()?
+            .ok_or(Cmi5Error::AuNotFound)?;
+        let course: Cmi5Course = cmi5_courses::table
+            .filter(cmi5_courses::id.eq(au.course_id))
+            .filter(cmi5_courses::deleted_at.is_null())
+            .select(Cmi5Course::as_select())
+            .first(&mut conn)
+            .optional()?
+            .ok_or(Cmi5Error::CourseNotFound)?;
+
+        let registration_id = Uuid::new_v4();
+        let actor_name = user_id.to_string();
+        let now = Utc::now();
+        let (fetch_plaintext, fetch_hash) = generate_token();
+
+        // The actor and the mandated launch parameters.
+        let actor = Agent {
+            object_type: Some("Agent".to_string()),
+            name: None,
+            mbox: None,
+            account: Some(Account {
+                home_page: site_url.to_string(),
+                name: actor_name.clone(),
+            }),
+        };
+        let endpoint = format!("{site_url}/api/cmi5/lrs");
+        let fetch = format!("{site_url}/api/cmi5/fetch?token={fetch_plaintext}");
+        let move_on = MoveOn::parse(&au.move_on)?;
+
+        // LMS.LaunchData for the content to read back through the State API.
+        let launch_data = LaunchData::new(
+            registration_id,
+            LaunchMode::Normal,
+            move_on,
+            au.mastery_score,
+        );
+        let launch_data_json =
+            serde_json::to_value(&launch_data).map_err(|e| Cmi5Error::Json(e.to_string()))?;
+
+        // The LMS-issued `launched` statement.
+        let statement_id = Uuid::new_v4();
+        let launched = Statement {
+            id: Some(statement_id),
+            actor: actor.clone(),
+            verb: Verb {
+                id: verbs::LAUNCHED.to_string(),
+                display: None,
+            },
+            object: StatementObject::Activity(Activity {
+                object_type: Some("Activity".to_string()),
+                id: au.au_iri.clone(),
+                definition: None,
+            }),
+            result: None,
+            context: Some(Context {
+                registration: Some(registration_id),
+                context_activities: Some(ContextActivities {
+                    category: Some(vec![Activity {
+                        object_type: None,
+                        id: categories::CMI5.to_string(),
+                        definition: None,
+                    }]),
+                    parent: None,
+                    grouping: None,
+                    other: None,
+                }),
+                extensions: None,
+            }),
+            timestamp: Some(now),
+        };
+        let launched_json =
+            serde_json::to_value(&launched).map_err(|e| Cmi5Error::Json(e.to_string()))?;
+
+        // Build the launch URL: content base + AU url + the cmi5 query.
+        let query = build_launch_query(&LaunchParams {
+            endpoint: &endpoint,
+            fetch: &fetch,
+            actor: &actor,
+            registration: registration_id,
+            activity_id: &au.au_iri,
+        })
+        .map_err(|e| Cmi5Error::Json(e.to_string()))?;
+        let content_base = format!(
+            "{site_url}/cmi5-content/{}/{}",
+            course.content_path,
+            au.launch_url.trim_start_matches('/')
+        );
+        // Opaque launchParameters, if any, precede the cmi5 params.
+        let with_params = match &au.launch_parameters {
+            Some(p) if !p.is_empty() => append_query(&content_base, p),
+            _ => content_base,
+        };
+        let launch_url = append_query(&with_params, &query);
+
+        conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            diesel::insert_into(cmi5_registrations::table)
+                .values(&NewCmi5Registration {
+                    id: registration_id,
+                    user_id,
+                    au_id,
+                    actor_account_name: actor_name.clone(),
+                    launch_mode: LaunchMode::Normal.as_str().to_string(),
+                })
+                .execute(conn)?;
+            diesel::insert_into(cmi5_launch_tokens::table)
+                .values(&NewCmi5LaunchToken {
+                    registration_id,
+                    fetch_token_hash: fetch_hash,
+                    expires_at: now + self.fetch_ttl,
+                    session_expires_at: now + self.session_ttl,
+                })
+                .execute(conn)?;
+            diesel::insert_into(cmi5_state_documents::table)
+                .values(&NewCmi5StateDocument {
+                    registration_id,
+                    activity_iri: au.au_iri.clone(),
+                    agent_account_name: actor_name.clone(),
+                    state_id: "LMS.LaunchData".to_string(),
+                    document: launch_data_json,
+                    etag: Uuid::new_v4().to_string(),
+                })
+                .execute(conn)?;
+            diesel::insert_into(cmi5_statements::table)
+                .values(&NewCmi5Statement {
+                    registration_id,
+                    statement_id,
+                    verb_iri: verbs::LAUNCHED.to_string(),
+                    statement: launched_json,
+                })
+                .execute(conn)?;
+            Ok(())
+        })?;
+
+        Ok(LaunchResult {
+            launch_url,
+            registration_id,
+        })
+    }
+
+    /// Exchange a one-time fetch token for a session credential.
+    ///
+    /// The claim is atomic and single-use, copied from the device-invite path:
+    /// the `WHERE fetch_consumed_at IS NULL AND expires_at > now()` plus the
+    /// affected-row check — not the preceding read — is what makes a second fetch
+    /// fail under concurrency. Returns the plaintext session token, whose hash is
+    /// what the LRS extractor later resolves.
+    pub fn consume_fetch(&self, fetch_plaintext: &str) -> Result<String, Cmi5Error> {
+        let mut conn = self.conn()?;
+        let fetch_hash = hash_token(fetch_plaintext);
+        let (session_plaintext, session_hash) = generate_token();
+        let now = Utc::now();
+
+        let affected = diesel::update(
+            cmi5_launch_tokens::table
+                .filter(cmi5_launch_tokens::fetch_token_hash.eq(&fetch_hash))
+                .filter(cmi5_launch_tokens::fetch_consumed_at.is_null())
+                .filter(cmi5_launch_tokens::expires_at.gt(now)),
+        )
+        .set((
+            cmi5_launch_tokens::fetch_consumed_at.eq(Some(now)),
+            cmi5_launch_tokens::session_token_hash.eq(Some(session_hash)),
+        ))
+        .execute(&mut conn)?;
+
+        if affected == 1 {
+            Ok(session_plaintext)
+        } else {
+            Err(Cmi5Error::FetchTokenInvalid)
+        }
+    }
+
+    /// Resolve a session credential to the server-side session truth, or `None`
+    /// if the token is unknown or the session has expired. This is what the LRS
+    /// extractor calls; it never trusts anything the content sent.
+    pub fn resolve_session(
+        &self,
+        session_plaintext: &str,
+    ) -> Result<Option<Cmi5SessionContext>, Cmi5Error> {
+        let mut conn = self.conn()?;
+        let session_hash = hash_token(session_plaintext);
+        let now = Utc::now();
+
+        let row: Option<(Uuid, Uuid, Uuid, String, String)> = cmi5_launch_tokens::table
+            .inner_join(
+                cmi5_registrations::table
+                    .on(cmi5_registrations::id.eq(cmi5_launch_tokens::registration_id)),
+            )
+            .inner_join(
+                cmi5_assignable_units::table
+                    .on(cmi5_assignable_units::id.eq(cmi5_registrations::au_id)),
+            )
+            .filter(cmi5_launch_tokens::session_token_hash.eq(&session_hash))
+            .filter(cmi5_launch_tokens::session_expires_at.gt(now))
+            .select((
+                cmi5_registrations::id,
+                cmi5_registrations::user_id,
+                cmi5_registrations::au_id,
+                cmi5_assignable_units::au_iri,
+                cmi5_registrations::launch_mode,
+            ))
+            .first(&mut conn)
+            .optional()?;
+
+        Ok(row.map(
+            |(registration_id, user_id, au_id, activity_id, launch_mode)| Cmi5SessionContext {
+                registration_id,
+                user_id,
+                au_id,
+                activity_id,
+                launch_mode,
+            },
+        ))
     }
 }
 

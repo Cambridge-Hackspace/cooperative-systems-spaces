@@ -8,15 +8,16 @@
 //! takes effect without a restart and without changing the route table.
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, State},
-    response::IntoResponse,
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, StaffUser};
+use crate::auth::{AdminUser, MemberUser, StaffUser};
 use crate::cmi5::Cmi5Error;
 use crate::models::{AuditEventType, Cmi5AssignableUnit, Cmi5Course, NewAuditLog};
 use crate::AppState;
@@ -48,6 +49,10 @@ pub fn cmi5_router() -> Router<AppState> {
             "/courses/{course_id}/aus/{au_id}/assign",
             post(assign_au_step),
         )
+        // Learner launch (member) and the one-time fetch exchange (public, but
+        // gated by the single-use token in its query string).
+        .route("/aus/{au_id}/launch", post(launch_au))
+        .route("/fetch", post(fetch_credential))
 }
 
 /// A course together with its assignable units.
@@ -187,6 +192,75 @@ async fn assign_au_step(
     Ok(ApiResponse::success(au))
 }
 
+/// Query string of the fetch endpoint: the one-time token lives here, exactly as
+/// the LMS placed it in the launch URL.
+#[derive(Debug, Deserialize)]
+struct FetchQuery {
+    token: Option<String>,
+}
+
+async fn launch_au(
+    State(state): State<AppState>,
+    member: MemberUser,
+    Path(au_id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    ensure_enabled(&state)?;
+    let site_url = state.config_manager.get_config().site.site_url.clone();
+    let result = state
+        .cmi5_service
+        .create_launch(au_id, member.0.id, &site_url)?;
+
+    let audit = NewAuditLog {
+        event_type: AuditEventType::Cmi5Launched.as_str().to_string(),
+        user_id: Some(member.0.id),
+        actor_id: Some(member.0.id),
+        event_data: serde_json::json!({
+            "au_id": au_id,
+            "registration": result.registration_id,
+        }),
+        ip_address: None,
+        user_agent: None,
+    };
+    state.db.create_audit_log(&audit)?;
+
+    Ok(ApiResponse::success(serde_json::json!({
+        "launch_url": result.launch_url,
+        "registration": result.registration_id,
+    })))
+}
+
+/// The cmi5 `fetch` endpoint. Public in the sense that no JWT extractor guards
+/// it — the single-use token in the query string is the credential. The success
+/// and error bodies are cmi5's own shapes (`auth-token` / `error-text`), not the
+/// app envelope, because the caller is cmi5 content, not the SPA.
+async fn fetch_credential(
+    State(state): State<AppState>,
+    Query(query): Query<FetchQuery>,
+) -> Response {
+    if !state.config_manager.get_config().cmi5.enabled {
+        return fetch_error(StatusCode::NOT_FOUND, "cmi5 support is not enabled");
+    }
+    let Some(token) = query.token.filter(|t| !t.is_empty()) else {
+        return fetch_error(StatusCode::BAD_REQUEST, "missing fetch token");
+    };
+    match state.cmi5_service.consume_fetch(&token) {
+        Ok(session) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "auth-token": session })),
+        )
+            .into_response(),
+        Err(_) => fetch_error(
+            StatusCode::UNAUTHORIZED,
+            "the fetch token is unknown, already used, or expired",
+        ),
+    }
+}
+
+/// A cmi5 fetch error body: `{"error-text": "..."}`, per the cmi5 spec.
+fn fetch_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error-text": message }))).into_response()
+}
+
 impl From<Cmi5Error> for ApiError {
     fn from(e: Cmi5Error) -> Self {
         match e {
@@ -219,6 +293,14 @@ impl From<Cmi5Error> for ApiError {
                 "an AU with moveOn=NotApplicable can never satisfy, so it cannot gate a tool"
                     .to_string(),
             ),
+            // The fetch endpoint answers in cmi5's own shape and does not use
+            // this conversion; mapped here only to keep the match exhaustive.
+            Cmi5Error::FetchTokenInvalid => ApiError::Unauthorized(
+                "the fetch token is unknown, already used, or expired".to_string(),
+            ),
+            Cmi5Error::Json(m) => {
+                ApiError::InternalServerError(format!("serialization error: {m}"))
+            }
         }
     }
 }

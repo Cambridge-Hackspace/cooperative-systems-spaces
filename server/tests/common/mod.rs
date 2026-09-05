@@ -129,6 +129,8 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/auth/register", Guard::Public), // auth::register
     R("GET", "/api/calendar/events", Guard::Public), // calendar::get_calendar_events
     R("GET", "/api/calendar/events/refresh", Guard::Public), // calendar::refresh_calendar_events
+    R("POST", "/api/cmi5/aus/00000000-0000-4000-8000-000000000001/launch", Guard::Member), // cmi5::launch_au
+    R("POST", "/api/cmi5/fetch", Guard::Public), // cmi5::fetch_credential
     R("GET", "/api/cmi5/courses", Guard::Staff), // cmi5::list_courses
     R("POST", "/api/cmi5/courses", Guard::Staff), // cmi5::import_course
     R("DELETE", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001", Guard::Staff), // cmi5::delete_course

@@ -27,7 +27,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{Guard, R, ROUTES};
+use common::{Guard, ROUTES};
 use css_server::{api, test_support, AppState};
 use tower::ServiceExt;
 
@@ -358,17 +358,18 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
-    // 145, up from 140: five cmi5 admin/management routes -- Staff course
-    // import/list/get/delete and the Admin AU->training-step binding. All are
-    // JWT-guarded; none touch the device surface, which is the number this test
-    // actually exists to hold still and which did not move.
+    // 146, up from 140: six cmi5 JWT-guarded routes -- Staff course
+    // import/list/get/delete, the Admin AU->training-step binding, and the
+    // Member launch. The cmi5 `fetch` route is public (its single-use token is
+    // the credential), so it is not counted here. None touch the device surface,
+    // which is the number this test actually exists to hold still.
     //
     // (140 was up from 139 for `PUT /api/users/me/password`; the two
     // training-session routes moving to `/progress/{user_id}/{start,complete}`
     // was net zero.)
-    assert_eq!(jwt_routes, 145, "JWT-authenticated routes");
+    assert_eq!(jwt_routes, 146, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 145 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 146 * 7 + 6 * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device token can only be rejected on its
@@ -381,36 +382,14 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     );
 }
 
-/// The "member or above" tier of the authorization model is empty.
-///
-/// `MemberUser` exists in `server/src/auth.rs` with its own extractor and its
-/// own rejection, and no route uses it — so no request has ever gone through
-/// that gate. rustc reports the symptom as "variant `Member` is never
-/// constructed" *in this file*, which reads like a tidying job in a test
-/// fixture rather than a statement about the product.
-///
-/// Asserting the count states it where it belongs and turns the first
-/// member-gated route into a failure that says what else has to move.
-/// `checks/tests/member_gate_is_dead.rs` carries the rest of that instruction.
-#[test]
-fn the_member_gate_currently_guards_nothing() {
-    let member_routes = ROUTES.iter().filter(|r| r.guard() == Guard::Member).count();
-    assert_eq!(
-        member_routes, 0,
-        "{member_routes} route(s) are now Guard::Member. Delete this test and \
-         add a live case to the stack battery's contract stage proving a Member \
-         is accepted and a Newbie is refused with 403 — the offline matrix \
-         cannot show acceptance, because accepting a credential means querying."
-    );
-
-    // Constructed on purpose. The arm exists for the first member-gated route,
-    // not for this assertion, and without a construction somewhere rustc calls
-    // it dead code — which is how a whole authorization tier comes to look like
-    // an unused enum variant somebody should tidy away.
-    let placeholder = R("GET", "/api/nothing-yet", Guard::Member);
-    assert_eq!(placeholder.guard(), Guard::Member);
-    assert!(placeholder.is_guarded());
-}
+// The "member or above" tier is no longer empty: `POST /api/cmi5/aus/{id}/launch`
+// is Guard::Member. The census in `the_offline_device_surface_is_exactly_this_narrow`
+// counts it among the JWT-guarded routes and the 998-pair matrix asserts it
+// refuses every invalid credential; the live "a Member is accepted, a Newbie is
+// refused 403" case lives in the stack battery's contract stage (acceptance can
+// only be shown against a database). The placeholder assertion that used to
+// stand here — and `checks/tests/member_gate_is_dead.rs` — were removed when the
+// gate went live, exactly as they instructed.
 
 #[tokio::test]
 async fn toolguard_parses_parameters_before_it_authenticates() {

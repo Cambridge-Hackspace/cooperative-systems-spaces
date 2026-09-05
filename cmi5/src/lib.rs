@@ -22,14 +22,14 @@ pub mod manifest;
 pub mod statement;
 pub mod validation;
 
-pub use launch::{LaunchData, LaunchMode, build_launch_query};
+pub use launch::{LaunchData, LaunchMode, LaunchParams, append_query, build_launch_query};
 pub use manifest::{
     AssignableUnit, Block, Course, CourseStructure, LangString, LaunchMethod, ManifestError,
     MoveOn, Node, Objective, parse_manifest, to_manifest_xml,
 };
 pub use statement::{
-    Account, Activity, Agent, Context, ContextActivities, Score, Statement, StatementObject,
-    XResult, verbs,
+    Account, Activity, Agent, Context, ContextActivities, Score, Statement, StatementObject, Verb,
+    XResult, categories, verbs,
 };
 pub use validation::{
     SessionExpectation, SessionOutcome, SessionState, Violation, evaluate_move_on,
