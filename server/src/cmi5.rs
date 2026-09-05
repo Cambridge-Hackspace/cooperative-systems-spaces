@@ -25,17 +25,18 @@ use zip::ZipArchive;
 // Leading `::` names the external `cmi5` crate unambiguously, distinct from this
 // module (`crate::cmi5`) and `crate::api::cmi5`.
 use ::cmi5::{
-    append_query, build_launch_query, categories, parse_manifest, verbs, Account, Activity, Agent,
-    Context, ContextActivities, LangString, LaunchData, LaunchMode, LaunchParams, ManifestError,
-    MoveOn, Node, Statement, StatementObject, Verb,
+    append_query, build_launch_query, categories, evaluate_move_on, parse_manifest,
+    validate_cmi5_statement, verbs, Account, Activity, Agent, Context, ContextActivities,
+    LangString, LaunchData, LaunchMode, LaunchParams, ManifestError, MoveOn, Node,
+    SessionExpectation, SessionState, Statement, StatementObject, Verb, Violation,
 };
 
 use crate::config::Cmi5Config;
 use crate::database::DatabaseManager;
 use crate::models::{
-    AssignCmi5AuStep, Cmi5AssignableUnit, Cmi5Block, Cmi5Course, NewCmi5AssignableUnit,
-    NewCmi5Block, NewCmi5Course, NewCmi5LaunchToken, NewCmi5Registration, NewCmi5StateDocument,
-    NewCmi5Statement, TrainingStep,
+    AssignCmi5AuStep, Cmi5AssignableUnit, Cmi5Block, Cmi5Course, Cmi5Registration,
+    NewCmi5AssignableUnit, NewCmi5Block, NewCmi5Course, NewCmi5LaunchToken, NewCmi5Registration,
+    NewCmi5StateDocument, NewCmi5Statement, NewTrainingRecord, TrainingStep,
 };
 use crate::schema::{
     cmi5_assignable_units, cmi5_blocks, cmi5_courses, cmi5_launch_tokens, cmi5_registrations,
@@ -80,6 +81,22 @@ pub enum Cmi5Error {
     FetchTokenInvalid,
     #[error("serialization error: {0}")]
     Json(String),
+    #[error("malformed xAPI statement: {0}")]
+    BadStatement(String),
+    #[error("statement rejected: {0}")]
+    Rejected(Violation),
+}
+
+impl From<crate::database::DatabaseError> for Cmi5Error {
+    fn from(e: crate::database::DatabaseError) -> Self {
+        match e {
+            crate::database::DatabaseError::Diesel(d) => Cmi5Error::Db(d),
+            // Pool/timeout/migration/other are all genuine server-side database
+            // faults; fold them onto the existing pool arm rather than adding a
+            // new blanket-500 site.
+            other => Cmi5Error::Pool(other.to_string()),
+        }
+    }
 }
 
 /// The cmi5 service. Holds a database handle and the content-store settings
@@ -113,6 +130,19 @@ pub struct Cmi5SessionContext {
 pub struct LaunchResult {
     pub launch_url: String,
     pub registration_id: Uuid,
+}
+
+/// Returned when an accepted statement satisfied an AU and a training-step grant
+/// was written. The LRS handler uses it to audit and to broadcast the new
+/// tool-access state to edge devices.
+#[derive(Debug, Clone)]
+pub struct GrantInfo {
+    pub user_id: Uuid,
+    pub au_id: Uuid,
+    pub registration_id: Uuid,
+    pub training_step_id: Uuid,
+    pub tool_id: Uuid,
+    pub score: Option<i32>,
 }
 
 impl Cmi5Service {
@@ -555,6 +585,277 @@ impl Cmi5Service {
             },
         ))
     }
+
+    /// Record one content-issued xAPI statement, and grant the mapped training
+    /// step if it satisfies the AU.
+    ///
+    /// This is the core of the security boundary, and every check that decides
+    /// whether the statement may count runs against `session` — the server-side
+    /// truth — never against anything the content chose. In order:
+    ///
+    /// 1. parse and validate against the session (actor/registration/activity
+    ///    binding, cmi5 category, verb legality, masteryScore) via the pure crate;
+    /// 2. replay the session's prior statements through the sequence machine and
+    ///    apply this one, enforcing initialized-first / terminated-last / no
+    ///    double-outcome;
+    /// 3. store it (a duplicate `statement_id` is an idempotent no-op, not a
+    ///    second grant);
+    /// 4. if the accumulated outcome satisfies the AU's moveOn — and the launch
+    ///    was Normal, the AU is mapped to a step, and the registration is not
+    ///    already satisfied — write the grant through the shared
+    ///    `create_training_record` path and mark the registration satisfied.
+    ///
+    /// Returns `Some(GrantInfo)` exactly when a grant was written, so the handler
+    /// can audit it and broadcast the new tool-access state.
+    pub fn record_statement(
+        &self,
+        session: &Cmi5SessionContext,
+        site_url: &str,
+        statement_id_hint: Option<Uuid>,
+        raw: serde_json::Value,
+    ) -> Result<Option<GrantInfo>, Cmi5Error> {
+        let stmt: Statement = serde_json::from_value(raw.clone())
+            .map_err(|e| Cmi5Error::BadStatement(e.to_string()))?;
+
+        let mut conn = self.conn()?;
+
+        let au: Cmi5AssignableUnit = cmi5_assignable_units::table
+            .filter(cmi5_assignable_units::id.eq(session.au_id))
+            .select(Cmi5AssignableUnit::as_select())
+            .first(&mut conn)
+            .optional()?
+            .ok_or(Cmi5Error::AuNotFound)?;
+
+        // 1. Validate against the session. Identity/binding first, so a forged
+        //    statement fails as "wrong actor/activity", not by leaking its score.
+        let expect = SessionExpectation {
+            actor_home_page: site_url.to_string(),
+            actor_account_name: session.user_id.to_string(),
+            registration: session.registration_id,
+            activity_id: session.activity_id.clone(),
+            mastery_score: au.mastery_score,
+        };
+        validate_cmi5_statement(&stmt, &expect).map_err(Cmi5Error::Rejected)?;
+
+        // Idempotency: a statement id already stored is a replay -> no-op accept.
+        let statement_id = statement_id_hint.or(stmt.id).unwrap_or_else(Uuid::new_v4);
+        let already: Option<Uuid> = cmi5_statements::table
+            .filter(cmi5_statements::statement_id.eq(statement_id))
+            .select(cmi5_statements::statement_id)
+            .first(&mut conn)
+            .optional()?;
+        if already.is_some() {
+            return Ok(None);
+        }
+
+        // 2. Rebuild the session state from prior statements, then apply this one.
+        let prior: Vec<serde_json::Value> = cmi5_statements::table
+            .filter(cmi5_statements::registration_id.eq(session.registration_id))
+            .order(cmi5_statements::stored.asc())
+            .select(cmi5_statements::statement)
+            .load(&mut conn)?;
+        let mut machine = SessionState::new();
+        for value in &prior {
+            // Only AU-issued verbs advance the sequence machine; the LMS-issued
+            // `launched`/`satisfied` are skipped. Prior statements were accepted
+            // already, so a replay error here is not the caller's to answer for.
+            if let Ok(s) = serde_json::from_value::<Statement>(value.clone()) {
+                let _ = machine.apply(&s);
+            }
+        }
+        machine.apply(&stmt).map_err(Cmi5Error::Rejected)?;
+
+        // 3. Store it.
+        diesel::insert_into(cmi5_statements::table)
+            .values(&NewCmi5Statement {
+                registration_id: session.registration_id,
+                statement_id,
+                verb_iri: stmt.verb_id().to_string(),
+                statement: raw,
+            })
+            .execute(&mut conn)?;
+
+        // 4. Grant on satisfaction.
+        let move_on = MoveOn::parse(&au.move_on)?;
+        let creditable = session.launch_mode == LaunchMode::Normal.as_str();
+        if !creditable || !evaluate_move_on(move_on, &machine.outcome()) {
+            return Ok(None);
+        }
+        let Some(step_id) = au.training_step_id else {
+            return Ok(None);
+        };
+        let registration: Cmi5Registration = cmi5_registrations::table
+            .filter(cmi5_registrations::id.eq(session.registration_id))
+            .select(Cmi5Registration::as_select())
+            .first(&mut conn)?;
+        if registration.satisfied_at.is_some() {
+            return Ok(None);
+        }
+
+        let score = statement_score(&stmt);
+        let grant = self.grant_step(step_id, session, &au, score)?;
+
+        let now = Utc::now();
+        let outcome = machine.outcome();
+        diesel::update(
+            cmi5_registrations::table.filter(cmi5_registrations::id.eq(session.registration_id)),
+        )
+        .set((
+            cmi5_registrations::satisfied_at.eq(Some(now)),
+            cmi5_registrations::passed_at.eq(outcome.passed.then_some(now)),
+            cmi5_registrations::completed_at.eq(outcome.completed.then_some(now)),
+            cmi5_registrations::updated_at.eq(now),
+        ))
+        .execute(&mut conn)?;
+
+        Ok(Some(grant))
+    }
+
+    /// Write the tool-access grant for a satisfied AU, through the *shared*
+    /// training-completion path so the web and edge access checks stay in
+    /// agreement (`tool_access_agrees`). `create_training_record` upserts the
+    /// `user_training_progress` row to Completed with the step's expiry — the
+    /// exact row `can_access_tool` reads — and records a training_records entry.
+    fn grant_step(
+        &self,
+        step_id: Uuid,
+        session: &Cmi5SessionContext,
+        au: &Cmi5AssignableUnit,
+        score: Option<i32>,
+    ) -> Result<GrantInfo, Cmi5Error> {
+        let step = self
+            .db
+            .get_training_step_by_id(step_id)?
+            .ok_or(Cmi5Error::StepNotFound)?;
+
+        let record = NewTrainingRecord {
+            tool_id: step.tool_id,
+            training_step_id: Some(step_id),
+            trainee_user_id: session.user_id,
+            // Self-directed, system-verified completion: the learner is both the
+            // subject and, for the record, the actor. The note names the cmi5
+            // module so history reads as "completed the cmi5 course", not "was
+            // signed off by a trainer".
+            trainer_user_id: session.user_id,
+            training_date: Utc::now().date_naive(),
+            completion_status: "completed".to_string(),
+            minutes_trained: None,
+            skills_covered: None,
+            notes: Some(format!("Completed via cmi5 module {}", au.au_iri)),
+            next_steps: None,
+        };
+        self.db.create_training_record(&record)?;
+
+        Ok(GrantInfo {
+            user_id: session.user_id,
+            au_id: au.id,
+            registration_id: session.registration_id,
+            training_step_id: step_id,
+            tool_id: step.tool_id,
+            score,
+        })
+    }
+
+    /// Read a State API document, if present.
+    pub fn get_state_document(
+        &self,
+        registration_id: Uuid,
+        activity_iri: &str,
+        agent_account_name: &str,
+        state_id: &str,
+    ) -> Result<Option<serde_json::Value>, Cmi5Error> {
+        let mut conn = self.conn()?;
+        let doc: Option<serde_json::Value> = cmi5_state_documents::table
+            .filter(cmi5_state_documents::registration_id.eq(registration_id))
+            .filter(cmi5_state_documents::activity_iri.eq(activity_iri))
+            .filter(cmi5_state_documents::agent_account_name.eq(agent_account_name))
+            .filter(cmi5_state_documents::state_id.eq(state_id))
+            .select(cmi5_state_documents::document)
+            .first(&mut conn)
+            .optional()?;
+        Ok(doc)
+    }
+
+    /// Create or replace a State API document.
+    pub fn put_state_document(
+        &self,
+        registration_id: Uuid,
+        activity_iri: &str,
+        agent_account_name: &str,
+        state_id: &str,
+        document: serde_json::Value,
+    ) -> Result<(), Cmi5Error> {
+        let mut conn = self.conn()?;
+        let now = Utc::now();
+        diesel::insert_into(cmi5_state_documents::table)
+            .values(&NewCmi5StateDocument {
+                registration_id,
+                activity_iri: activity_iri.to_string(),
+                agent_account_name: agent_account_name.to_string(),
+                state_id: state_id.to_string(),
+                document: document.clone(),
+                etag: Uuid::new_v4().to_string(),
+            })
+            .on_conflict((
+                cmi5_state_documents::registration_id,
+                cmi5_state_documents::activity_iri,
+                cmi5_state_documents::agent_account_name,
+                cmi5_state_documents::state_id,
+            ))
+            .do_update()
+            .set((
+                cmi5_state_documents::document.eq(document),
+                cmi5_state_documents::etag.eq(Uuid::new_v4().to_string()),
+                cmi5_state_documents::updated_at.eq(now),
+            ))
+            .execute(&mut conn)?;
+        Ok(())
+    }
+
+    /// Delete a State API document. Missing is not an error.
+    pub fn delete_state_document(
+        &self,
+        registration_id: Uuid,
+        activity_iri: &str,
+        agent_account_name: &str,
+        state_id: &str,
+    ) -> Result<(), Cmi5Error> {
+        let mut conn = self.conn()?;
+        diesel::delete(
+            cmi5_state_documents::table
+                .filter(cmi5_state_documents::registration_id.eq(registration_id))
+                .filter(cmi5_state_documents::activity_iri.eq(activity_iri))
+                .filter(cmi5_state_documents::agent_account_name.eq(agent_account_name))
+                .filter(cmi5_state_documents::state_id.eq(state_id)),
+        )
+        .execute(&mut conn)?;
+        Ok(())
+    }
+
+    /// Read a stored statement by id, scoped to a registration.
+    pub fn get_statement(
+        &self,
+        registration_id: Uuid,
+        statement_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, Cmi5Error> {
+        let mut conn = self.conn()?;
+        let stmt: Option<serde_json::Value> = cmi5_statements::table
+            .filter(cmi5_statements::registration_id.eq(registration_id))
+            .filter(cmi5_statements::statement_id.eq(statement_id))
+            .select(cmi5_statements::statement)
+            .first(&mut conn)
+            .optional()?;
+        Ok(stmt)
+    }
+}
+
+/// The 0–100 assessment score a statement carries, from `result.score.scaled`.
+fn statement_score(stmt: &Statement) -> Option<i32> {
+    stmt.result
+        .as_ref()
+        .and_then(|r| r.score.as_ref())
+        .and_then(|s| s.scaled)
+        .map(|scaled| (scaled * 100.0).round().clamp(0.0, 100.0) as i32)
 }
 
 /// Extract every file entry into `dest`, refusing any entry whose path would

@@ -173,9 +173,13 @@ async fn no_guarded_route_answers_anything_but_401_without_a_credential() {
     let mut failures: Vec<String> = Vec::new();
 
     for route in ROUTES.iter().filter(|r| r.is_guarded()) {
-        // A device token is opaque, so DeviceAuth must query to reject it.
-        // Only its shape checks are reachable without a database.
-        let device_backed = matches!(route.guard(), Guard::Device | Guard::InlineAuth);
+        // A device token is opaque, so DeviceAuth must query to reject it; the
+        // cmi5 session credential is the same shape of secret. Only their shape
+        // checks are reachable without a database.
+        let device_backed = matches!(
+            route.guard(),
+            Guard::Device | Guard::InlineAuth | Guard::Cmi5Session
+        );
 
         for cred in CREDS {
             if device_backed && !cred.shape_only {
@@ -269,6 +273,7 @@ async fn the_table_is_not_empty_and_covers_every_guard_kind() {
         Guard::Auth,
         Guard::Device,
         Guard::InlineAuth,
+        Guard::Cmi5Session,
         Guard::Public,
     ] {
         assert!(
@@ -333,7 +338,10 @@ fn asserted_pairs() -> usize {
         .iter()
         .filter(|r| r.is_guarded())
         .map(|r| {
-            if matches!(r.guard(), Guard::Device | Guard::InlineAuth) {
+            if matches!(
+                r.guard(),
+                Guard::Device | Guard::InlineAuth | Guard::Cmi5Session
+            ) {
                 shape_only
             } else {
                 CREDS.len()
@@ -355,28 +363,39 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
         .iter()
         .filter(|r| matches!(r.guard(), Guard::Device | Guard::InlineAuth))
         .count();
-    let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
+    let cmi5_session_routes = ROUTES
+        .iter()
+        .filter(|r| matches!(r.guard(), Guard::Cmi5Session))
+        .count();
+    let jwt_routes =
+        ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes - cmi5_session_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
+    // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
+    // (GET/PUT/DELETE), all authenticated by the session credential. Like the
+    // device surface, only their shape checks are reachable offline; their
+    // contents are deferred to the live tier.
+    assert_eq!(cmi5_session_routes, 6, "cmi5 LRS routes");
     // 146, up from 140: six cmi5 JWT-guarded routes -- Staff course
     // import/list/get/delete, the Admin AU->training-step binding, and the
     // Member launch. The cmi5 `fetch` route is public (its single-use token is
-    // the credential), so it is not counted here. None touch the device surface,
-    // which is the number this test actually exists to hold still.
+    // the credential) and the six LRS routes are counted separately above, so
+    // none of them land here. The device surface did not move, which is the
+    // number this test actually exists to hold still.
     //
     // (140 was up from 139 for `PUT /api/users/me/password`; the two
     // training-session routes moving to `/progress/{user_id}/{start,complete}`
     // was net zero.)
     assert_eq!(jwt_routes, 146, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 146 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 146 * 7 + (6 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
-    // the live-database tier's: a device token can only be rejected on its
-    // contents by looking it up.
-    let deferred = device_routes * (CREDS.len() - 3);
+    // the live-database tier's: a device or session token can only be rejected
+    // on its contents by looking it up.
+    let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
     assert_eq!(
-        deferred, 24,
+        deferred, 48,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

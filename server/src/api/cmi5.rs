@@ -1,24 +1,28 @@
-//! cmi5 admin/management HTTP surface (Stage 3): import a package, list/get/
-//! delete courses, and bind an AU to a training step.
+//! The cmi5 HTTP surface: admin/management, learner launch, and the embedded LRS.
 //!
-//! Launch, the fetch handshake, and the LRS live in later stages. Every route
-//! here is JWT-guarded (Staff for the course operations, Admin for the binding
-//! that gates physical tool access). The routes are always mounted; each handler
-//! checks whether the subsystem is enabled in live config, so toggling `enabled`
-//! takes effect without a restart and without changing the route table.
+//! - Course import/list/get/delete (Staff) and the AU→training-step binding
+//!   (Admin) that gates physical tool access.
+//! - Launch (Member) and the one-time `fetch` exchange (public, token-gated).
+//! - The LRS sub-routes under `/lrs` — statements and the State API — each
+//!   authenticated only by `Cmi5SessionAuth` (the scoped session credential) and
+//!   authorized per statement against that session's registration/actor/AU.
+//!
+//! The routes are always mounted; each handler checks whether the subsystem is
+//! enabled in live config, so toggling `enabled` takes effect without a restart
+//! and without changing the route table.
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{AdminUser, MemberUser, StaffUser};
-use crate::cmi5::Cmi5Error;
+use crate::auth::{AdminUser, Cmi5SessionAuth, MemberUser, StaffUser};
+use crate::cmi5::{Cmi5Error, GrantInfo};
 use crate::models::{AuditEventType, Cmi5AssignableUnit, Cmi5Course, NewAuditLog};
 use crate::AppState;
 
@@ -53,6 +57,21 @@ pub fn cmi5_router() -> Router<AppState> {
         // gated by the single-use token in its query string).
         .route("/aus/{au_id}/launch", post(launch_au))
         .route("/fetch", post(fetch_credential))
+        // The embedded LRS: statements and the State API. Every handler here
+        // authenticates only via Cmi5SessionAuth (the session credential), and
+        // authorizes each write against that session's registration/actor/AU.
+        .route(
+            "/lrs/statements",
+            put(lrs_put_statement)
+                .post(lrs_post_statement)
+                .get(lrs_get_statements),
+        )
+        .route(
+            "/lrs/activities/state",
+            get(lrs_get_state)
+                .put(lrs_put_state)
+                .delete(lrs_delete_state),
+        )
 }
 
 /// A course together with its assignable units.
@@ -261,6 +280,179 @@ fn fetch_error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error-text": message }))).into_response()
 }
 
+// ---------------------------------------------------------------------------
+// The embedded LRS (Cmi5SessionAuth on every handler)
+// ---------------------------------------------------------------------------
+
+/// Statement endpoint query: the xAPI `statementId`, when the content PUTs.
+#[derive(Debug, Deserialize)]
+struct StatementQuery {
+    #[serde(rename = "statementId")]
+    statement_id: Option<Uuid>,
+}
+
+/// State API query. Only `stateId` is honored; the activity, agent, and
+/// registration are taken from the authenticated session, not the query, so the
+/// content cannot read or write another session's state.
+#[derive(Debug, Deserialize)]
+struct StateQuery {
+    #[serde(rename = "stateId")]
+    state_id: Option<String>,
+}
+
+/// On a grant, broadcast the new tool-access state to edge devices and record
+/// the satisfaction in the audit log.
+async fn apply_grant(state: &AppState, grant: GrantInfo) -> Result<(), ApiError> {
+    crate::api::toolguard::broadcast_toolguard_state(state).await;
+    let audit = NewAuditLog {
+        event_type: AuditEventType::Cmi5AuSatisfied.as_str().to_string(),
+        user_id: Some(grant.user_id),
+        actor_id: Some(grant.user_id),
+        event_data: serde_json::json!({
+            "au_id": grant.au_id,
+            "registration": grant.registration_id,
+            "training_step_id": grant.training_step_id,
+            "tool_id": grant.tool_id,
+            "score": grant.score,
+        }),
+        ip_address: None,
+        user_agent: None,
+    };
+    state.db.create_audit_log(&audit)?;
+    Ok(())
+}
+
+async fn lrs_put_statement(
+    State(state): State<AppState>,
+    session: Cmi5SessionAuth,
+    Query(query): Query<StatementQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    let site_url = state.config_manager.get_config().site.site_url.clone();
+    if let Some(grant) =
+        state
+            .cmi5_service
+            .record_statement(&session.0, &site_url, query.statement_id, body)?
+    {
+        apply_grant(&state, grant).await?;
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn lrs_post_statement(
+    State(state): State<AppState>,
+    session: Cmi5SessionAuth,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    let site_url = state.config_manager.get_config().site.site_url.clone();
+    let items = match body {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
+    };
+    let mut ids = Vec::new();
+    for item in items {
+        let sid = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+        if let Some(grant) = state
+            .cmi5_service
+            .record_statement(&session.0, &site_url, sid, item)?
+        {
+            apply_grant(&state, grant).await?;
+        }
+        if let Some(sid) = sid {
+            ids.push(sid.to_string());
+        }
+    }
+    Ok((StatusCode::OK, Json(serde_json::json!(ids))).into_response())
+}
+
+async fn lrs_get_statements(
+    State(state): State<AppState>,
+    session: Cmi5SessionAuth,
+    Query(query): Query<StatementQuery>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    match query.statement_id {
+        Some(sid) => match state
+            .cmi5_service
+            .get_statement(session.0.registration_id, sid)?
+        {
+            Some(doc) => Ok((StatusCode::OK, Json(doc)).into_response()),
+            None => Ok(StatusCode::NOT_FOUND.into_response()),
+        },
+        // A minimal StatementResult. cmi5 does not require the LMS to serve a
+        // full statement query, and this session's own statements are the only
+        // ones it could ever be shown.
+        None => Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({ "statements": [], "more": "" })),
+        )
+            .into_response()),
+    }
+}
+
+async fn lrs_get_state(
+    State(state): State<AppState>,
+    session: Cmi5SessionAuth,
+    Query(query): Query<StateQuery>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    let state_id = query
+        .state_id
+        .ok_or_else(|| ApiError::BadRequest("missing stateId".to_string()))?;
+    match state.cmi5_service.get_state_document(
+        session.0.registration_id,
+        &session.0.activity_id,
+        &session.0.user_id.to_string(),
+        &state_id,
+    )? {
+        Some(doc) => Ok((StatusCode::OK, Json(doc)).into_response()),
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+    }
+}
+
+async fn lrs_put_state(
+    State(state): State<AppState>,
+    session: Cmi5SessionAuth,
+    Query(query): Query<StateQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    let state_id = query
+        .state_id
+        .ok_or_else(|| ApiError::BadRequest("missing stateId".to_string()))?;
+    state.cmi5_service.put_state_document(
+        session.0.registration_id,
+        &session.0.activity_id,
+        &session.0.user_id.to_string(),
+        &state_id,
+        body,
+    )?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn lrs_delete_state(
+    State(state): State<AppState>,
+    session: Cmi5SessionAuth,
+    Query(query): Query<StateQuery>,
+) -> Result<Response, ApiError> {
+    ensure_enabled(&state)?;
+    let state_id = query
+        .state_id
+        .ok_or_else(|| ApiError::BadRequest("missing stateId".to_string()))?;
+    state.cmi5_service.delete_state_document(
+        session.0.registration_id,
+        &session.0.activity_id,
+        &session.0.user_id.to_string(),
+        &state_id,
+    )?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 impl From<Cmi5Error> for ApiError {
     fn from(e: Cmi5Error) -> Self {
         match e {
@@ -300,6 +492,23 @@ impl From<Cmi5Error> for ApiError {
             ),
             Cmi5Error::Json(m) => {
                 ApiError::InternalServerError(format!("serialization error: {m}"))
+            }
+            Cmi5Error::BadStatement(m) => {
+                ApiError::BadRequest(format!("malformed xAPI statement: {m}"))
+            }
+            // Identity/scope violations are 403 -- an authenticated session
+            // reaching past what it may touch. Everything else (a malformed
+            // result, a below-mastery pass, an out-of-order verb) is a 400: the
+            // statement itself is wrong, not the caller's right to be here.
+            Cmi5Error::Rejected(v) => {
+                use ::cmi5::Violation;
+                match v {
+                    Violation::NotAnAccountActor
+                    | Violation::ActorMismatch
+                    | Violation::RegistrationMismatch
+                    | Violation::ActivityMismatch => ApiError::Forbidden(v.to_string()),
+                    _ => ApiError::BadRequest(v.to_string()),
+                }
             }
         }
     }

@@ -386,15 +386,7 @@ where
 /// running the content cannot use it to reach any other API. Modelled on
 /// [`DeviceAuth`]: a bearer token resolved against the database, not a role.
 #[derive(Clone)]
-pub struct Cmi5SessionAuth {
-    pub registration_id: uuid::Uuid,
-    pub user_id: uuid::Uuid,
-    pub au_id: uuid::Uuid,
-    /// The AU's activity IRI: the only activity this session may write about.
-    pub activity_id: String,
-    /// Normal / Browse / Review. Only Normal may satisfy moveOn.
-    pub launch_mode: String,
-}
+pub struct Cmi5SessionAuth(pub crate::cmi5::Cmi5SessionContext);
 
 impl<S> FromRequestParts<S> for Cmi5SessionAuth
 where
@@ -417,13 +409,7 @@ where
             .ok_or(AuthError::InvalidToken)?;
 
         match app_state.cmi5_service.resolve_session(token) {
-            Ok(Some(ctx)) => Ok(Cmi5SessionAuth {
-                registration_id: ctx.registration_id,
-                user_id: ctx.user_id,
-                au_id: ctx.au_id,
-                activity_id: ctx.activity_id,
-                launch_mode: ctx.launch_mode,
-            }),
+            Ok(Some(ctx)) => Ok(Cmi5SessionAuth(ctx)),
             // A resolvable-but-invalid credential (unknown or expired) is 401,
             // not 403: it is a bad credential, not an authenticated party
             // reaching past its scope. Scope violations are enforced per
