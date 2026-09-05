@@ -1,4 +1,5 @@
 mod account_tokens;
+mod cmi5;
 mod devices;
 mod doors;
 mod home_links;
@@ -16,6 +17,7 @@ mod training;
 mod webhooks;
 
 pub use account_tokens::*;
+pub use cmi5::*;
 pub use devices::*;
 pub use doors::*;
 pub use home_links::*;
@@ -339,6 +341,20 @@ pub enum AuditEventType {
     /// report this -- saying so would turn a send failure into an account
     /// enumeration oracle -- so this row is how an operator finds out.
     EmailSendFailed,
+    // cmi5 training modules
+    //
+    // Appended at the tail for the same reason as the block above: a new event
+    // type filed next to a related group is tidier but collides with any branch
+    // touching that group.
+    Cmi5CoursePublished,
+    Cmi5CourseDeleted,
+    Cmi5AuAssignedToTool,
+    Cmi5Launched,
+    /// A verified cmi5 pass satisfied an AU and granted the mapped training
+    /// step. This is the cmi5 analogue of `training_session_completed`: the
+    /// record that a browser course led to physical tool access.
+    Cmi5AuSatisfied,
+    Cmi5CourseExported,
 }
 
 impl AuditEventType {
@@ -419,6 +435,12 @@ impl AuditEventType {
             Self::EmailVerificationSent => "email_verification_sent",
             Self::EmailVerified => "email_verified",
             Self::EmailSendFailed => "email_send_failed",
+            Self::Cmi5CoursePublished => "cmi5_course_published",
+            Self::Cmi5CourseDeleted => "cmi5_course_deleted",
+            Self::Cmi5AuAssignedToTool => "cmi5_au_assigned_to_tool",
+            Self::Cmi5Launched => "cmi5_launched",
+            Self::Cmi5AuSatisfied => "cmi5_au_satisfied",
+            Self::Cmi5CourseExported => "cmi5_course_exported",
         }
     }
 
@@ -502,6 +524,12 @@ impl AuditEventType {
             EmailVerificationSent,
             EmailVerified,
             EmailSendFailed,
+            Cmi5CoursePublished,
+            Cmi5CourseDeleted,
+            Cmi5AuAssignedToTool,
+            Cmi5Launched,
+            Cmi5AuSatisfied,
+            Cmi5CourseExported,
         ]
     }
 }
