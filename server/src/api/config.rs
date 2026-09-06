@@ -69,6 +69,11 @@ pub struct PublicCalendarConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicGroupsioConfig {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicToolGuardConfig {
     pub enabled: bool,
     /// Name of the profile field that holds the user's RFID/NFC card id —
@@ -105,6 +110,7 @@ pub struct PublicConfig {
     pub doors: PublicDoorsConfig,
     pub calendar: PublicCalendarConfig,
     pub toolguard: PublicToolGuardConfig,
+    pub groupsio: PublicGroupsioConfig,
 }
 
 fn build_public_config(state: &AppState) -> PublicConfig {
@@ -160,6 +166,9 @@ fn build_public_config(state: &AppState) -> PublicConfig {
         toolguard: PublicToolGuardConfig {
             enabled: config.toolguard.enabled,
             profile_field: config.toolguard.profile_field.clone(),
+        },
+        groupsio: PublicGroupsioConfig {
+            enabled: config.groupsio.enabled,
         },
     }
 }
