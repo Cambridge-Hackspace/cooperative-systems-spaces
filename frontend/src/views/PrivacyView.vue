@@ -13,15 +13,15 @@
       <div class="alert alert-warning text-sm">
         <span>
           This draft reflects what this site's software actually does as of today. It hasn't been
-          formally adopted by Cambridge Hackspace or reviewed by legal counsel &mdash; please have
+          formally adopted by {{ siteName }} or reviewed by legal counsel &mdash; please have
           someone review it before treating it as final.
         </span>
       </div>
 
       <section>
         <p class="leading-relaxed">
-          This policy explains what information Cambridge Hackspace collects through this site and
-          its membership system, why we collect it, and who can see it.
+          This policy explains what information {{ siteName }} collects through this site and its
+          membership system, why we collect it, and who can see it.
         </p>
       </section>
 
@@ -126,6 +126,12 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
+
 const lastUpdated = new Date().toLocaleDateString('en-US', {
   year: 'numeric',
   month: 'long',

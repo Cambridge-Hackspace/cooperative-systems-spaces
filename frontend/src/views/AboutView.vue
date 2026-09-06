@@ -13,10 +13,10 @@
          Headings are sized explicitly to match the rest of the app. -->
     <div class="mx-auto max-w-3xl space-y-6 text-base-content/90">
       <section>
-        <h2 class="text-2xl font-semibold mb-2">What is Cambridge Hackspace?</h2>
+        <h2 class="text-2xl font-semibold mb-2">What is {{ siteName }}?</h2>
         <p class="leading-relaxed">
-          Cambridge Hackspace is a 501(c)(3) non-profit makerspace in the center of Somerville, MA.
-          We hold weekly meetings where we get together and make things. We have a dedicated space
+          {{ siteName }} is a 501(c)(3) non-profit makerspace in the center of Somerville, MA. We
+          hold weekly meetings where we get together and make things. We have a dedicated space
           where members can come along and work on their projects any day of the week. Our community
           has a common interest in making, building, computers, technology, craft, and art. Members
           join not only to work on their projects, but to share knowledge and resources, to learn,
@@ -62,17 +62,17 @@
 
       <section>
         <h2 class="text-2xl font-semibold mb-2">Are there requirements?</h2>
-        <p class="leading-relaxed">You must be over 18 to be a member of Cambridge Hackspace.</p>
+        <p class="leading-relaxed">You must be over 18 to be a member of {{ siteName }}.</p>
       </section>
 
       <section>
         <h2 class="text-2xl font-semibold mb-2">Accessibility</h2>
         <p class="leading-relaxed">
-          Cambridge Hackspace welcomes individuals with disabilities to participate in our
-          activities. Although we are on the ground floor, the main building entrance has three (3)
-          steps from street level. Our building does not have a wheelchair ramp or lift, but we're
-          happy to arrange accommodations and access for you to join us on our Tuesday Project Night
-          or other events. Please contact us directly at
+          {{ siteName }} welcomes individuals with disabilities to participate in our activities.
+          Although we are on the ground floor, the main building entrance has three (3) steps from
+          street level. Our building does not have a wheelchair ramp or lift, but we're happy to
+          arrange accommodations and access for you to join us on our Tuesday Project Night or other
+          events. Please contact us directly at
           <a href="mailto:info@cambridgehackspace.com" class="link link-primary"
             >info@cambridgehackspace.com</a
           >.
@@ -97,11 +97,7 @@
           >
           to see for yourself.
         </p>
-        <img
-          src="/images/map.png"
-          alt="Map to Cambridge Hackspace"
-          class="rounded-lg mt-4 max-w-full"
-        />
+        <img src="/images/map.png" :alt="`Map to ${siteName}`" class="rounded-lg mt-4 max-w-full" />
       </section>
 
       <div class="border-t-2 border-dotted border-base-content/30 pt-6">
@@ -117,4 +113,9 @@
 
 <script setup lang="ts">
 // About page component
+import { computed } from 'vue'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
 </script>
