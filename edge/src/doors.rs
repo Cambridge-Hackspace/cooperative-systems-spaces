@@ -18,11 +18,16 @@
 //! - in:  `door/request/scan`    JSON [`LocalScanRequest`]
 //! - out: `door/response/unlock` JSON [`LocalUnlockResponse`]
 //!
-//! ## TODO (hardware bridge integration)
+//! ## Open Access hold (issue #12)
 //!
-//! Wiring this into [`crate::mqtt::EdgeMqttClient`] (remote `subscribe_to_commands`)
-//! and [`crate::mqtt::LocalMqttClient`] (local `subscribe_to_requests`) is left
-//! as a small follow-up — it mirrors what `toolguard` already does there.
+//! An Open Access window holds the strike unlocked for its whole duration. The
+//! external relay firmware only understands the momentary `door/response/unlock`
+//! (a `duration_ms` pulse it auto-relocks after), so the edge *holds* a door by
+//! re-sending that pulse faster than it elapses — see [`DoorsState::hold_pulses_at`]
+//! / [`hold_pulse_ms`] and the refresh loop in `main.rs`. It is driven off this
+//! device's own clock and simply stops at the window end, so the strike
+//! auto-relocks on its own if a window closes, the edge dies, or the server
+//! link drops (fail-secure + edge-local expiry).
 
 use std::sync::{Arc, RwLock};
 
@@ -93,6 +98,43 @@ pub enum Decision {
     Deny(&'static str),
 }
 
+/// How often the edge re-sends the momentary unlock to keep an Open Access door
+/// held open. Must be shorter than the pulse [`hold_pulse_ms`] returns so the
+/// strike never de-energizes between refreshes.
+pub const HOLD_REFRESH_SECS: u64 = 30;
+
+/// Extra time each hold pulse outlasts the refresh interval, absorbing tick
+/// jitter so the relay never drops mid-window. The pulse is still capped at the
+/// window's remaining time, so the strike relocks *at* the boundary, not after.
+pub const HOLD_PULSE_MARGIN_SECS: i64 = 15;
+
+/// The momentary-unlock `duration_ms` to publish *now* to keep an Open Access
+/// door held open, or `None` if it must not be held (no window, or the window
+/// has ended as of `now`).
+///
+/// The pulse outlasts `refresh` (by [`HOLD_PULSE_MARGIN_SECS`]) so a continuous
+/// refresh never lets the strike drop, but is capped at the time remaining until
+/// `hold_unlock_until` so the last pulse expires at the window boundary — the
+/// strike then auto-relocks with no further message. Comparing to `now` (the
+/// caller passes this device's own clock) is what self-expires the hold on a
+/// server disconnect. Pure, so it is unit-tested directly.
+pub fn hold_pulse_ms(
+    hold_unlock_until: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    refresh: chrono::Duration,
+) -> Option<i32> {
+    let until = hold_unlock_until?;
+    let remaining = until - now;
+    if remaining <= chrono::Duration::zero() {
+        return None;
+    }
+    let pulse = (refresh + chrono::Duration::seconds(HOLD_PULSE_MARGIN_SECS)).min(remaining);
+    // Capped at 45s (refresh + margin) so this never overflows i32; floored at
+    // 1ms so a sub-millisecond tail still reads as a (near-instant) unlock
+    // rather than the `0` the wire uses for "denied".
+    Some(pulse.num_milliseconds().max(1) as i32)
+}
+
 /// In-memory state cache fed by `doors/state` snapshots and read by the
 /// scan handler.
 #[derive(Debug, Default)]
@@ -151,6 +193,23 @@ impl DoorsState {
             };
         }
         Decision::Deny("Card not authorized")
+    }
+
+    /// The doors that should be held open right now and the momentary-unlock
+    /// `duration_ms` to (re)send each, as of `now`. The refresh loop in `main.rs`
+    /// calls this every [`HOLD_REFRESH_SECS`] and publishes an unlock for each.
+    /// A disabled door is never held (mirrors [`Self::decide_at`]).
+    pub fn hold_pulses_at(
+        &self,
+        now: DateTime<Utc>,
+        refresh: chrono::Duration,
+    ) -> Vec<(Uuid, i32)> {
+        let guard = self.inner.read().expect("doors state poisoned");
+        guard
+            .iter()
+            .filter(|d| d.enabled)
+            .filter_map(|d| hold_pulse_ms(d.hold_unlock_until, now, refresh).map(|ms| (d.id, ms)))
+            .collect()
     }
 
     /// Number of doors currently cached. Useful for `/status` / logging.
@@ -267,6 +326,97 @@ mod tests {
             s.decide_at(id, "STRANGER", now),
             Decision::Deny(_)
         ));
+    }
+
+    #[test]
+    fn hold_pulse_is_none_without_a_window_or_after_it_ends() {
+        let now = Utc::now();
+        let refresh = chrono::Duration::seconds(30);
+        // No window at all.
+        assert_eq!(hold_pulse_ms(None, now, refresh), None);
+        // Window already ended -> no pulse. This is the fail-secure boundary:
+        // the loop stops sending and the strike auto-relocks.
+        assert_eq!(
+            hold_pulse_ms(Some(now - chrono::Duration::seconds(1)), now, refresh),
+            None
+        );
+    }
+
+    #[test]
+    fn hold_pulse_outlasts_the_refresh_mid_window() {
+        // Far from the boundary, the pulse is refresh + margin (45s), so a pulse
+        // every 30s always overlaps the previous one and the strike never drops.
+        let now = Utc::now();
+        let refresh = chrono::Duration::seconds(30);
+        let ms = hold_pulse_ms(Some(now + chrono::Duration::hours(2)), now, refresh).unwrap();
+        assert_eq!(ms, 45_000);
+        assert!(
+            ms > refresh.num_milliseconds() as i32,
+            "a mid-window pulse must outlast the refresh interval or the strike drops between refreshes"
+        );
+    }
+
+    #[test]
+    fn hold_pulse_is_capped_at_the_window_boundary() {
+        // Near the end, the pulse shrinks to exactly the time left, so the last
+        // pulse expires at the boundary rather than holding the door open past it.
+        let now = Utc::now();
+        let refresh = chrono::Duration::seconds(30);
+        let ms = hold_pulse_ms(Some(now + chrono::Duration::seconds(10)), now, refresh).unwrap();
+        assert!(
+            (9_000..=10_000).contains(&ms),
+            "expected ~10s pulse capped at the remaining window, got {ms}ms"
+        );
+    }
+
+    #[test]
+    fn hold_pulses_at_lists_held_doors_and_skips_the_rest() {
+        let now = Utc::now();
+        let refresh = chrono::Duration::seconds(30);
+        let held = Uuid::new_v4();
+        let idle = Uuid::new_v4();
+        let disabled = Uuid::new_v4();
+
+        let snapshot = DoorStateSnapshot {
+            snapshot_at: now,
+            doors: vec![
+                CompiledDoor {
+                    id: held,
+                    name: "Held".into(),
+                    enabled: true,
+                    unlock_duration_ms: 4200,
+                    allow_cards: vec![],
+                    deny_cards: vec![],
+                    hold_unlock_until: Some(now + chrono::Duration::hours(1)),
+                },
+                CompiledDoor {
+                    id: idle,
+                    name: "Idle".into(),
+                    enabled: true,
+                    unlock_duration_ms: 4200,
+                    allow_cards: vec!["A1".into()],
+                    deny_cards: vec![],
+                    hold_unlock_until: None,
+                },
+                // Held window but disabled -> must not be driven open.
+                CompiledDoor {
+                    id: disabled,
+                    name: "Disabled".into(),
+                    enabled: false,
+                    unlock_duration_ms: 4200,
+                    allow_cards: vec![],
+                    deny_cards: vec![],
+                    hold_unlock_until: Some(now + chrono::Duration::hours(1)),
+                },
+            ],
+        };
+        let s = DoorsState::default();
+        s.apply_snapshot(snapshot);
+
+        let pulses = s.hold_pulses_at(now, refresh);
+        assert_eq!(pulses.len(), 1, "only the enabled, in-window door is held");
+        assert_eq!(pulses[0].0, held);
+        assert_eq!(pulses[0].1, 45_000);
     }
 
     #[test]
