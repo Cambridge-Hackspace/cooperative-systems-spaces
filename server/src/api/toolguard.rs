@@ -108,6 +108,12 @@ pub struct ToolGuardSyncTool {
     pub external_id: Option<String>,
     pub name: String,
     pub status: crate::models::ToolStatus,
+    /// True for a metered tool under `actuation_mode = OnlineSynchronous`: the
+    /// edge must call the server before energizing it (rather than deciding from
+    /// the cached allow-list). `#[serde(default)]` so an older edge/payload
+    /// without the field still parses (defaults to the offline-capable path).
+    #[serde(default)]
+    pub requires_online: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +200,17 @@ async fn boot_reset(
         state.db.create_tool_event(&event).map_err(|e| {
             ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
         })?;
+
+        // Metered tool billing (Phase 2): a tool force-reset at boot never got a
+        // clean tool-off, so settle its open session as abandoned -- charge the
+        // usage reported so far and release the hold.
+        if let Some(billing) = &state.tool_billing {
+            if billing.enabled() && billing.tool_is_metered(&tool) {
+                if let Err(e) = billing.settle_open_session_for_tool(&tool, "abandoned") {
+                    tracing::error!("tool billing: settle on boot-reset failed: {e}");
+                }
+            }
+        }
     }
 
     if count > 0 {
@@ -332,6 +349,35 @@ async fn tool_on(
         }
     }
 
+    // Metered tool billing (Phase 2). Money is the LAST gate: training passed
+    // above, so a hold is never placed for a member who was not eligible to use
+    // the tool. A metered tool must also authenticate with its own per-tool key
+    // (not the shared global key), so one leaked key can't run up charges on
+    // every tool.
+    if let Some(billing) = &state.tool_billing {
+        if billing.enabled() && billing.tool_is_metered(&tool) {
+            if !metered_key_ok(req.api_key.as_deref(), &tool) {
+                log_tool_access_denied(
+                    &state,
+                    Some(&user),
+                    &req.tool_id,
+                    "Metered tool requires its own API key",
+                )
+                .await?;
+                return Ok(Json(ToolGuardResponse::tool_denied(
+                    "Metered tool requires its own API key",
+                )));
+            }
+            match billing.open_session(&user, &tool).map_err(ApiError::from)? {
+                crate::tool_billing::ActivationOutcome::Authorized(_) => {}
+                crate::tool_billing::ActivationOutcome::Denied(reason) => {
+                    log_tool_access_denied(&state, Some(&user), &req.tool_id, &reason).await?;
+                    return Ok(Json(ToolGuardResponse::tool_denied(&reason)));
+                }
+            }
+        }
+    }
+
     state
         .db
         .update_tool_status(tool.id, &crate::models::ToolStatus::InUse)
@@ -405,6 +451,27 @@ async fn tool_off(
             ApiError::InternalServerError(format!("Failed to update tool status: {}", e))
         })?;
 
+    // Metered tool billing (Phase 2): settle the open session on stop -- post
+    // the actual charge and release the hold; the broadcast below then refreshes
+    // the allow-list with the freed balance. The tool is released regardless of
+    // the key (safety); a mis-keyed stop defers the settle to the sweep rather
+    // than trusting it.
+    if let Some(billing) = &state.tool_billing {
+        if billing.enabled() && billing.tool_is_metered(&tool) {
+            if metered_key_ok(req.api_key.as_deref(), &tool) {
+                if let Err(e) = billing.settle_open_session_for_tool(&tool, "settled") {
+                    tracing::error!("tool billing: settle on tool-off failed: {e}");
+                }
+            } else {
+                tracing::warn!(
+                    "tool billing: metered tool-off without the tool's key; deferring \
+                     settle to the sweep for tool_id={}",
+                    req.tool_id
+                );
+            }
+        }
+    }
+
     use crate::models::NewToolEvent;
     let event = NewToolEvent {
         tool_id: tool.id,
@@ -464,6 +531,42 @@ async fn tool_log(
         Some(t) => t,
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
     };
+
+    // Metered tool billing (Phase 2): a billable report must use the tool's own
+    // key and correlate to an open activation session; a report with no open
+    // session (or a negative/absurd value) is rejected rather than billed. The
+    // seconds are validated + capped inside record_usage / at settle.
+    if let Some(billing) = &state.tool_billing {
+        if billing.enabled() && billing.tool_is_metered(&tool) {
+            if !metered_key_ok(req.api_key.as_deref(), &tool) {
+                log_tool_access_denied(
+                    &state,
+                    Some(&user),
+                    &req.tool_id,
+                    "Metered tool requires its own API key",
+                )
+                .await?;
+                return Ok(Json(ToolGuardResponse::error(
+                    "Metered tool requires its own API key",
+                )));
+            }
+            let applied = billing
+                .record_usage(tool.id, req.seconds)
+                .map_err(ApiError::from)?;
+            if !applied {
+                log_tool_access_denied(
+                    &state,
+                    Some(&user),
+                    &req.tool_id,
+                    "Usage report without an open session (or invalid seconds)",
+                )
+                .await?;
+                return Ok(Json(ToolGuardResponse::error(
+                    "No open session for this tool",
+                )));
+            }
+        }
+    }
 
     use crate::models::NewToolEvent;
     let event = NewToolEvent {
@@ -530,9 +633,14 @@ pub async fn build_sync_payload(
     device_id: Uuid,
     profile_field: &str,
 ) -> Result<ToolGuardSyncPayload, ApiError> {
+    // When tool billing is on, a config snapshot lets the DB layer drop metered
+    // tools a member can't afford (or isn't a member for) from each user's
+    // authorized list -- the per-user affordability filter that makes edge-local
+    // actuation safe -- and flag metered tools that need online actuation.
+    let metered_gate = state.tool_billing.as_ref().map(|svc| svc.gate());
     let (mut users, mut tools) = state
         .db
-        .get_toolguard_sync_data(profile_field)
+        .get_toolguard_sync_data(profile_field, metered_gate.as_ref())
         .map_err(|e| ApiError::InternalServerError(format!("Failed to build sync data: {}", e)))?;
 
     // Apply schedule gating: any tool whose attached schedule is closed
@@ -697,6 +805,18 @@ async fn authorize_toolguard(
     Err(ApiError::Unauthorized(
         "ToolGuard operations require a registered device token or a valid API key".to_string(),
     ))
+}
+
+/// Metered tools must authenticate with their OWN `external_api_key`, not the
+/// shared global key (and not a bare device token). This binds a billable report
+/// to the specific tool's secret, so one leaked global key cannot post charges
+/// for every tool. A metered tool with no key set can never satisfy this -- by
+/// design, an unbillable/forgeable metered tool is refused rather than trusted.
+fn metered_key_ok(api_key: Option<&str>, tool: &crate::models::Tool) -> bool {
+    match (api_key, tool.external_api_key.as_deref()) {
+        (Some(provided), Some(tool_key)) => !tool_key.is_empty() && provided == tool_key,
+        _ => false,
+    }
 }
 
 async fn validate_api_key(
