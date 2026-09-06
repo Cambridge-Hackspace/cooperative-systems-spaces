@@ -3120,6 +3120,239 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    // --- membership dues ledger ------------------------------------------
+
+    /// Insert one ledger entry.
+    pub fn insert_ledger_entry(
+        &self,
+        entry: &crate::models::NewMembershipLedgerEntry,
+    ) -> Result<crate::models::MembershipLedgerEntry, DatabaseError> {
+        use crate::schema::membership_ledger;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(membership_ledger::table)
+            .values(entry)
+            .returning(crate::models::MembershipLedgerEntry::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Whether a ledger entry already exists for a Stripe reference id. The
+    /// second oracle for webhook idempotency, alongside the partial unique index:
+    /// callers check this before inserting so a redelivered event is a no-op
+    /// rather than a unique-violation error to swallow.
+    pub fn ledger_entry_exists_for_reference(
+        &self,
+        reference: &str,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::membership_ledger::dsl::*;
+        let mut conn = self.get_connection()?;
+        let n: i64 = membership_ledger
+            .filter(external_reference.eq(reference))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(n > 0)
+    }
+
+    /// A member's current balance: the sum of their ledger amounts, or zero if
+    /// they have none. The single source of truth for entitlement -- there is no
+    /// cached balance column to drift from this.
+    ///
+    /// Summed in Rust rather than with `diesel::dsl::sum`: that name is an
+    /// ambiguous glob re-export in diesel 2.3 (a `sum` type alias and a `sum`
+    /// function both land in `dsl`), which is a hard error under
+    /// `deny(future_incompatible)`. A member's ledger is small, so loading the
+    /// amounts and folding them is cheap and unambiguous.
+    pub fn user_balance(&self, uid: uuid::Uuid) -> Result<bigdecimal::BigDecimal, DatabaseError> {
+        use crate::schema::membership_ledger::dsl::*;
+        let mut conn = self.get_connection()?;
+        let amounts: Vec<bigdecimal::BigDecimal> = membership_ledger
+            .filter(user_id.eq(uid))
+            .select(amount)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(amounts
+            .into_iter()
+            .fold(bigdecimal::BigDecimal::from(0), |acc, a| acc + a))
+    }
+
+    /// A member's ledger, newest first, for the admin drill-down.
+    pub fn list_user_ledger(
+        &self,
+        uid: uuid::Uuid,
+        limit: i64,
+    ) -> Result<Vec<crate::models::MembershipLedgerEntry>, DatabaseError> {
+        use crate::schema::membership_ledger::dsl::*;
+        let mut conn = self.get_connection()?;
+        membership_ledger
+            .filter(user_id.eq(uid))
+            .order(occurred_at.desc())
+            .limit(limit)
+            .select(crate::models::MembershipLedgerEntry::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// How many active admins exist. The last-admin guard reads this before a
+    /// billing-driven demotion: an Admin whose lapse would take the count to
+    /// zero is never demoted.
+    ///
+    /// The active filter runs in SQL, but the `role == Admin` count is done in
+    /// Rust: a `.filter(role.eq(...))` on the custom `user_role` enum column
+    /// would require `sql_types::UserRole: QueryId`, which the generated schema
+    /// does not derive -- and deriving it there is a change a `diesel
+    /// print-schema` regeneration would silently drop. Loading a single enum
+    /// column needs no such bound, and the active-user set is small.
+    pub fn count_active_admins(&self) -> Result<i64, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let roles: Vec<crate::models::UserRole> = users
+            .filter(is_active.eq(true))
+            .select(role)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(roles
+            .iter()
+            .filter(|r| **r == crate::models::UserRole::Admin)
+            .count() as i64)
+    }
+
+    /// Every enrolled user (has a membership clock), for the renewal cycle.
+    pub fn enrolled_users(&self) -> Result<Vec<User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(membership_next_due_at.is_not_null())
+            .select(User::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every user linked to a Stripe customer, for the invoice-poll backbone
+    /// (which must re-credit even a lapsed, un-enrolled member whose renewal
+    /// webhook was missed -- so this is not restricted to enrolled users).
+    pub fn users_with_stripe_customer(&self) -> Result<Vec<User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(stripe_customer_id.is_not_null())
+            .select(User::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Map a Stripe customer id back to the platform user (webhook handling).
+    pub fn find_user_by_stripe_customer_id(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(stripe_customer_id.eq(customer_id))
+            .select(User::as_select())
+            .first::<User>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Set (or clear, with `None`) a member's next-due anniversary. Clearing it
+    /// un-enrolls them: a lapse ends the membership rather than carrying a debt.
+    pub fn set_membership_next_due(
+        &self,
+        uid: uuid::Uuid,
+        next_due: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                membership_next_due_at.eq(next_due),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Record (or clear) the Stripe customer id for a user.
+    pub fn set_stripe_customer_id(
+        &self,
+        uid: uuid::Uuid,
+        customer_id: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                stripe_customer_id.eq(customer_id),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Record the user's Stripe subscription id and last-seen status together.
+    /// Both are set each call (either may be `None`), so a cancellation clears
+    /// the id while stamping the status.
+    pub fn set_stripe_subscription(
+        &self,
+        uid: uuid::Uuid,
+        subscription_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                stripe_subscription_id.eq(subscription_id),
+                subscription_status.eq(status),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Record one membership renewal-cycle pass.
+    pub fn record_membership_sync_run(
+        &self,
+        run: &crate::models::NewMembershipSyncRun,
+    ) -> Result<crate::models::MembershipSyncRun, DatabaseError> {
+        use crate::schema::membership_sync_runs;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(membership_sync_runs::table)
+            .values(run)
+            .returning(crate::models::MembershipSyncRun::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The most recent renewal-cycle passes, newest first.
+    pub fn latest_membership_sync_runs(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::models::MembershipSyncRun>, DatabaseError> {
+        use crate::schema::membership_sync_runs::dsl::*;
+        let mut conn = self.get_connection()?;
+        membership_sync_runs
+            .order(started_at.desc())
+            .limit(limit)
+            .select(crate::models::MembershipSyncRun::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     // --- users.mfa_enrolled_at -------------------------------------------
 
     pub fn set_user_mfa_enrolled(
