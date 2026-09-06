@@ -76,6 +76,11 @@ pub struct DatabaseManager {
     /// Optional sink for newly-created audit logs, consumed by the webhook
     /// dispatcher. Set once at startup via [`set_webhook_sender`].
     webhook_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
+    /// A second, independent sink for the same audit events, consumed by the
+    /// Groups.io mailing-list sync. Kept separate from `webhook_tx` on purpose:
+    /// the two dispatchers must not be able to starve or block one another, and
+    /// each is registered (or absent) on its own.
+    groupsio_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -121,6 +126,7 @@ impl DatabaseManager {
         Self {
             pool,
             webhook_tx: std::sync::OnceLock::new(),
+            groupsio_tx: std::sync::OnceLock::new(),
         }
     }
 }
@@ -168,6 +174,7 @@ impl DatabaseManager {
         Ok(Self {
             pool,
             webhook_tx: std::sync::OnceLock::new(),
+            groupsio_tx: std::sync::OnceLock::new(),
         })
     }
 
@@ -178,6 +185,15 @@ impl DatabaseManager {
         tx: tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>,
     ) {
         let _ = self.webhook_tx.set(tx);
+    }
+
+    /// Register the channel the Groups.io sync listens on. Called once at
+    /// startup after the sync service is created. Subsequent calls are ignored.
+    pub fn set_groupsio_sender(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>,
+    ) {
+        let _ = self.groupsio_tx.set(tx);
     }
 
     /// Get a connection from the pool
@@ -649,6 +665,18 @@ impl DatabaseManager {
         // Never fails the audit write: a closed/absent channel is ignored.
         if let Some(tx) = self.webhook_tx.get() {
             let _ = tx.send(created.clone());
+        }
+        // ...and independently to the Groups.io sync, same contract. A send that
+        // fails means the sender is registered but its consumer task is gone -- a
+        // real fault worth logging, unlike an absent sender (the module is simply
+        // disabled).
+        if let Some(tx) = self.groupsio_tx.get() {
+            if tx.send(created.clone()).is_err() {
+                tracing::error!(
+                    "groupsio_tx send failed (consumer gone) for {}",
+                    created.event_type
+                );
+            }
         }
 
         Ok(created)
@@ -3018,6 +3046,78 @@ impl DatabaseManager {
             return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
         }
         Ok(())
+    }
+
+    /// Set (or clear) a member's mailing-list opt-out timestamp.
+    ///
+    /// `Some(ts)` records an explicit opt-out; `None` clears it back to
+    /// subscribed-by-default. A dedicated setter rather than a field on
+    /// `UpdateUser` because the column must be settable to NULL, which the
+    /// skip-on-None changeset cannot express. Reports NotFound when it changed
+    /// nothing, per writes_report_what_they_changed.
+    pub fn set_mailing_list_opt_out(
+        &self,
+        uid: uuid::Uuid,
+        opt_out_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                mailing_list_opt_out_at.eq(opt_out_at),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Emails of every member who should be on the mailing list: active, with a
+    /// verified address, and not opted out. This is the reconciler's notion of
+    /// "intended subscribed" -- the set Groups.io is made to mirror.
+    pub fn list_mailing_list_intended(&self) -> Result<Vec<String>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(is_active.eq(true))
+            .filter(email_verified_at.is_not_null())
+            .filter(mailing_list_opt_out_at.is_null())
+            .select(email)
+            .load::<String>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Record one Groups.io reconciliation pass.
+    pub fn record_groupsio_sync_run(
+        &self,
+        run: &crate::models::NewGroupsioSyncRun,
+    ) -> Result<crate::models::GroupsioSyncRun, DatabaseError> {
+        use crate::schema::groupsio_sync_runs;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(groupsio_sync_runs::table)
+            .values(run)
+            .returning(crate::models::GroupsioSyncRun::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The most recent reconciliation passes, newest first.
+    pub fn latest_groupsio_sync_runs(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::models::GroupsioSyncRun>, DatabaseError> {
+        use crate::schema::groupsio_sync_runs::dsl::*;
+        let mut conn = self.get_connection()?;
+        groupsio_sync_runs
+            .order(started_at.desc())
+            .limit(limit)
+            .select(crate::models::GroupsioSyncRun::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 
     // --- users.mfa_enrolled_at -------------------------------------------

@@ -17,6 +17,8 @@ use css_server::config::{load_config, ConfigManager};
 use css_server::database::{initialize_database, DatabaseManager};
 use css_server::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 use css_server::doors::DoorService;
+use css_server::groupsio::GroupsioClient;
+use css_server::groupsio_sync::GroupsIoService;
 use css_server::mail::MailService;
 use css_server::mfa::MfaService;
 use css_server::mqtt::MqttService;
@@ -274,6 +276,47 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("Door schedule ticker started (1 minute interval)");
     }
 
+    // Groups.io mailing-list sync. Only wired when the module is enabled: build
+    // the client and service, register its sender as a second consumer of the
+    // audit-event fan-out (alongside the webhook dispatcher), and spawn the
+    // reconciliation ticker -- the same idiom as the door ticker above.
+    let groupsio_sync = if app_config.groupsio.enabled {
+        info!("Initializing Groups.io mailing-list sync...");
+        let client = GroupsioClient::new(config_manager.clone());
+        let (svc, groupsio_tx) =
+            GroupsIoService::start(db_manager.clone(), config_manager.clone(), client);
+        db_manager.set_groupsio_sender(groupsio_tx);
+
+        let interval_secs = app_config.groupsio.sync_interval_secs.max(1);
+        let recon = svc.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let outcome = recon.reconcile_once().await;
+                if !outcome.ok {
+                    if let Some(err) = &outcome.error {
+                        warn!("Groups.io reconciliation did not complete: {err}");
+                    }
+                } else if outcome.added + outcome.removed + outcome.opted_out > 0 {
+                    info!(
+                        "Groups.io reconciled: +{} -{} opt-out {}",
+                        outcome.added, outcome.removed, outcome.opted_out
+                    );
+                }
+            }
+        });
+        info!(
+            "Groups.io mailing-list sync started (reconcile every {}s)",
+            interval_secs
+        );
+        Some(svc)
+    } else {
+        info!("Groups.io integration disabled, mailing-list sync not started");
+        None
+    };
+
     let app_state = AppState {
         config_manager,
         db: db_manager,
@@ -290,6 +333,7 @@ async fn main() -> Result<(), anyhow::Error> {
         device_transport,
         device_registry,
         device_inbound,
+        groupsio_sync,
     };
 
     // Serve frontend static files

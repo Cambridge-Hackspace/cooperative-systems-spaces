@@ -50,6 +50,10 @@ export interface PublicToolGuardConfig {
   profile_field: string
 }
 
+export interface PublicGroupsioConfig {
+  enabled: boolean
+}
+
 export interface PublicAuthConfig {
   // Already ANDed with email.enabled server-side, so this is "can a member
   // actually recover an account", not "did the operator tick the box". The
@@ -73,6 +77,7 @@ export interface PublicConfig {
   doors?: PublicDoorsConfig
   calendar?: PublicCalendarConfig
   toolguard?: PublicToolGuardConfig
+  groupsio?: PublicGroupsioConfig
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -188,6 +193,10 @@ export const useConfigStore = defineStore('config', () => {
     return !!config.value?.toolguard?.enabled
   }
 
+  function groupsioEnabled(): boolean {
+    return !!config.value?.groupsio?.enabled
+  }
+
   // Name of the profile field that holds the user's RFID/NFC card id, if
   // the server has one configured. Shared between ToolGuard and door access.
   function cardIdField(): string | null {
@@ -206,6 +215,7 @@ export const useConfigStore = defineStore('config', () => {
     doorsEnabled,
     calendarEnabled,
     toolguardEnabled,
+    groupsioEnabled,
     cardIdField,
   }
 })

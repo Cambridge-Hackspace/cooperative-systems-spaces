@@ -36,6 +36,7 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@PG_DB@", "css"),
     ("@MQTT_PORT@", "1883"),
     ("@SMTP_PORT@", "2525"),
+    ("@GROUPSIO_PORT@", "4390"),
 ];
 
 /// The value `substituted()` puts in for one placeholder, by name rather than

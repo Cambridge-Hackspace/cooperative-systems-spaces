@@ -73,6 +73,8 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/doors/00000000-0000-4000-8000-000000000001/rules", Guard::Admin), // doors::add_rule
     R("DELETE", "/api/admin/doors/00000000-0000-4000-8000-000000000001/rules/00000000-0000-4000-8000-000000000001", Guard::Admin), // doors::remove_rule
     R("POST", "/api/admin/doors/00000000-0000-4000-8000-000000000001/unlock", Guard::Admin), // doors::admin_unlock
+    R("POST", "/api/admin/groupsio/reconcile", Guard::Admin), // groupsio::admin_reconcile
+    R("GET", "/api/admin/groupsio/status", Guard::Admin), // groupsio::admin_status
     R("GET", "/api/admin/home-links", Guard::Admin), // home_links::list_links_admin
     R("POST", "/api/admin/home-links", Guard::Admin), // home_links::create_link
     R("DELETE", "/api/admin/home-links/00000000-0000-4000-8000-000000000001", Guard::Admin), // home_links::delete_link
@@ -136,6 +138,9 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/devices/ws", Guard::Device), // devices::device_ws
     R("POST", "/api/doors/00000000-0000-4000-8000-000000000001/checkin", Guard::Auth), // doors::door_checkin
     R("GET", "/api/doors/00000000-0000-4000-8000-000000000001/info", Guard::Auth), // doors::door_info
+    R("GET", "/api/groupsio/subscription", Guard::Auth), // groupsio::get_subscription
+    R("PUT", "/api/groupsio/subscription", Guard::Auth), // groupsio::set_subscription
+    R("POST", "/api/groupsio/webhook", Guard::Public), // groupsio::receive_webhook
     R("GET", "/api/instance/qr", Guard::Auth), // instance::get_instance_qr
     R("GET", "/api/pages/navigation", Guard::Public), // pages::get_navigation
     R("GET", "/api/pages/page", Guard::Public), // pages::list_site_pages

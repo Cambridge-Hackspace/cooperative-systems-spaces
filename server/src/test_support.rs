@@ -113,5 +113,8 @@ pub async fn app_state() -> AppState {
         device_registry,
         db,
         config_manager,
+        // The mailing-list sync is wired only when the module is enabled;
+        // fixtures leave it off, and reconcile-now checks for it before running.
+        groupsio_sync: None,
     }
 }

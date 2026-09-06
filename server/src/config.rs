@@ -972,6 +972,48 @@ impl Default for ToolConfig {
     }
 }
 
+/// Groups.io mailing-list integration module configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupsioConfig {
+    /// Master toggle. When false, all Groups.io endpoints reject, no sync
+    /// runs, and no membership is pushed or pulled.
+    pub enabled: bool,
+    /// Groups.io API key, sent as a bearer token. Secret; never exposed to the
+    /// SPA.
+    pub api_key: String,
+    /// Base URL of the Groups.io API.
+    pub base_url: String,
+    /// Identifier of the target group whose roster we mirror. The exact form
+    /// (numeric id vs subdomain/name) is settled against the live account.
+    pub group_id: String,
+    /// How often the reconciliation loop diffs our intended roster against the
+    /// group, in seconds.
+    pub sync_interval_secs: u64,
+    /// Shared secret used to verify inbound Groups.io membership webhooks.
+    /// Secret; never exposed to the SPA. Empty means no inbound webhook is
+    /// trusted (the reconciliation poll still catches every opt-out).
+    pub webhook_secret: String,
+    /// Addresses reconciliation must never remove even though the platform did
+    /// not add them -- the group owner, moderators, and any service accounts.
+    /// Because the platform owns the whole list, without this allowlist the
+    /// first sync would remove the group's own managers.
+    pub protected_addresses: Vec<String>,
+}
+
+impl Default for GroupsioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            base_url: "https://groups.io/api/v1".to_string(),
+            group_id: String::new(),
+            sync_interval_secs: 300,
+            webhook_secret: String::new(),
+            protected_addresses: Vec::new(),
+        }
+    }
+}
+
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -1017,6 +1059,9 @@ pub struct AppConfig {
     /// Configurable hierarchy of places
     #[serde(default)]
     pub place: PlaceConfig,
+    /// Groups.io mailing-list integration
+    #[serde(default)]
+    pub groupsio: GroupsioConfig,
 }
 
 impl Default for AppConfig {
@@ -1042,6 +1087,7 @@ impl Default for AppConfig {
             edge: EdgeConfig::default(),
             door: DoorConfig::default(),
             place: PlaceConfig::default(),
+            groupsio: GroupsioConfig::default(),
         }
     }
 }
@@ -1391,6 +1437,29 @@ fn validate_config(config: &AppConfig) -> Result<()> {
              point could ever sign in. Configure [email] and enable it, or turn \
              require_email_verification off."
         ));
+    }
+
+    // A Groups.io sync switched on but unable to authenticate, or not told
+    // which group to mirror, can only fail every cycle -- and because the
+    // platform owns the whole list, a group id left blank (or pointed at the
+    // wrong group) would try to reshape a roster that is not ours. Refused at
+    // boot and at reload, like the email guard above, so a misconfiguration is
+    // caught before the first destructive reconciliation rather than after it.
+    if config.groupsio.enabled {
+        if config.groupsio.api_key.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "groupsio.enabled is true but groupsio.api_key is empty, so no \
+                 request to Groups.io could authenticate. Set an API key, or set \
+                 groupsio.enabled = false."
+            ));
+        }
+        if config.groupsio.group_id.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "groupsio.enabled is true but groupsio.group_id is empty, so the \
+                 sync would not know which group to mirror. Set the target group, \
+                 or set groupsio.enabled = false."
+            ));
+        }
     }
 
     // CORS switched on with nothing to allow. The same failure the email guard

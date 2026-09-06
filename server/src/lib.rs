@@ -36,6 +36,8 @@ pub mod database;
 pub mod devices_inbound;
 pub mod devices_transport;
 pub mod doors;
+pub mod groupsio;
+pub mod groupsio_sync;
 pub mod mail;
 pub mod mfa;
 pub mod models;
@@ -59,6 +61,7 @@ use crate::database::DatabaseManager;
 use crate::devices_inbound::DeviceInbound;
 use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 use crate::doors::DoorService;
+use crate::groupsio_sync::GroupsIoService;
 use crate::mail::MailService;
 use crate::mfa::MfaService;
 use crate::mqtt::MqttService;
@@ -90,6 +93,9 @@ pub struct AppState {
     pub device_registry: Arc<DeviceChannelRegistry>,
     /// Shared inbound dispatcher used by both transports.
     pub device_inbound: Arc<DeviceInbound>,
+    /// Groups.io mailing-list sync. `None` when the module is disabled; the
+    /// admin "reconcile now" endpoint checks for it before running.
+    pub groupsio_sync: Option<Arc<GroupsIoService>>,
 }
 
 /// `GET /status` — the JSON liveness handler.

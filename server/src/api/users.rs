@@ -204,6 +204,32 @@ async fn update_user(
         crate::api::toolguard::broadcast_toolguard_state(&state).await;
     }
 
+    // Record an email change so the mailing-list sync can follow it. This path
+    // otherwise emits no audit event, so without this a changed address would
+    // stay on the Groups.io list under the old value until the next full
+    // reconciliation -- the sync consumes UserEmailChange to move it at once.
+    if let Some(ref new_email) = update_data.email {
+        if new_email != &existing_user.email {
+            if let Err(e) = state
+                .audit_logger
+                .log_event(
+                    AuditEventType::UserEmailChange,
+                    Some(user_id),
+                    Some(auth_user.0.id),
+                    serde_json::json!({
+                        "old_email": existing_user.email,
+                        "new_email": new_email,
+                    }),
+                    None,
+                    None,
+                )
+                .await
+            {
+                tracing::warn!("Failed to log user email change: {}", e);
+            }
+        }
+    }
+
     Ok(Json(ApiResponse::success_with_message(
         UserResponse::from(updated_user),
         "User updated successfully".to_string(),

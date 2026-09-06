@@ -37,6 +37,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    groupsio_sync_runs (id) {
+        id -> Uuid,
+        started_at -> Timestamptz,
+        finished_at -> Timestamptz,
+        added -> Int4,
+        removed -> Int4,
+        opted_out -> Int4,
+        ok -> Bool,
+        error -> Nullable<Text>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     audit_logs (id) {
         id -> Uuid,
         event_type -> Text,
@@ -349,6 +363,7 @@ diesel::table! {
         meta -> Jsonb,
         mfa_enrolled_at -> Nullable<Timestamptz>,
         email_verified_at -> Nullable<Timestamptz>,
+        mailing_list_opt_out_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -573,6 +588,7 @@ diesel::joinable!(email_verification_tokens -> users (user_id));
 diesel::allow_tables_to_appear_in_same_query!(
     audit_event_types,
     audit_logs,
+    groupsio_sync_runs,
     space_device_auth,
     space_device_auth_requests,
     space_devices,

@@ -19,6 +19,13 @@ path = "src/bin/webhook_recvr.rs"
 name = "css-smtp-sink"
 path = "src/bin/smtp_sink.rs"
 
+# The stack tier's Groups.io destination. Same reasoning as the two sinks above:
+# a stateful in-repo fake of the Groups.io member API, built alongside the
+# server, so the mailing-list stage needs no external service or pinned image.
+[[bin]]
+name = "css-groupsio-sink"
+path = "src/bin/groupsio_sink.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }

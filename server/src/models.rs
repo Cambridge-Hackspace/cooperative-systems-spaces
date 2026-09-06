@@ -28,7 +28,7 @@ pub use trainers::*;
 pub use training::*;
 pub use webhooks::*;
 
-use crate::schema::{audit_logs, sql_types, users};
+use crate::schema::{audit_logs, groupsio_sync_runs, sql_types, users};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -138,6 +138,15 @@ pub struct User {
     /// migration, so turning `auth.require_email_verification` on does not lock
     /// out an existing membership.
     pub email_verified_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the member opted out of the Groups.io mailing list. `None` means
+    /// subscribed-by-default: they are on the list once the account is active
+    /// and the email is verified. Set from the platform toggle or on learning
+    /// of an unsubscribe done from a Groups.io email link.
+    ///
+    /// Last in the struct for the same reason as `email_verified_at`:
+    /// `ALTER TABLE ADD COLUMN` appends physically and `Queryable` loads
+    /// positionally, so a new column must be the last field here too.
+    pub mailing_list_opt_out_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -229,6 +238,36 @@ pub struct NewAuditLog {
     pub event_data: serde_json::Value,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
+}
+
+/// One recorded Groups.io reconciliation pass, for the admin status view.
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = groupsio_sync_runs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct GroupsioSyncRun {
+    pub id: uuid::Uuid,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+    pub added: i32,
+    pub removed: i32,
+    pub opted_out: i32,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A reconciliation pass to record.
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = groupsio_sync_runs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewGroupsioSyncRun {
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+    pub added: i32,
+    pub removed: i32,
+    pub opted_out: i32,
+    pub ok: bool,
+    pub error: Option<String>,
 }
 
 /// Audit event types
@@ -339,6 +378,28 @@ pub enum AuditEventType {
     /// report this -- saying so would turn a send failure into an account
     /// enumeration oracle -- so this row is how an operator finds out.
     EmailSendFailed,
+    // Groups.io mailing-list opt-in/opt-out
+    //
+    // Appended at the tail, like the transactional-email group above, so a
+    // concurrent branch adding events near another group does not collide here.
+    /// A member asked, through the platform, to be on the mailing list (or had
+    /// their opt-out cleared). The Groups.io sync consumes this to add them.
+    MailingListSubscribe,
+    /// A member opted out of the mailing list -- via the platform toggle, or on
+    /// the platform learning of an unsubscribe done from a Groups.io email link.
+    /// The sync consumes this to remove them and never re-add.
+    MailingListUnsubscribe,
+    /// Reconciliation added an address to the Groups.io group to match intended
+    /// membership. A record of what the sync did, not a member action.
+    MailingListSyncAdd,
+    /// Reconciliation removed an address from the Groups.io group -- either it
+    /// was no longer intended, or (platform owns the list) it was a subscriber
+    /// the platform did not add. A record of what the sync did.
+    MailingListSyncRemove,
+    /// A user's email address was changed. Emitted from the account-update path,
+    /// which previously recorded nothing -- so a change there would silently
+    /// desync the mailing list. The payload carries the old and new addresses.
+    UserEmailChange,
 }
 
 impl AuditEventType {
@@ -419,6 +480,11 @@ impl AuditEventType {
             Self::EmailVerificationSent => "email_verification_sent",
             Self::EmailVerified => "email_verified",
             Self::EmailSendFailed => "email_send_failed",
+            Self::MailingListSubscribe => "mailing_list_subscribe",
+            Self::MailingListUnsubscribe => "mailing_list_unsubscribe",
+            Self::MailingListSyncAdd => "mailing_list_sync_add",
+            Self::MailingListSyncRemove => "mailing_list_sync_remove",
+            Self::UserEmailChange => "user_email_change",
         }
     }
 
@@ -502,6 +568,11 @@ impl AuditEventType {
             EmailVerificationSent,
             EmailVerified,
             EmailSendFailed,
+            MailingListSubscribe,
+            MailingListUnsubscribe,
+            MailingListSyncAdd,
+            MailingListSyncRemove,
+            UserEmailChange,
         ]
     }
 }

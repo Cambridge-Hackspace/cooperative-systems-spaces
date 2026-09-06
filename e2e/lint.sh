@@ -180,6 +180,7 @@ fi
 # whether the most expensive thing means anything.
 if command -v node >/dev/null 2>&1; then
   run "tier-9-oracle" node e2e/journeys/selftest.mjs
+  run "groupsio-oracle" node e2e/journeys/groupsio-selftest.mjs
 fi
 
 printf '\n'
