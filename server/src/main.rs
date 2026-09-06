@@ -29,6 +29,7 @@ use css_server::profile_fields;
 use css_server::recaptcha::RecaptchaService;
 use css_server::stripe::StripeClient;
 use css_server::throttle::RegistrationThrottleService;
+use css_server::tool_billing::ToolBillingService;
 use css_server::webhooks::WebhookDispatcher;
 
 #[derive(Parser, Debug)]
@@ -375,6 +376,20 @@ async fn main() -> Result<(), anyhow::Error> {
         None
     };
 
+    // Metered tool-billing service (Phase 2). Reuses the membership ledger; the
+    // abandoned-session sweep ticker is spawned after AppState is built because
+    // its re-broadcast needs the whole state.
+    let tool_billing = if app_config.tool_billing.enabled {
+        info!("Initializing metered tool billing...");
+        Some(ToolBillingService::new(
+            db_manager.clone(),
+            config_manager.clone(),
+        ))
+    } else {
+        info!("Tool billing disabled, metered tool billing not started");
+        None
+    };
+
     let app_state = AppState {
         config_manager,
         db: db_manager,
@@ -393,7 +408,34 @@ async fn main() -> Result<(), anyhow::Error> {
         device_inbound,
         groupsio_sync,
         membership,
+        tool_billing,
     };
+
+    // The tool-billing abandoned-session sweep. Spawned after AppState because it
+    // re-broadcasts the toolguard allow-list (freeing a settled hold can restore
+    // tools to a member's affordable set), which needs the whole state. Hourly.
+    if app_config.tool_billing.enabled {
+        let sweep_state = app_state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                if let Some(svc) = &sweep_state.tool_billing {
+                    match svc.sweep_abandoned() {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            info!("Tool-billing sweep settled {n} abandoned session(s)");
+                            css_server::api::toolguard::broadcast_toolguard_state(&sweep_state)
+                                .await;
+                        }
+                        Err(e) => warn!("Tool-billing sweep failed: {e}"),
+                    }
+                }
+            }
+        });
+        info!("Tool-billing sweep started (hourly)");
+    }
 
     // Serve frontend static files
     let frontend_path = args.frontend_path.clone();
