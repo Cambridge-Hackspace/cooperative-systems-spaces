@@ -365,9 +365,13 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // Public, so it is not counted here. (144 was itself groupsio's +4 over the
     // base 140.) The device surface did not move, which is the number this test
     // actually exists to hold still.
-    assert_eq!(jwt_routes, 152, "JWT-authenticated routes");
+    // 155, up from 152: Phase-2 tool billing added one Auth route
+    // (GET /api/tool-billing) and two Admin routes
+    // (/api/admin/tool-billing/status and .../users/{id}/sessions). The metered
+    // toolguard endpoints (tool-on/off/log) are unchanged InlineAuth routes.
+    assert_eq!(jwt_routes, 155, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 152 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 155 * 7 + 6 * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device token can only be rejected on its

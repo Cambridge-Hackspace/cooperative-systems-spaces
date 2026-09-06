@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -876,6 +876,29 @@ stage_stripe() {
 
   collect_server_log
   emit_junit stripe "driver=stripe.mjs"
+}
+
+# Metered pay-per-use tool billing. Drives the server toolguard endpoints
+# directly with a metered tool's per-tool key and a funded member: a hold at
+# activation, a settle on stop (never negative), per-tool-key enforcement,
+# insufficient-balance and membership denials, idempotency, and -- the one the
+# owner insisted on -- training gated before any money moves.
+stage_toolbilling() {
+  cases_begin toolbilling
+  stack_paths
+
+  if ! server_ready; then
+    record_case "toolbilling/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit toolbilling
+    return 1
+  fi
+  record_case "toolbilling/stack-is-up" ok
+
+  run_node toolbilling.mjs >"${OUT}/logs/toolbilling.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit toolbilling "driver=toolbilling.mjs"
 }
 
 stage_fuzz() {

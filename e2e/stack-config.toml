@@ -96,6 +96,21 @@ currency = "USD"
 accrual_interval_secs = 3600
 plan_name = "CSS E2E Membership"
 
+[tool_billing]
+# Enabled so the stripe/toolbilling stage exercises metered tool billing against
+# the ledger. Prepaid (never-negative) is the mode the stage asserts end to end;
+# postpaid's dip-and-block is unit-covered. EdgeLocal keeps the server tool-on as
+# the gate the driver calls directly. require_membership is on: the driver funds
+# a member (a large cash credit that also enrolls them) and also proves a
+# non-member with balance is denied.
+enabled = true
+billing_mode = "Prepaid"
+actuation_mode = "EdgeLocal"
+require_membership = true
+default_max_session_minutes = 120
+min_balance = "0"
+currency = "USD"
+
 # Enabled and pointed at css-groupsio-sink so the groupsio stage exercises the
 # whole sync against a simulated Groups.io. api_key/webhook_secret are the fixture
 # values the driver signs with; owner@e2e.invalid is protected so the stage can
@@ -276,6 +291,9 @@ label = "Other"
 [toolguard]
 enabled = true
 profile_field = "card_id"
+# A shared global key exists so the toolbilling stage can prove it is REJECTED
+# for a metered tool (which must use its own per-tool key).
+global_api_key = "e2e-global-key"
 
 [calendar]
 enabled = false

@@ -80,6 +80,8 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/membership/payments", Guard::Admin), // membership::admin_log_payment
     R("GET", "/api/admin/membership/users/00000000-0000-4000-8000-000000000001/ledger", Guard::Admin), // membership::admin_user_ledger
     R("POST", "/api/admin/membership/users/00000000-0000-4000-8000-000000000001/next-due", Guard::Admin), // membership::admin_set_next_due
+    R("GET", "/api/admin/tool-billing/status", Guard::Admin), // tool_billing::admin_status
+    R("GET", "/api/admin/tool-billing/users/00000000-0000-4000-8000-000000000001/sessions", Guard::Admin), // tool_billing::admin_user_sessions
     R("GET", "/api/admin/home-links", Guard::Admin), // home_links::list_links_admin
     R("POST", "/api/admin/home-links", Guard::Admin), // home_links::create_link
     R("DELETE", "/api/admin/home-links/00000000-0000-4000-8000-000000000001", Guard::Admin), // home_links::delete_link
@@ -150,6 +152,7 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/stripe/checkout", Guard::Auth), // stripe::create_checkout
     R("POST", "/api/stripe/portal", Guard::Auth), // stripe::create_portal
     R("POST", "/api/stripe/webhook", Guard::Public), // stripe::receive_webhook
+    R("GET", "/api/tool-billing", Guard::Auth), // tool_billing::get_my_tool_billing
     R("GET", "/api/instance/qr", Guard::Auth), // instance::get_instance_qr
     R("GET", "/api/pages/navigation", Guard::Public), // pages::get_navigation
     R("GET", "/api/pages/page", Guard::Public), // pages::list_site_pages

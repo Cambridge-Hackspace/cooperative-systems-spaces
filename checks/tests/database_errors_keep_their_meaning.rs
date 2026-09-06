@@ -80,6 +80,9 @@ const BUDGET: &[(&str, usize)] = &[
     // fault, validated at boot) and two upstream Stripe failures wrapping a
     // `StripeError` from checkout/portal. DB errors here use `ApiError::from`.
     ("stripe.rs", 4),
+    // 0: the tool-billing API maps DatabaseErrors through `ApiError::from`
+    // (preserving 404/409) and has no genuine server-fault 500 of its own.
+    ("tool_billing.rs", 0),
     ("toolguard.rs", 17),
     ("tools.rs", 0),
     ("trainers.rs", 1),
