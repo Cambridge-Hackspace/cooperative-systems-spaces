@@ -589,13 +589,27 @@ async fn add_rule(
     Json(req): Json<AddRuleRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let door = state.db.get_door(id)?;
-    if req.value.trim().is_empty() {
-        return Err(ApiError::BadRequest("value is required".to_string()));
-    }
+    // Open Access carries no `value` (the strike is held open for everyone while
+    // its window is active), but it *requires* a schedule: an unscheduled
+    // open-access rule would hold the door unlocked forever -- defeating access
+    // control and leaving no window end to push to the edge as `hold_unlock_until`.
+    let value = if req.kind == DoorRuleKind::OpenAccess {
+        if req.schedule_id.is_none() {
+            return Err(ApiError::BadRequest(
+                "open_access rules require a schedule".to_string(),
+            ));
+        }
+        String::new()
+    } else {
+        if req.value.trim().is_empty() {
+            return Err(ApiError::BadRequest("value is required".to_string()));
+        }
+        req.value
+    };
     let rule = state.db.insert_door_rule(&NewDoorAccessRule {
         door_id: id,
         kind: req.kind.as_str().to_string(),
-        value: req.value,
+        value,
         effect: req.effect.as_str().to_string(),
         schedule_id: req.schedule_id,
     })?;

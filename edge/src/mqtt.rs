@@ -571,6 +571,23 @@ impl LocalMqttClient {
         }
     }
 
+    /// Publish one Open Access hold pulse: a momentary unlock the hold-refresh
+    /// loop re-sends before it elapses to keep the strike energized for the whole
+    /// window. Same wire message as any unlock (the external relay firmware only
+    /// understands the momentary `duration_ms`); holding is a property of the
+    /// loop re-sending, and stopping is what relocks the door — fail-secure.
+    pub fn publish_doors_hold(&self, door_id: uuid::Uuid, duration_ms: i32) {
+        let response = LocalUnlockResponse {
+            door_id,
+            granted: true,
+            duration_ms,
+            reason: Some("open_access".to_string()),
+        };
+        if let Ok(v) = serde_json::to_value(&response) {
+            self.publish_local(LOCAL_DOOR_UNLOCK_RESP, &v);
+        }
+    }
+
     pub async fn handle_refresh_request(&self) {
         debug!("Kiosk refresh request received");
         if let Some(payload) = self.toolguard_state.get_state() {

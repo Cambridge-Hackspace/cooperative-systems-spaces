@@ -322,9 +322,10 @@
                 <option value="role">Role (≥)</option>
                 <option value="user">User</option>
                 <option value="card">Card ID</option>
+                <option value="open_access">Open Access</option>
               </select>
             </div>
-            <div class="form-control md:col-span-2">
+            <div v-if="newRule.kind !== 'open_access'" class="form-control md:col-span-2">
               <label class="label py-1"><span class="label-text">Value</span></label>
               <select
                 v-if="newRule.kind === 'role'"
@@ -366,7 +367,9 @@
             </div>
             <button
               class="btn btn-primary btn-sm md:col-span-5"
-              :disabled="!newRule.value.trim()"
+              :disabled="
+                newRule.kind === 'open_access' ? !newRule.schedule_id : !newRule.value.trim()
+              "
               @click="addRule"
             >
               Add rule
@@ -554,6 +557,7 @@ function userLabel(id: string) {
   return u ? `${u.full_name} (@${u.username})` : id.slice(0, 8)
 }
 function ruleValueLabel(r: DoorAccessRule) {
+  if (r.kind === 'open_access') return '— (held open on schedule)'
   if (r.kind === 'user') return userLabel(r.value)
   return r.value
 }
@@ -755,8 +759,13 @@ async function switchToQr() {
 }
 
 async function addRule() {
-  if (!detail.value || !newRule.value.value.trim()) return
-  const r = await doorsApi.addRule(detail.value.id, { ...newRule.value })
+  if (!detail.value) return
+  const isOpenAccess = newRule.value.kind === 'open_access'
+  // Open Access carries no value but requires a schedule (the server enforces
+  // both); every other kind requires a value.
+  if (isOpenAccess ? !newRule.value.schedule_id : !newRule.value.value.trim()) return
+  const payload = { ...newRule.value, value: isOpenAccess ? '' : newRule.value.value }
+  const r = await doorsApi.addRule(detail.value.id, payload)
   if (r.success) {
     notify('Rule added')
     newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''

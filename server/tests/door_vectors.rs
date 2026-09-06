@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use css_server::doors::{cards_in_profile, expand_rules_at};
+use css_server::doors::{cards_in_profile, expand_rules_at, open_access_hold_until_at};
 use css_server::models::{DoorAccessRule, Schedule, User, UserRole};
 use serde_json::Value;
 use uuid::Uuid;
@@ -107,6 +107,16 @@ fn set(v: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// An optional RFC 3339 instant from the vectors: absent or JSON `null` means
+/// "no hold" (`None`); anything else must parse.
+fn opt_dt(v: &Value) -> Option<DateTime<Utc>> {
+    match v {
+        Value::Null => None,
+        Value::String(s) => Some(s.parse().expect("hold_unlock_until must be RFC 3339")),
+        other => panic!("hold_unlock_until must be a string or null, got {other}"),
+    }
+}
+
 #[test]
 fn every_case_compiles_to_the_declared_card_sets() {
     let doc = vectors();
@@ -149,9 +159,13 @@ fn every_case_compiles_to_the_declared_card_sets() {
             .collect();
 
         let (allow, deny) = expand_rules_at(&rules, &users, &schedules, tz, profile_field, now);
+        let hold = open_access_hold_until_at(&rules, &schedules, tz, now);
 
         let want = &case["expect"]["server_compiled"];
         let (want_allow, want_deny) = (set(&want["allow"]), set(&want["deny"]));
+        // Absent key = no hold, which also pins that card-only rules never
+        // compile a held-unlock window.
+        let want_hold = opt_dt(&want["hold_unlock_until"]);
 
         if allow != want_allow {
             failures.push(format!(
@@ -160,6 +174,11 @@ fn every_case_compiles_to_the_declared_card_sets() {
         }
         if deny != want_deny {
             failures.push(format!("{name}: deny {deny:?} != expected {want_deny:?}"));
+        }
+        if hold != want_hold {
+            failures.push(format!(
+                "{name}: hold_unlock_until {hold:?} != expected {want_hold:?}"
+            ));
         }
     }
 
@@ -185,6 +204,9 @@ fn the_vector_file_was_actually_read() {
         "deny beats allow",
         "schedule-gated rule is silent",
         "inactive member",
+        "open access holds the door",
+        "deny open-access rule is inert",
+        "banned card stays out even during open access",
     ] {
         assert!(
             names.iter().any(|n| n.contains(needle)),

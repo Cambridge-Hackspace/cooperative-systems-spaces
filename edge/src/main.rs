@@ -269,6 +269,31 @@ async fn main() -> Result<()> {
                                     }
                                 });
                             }
+
+                            // Open Access hold: keep the strike energized while a
+                            // door's window is live. Driven off this device's own
+                            // clock, so it self-locks on a server disconnect; the
+                            // relay firmware only understands the momentary unlock,
+                            // so we re-send it faster than it elapses and simply
+                            // stop at the window end (the strike auto-relocks --
+                            // fail-secure). See doors::hold_pulses_at.
+                            {
+                                let lc = Arc::clone(&local_client);
+                                let ds = Arc::clone(&doors_state);
+                                let refresh_secs = css_edge::doors::HOLD_REFRESH_SECS;
+                                let refresh = chrono::Duration::seconds(refresh_secs as i64);
+                                tokio::spawn(async move {
+                                    let mut ticker = interval(Duration::from_secs(refresh_secs));
+                                    loop {
+                                        ticker.tick().await;
+                                        for (door_id, duration_ms) in
+                                            ds.hold_pulses_at(chrono::Utc::now(), refresh)
+                                        {
+                                            lc.publish_doors_hold(door_id, duration_ms);
+                                        }
+                                    }
+                                });
+                            }
                         }
                     }
                     Err(e) => error!("Failed to start local MQTT client: {}", e),

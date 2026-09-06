@@ -163,7 +163,7 @@ export interface MfaWebauthnRegisterBegin {
 
 // ===== Doors =====
 
-export type DoorRuleKind = 'role' | 'user' | 'card'
+export type DoorRuleKind = 'role' | 'user' | 'card' | 'open_access'
 export type DoorRuleEffect = 'allow' | 'deny'
 export type DoorAccessMethod = 'rfid' | 'qr_checkin' | 'admin_remote'
 
