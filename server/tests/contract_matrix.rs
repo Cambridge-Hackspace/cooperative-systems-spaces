@@ -358,14 +358,14 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
-    // 140, up from 139: `PUT /api/users/me/password` is new (self-service
-    // password change). The two training-session routes moved from
-    // `/sessions/{start,complete}` to `/progress/{user_id}/{start,complete}`,
-    // which is net zero. The device surface did not move, which is the number
-    // this test actually exists to hold still.
-    assert_eq!(jwt_routes, 140, "JWT-authenticated routes");
+    // 144, up from 140: the Groups.io module added two Auth routes
+    // (GET/PUT /api/groupsio/subscription) and two Admin routes
+    // (/api/admin/groupsio/status and /reconcile). Its inbound webhook is
+    // Public, so it is not counted here. The device surface did not move, which
+    // is the number this test actually exists to hold still.
+    assert_eq!(jwt_routes, 144, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 140 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 144 * 7 + 6 * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device token can only be rejected on its
