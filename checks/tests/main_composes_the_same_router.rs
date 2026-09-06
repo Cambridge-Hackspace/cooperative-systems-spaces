@@ -73,6 +73,11 @@ const SEPARATE_BINARIES: &[&str] = &[
     // Covered by the `mail` stage, which asserts what arrived rather than what
     // the mailer claimed to send.
     "bin/smtp_sink.rs",
+    // The standalone Groups.io sink the stack battery points [groupsio] at. It
+    // composes the fake Groups.io member API plus a small control surface, none
+    // of it the server's own routes. Covered by the `groupsio` stage, which
+    // asserts the roster it holds rather than what the sync claimed to do.
+    "bin/groupsio_sink.rs",
 ];
 
 /// Every `.route("...")` literal in a file, comments stripped.

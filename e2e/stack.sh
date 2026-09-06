@@ -72,6 +72,7 @@ MQTT_PORT="${CSS_E2E_MQTT_PORT:-1883}"
 export STACK_HOST="127.0.0.1"
 SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
 SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
+GROUPSIO_PORT="${CSS_E2E_GROUPSIO_PORT:-4390}"
 PG_USER="css_user"
 PG_PASS="css_pass"
 PG_DB="css"
@@ -377,6 +378,24 @@ stop_smtp_sink() {
   fi
 }
 
+# The Groups.io destination. A plain HTTP sink, so unlike css-smtp-sink it needs
+# no certificate; a host process in both provisioning modes, like the other
+# in-repo sinks. State is in-memory and control endpoints let the driver seed and
+# read the fake group's roster.
+start_groupsio_sink() {
+  log "starting css-groupsio-sink on ${GROUPSIO_PORT}"
+  GROUPSIO_SINK_BIND="127.0.0.1:${GROUPSIO_PORT}" \
+    "${ROOT}/e2e/artifacts/css-groupsio-sink" >"${OUT}/logs/groupsio-sink.log" 2>&1 &
+  echo $! >"${STACK_DIR}/groupsio-sink.pid"
+}
+
+stop_groupsio_sink() {
+  if [[ -f "${STACK_DIR}/groupsio-sink.pid" ]]; then
+    kill "$(cat "${STACK_DIR}/groupsio-sink.pid")" 2>/dev/null || true
+    rm -f "${STACK_DIR}/groupsio-sink.pid"
+  fi
+}
+
 # The runtime image: the shipping Dockerfile's runtime stage, minus the parts
 # that only matter in production. Built here rather than pulled because there is
 # no published image carrying these binaries, and built from a digest-pinned
@@ -440,6 +459,7 @@ write_stack_config() {
     -e "s|@PG_DB@|${PG_DB}|g" \
     -e "s|@MQTT_PORT@|${MQTT_PORT}|g" \
     -e "s|@SMTP_PORT@|${SMTP_PORT}|g" \
+    -e "s|@GROUPSIO_PORT@|${GROUPSIO_PORT}|g" \
     -e "s|^bind_address = \"127\.0\.0\.1:|bind_address = \"${bind}:|" \
     -e "s|http://127\.0\.0\.1:|http://${host}:|g" \
     "${ROOT}/e2e/stack-config.toml" >"${STACK_DIR}/config.toml"
@@ -610,6 +630,7 @@ run_node() {
       CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       CSS_STACK_DIR="${STACK_DIR}" \
       CSS_DB_ENCODING="${PG_ENCODING}" \
+      CSS_GROUPSIO_SINK_URL="http://127.0.0.1:${GROUPSIO_PORT}" \
       node "${ROOT}/e2e/drivers/${script}" "$@"
   else
     # Configuration the drivers read, forwarded explicitly.
@@ -641,6 +662,7 @@ run_node() {
       -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
       -e CSS_STACK_DIR=/stack \
       -e CSS_DB_ENCODING="${PG_ENCODING}" \
+      -e CSS_GROUPSIO_SINK_URL="http://127.0.0.1:${GROUPSIO_PORT}" \
       -v "${ROOT}/e2e:/e2e:ro" \
       -v "${STACK_DIR}:/stack" \
       "${IMG_NODE}" node "/e2e/drivers/${script}" "$@"
