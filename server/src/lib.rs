@@ -36,6 +36,7 @@ pub mod database;
 pub mod devices_inbound;
 pub mod devices_transport;
 pub mod doors;
+pub mod groupsio;
 pub mod mail;
 pub mod mfa;
 pub mod models;
