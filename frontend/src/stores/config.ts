@@ -65,6 +65,12 @@ export interface PublicMembershipConfig {
   plan_name: string
 }
 
+export interface PublicToolBillingConfig {
+  enabled: boolean
+  billing_mode: string
+  currency: string
+}
+
 export interface PublicAuthConfig {
   // Already ANDed with email.enabled server-side, so this is "can a member
   // actually recover an account", not "did the operator tick the box". The
@@ -90,6 +96,7 @@ export interface PublicConfig {
   toolguard?: PublicToolGuardConfig
   groupsio?: PublicGroupsioConfig
   membership?: PublicMembershipConfig
+  tool_billing?: PublicToolBillingConfig
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -221,6 +228,14 @@ export const useConfigStore = defineStore('config', () => {
     return config.value?.membership ?? null
   }
 
+  function toolBillingEnabled(): boolean {
+    return !!config.value?.tool_billing?.enabled
+  }
+
+  function toolBillingInfo(): PublicToolBillingConfig | null {
+    return config.value?.tool_billing ?? null
+  }
+
   // The organization's display name, and its short label. Configurable so no
   // view hardcodes the organization name; `siteShortName` falls back to the full
   // name when no abbreviation is set.
@@ -254,6 +269,8 @@ export const useConfigStore = defineStore('config', () => {
     membershipEnabled,
     stripeEnabled,
     membershipInfo,
+    toolBillingEnabled,
+    toolBillingInfo,
     siteName,
     siteShortName,
     cardIdField,

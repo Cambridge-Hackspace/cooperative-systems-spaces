@@ -24,6 +24,12 @@ pub struct SyncTool {
     pub external_id: Option<String>,
     pub name: String,
     pub status: ToolStatus,
+    /// True when the server runs metered tool billing in online-synchronous
+    /// mode: the edge must ask the server before energizing this tool rather
+    /// than deciding from the cached allow-list. `#[serde(default)]` so a server
+    /// that does not send it (older, or edge-local mode) parses as `false`.
+    #[serde(default)]
+    pub requires_online: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,5 +174,23 @@ impl ToolGuardState {
         }
 
         AccessResult::Authorized
+    }
+
+    /// Whether the server flagged this tool as requiring online (synchronous)
+    /// actuation -- a metered tool under `actuation_mode = OnlineSynchronous`.
+    /// The edge must then ask the server before energizing it rather than
+    /// trusting the cached allow-list. Unknown tool / no state -> false (the
+    /// offline-capable default).
+    pub fn tool_requires_online(&self, tool_id_str: &str) -> bool {
+        let guard = self.inner.read().unwrap();
+        guard
+            .as_ref()
+            .and_then(|state| {
+                state.tools.iter().find(|t| {
+                    t.external_id.as_deref() == Some(tool_id_str) || t.id.to_string() == tool_id_str
+                })
+            })
+            .map(|t| t.requires_online)
+            .unwrap_or(false)
     }
 }

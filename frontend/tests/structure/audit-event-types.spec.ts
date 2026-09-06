@@ -104,7 +104,9 @@ describe('the audit filter against the server enum', () => {
       // _revoked / _payment_recorded / _last_admin_protected and
       // subscription_started / _canceled / _payment_failed). Same rationale --
       // billing lifecycle records, not access-control filters.
-    ).toBe(69)
+      // 69 -> 71: metered tool billing added tool_usage_charged and
+      // tool_session_abandoned. Same rationale -- billing records, not filters.
+    ).toBe(71)
   })
 
   // Named separately because these are the ones that matter in an

@@ -40,6 +40,11 @@ export interface Tool {
   created_at: string
   updated_at: string
   external_id?: string
+  // Metered pay-per-use billing (Phase 2). A tool is "metered" iff a flat fee
+  // or a per-minute rate is set. Decimals travel as strings.
+  usage_flat_fee?: string | null
+  usage_rate_per_min?: string | null
+  usage_max_session_minutes?: number | null
   // Additional fields that may be present
   manufacturer?: string
   model?: string
@@ -58,6 +63,9 @@ export interface CreateToolRequest {
   maintenance_notes?: string
   requires_training?: boolean
   external_id?: string
+  usage_flat_fee?: string | null
+  usage_rate_per_min?: string | null
+  usage_max_session_minutes?: number | null
   manufacturer?: string
   model?: string
   notes?: string
@@ -79,6 +87,9 @@ export interface UpdateToolRequest {
   maintenance_notes?: string
   requires_training?: boolean
   external_id?: string
+  usage_flat_fee?: string | null
+  usage_rate_per_min?: string | null
+  usage_max_session_minutes?: number | null
   manufacturer?: string
   model?: string
   notes?: string

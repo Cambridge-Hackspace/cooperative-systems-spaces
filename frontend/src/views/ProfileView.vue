@@ -55,6 +55,8 @@
     <!-- Mailing List subscription (own profile only, when the module is enabled) -->
     <MembershipCard v-if="isOwnProfile && membershipEnabled" class="mb-6" />
 
+    <ToolBillingCard v-if="isOwnProfile && toolBillingEnabled" class="mb-6" />
+
     <MailingListCard v-if="isOwnProfile && groupsioEnabled" class="mb-6" />
 
     <!-- Theme Picker (only shown for own profile) -->
@@ -76,6 +78,7 @@ import UserProfile from '@/components/UserProfile.vue'
 import ThemePicker from '@/components/ThemePicker.vue'
 import MailingListCard from '@/components/MailingListCard.vue'
 import MembershipCard from '@/components/MembershipCard.vue'
+import ToolBillingCard from '@/components/ToolBillingCard.vue'
 import InstanceQrCard from '@/components/InstanceQrCard.vue'
 import { apiClient, mfaApi } from '@/utils/api'
 import type { User } from '@/types'
@@ -95,6 +98,7 @@ const cardFieldConfigured = computed(() => !!configStore.cardIdField())
 /** True when the Groups.io mailing-list module is enabled server-side. */
 const groupsioEnabled = computed(() => configStore.groupsioEnabled())
 const membershipEnabled = computed(() => configStore.membershipEnabled())
+const toolBillingEnabled = computed(() => configStore.toolBillingEnabled())
 
 // Computed properties
 const userId = computed(() => {

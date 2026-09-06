@@ -200,6 +200,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/admin/tool-billing',
+      name: 'admin-tool-billing',
+      component: () => import('@/components/ToolBillingManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
       path: '/admin/doors',
       redirect: { name: 'admin-facility', query: { tab: 'doors' } },
     },

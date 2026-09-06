@@ -154,6 +154,49 @@
           </label>
         </div>
 
+        <fieldset v-if="toolBillingEnabled" class="form-group metered-billing">
+          <legend>Metered billing</legend>
+          <small class="help-text">
+            Set a flat fee and/or a per-minute rate to charge for using this tool. Leave both blank
+            for a free (training-gated) tool.
+          </small>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="usage_flat_fee">Flat fee per use</label>
+              <input
+                id="usage_flat_fee"
+                v-model="form.usage_flat_fee"
+                type="text"
+                inputmode="decimal"
+                placeholder="e.g. 0.50"
+                class="input"
+              />
+            </div>
+            <div class="form-group">
+              <label for="usage_rate_per_min">Rate per minute</label>
+              <input
+                id="usage_rate_per_min"
+                v-model="form.usage_rate_per_min"
+                type="text"
+                inputmode="decimal"
+                placeholder="e.g. 0.20"
+                class="input"
+              />
+            </div>
+            <div class="form-group">
+              <label for="usage_max_session_minutes">Max session minutes</label>
+              <input
+                id="usage_max_session_minutes"
+                v-model.number="form.usage_max_session_minutes"
+                type="number"
+                min="1"
+                placeholder="default"
+                class="input"
+              />
+            </div>
+          </div>
+        </fieldset>
+
         <div class="form-group">
           <label for="notes">Notes</label>
           <textarea
@@ -181,11 +224,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { toolsApi, schedulesApi } from '../utils/api'
 import type { Tool, ToolCategory } from '../types/tools'
 import type { Schedule } from '../types'
 import SchedulePicker from './SchedulePicker.vue'
+import { useConfigStore } from '@/stores/config'
 import axios from 'axios'
 
 interface Props {
@@ -199,6 +243,9 @@ interface Emits {
 
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
+
+const configStore = useConfigStore()
+const toolBillingEnabled = computed(() => configStore.toolBillingEnabled())
 
 // State
 const loading = ref(false)
@@ -225,6 +272,9 @@ const form = ref({
   requires_training: false,
   notes: '',
   schedule_id: null,
+  usage_flat_fee: '',
+  usage_rate_per_min: '',
+  usage_max_session_minutes: undefined,
 })
 
 // Methods
@@ -261,6 +311,9 @@ const loadToolData = () => {
     requires_training: props.tool.requires_training || false,
     notes: props.tool.notes || '',
     schedule_id: (props.tool as any).schedule_id ?? null,
+    usage_flat_fee: props.tool.usage_flat_fee ?? '',
+    usage_rate_per_min: props.tool.usage_rate_per_min ?? '',
+    usage_max_session_minutes: props.tool.usage_max_session_minutes ?? undefined,
   }
 }
 
