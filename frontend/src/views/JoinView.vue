@@ -12,7 +12,7 @@
       <section>
         <h2 class="text-2xl font-semibold mb-2">About</h2>
         <p class="leading-relaxed">
-          Cambridge Hackspace grew out of a small group meeting weekly to work on projects and meet
+          {{ siteName }} grew out of a small group meeting weekly to work on projects and meet
           like-minded people. Years later the idea hasn't changed &mdash; we've just grown into it:
           our own space, a solid set of tools, and a community built up over time.
         </p>
@@ -64,4 +64,9 @@
 
 <script setup lang="ts">
 // Join page component
+import { computed } from 'vue'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
 </script>

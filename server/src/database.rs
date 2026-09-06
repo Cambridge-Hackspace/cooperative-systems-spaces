@@ -1765,37 +1765,49 @@ impl DatabaseManager {
         &self,
         user_id: uuid::Uuid,
         tool_id: uuid::Uuid,
+        metered_gate: Option<&crate::tool_billing::MeteredGate>,
     ) -> Result<bool, DatabaseError> {
         // First check if tool requires training
         let tool = self
             .get_tool_by_id(tool_id)?
             .ok_or_else(|| DatabaseError::Diesel(diesel::result::Error::NotFound))?;
 
-        if !tool.requires_training {
-            return Ok(true); // No training required
-        }
-
-        // One rule, one implementation.
+        // Training gate, one rule, one implementation.
         //
-        // This used to re-derive the answer with a bare existence test --
-        // `count() > 0` against user_training_progress, reading neither
-        // `status` nor `expires_at` -- while the toolguard sync path asked
-        // `user_has_completed_all_training_steps`, which reads both.
-        //
-        // They disagreed in the direction that matters. `start_training_session`
-        // is self-serve for your own user and upserts, so a member could grant
-        // themselves web-reported access to any tool by pressing Start Training
-        // once per step. An expired certification still read as access, and so
-        // did a `failed` step. The physical guard refused all three, so the web
+        // The web path used to re-derive the answer with a bare existence test
+        // that read neither `status` nor `expires_at`, while the sync path asked
+        // `user_has_completed_all_training_steps`, which reads both -- so the web
         // UI told members they could use machines the door would not open.
         //
         // Deliberately still not identical to the sync path: that one keys off
         // `tool_has_training_steps` and ignores `tool.requires_training`, so a
         // tool with the flag off and steps configured is answered differently
-        // there than here. Changing what the physical guard permits is a
-        // separate decision and is not being made silently inside a fix to the
-        // web path. checks/tests/tool_access_agrees.rs pins both halves.
-        self.user_has_completed_all_training_steps(user_id, tool_id)
+        // there than here. checks/tests/tool_access_agrees.rs pins both halves.
+        let training_ok = if !tool.requires_training {
+            true
+        } else {
+            self.user_has_completed_all_training_steps(user_id, tool_id)?
+        };
+        if !training_ok {
+            return Ok(false);
+        }
+
+        // Metered-billing gate (Phase 2). When tool billing is on, the same
+        // affordability + membership check the live guard and the edge allow-list
+        // apply, so the web self-report agrees with what the machine will do
+        // rather than promising access a member cannot afford.
+        if let Some(gate) = metered_gate {
+            let Some(user) = self.find_user_by_id(user_id)? else {
+                return Ok(false);
+            };
+            let available = self.available_balance(user_id)?;
+            let is_member = user.role.rank() >= gate.member_role_rank;
+            if !gate.authorizes(&tool, &available, is_member) {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
     }
 
     // Placeholder implementations for complex training methods
@@ -1848,7 +1860,9 @@ impl DatabaseManager {
             tool_name: tool.name,
             steps,
             overall_progress,
-            can_access_tool: self.can_access_tool(user_id, tool_id)?,
+            // This overview field means "training complete", so it is the
+            // training-only answer -- no metered gate here.
+            can_access_tool: self.can_access_tool(user_id, tool_id, None)?,
             next_step,
         })
     }
@@ -2214,6 +2228,7 @@ impl DatabaseManager {
     pub fn get_toolguard_sync_data(
         &self,
         profile_field: &str,
+        metered_gate: Option<&crate::tool_billing::MeteredGate>,
     ) -> Result<
         (
             Vec<crate::api::toolguard::ToolGuardSyncUser>,
@@ -2272,14 +2287,34 @@ impl DatabaseManager {
 
             // Authorization is per-user, so compute it once and reuse across
             // every identifier this user exposes.
+            //
+            // Training is the first gate (unchanged). When tool billing is on, a
+            // metered tool the member cannot currently afford (or, if required,
+            // is not a member for) is additionally dropped here -- the per-user
+            // affordability filter that makes edge-local actuation safe. Money is
+            // never charged here; this only shapes the offered list. Available
+            // balance is read once per user (not per tool).
+            let metered_ctx = metered_gate.map(|g| {
+                let available = self
+                    .available_balance(user.id)
+                    .unwrap_or_else(|_| bigdecimal::BigDecimal::from(0));
+                let is_member = user.role.rank() >= g.member_role_rank;
+                (g, available, is_member)
+            });
             let mut authorized_tool_ids = Vec::new();
             for tool in &all_tools {
                 let has_steps = self.tool_has_training_steps(tool.id)?;
-                let authorized = if has_steps {
+                let mut authorized = if has_steps {
                     self.user_has_completed_all_training_steps(user.id, tool.id)?
                 } else {
                     true
                 };
+
+                if authorized {
+                    if let Some((gate, available, is_member)) = &metered_ctx {
+                        authorized = gate.authorizes(tool, available, *is_member);
+                    }
+                }
 
                 if authorized {
                     authorized_tool_ids.push(tool.id);
@@ -2306,6 +2341,7 @@ impl DatabaseManager {
                 external_id: t.external_id.clone(),
                 name: t.name.clone(),
                 status: t.status.clone(),
+                requires_online: metered_gate.map(|g| g.requires_online(t)).unwrap_or(false),
             })
             .collect();
 
@@ -3116,6 +3152,396 @@ impl DatabaseManager {
             .order(started_at.desc())
             .limit(limit)
             .select(crate::models::GroupsioSyncRun::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // --- membership dues ledger ------------------------------------------
+
+    /// Insert one ledger entry.
+    pub fn insert_ledger_entry(
+        &self,
+        entry: &crate::models::NewMembershipLedgerEntry,
+    ) -> Result<crate::models::MembershipLedgerEntry, DatabaseError> {
+        use crate::schema::membership_ledger;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(membership_ledger::table)
+            .values(entry)
+            .returning(crate::models::MembershipLedgerEntry::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Whether a ledger entry already exists for a Stripe reference id. The
+    /// second oracle for webhook idempotency, alongside the partial unique index:
+    /// callers check this before inserting so a redelivered event is a no-op
+    /// rather than a unique-violation error to swallow.
+    pub fn ledger_entry_exists_for_reference(
+        &self,
+        reference: &str,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::membership_ledger::dsl::*;
+        let mut conn = self.get_connection()?;
+        let n: i64 = membership_ledger
+            .filter(external_reference.eq(reference))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(n > 0)
+    }
+
+    /// A member's current balance: the sum of their ledger amounts, or zero if
+    /// they have none. The single source of truth for entitlement -- there is no
+    /// cached balance column to drift from this.
+    ///
+    /// Summed in Rust rather than with `diesel::dsl::sum`: that name is an
+    /// ambiguous glob re-export in diesel 2.3 (a `sum` type alias and a `sum`
+    /// function both land in `dsl`), which is a hard error under
+    /// `deny(future_incompatible)`. A member's ledger is small, so loading the
+    /// amounts and folding them is cheap and unambiguous.
+    pub fn user_balance(&self, uid: uuid::Uuid) -> Result<bigdecimal::BigDecimal, DatabaseError> {
+        use crate::schema::membership_ledger::dsl::*;
+        let mut conn = self.get_connection()?;
+        let amounts: Vec<bigdecimal::BigDecimal> = membership_ledger
+            .filter(user_id.eq(uid))
+            .select(amount)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(amounts
+            .into_iter()
+            .fold(bigdecimal::BigDecimal::from(0), |acc, a| acc + a))
+    }
+
+    /// A member's ledger, newest first, for the admin drill-down.
+    pub fn list_user_ledger(
+        &self,
+        uid: uuid::Uuid,
+        limit: i64,
+    ) -> Result<Vec<crate::models::MembershipLedgerEntry>, DatabaseError> {
+        use crate::schema::membership_ledger::dsl::*;
+        let mut conn = self.get_connection()?;
+        membership_ledger
+            .filter(user_id.eq(uid))
+            .order(occurred_at.desc())
+            .limit(limit)
+            .select(crate::models::MembershipLedgerEntry::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// How many active admins exist. The last-admin guard reads this before a
+    /// billing-driven demotion: an Admin whose lapse would take the count to
+    /// zero is never demoted.
+    ///
+    /// The active filter runs in SQL, but the `role == Admin` count is done in
+    /// Rust: a `.filter(role.eq(...))` on the custom `user_role` enum column
+    /// would require `sql_types::UserRole: QueryId`, which the generated schema
+    /// does not derive -- and deriving it there is a change a `diesel
+    /// print-schema` regeneration would silently drop. Loading a single enum
+    /// column needs no such bound, and the active-user set is small.
+    pub fn count_active_admins(&self) -> Result<i64, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let roles: Vec<crate::models::UserRole> = users
+            .filter(is_active.eq(true))
+            .select(role)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(roles
+            .iter()
+            .filter(|r| **r == crate::models::UserRole::Admin)
+            .count() as i64)
+    }
+
+    /// Every enrolled user (has a membership clock), for the renewal cycle.
+    pub fn enrolled_users(&self) -> Result<Vec<User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(membership_next_due_at.is_not_null())
+            .select(User::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every user linked to a Stripe customer, for the invoice-poll backbone
+    /// (which must re-credit even a lapsed, un-enrolled member whose renewal
+    /// webhook was missed -- so this is not restricted to enrolled users).
+    pub fn users_with_stripe_customer(&self) -> Result<Vec<User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(stripe_customer_id.is_not_null())
+            .select(User::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Map a Stripe customer id back to the platform user (webhook handling).
+    pub fn find_user_by_stripe_customer_id(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<User>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(stripe_customer_id.eq(customer_id))
+            .select(User::as_select())
+            .first::<User>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Set (or clear, with `None`) a member's next-due anniversary. Clearing it
+    /// un-enrolls them: a lapse ends the membership rather than carrying a debt.
+    pub fn set_membership_next_due(
+        &self,
+        uid: uuid::Uuid,
+        next_due: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                membership_next_due_at.eq(next_due),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Record (or clear) the Stripe customer id for a user.
+    pub fn set_stripe_customer_id(
+        &self,
+        uid: uuid::Uuid,
+        customer_id: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                stripe_customer_id.eq(customer_id),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Record the user's Stripe subscription id and last-seen status together.
+    /// Both are set each call (either may be `None`), so a cancellation clears
+    /// the id while stamping the status.
+    pub fn set_stripe_subscription(
+        &self,
+        uid: uuid::Uuid,
+        subscription_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                stripe_subscription_id.eq(subscription_id),
+                subscription_status.eq(status),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Record one membership renewal-cycle pass.
+    pub fn record_membership_sync_run(
+        &self,
+        run: &crate::models::NewMembershipSyncRun,
+    ) -> Result<crate::models::MembershipSyncRun, DatabaseError> {
+        use crate::schema::membership_sync_runs;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(membership_sync_runs::table)
+            .values(run)
+            .returning(crate::models::MembershipSyncRun::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The most recent renewal-cycle passes, newest first.
+    pub fn latest_membership_sync_runs(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::models::MembershipSyncRun>, DatabaseError> {
+        use crate::schema::membership_sync_runs::dsl::*;
+        let mut conn = self.get_connection()?;
+        membership_sync_runs
+            .order(started_at.desc())
+            .limit(limit)
+            .select(crate::models::MembershipSyncRun::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    // --- metered tool-billing sessions -----------------------------------
+
+    /// Sum of the still-open holds for a user (summed in Rust to dodge the
+    /// `diesel::dsl::sum` glob ambiguity, as `user_balance` does).
+    pub fn sum_open_tool_holds(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<bigdecimal::BigDecimal, DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        let mut conn = self.get_connection()?;
+        let holds: Vec<bigdecimal::BigDecimal> = tool_usage_sessions
+            .filter(user_id.eq(uid))
+            .filter(status.eq("open"))
+            .select(hold_amount)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(holds
+            .into_iter()
+            .fold(bigdecimal::BigDecimal::from(0), |acc, h| acc + h))
+    }
+
+    /// A member's available balance: ledger balance minus open holds. This is
+    /// what the metered-tool gate reads, so concurrent sessions cannot
+    /// double-spend the same funds.
+    pub fn available_balance(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<bigdecimal::BigDecimal, DatabaseError> {
+        Ok(self.user_balance(uid)? - self.sum_open_tool_holds(uid)?)
+    }
+
+    /// The open session for a tool, if any (at most one, per the partial unique
+    /// index). Used to correlate a usage report to its session and to settle.
+    pub fn open_tool_session_for_tool(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Option<crate::models::ToolUsageSession>, DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_usage_sessions
+            .filter(tool_id.eq(tid))
+            .filter(status.eq("open"))
+            .select(crate::models::ToolUsageSession::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Open a session (place the hold).
+    pub fn insert_tool_session(
+        &self,
+        session: &crate::models::NewToolUsageSession,
+    ) -> Result<crate::models::ToolUsageSession, DatabaseError> {
+        use crate::schema::tool_usage_sessions;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_usage_sessions::table)
+            .values(session)
+            .returning(crate::models::ToolUsageSession::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Accumulate device-reported usage onto an open session (validated/capped by
+    /// the caller). No-op if the session is not open.
+    pub fn add_reported_seconds(
+        &self,
+        session_id: uuid::Uuid,
+        seconds: bigdecimal::BigDecimal,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        let mut conn = self.get_connection()?;
+        // COALESCE(reported_seconds, 0) + seconds, in Rust to keep the query simple.
+        let current: Option<Option<bigdecimal::BigDecimal>> = tool_usage_sessions
+            .filter(id.eq(session_id))
+            .filter(status.eq("open"))
+            .select(reported_seconds)
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        let Some(existing) = current else {
+            return Ok(()); // not open (or gone) -- nothing to accumulate
+        };
+        let total = existing.unwrap_or_else(|| bigdecimal::BigDecimal::from(0)) + seconds;
+        diesel::update(
+            tool_usage_sessions
+                .filter(id.eq(session_id))
+                .filter(status.eq("open")),
+        )
+        .set(reported_seconds.eq(total))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// Settle an open session: record the charge/usage and close it. Returns
+    /// `true` iff this call was the one that closed it -- **idempotent**: a second
+    /// settle (a replayed report) matches no open row and returns `false`, so a
+    /// charge is posted at most once.
+    pub fn settle_tool_session(
+        &self,
+        session_id: uuid::Uuid,
+        reported: Option<bigdecimal::BigDecimal>,
+        charged: bigdecimal::BigDecimal,
+        ledger_entry: Option<uuid::Uuid>,
+        new_status: &str,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(
+            tool_usage_sessions
+                .filter(id.eq(session_id))
+                .filter(status.eq("open")),
+        )
+        .set((
+            ended_at.eq(Some(chrono::Utc::now())),
+            reported_seconds.eq(reported),
+            charged_amount.eq(Some(charged)),
+            ledger_entry_id.eq(ledger_entry),
+            status.eq(new_status),
+        ))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(affected > 0)
+    }
+
+    /// Open sessions started before `cutoff`, for the abandoned-session sweep.
+    pub fn open_tool_sessions_older_than(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::models::ToolUsageSession>, DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_usage_sessions
+            .filter(status.eq("open"))
+            .filter(started_at.lt(cutoff))
+            .select(crate::models::ToolUsageSession::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// A member's recent tool sessions, for the admin/self view.
+    pub fn list_tool_sessions_for_user(
+        &self,
+        uid: uuid::Uuid,
+        limit: i64,
+    ) -> Result<Vec<crate::models::ToolUsageSession>, DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_usage_sessions
+            .filter(user_id.eq(uid))
+            .order(started_at.desc())
+            .limit(limit)
+            .select(crate::models::ToolUsageSession::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }

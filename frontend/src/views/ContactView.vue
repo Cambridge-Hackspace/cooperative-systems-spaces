@@ -45,19 +45,24 @@
       <section>
         <h2 class="text-xl font-semibold mb-2">Accessibility</h2>
         <p class="leading-relaxed">
-          Cambridge Hackspace welcomes individuals with disabilities to participate in our
-          activities. Although we're on the ground floor, the main building entrance has three steps
-          up from street level, and we don't have a ramp or lift. We're happy to arrange
-          accommodations so you can join us on a Tuesday Project Night or other event &mdash; just
-          reach out to the email above.
+          {{ siteName }} welcomes individuals with disabilities to participate in our activities.
+          Although we're on the ground floor, the main building entrance has three steps up from
+          street level, and we don't have a ramp or lift. We're happy to arrange accommodations so
+          you can join us on a Tuesday Project Night or other event &mdash; just reach out to the
+          email above.
         </p>
       </section>
 
-      <img src="/images/map.png" alt="Map to Cambridge Hackspace" class="rounded-lg max-w-full" />
+      <img src="/images/map.png" :alt="`Map to ${siteName}`" class="rounded-lg max-w-full" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 // Contact page component
+import { computed } from 'vue'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
 </script>

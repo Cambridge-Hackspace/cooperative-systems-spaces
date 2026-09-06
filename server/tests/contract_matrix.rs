@@ -358,14 +358,20 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
-    // 144, up from 140: the Groups.io module added two Auth routes
-    // (GET/PUT /api/groupsio/subscription) and two Admin routes
-    // (/api/admin/groupsio/status and /reconcile). Its inbound webhook is
-    // Public, so it is not counted here. The device surface did not move, which
-    // is the number this test actually exists to hold still.
-    assert_eq!(jwt_routes, 144, "JWT-authenticated routes");
+    // 152, up from 144: the membership module added three Auth routes
+    // (GET /api/membership, POST /api/stripe/checkout, POST /api/stripe/portal)
+    // and five Admin routes (/api/admin/membership/{status,reconcile,payments}
+    // and .../users/{id}/{ledger,next-due}). Its inbound Stripe webhook is
+    // Public, so it is not counted here. (144 was itself groupsio's +4 over the
+    // base 140.) The device surface did not move, which is the number this test
+    // actually exists to hold still.
+    // 155, up from 152: Phase-2 tool billing added one Auth route
+    // (GET /api/tool-billing) and two Admin routes
+    // (/api/admin/tool-billing/status and .../users/{id}/sessions). The metered
+    // toolguard endpoints (tool-on/off/log) are unchanged InlineAuth routes.
+    assert_eq!(jwt_routes, 155, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 144 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 155 * 7 + 6 * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device token can only be rejected on its

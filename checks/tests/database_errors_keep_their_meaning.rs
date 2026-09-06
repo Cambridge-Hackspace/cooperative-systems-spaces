@@ -60,6 +60,11 @@ const BUDGET: &[(&str, usize)] = &[
     ("groupsio.rs", 1),
     ("home_links.rs", 0),
     ("instance.rs", 0),
+    // 1: the `service()` helper's "membership service is not running" -- the
+    // module is enabled but was not wired at boot, a server inconsistency the
+    // caller cannot fix. Not a laundered DatabaseError (those use
+    // `ApiError::from`, which preserves 404/409).
+    ("membership.rs", 1),
     ("mfa.rs", 8),
     ("mod.rs", 0),
     ("pages.rs", 0),
@@ -70,6 +75,14 @@ const BUDGET: &[(&str, usize)] = &[
     ("profiles.rs", 4),
     ("responses.rs", 0),
     ("schedules.rs", 3),
+    // 4: the `service()` helper (as membership.rs) plus three genuine 500s that
+    // are not DatabaseErrors -- an unparseable `membership.due_amount` (a config
+    // fault, validated at boot) and two upstream Stripe failures wrapping a
+    // `StripeError` from checkout/portal. DB errors here use `ApiError::from`.
+    ("stripe.rs", 4),
+    // 0: the tool-billing API maps DatabaseErrors through `ApiError::from`
+    // (preserving 404/409) and has no genuine server-fault 500 of its own.
+    ("tool_billing.rs", 0),
     ("toolguard.rs", 17),
     ("tools.rs", 0),
     ("trainers.rs", 1),

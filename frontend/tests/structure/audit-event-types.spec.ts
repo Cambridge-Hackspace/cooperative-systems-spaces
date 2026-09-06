@@ -100,7 +100,13 @@ describe('the audit filter against the server enum', () => {
       // user_email_change). They join the unfiltered set deliberately -- the
       // filter offers a curated subset, and these are diagnostic rather than
       // access-control events.
-    ).toBe(62)
+      // 62 -> 69: the membership module added seven more (membership_granted /
+      // _revoked / _payment_recorded / _last_admin_protected and
+      // subscription_started / _canceled / _payment_failed). Same rationale --
+      // billing lifecycle records, not access-control filters.
+      // 69 -> 71: metered tool billing added tool_usage_charged and
+      // tool_session_abandoned. Same rationale -- billing records, not filters.
+    ).toBe(71)
   })
 
   // Named separately because these are the ones that matter in an

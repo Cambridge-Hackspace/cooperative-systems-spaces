@@ -1036,12 +1036,18 @@ async fn check_tool_access(
     _staff: StaffUser,
     Path((tool_id, user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
-    let can_access = state.db.can_access_tool(user_id, tool_id).map_err(|e| {
-        // See the note in update_tool. A tool or user that does not exist is a
-        // 404, not a server fault.
-        tracing::warn!("can_access_tool({user_id}, {tool_id}) failed: {e}");
-        ApiError::from(e)
-    })?;
+    // Billing-aware: when tool billing is on, the answer reflects affordability
+    // + membership too, so it agrees with what the machine will do.
+    let gate = state.tool_billing.as_ref().map(|s| s.gate());
+    let can_access = state
+        .db
+        .can_access_tool(user_id, tool_id, gate.as_ref())
+        .map_err(|e| {
+            // See the note in update_tool. A tool or user that does not exist is
+            // a 404, not a server fault.
+            tracing::warn!("can_access_tool({user_id}, {tool_id}) failed: {e}");
+            ApiError::from(e)
+        })?;
 
     Ok(Json(ApiResponse::success(can_access)))
 }
@@ -1052,13 +1058,17 @@ async fn check_my_tool_access(
     user: AuthUser,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<bool>>, ApiError> {
-    let can_access = state.db.can_access_tool(user.0.id, tool_id).map_err(|e| {
-        // The sibling of check_tool_access, and it had the same blanket 500.
-        // Converting one and not the other is how "the same request answers
-        // differently depending on which endpoint you used" happens.
-        tracing::warn!("can_access_tool({}, {tool_id}) failed: {e}", user.0.id);
-        ApiError::from(e)
-    })?;
+    let gate = state.tool_billing.as_ref().map(|s| s.gate());
+    let can_access = state
+        .db
+        .can_access_tool(user.0.id, tool_id, gate.as_ref())
+        .map_err(|e| {
+            // The sibling of check_tool_access, and it had the same blanket 500.
+            // Converting one and not the other is how "the same request answers
+            // differently depending on which endpoint you used" happens.
+            tracing::warn!("can_access_tool({}, {tool_id}) failed: {e}", user.0.id);
+            ApiError::from(e)
+        })?;
 
     Ok(Json(ApiResponse::success(can_access)))
 }

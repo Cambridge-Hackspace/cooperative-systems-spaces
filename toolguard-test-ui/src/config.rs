@@ -16,6 +16,12 @@ pub struct VirtualTool {
     pub name: String,
     /// The external_id sent as `tool_id` in MQTT messages
     pub id: String,
+    /// The tool's own `external_api_key`. A metered tool requires it: the server
+    /// accepts only the per-tool key (not the shared global key) on the money
+    /// path, so a metered tool driven without it is refused. Left unset for
+    /// free/non-metered tools, which authenticate via the edge's device token.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,10 +60,15 @@ impl Default for Config {
                 VirtualTool {
                     name: "Laser Cutter".to_string(),
                     id: "laser-01".to_string(),
+                    // A metered tool: give it its own key so the sample config
+                    // can drive the money path. Must match the tool's
+                    // external_api_key on the server.
+                    api_key: Some("laser-01-key".to_string()),
                 },
                 VirtualTool {
                     name: "3D Printer".to_string(),
                     id: "3dprinter-01".to_string(),
+                    api_key: None,
                 },
             ],
         }

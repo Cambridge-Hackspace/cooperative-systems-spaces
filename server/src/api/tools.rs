@@ -34,6 +34,11 @@ pub struct CreateToolRequest {
     /// Optional usability window. When set and the schedule is closed,
     /// the tool is removed from every user's authorized list at sync time.
     pub schedule_id: Option<uuid::Uuid>,
+    /// Metered-billing rates (Phase 2). Setting a flat fee or a per-minute rate
+    /// makes the tool metered (balance-gated); leaving both unset keeps it free.
+    pub usage_flat_fee: Option<bigdecimal::BigDecimal>,
+    pub usage_rate_per_min: Option<bigdecimal::BigDecimal>,
+    pub usage_max_session_minutes: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, diesel::AsChangeset)]
@@ -54,6 +59,9 @@ pub struct UpdateToolRequest {
     pub external_api_key: Option<String>,
     pub place_id: Option<uuid::Uuid>,
     pub schedule_id: Option<uuid::Uuid>,
+    pub usage_flat_fee: Option<bigdecimal::BigDecimal>,
+    pub usage_rate_per_min: Option<bigdecimal::BigDecimal>,
+    pub usage_max_session_minutes: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -160,6 +168,9 @@ async fn create_tool(
         external_api_key: payload.external_api_key,
         place_id: payload.place_id,
         schedule_id: payload.schedule_id,
+        usage_flat_fee: payload.usage_flat_fee,
+        usage_rate_per_min: payload.usage_rate_per_min,
+        usage_max_session_minutes: payload.usage_max_session_minutes,
     };
 
     let created_tool = state

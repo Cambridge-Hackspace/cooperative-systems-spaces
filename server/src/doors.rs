@@ -249,7 +249,7 @@ impl DoorService {
                 DoorRuleKind::Card => user_cards.contains(&rule.value),
                 DoorRuleKind::User => rule.value == user_id_str,
                 DoorRuleKind::Role => match role_from_str(&rule.value) {
-                    Some(required) => role_level(&user.role) >= role_level(&required),
+                    Some(required) => user.role.rank() >= required.rank(),
                     None => false,
                 },
                 // Open Access is a door-level held-unlock latch, not a per-user
@@ -394,16 +394,6 @@ fn schedule_is_active_at(
         }
     };
     crate::schedules::matches_at(&intervals, tz, now)
-}
-
-fn role_level(role: &UserRole) -> u8 {
-    match role {
-        UserRole::Unknown => 0,
-        UserRole::Newbie => 1,
-        UserRole::Member => 2,
-        UserRole::Staff => 3,
-        UserRole::Admin => 4,
-    }
 }
 
 fn role_from_str(s: &str) -> Option<UserRole> {
@@ -571,7 +561,7 @@ pub fn expand_rules_at(
                     }
                 };
                 for u in active_users.iter() {
-                    if role_level(&u.role) >= role_level(&required) {
+                    if u.role.rank() >= required.rank() {
                         for c in cards_in_profile(&u.profile, profile_field) {
                             bucket.insert(c);
                         }

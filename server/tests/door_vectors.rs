@@ -73,6 +73,12 @@ fn user_from(v: &Value, profile_field: &str) -> User {
         email_verified_at: None,
         // Mailing-list membership has no bearing on door access.
         mailing_list_opt_out_at: None,
+        // Membership-billing state has no bearing on door access either; stated
+        // explicitly for the same field-by-field reason as above.
+        membership_next_due_at: None,
+        stripe_customer_id: None,
+        stripe_subscription_id: None,
+        subscription_status: None,
     }
 }
 

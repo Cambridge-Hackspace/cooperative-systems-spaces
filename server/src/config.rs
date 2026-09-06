@@ -1,3 +1,4 @@
+use crate::models::UserRole;
 use anyhow::{Context, Result};
 pub use css_lib::MqttConfig;
 use rand::distributions::Alphanumeric;
@@ -67,6 +68,11 @@ impl Default for HomepageLinksConfig {
 pub struct SiteConfig {
     /// The name of the site
     pub site_name: String,
+    /// Short name / abbreviation for the organization (e.g. "CHACK"). Optional;
+    /// `#[serde(default)]` so configs predating it still parse. Surfaced to the
+    /// SPA so labels are configurable rather than hardcoded.
+    #[serde(default)]
+    pub site_short_name: String,
     /// The main URL of the site (including protocol)
     pub site_url: String,
     /// URL for the admin panel
@@ -92,6 +98,7 @@ impl Default for SiteConfig {
     fn default() -> Self {
         Self {
             site_name: "Cooperative Systems Spaces".to_string(),
+            site_short_name: String::new(),
             site_url: "http://localhost:4399".to_string(),
             admin_url: "http://localhost:4399/admin".to_string(),
             timezone: "UTC".to_string(),
@@ -183,21 +190,35 @@ impl Default for ThemeConfig {
     }
 }
 
-/// Stripe payment configuration
+/// Stripe payment configuration.
+///
+/// Online payment on top of the membership module: when enabled, members pay
+/// via Stripe-hosted Checkout and manage/cancel via the hosted Billing Portal,
+/// so the platform never handles card data (SAQ-A posture). Disabled leaves the
+/// membership module fully usable with cash-only payments logged by admins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StripeConfig {
-    /// Stripe publishable key
+    /// Stripe publishable key. Not needed by the SPA (the redirect flow mints
+    /// hosted URLs server-side), so it is never exposed publicly.
     pub publishable_key: String,
-    /// Stripe secret key
+    /// Stripe secret key. Secret; never exposed to the SPA.
     pub secret_key: String,
-    /// Webhook endpoint secret
+    /// Webhook endpoint secret used to verify inbound `Stripe-Signature`.
+    /// Secret; never exposed to the SPA.
     pub webhook_secret: String,
-    /// Enable Stripe integration
+    /// Enable Stripe integration. Requires `membership.enabled`.
     pub enabled: bool,
-    /// Default currency code
+    /// Default currency code.
     pub currency: String,
-    /// Test mode (use test keys)
+    /// Test mode (use test keys).
     pub test_mode: bool,
+    /// The recurring price id for the membership subscription. Must be created in
+    /// Stripe to match `membership.due_amount` + `membership.due_period` (the
+    /// platform does not configure the Stripe price).
+    pub price_id: String,
+    /// Base URL of the Stripe API. Overridable so the e2e stack can point the
+    /// client at an in-process fake instead of the live API.
+    pub base_url: String,
 }
 
 impl Default for StripeConfig {
@@ -209,6 +230,148 @@ impl Default for StripeConfig {
             enabled: false,
             currency: "USD".to_string(),
             test_mode: true,
+            price_id: String::new(),
+            base_url: "https://api.stripe.com".to_string(),
+        }
+    }
+}
+
+/// Cadence of membership dues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MembershipPeriod {
+    Monthly,
+    Quarterly,
+    Yearly,
+}
+
+impl Default for MembershipPeriod {
+    fn default() -> Self {
+        MembershipPeriod::Monthly
+    }
+}
+
+/// Membership dues-ledger configuration.
+///
+/// The module's core is a non-negative credit ledger; dues of `due_amount` fall
+/// due every `due_period` and are deducted only when the balance covers them.
+/// Entitlement drives the user's role between `member_role` and `lapsed_role`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MembershipConfig {
+    /// Enable the membership-billing module.
+    pub enabled: bool,
+    /// Dues charged each period, as a decimal string (e.g. "25.00"). Parsed to a
+    /// `BigDecimal`; a string keeps TOML round-trips exact and float-free.
+    pub due_amount: String,
+    /// How often dues fall due.
+    pub due_period: MembershipPeriod,
+    /// Days after the anniversary before the renewal check runs, so a renewal
+    /// payment has time to land ("the next day" = 1).
+    pub grace_days: i64,
+    /// Role granted while a membership is in good standing. Validated `<= Member`
+    /// so billing can never grant Staff/Admin.
+    pub member_role: UserRole,
+    /// Role a member drops to on lapse. Validated below `member_role`.
+    pub lapsed_role: UserRole,
+    /// When true, a member who lapses and later pays starts a fresh membership
+    /// anchored to the new payment (no back-charge). False re-anchors to the old
+    /// cycle (discouraged). Default true.
+    pub restart_on_lapse: bool,
+    /// How many periods a one-shot payment buys (amount = due_amount * this).
+    pub one_shot_periods: i64,
+    /// Display currency for balances/amounts.
+    pub currency: String,
+    /// How often the renewal-cycle ticker runs, in seconds (default daily).
+    pub accrual_interval_secs: u64,
+    /// Display label for the subscription/plan (e.g. "CHACK Membership"). Never
+    /// hardcoded in the feature; shown on the profile/admin cards and used as the
+    /// Stripe checkout product name.
+    pub plan_name: String,
+}
+
+impl Default for MembershipConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            due_amount: "0.00".to_string(),
+            due_period: MembershipPeriod::Monthly,
+            grace_days: 1,
+            member_role: UserRole::Member,
+            lapsed_role: UserRole::Newbie,
+            restart_on_lapse: true,
+            one_shot_periods: 1,
+            currency: "USD".to_string(),
+            accrual_interval_secs: 86_400,
+            plan_name: "Membership".to_string(),
+        }
+    }
+}
+
+/// How a metered tool charges against the balance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BillingMode {
+    /// Hold the max session cost at activation; settle the actual on stop. The
+    /// balance never goes negative.
+    Prepaid,
+    /// Gate on a minimum balance; charge the actual on stop, which may dip the
+    /// balance negative and block the next activation.
+    Postpaid,
+}
+
+impl Default for BillingMode {
+    fn default() -> Self {
+        BillingMode::Prepaid
+    }
+}
+
+/// Where a metered tool's activation is authorized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActuationMode {
+    /// The edge calls the server synchronously for metered tools and gates the
+    /// energize on its decision (fail-closed if the server is unreachable).
+    OnlineSynchronous,
+    /// The edge authorizes from its cached allow-list and energizes immediately;
+    /// the server places the hold on the forwarded activation and re-broadcasts.
+    /// Preserves offline operation; accepts a bounded balance-overshoot race.
+    EdgeLocal,
+}
+
+impl Default for ActuationMode {
+    fn default() -> Self {
+        ActuationMode::EdgeLocal
+    }
+}
+
+/// Metered pay-per-use tool-billing configuration (Phase 2). Requires the
+/// membership module (it reuses that credit ledger).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolBillingConfig {
+    /// Enable metered tool billing.
+    pub enabled: bool,
+    /// Prepaid (hold/settle, never negative) or postpaid (bill-after).
+    pub billing_mode: BillingMode,
+    /// Online-synchronous (server gates before energize) or edge-local.
+    pub actuation_mode: ActuationMode,
+    /// Whether using a metered tool requires membership in good standing.
+    pub require_membership: bool,
+    /// Fallback cap on billable minutes + the prepaid hold estimate when a tool
+    /// sets no `usage_max_session_minutes`.
+    pub default_max_session_minutes: i32,
+    /// Postpaid floor: minimum balance to start a metered tool. Decimal string.
+    pub min_balance: String,
+    /// Display currency for tool charges.
+    pub currency: String,
+}
+
+impl Default for ToolBillingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            billing_mode: BillingMode::Prepaid,
+            actuation_mode: ActuationMode::EdgeLocal,
+            require_membership: true,
+            default_max_session_minutes: 120,
+            min_balance: "0".to_string(),
+            currency: "USD".to_string(),
         }
     }
 }
@@ -1023,7 +1186,9 @@ pub struct AppConfig {
     pub email: EmailConfig,
     /// Theme and UI settings
     pub theme: ThemeConfig,
-    /// Stripe payment settings
+    /// Stripe payment settings. `#[serde(default)]` so a config omitting the
+    /// block still parses -- the module is optional and off by default.
+    #[serde(default)]
     pub stripe: StripeConfig,
     /// Reporting configuration
     pub reports: ReportConfig,
@@ -1062,6 +1227,12 @@ pub struct AppConfig {
     /// Groups.io mailing-list integration
     #[serde(default)]
     pub groupsio: GroupsioConfig,
+    /// Membership dues-ledger + billing module
+    #[serde(default)]
+    pub membership: MembershipConfig,
+    /// Metered pay-per-use tool-billing module (Phase 2)
+    #[serde(default)]
+    pub tool_billing: ToolBillingConfig,
 }
 
 impl Default for AppConfig {
@@ -1088,6 +1259,8 @@ impl Default for AppConfig {
             door: DoorConfig::default(),
             place: PlaceConfig::default(),
             groupsio: GroupsioConfig::default(),
+            membership: MembershipConfig::default(),
+            tool_billing: ToolBillingConfig::default(),
         }
     }
 }
@@ -1458,6 +1631,108 @@ fn validate_config(config: &AppConfig) -> Result<()> {
                 "groupsio.enabled is true but groupsio.group_id is empty, so the \
                  sync would not know which group to mirror. Set the target group, \
                  or set groupsio.enabled = false."
+            ));
+        }
+    }
+
+    // The membership module governs money and role changes, so a switched-on but
+    // incoherent configuration is refused at boot and reload rather than left to
+    // misbehave. due_amount must parse to a positive decimal (dues that are zero
+    // or unparseable make "balance covers dues" meaningless), and the billing
+    // roles must sit at or below Member with lapsed strictly below member -- the
+    // hard stop that keeps billing from ever granting or restoring Staff/Admin.
+    if config.membership.enabled {
+        use std::str::FromStr;
+        match bigdecimal::BigDecimal::from_str(config.membership.due_amount.trim()) {
+            Ok(amount) if amount > bigdecimal::BigDecimal::from(0) => {}
+            Ok(_) => {
+                return Err(anyhow::anyhow!(
+                    "membership.enabled is true but membership.due_amount ({:?}) is \
+                     not greater than zero. Set a positive dues amount, or set \
+                     membership.enabled = false.",
+                    config.membership.due_amount
+                ));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "membership.due_amount ({:?}) is not a valid decimal amount \
+                     (e.g. \"25.00\").",
+                    config.membership.due_amount
+                ));
+            }
+        }
+        if config.membership.member_role.rank() > UserRole::Member.rank() {
+            return Err(anyhow::anyhow!(
+                "membership.member_role must be Member or lower; billing must never \
+                 grant Staff or Admin."
+            ));
+        }
+        if config.membership.lapsed_role.rank() >= config.membership.member_role.rank() {
+            return Err(anyhow::anyhow!(
+                "membership.lapsed_role must rank below membership.member_role, so a \
+                 lapse is an actual downgrade."
+            ));
+        }
+    }
+
+    // Stripe is the online-payment layer on top of the membership module. It
+    // cannot function without the module, and switched on but unable to
+    // authenticate or verify webhooks it can only fail -- refused here like the
+    // email and groups.io guards above.
+    if config.stripe.enabled {
+        if !config.membership.enabled {
+            return Err(anyhow::anyhow!(
+                "stripe.enabled is true but membership.enabled is false. Stripe is \
+                 the payment layer for the membership module; enable membership, or \
+                 set stripe.enabled = false."
+            ));
+        }
+        if config.stripe.secret_key.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "stripe.enabled is true but stripe.secret_key is empty, so no \
+                 request to Stripe could authenticate. Set a secret key, or set \
+                 stripe.enabled = false."
+            ));
+        }
+        if config.stripe.webhook_secret.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "stripe.enabled is true but stripe.webhook_secret is empty, so no \
+                 inbound webhook could be verified. Set the webhook signing secret, \
+                 or set stripe.enabled = false."
+            ));
+        }
+        if config.stripe.price_id.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "stripe.enabled is true but stripe.price_id is empty, so a recurring \
+                 checkout has no price to sell. Set the membership price id, or set \
+                 stripe.enabled = false."
+            ));
+        }
+    }
+
+    // Metered tool billing charges against the membership credit ledger, so it
+    // cannot run without the membership module, and a zero max-session makes the
+    // prepaid hold estimate and the billable-time cap meaningless. Refused at
+    // boot and reload like the guards above.
+    if config.tool_billing.enabled {
+        use std::str::FromStr;
+        if !config.membership.enabled {
+            return Err(anyhow::anyhow!(
+                "tool_billing.enabled is true but membership.enabled is false. Tool \
+                 billing charges against the membership credit ledger; enable \
+                 membership, or set tool_billing.enabled = false."
+            ));
+        }
+        if config.tool_billing.default_max_session_minutes <= 0 {
+            return Err(anyhow::anyhow!(
+                "tool_billing.default_max_session_minutes must be positive; it bounds \
+                 billable time and the prepaid hold estimate."
+            ));
+        }
+        if let Err(e) = bigdecimal::BigDecimal::from_str(config.tool_billing.min_balance.trim()) {
+            return Err(anyhow::anyhow!(
+                "tool_billing.min_balance ({:?}) is not a valid decimal amount: {e}",
+                config.tool_billing.min_balance
             ));
         }
     }

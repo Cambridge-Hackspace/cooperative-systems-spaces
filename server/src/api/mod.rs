@@ -8,12 +8,15 @@ pub mod errors;
 pub mod groupsio;
 pub mod home_links;
 pub mod instance;
+pub mod membership;
 pub mod mfa;
 pub mod pages;
 pub mod places;
 pub mod profiles;
 pub mod responses;
 pub mod schedules;
+pub mod stripe;
+pub mod tool_billing;
 pub mod toolguard;
 pub mod tools;
 pub mod trainers;
@@ -45,6 +48,9 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/public", home_links::public_routes())
         .nest("/instance", instance::instance_routes())
         .nest("/groupsio", groupsio::routes())
+        .nest("/membership", membership::routes())
+        .nest("/stripe", stripe::routes())
+        .nest("/tool-billing", tool_billing::routes())
         // The API's own 404, and it belongs here rather than at the composition
         // site.
         //

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{errors::ApiError, responses::ApiResponse},
-    config::{LinkLocation, ToolCategoryMapping},
+    config::{BillingMode, LinkLocation, MembershipPeriod, ToolCategoryMapping},
     AppState,
 };
 
@@ -35,6 +35,8 @@ pub struct PublicHomepageLinksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicSiteConfig {
     pub site_name: String,
+    /// Org abbreviation for compact labels; empty falls back to `site_name`.
+    pub site_short_name: String,
     pub homepage_links: PublicHomepageLinksConfig,
 }
 
@@ -73,6 +75,20 @@ pub struct PublicGroupsioConfig {
     pub enabled: bool,
 }
 
+/// Membership facts the SPA needs to render the billing card. No secrets: the
+/// checkout/portal flow mints hosted URLs server-side, so not even a publishable
+/// key is exposed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicMembershipConfig {
+    pub enabled: bool,
+    /// Whether online (Stripe) payment is available on top of the module.
+    pub stripe_enabled: bool,
+    pub currency: String,
+    pub due_amount: String,
+    pub due_period: MembershipPeriod,
+    pub plan_name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicToolGuardConfig {
     pub enabled: bool,
@@ -99,6 +115,15 @@ pub struct PublicAuthConfig {
     pub require_email_verification: bool,
 }
 
+/// Metered tool-billing facts the SPA needs (to show balance/holds and label
+/// charges). No secrets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicToolBillingConfig {
+    pub enabled: bool,
+    pub billing_mode: BillingMode,
+    pub currency: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicConfig {
     pub auth: PublicAuthConfig,
@@ -111,6 +136,8 @@ pub struct PublicConfig {
     pub calendar: PublicCalendarConfig,
     pub toolguard: PublicToolGuardConfig,
     pub groupsio: PublicGroupsioConfig,
+    pub membership: PublicMembershipConfig,
+    pub tool_billing: PublicToolBillingConfig,
 }
 
 fn build_public_config(state: &AppState) -> PublicConfig {
@@ -134,6 +161,7 @@ fn build_public_config(state: &AppState) -> PublicConfig {
         },
         site: PublicSiteConfig {
             site_name: config.site.site_name.clone(),
+            site_short_name: config.site.site_short_name.clone(),
             homepage_links: PublicHomepageLinksConfig {
                 view_my_profile: config.site.homepage_links.view_my_profile,
                 browse_tools: config.site.homepage_links.browse_tools,
@@ -169,6 +197,19 @@ fn build_public_config(state: &AppState) -> PublicConfig {
         },
         groupsio: PublicGroupsioConfig {
             enabled: config.groupsio.enabled,
+        },
+        membership: PublicMembershipConfig {
+            enabled: config.membership.enabled,
+            stripe_enabled: config.stripe.enabled,
+            currency: config.membership.currency.clone(),
+            due_amount: config.membership.due_amount.clone(),
+            due_period: config.membership.due_period,
+            plan_name: config.membership.plan_name.clone(),
+        },
+        tool_billing: PublicToolBillingConfig {
+            enabled: config.tool_billing.enabled,
+            billing_mode: config.tool_billing.billing_mode,
+            currency: config.tool_billing.currency.clone(),
         },
     }
 }

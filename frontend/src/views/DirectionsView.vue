@@ -15,7 +15,7 @@
     <div class="mx-auto max-w-2xl space-y-8 text-base-content/90">
       <section>
         <h2 class="text-xl font-semibold mb-2">Map</h2>
-        <img src="/images/map.png" alt="Map to Cambridge Hackspace" class="rounded-lg max-w-full" />
+        <img src="/images/map.png" :alt="`Map to ${siteName}`" class="rounded-lg max-w-full" />
       </section>
 
       <section>
@@ -78,7 +78,7 @@
         </p>
         <img
           src="/images/cambridge_hackspace_doorbell.jpg"
-          alt="The Cambridge Hackspace doorbell"
+          :alt="`The ${siteName} doorbell`"
           class="rounded-lg max-w-full mt-3"
         />
       </section>
@@ -109,4 +109,9 @@
 
 <script setup lang="ts">
 // Directions page component
+import { computed } from 'vue'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
 </script>

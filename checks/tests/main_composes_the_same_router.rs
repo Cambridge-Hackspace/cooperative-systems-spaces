@@ -78,6 +78,12 @@ const SEPARATE_BINARIES: &[&str] = &[
     // of it the server's own routes. Covered by the `groupsio` stage, which
     // asserts the roster it holds rather than what the sync claimed to do.
     "bin/groupsio_sink.rs",
+    // The standalone Stripe sink the stack battery points [stripe] at. It
+    // composes a fake of the Stripe API slice the membership module calls plus a
+    // small control surface, none of it the server's own routes. Covered by the
+    // `stripe` stage, which asserts the ledger balance and role rather than what
+    // the client claimed to send.
+    "bin/stripe_sink.rs",
 ];
 
 /// Every `.route("...")` literal in a file, comments stripped.
