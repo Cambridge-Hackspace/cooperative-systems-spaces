@@ -3020,6 +3020,34 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Set (or clear) a member's mailing-list opt-out timestamp.
+    ///
+    /// `Some(ts)` records an explicit opt-out; `None` clears it back to
+    /// subscribed-by-default. A dedicated setter rather than a field on
+    /// `UpdateUser` because the column must be settable to NULL, which the
+    /// skip-on-None changeset cannot express. Reports NotFound when it changed
+    /// nothing, per writes_report_what_they_changed.
+    pub fn set_mailing_list_opt_out(
+        &self,
+        uid: uuid::Uuid,
+        opt_out_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(users.filter(id.eq(uid)))
+            .set((
+                mailing_list_opt_out_at.eq(opt_out_at),
+                updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
     // --- users.mfa_enrolled_at -------------------------------------------
 
     pub fn set_user_mfa_enrolled(

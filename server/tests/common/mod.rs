@@ -136,6 +136,8 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/devices/ws", Guard::Device), // devices::device_ws
     R("POST", "/api/doors/00000000-0000-4000-8000-000000000001/checkin", Guard::Auth), // doors::door_checkin
     R("GET", "/api/doors/00000000-0000-4000-8000-000000000001/info", Guard::Auth), // doors::door_info
+    R("GET", "/api/groupsio/subscription", Guard::Auth), // groupsio::get_subscription
+    R("PUT", "/api/groupsio/subscription", Guard::Auth), // groupsio::set_subscription
     R("GET", "/api/instance/qr", Guard::Auth), // instance::get_instance_qr
     R("GET", "/api/pages/navigation", Guard::Public), // pages::get_navigation
     R("GET", "/api/pages/page", Guard::Public), // pages::list_site_pages

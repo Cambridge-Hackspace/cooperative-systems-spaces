@@ -138,6 +138,15 @@ pub struct User {
     /// migration, so turning `auth.require_email_verification` on does not lock
     /// out an existing membership.
     pub email_verified_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the member opted out of the Groups.io mailing list. `None` means
+    /// subscribed-by-default: they are on the list once the account is active
+    /// and the email is verified. Set from the platform toggle or on learning
+    /// of an unsubscribe done from a Groups.io email link.
+    ///
+    /// Last in the struct for the same reason as `email_verified_at`:
+    /// `ALTER TABLE ADD COLUMN` appends physically and `Queryable` loads
+    /// positionally, so a new column must be the last field here too.
+    pub mailing_list_opt_out_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -339,6 +348,17 @@ pub enum AuditEventType {
     /// report this -- saying so would turn a send failure into an account
     /// enumeration oracle -- so this row is how an operator finds out.
     EmailSendFailed,
+    // Groups.io mailing-list opt-in/opt-out
+    //
+    // Appended at the tail, like the transactional-email group above, so a
+    // concurrent branch adding events near another group does not collide here.
+    /// A member asked, through the platform, to be on the mailing list (or had
+    /// their opt-out cleared). The Groups.io sync consumes this to add them.
+    MailingListSubscribe,
+    /// A member opted out of the mailing list -- via the platform toggle, or on
+    /// the platform learning of an unsubscribe done from a Groups.io email link.
+    /// The sync consumes this to remove them and never re-add.
+    MailingListUnsubscribe,
 }
 
 impl AuditEventType {
@@ -419,6 +439,8 @@ impl AuditEventType {
             Self::EmailVerificationSent => "email_verification_sent",
             Self::EmailVerified => "email_verified",
             Self::EmailSendFailed => "email_send_failed",
+            Self::MailingListSubscribe => "mailing_list_subscribe",
+            Self::MailingListUnsubscribe => "mailing_list_unsubscribe",
         }
     }
 
@@ -502,6 +524,8 @@ impl AuditEventType {
             EmailVerificationSent,
             EmailVerified,
             EmailSendFailed,
+            MailingListSubscribe,
+            MailingListUnsubscribe,
         ]
     }
 }

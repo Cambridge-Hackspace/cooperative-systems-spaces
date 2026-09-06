@@ -349,6 +349,7 @@ diesel::table! {
         meta -> Jsonb,
         mfa_enrolled_at -> Nullable<Timestamptz>,
         email_verified_at -> Nullable<Timestamptz>,
+        mailing_list_opt_out_at -> Nullable<Timestamptz>,
     }
 }
 

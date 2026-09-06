@@ -52,6 +52,9 @@
       <router-link to="/profile/card" class="btn btn-primary btn-sm">Manage</router-link>
     </div>
 
+    <!-- Mailing List subscription (own profile only, when the module is enabled) -->
+    <MailingListCard v-if="isOwnProfile && groupsioEnabled" class="mb-6" />
+
     <!-- Theme Picker (only shown for own profile) -->
     <ThemePicker v-if="isOwnProfile" :user-id="userId" />
 
@@ -69,6 +72,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import UserProfile from '@/components/UserProfile.vue'
 import ThemePicker from '@/components/ThemePicker.vue'
+import MailingListCard from '@/components/MailingListCard.vue'
 import InstanceQrCard from '@/components/InstanceQrCard.vue'
 import { apiClient, mfaApi } from '@/utils/api'
 import type { User } from '@/types'
@@ -85,6 +89,8 @@ const error = ref<string | null>(null)
 const mfaAvailable = ref(false)
 /** True when the server has a profile field configured to hold a card id. */
 const cardFieldConfigured = computed(() => !!configStore.cardIdField())
+/** True when the Groups.io mailing-list module is enabled server-side. */
+const groupsioEnabled = computed(() => configStore.groupsioEnabled())
 
 // Computed properties
 const userId = computed(() => {
