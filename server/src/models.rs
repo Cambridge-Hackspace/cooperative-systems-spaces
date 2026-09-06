@@ -28,7 +28,7 @@ pub use trainers::*;
 pub use training::*;
 pub use webhooks::*;
 
-use crate::schema::{audit_logs, sql_types, users};
+use crate::schema::{audit_logs, groupsio_sync_runs, sql_types, users};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};

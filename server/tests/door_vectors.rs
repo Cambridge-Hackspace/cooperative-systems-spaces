@@ -71,6 +71,8 @@ fn user_from(v: &Value, profile_field: &str) -> User {
         // column arriving on `users` fails here and somebody has to decide
         // whether the door rules care about it.
         email_verified_at: None,
+        // Mailing-list membership has no bearing on door access.
+        mailing_list_opt_out_at: None,
     }
 }
 

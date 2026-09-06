@@ -214,7 +214,17 @@ async fn receive_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ApiResponse<WebhookAck>>, ApiError> {
-    require_enabled(&state)?;
+    // A disabled module makes this public endpoint answer "not here" (404)
+    // rather than "forbidden" (403): a 403 on an unguarded route reads as an
+    // auth gate it does not have, which the contract matrix rightly rejects.
+    // The Auth/Admin routes keep `require_enabled`'s 403 -- an anonymous request
+    // is refused by the auth extractor first, so their gate is never mistaken
+    // for a public one.
+    if !state.config_manager.get_config().groupsio.enabled {
+        return Err(ApiError::NotFound(
+            "Groups.io integration is not enabled".to_string(),
+        ));
+    }
 
     let secret = state.config_manager.get_config().groupsio.webhook_secret;
     if secret.trim().is_empty() {
