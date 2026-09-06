@@ -972,6 +972,39 @@ impl Default for ToolConfig {
     }
 }
 
+/// cmi5 (xAPI) training-module settings.
+///
+/// Disabled by default: enabling it stands up the launch/LRS surface and the
+/// filesystem content store, which an instance that does not use cmi5 has no
+/// reason to expose. `content_dir` is where imported packages are extracted and
+/// served from; `max_package_bytes` caps an upload; the TTLs bound the launch
+/// handshake (a short-lived one-time fetch token, a longer session credential).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Cmi5Config {
+    /// Whether the cmi5 subsystem is active.
+    pub enabled: bool,
+    /// Directory imported packages are extracted to and served from.
+    pub content_dir: String,
+    /// Maximum accepted size of an uploaded package, in bytes.
+    pub max_package_bytes: usize,
+    /// Lifetime of the one-time launch `fetch` token, in seconds.
+    pub fetch_ttl_secs: u64,
+    /// Lifetime of an issued session credential, in seconds.
+    pub session_ttl_secs: u64,
+}
+
+impl Default for Cmi5Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            content_dir: "./cmi5-content".to_string(),
+            max_package_bytes: 100 * 1024 * 1024,
+            fetch_ttl_secs: 300,
+            session_ttl_secs: 4 * 60 * 60,
+        }
+    }
+}
+
 /// Groups.io mailing-list integration module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupsioConfig {
@@ -1059,6 +1092,9 @@ pub struct AppConfig {
     /// Configurable hierarchy of places
     #[serde(default)]
     pub place: PlaceConfig,
+    /// cmi5 training-module configuration
+    #[serde(default)]
+    pub cmi5: Cmi5Config,
     /// Groups.io mailing-list integration
     #[serde(default)]
     pub groupsio: GroupsioConfig,
@@ -1087,6 +1123,7 @@ impl Default for AppConfig {
             edge: EdgeConfig::default(),
             door: DoorConfig::default(),
             place: PlaceConfig::default(),
+            cmi5: Cmi5Config::default(),
             groupsio: GroupsioConfig::default(),
         }
     }

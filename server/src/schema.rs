@@ -541,6 +541,107 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    cmi5_courses (id) {
+        id -> Uuid,
+        course_iri -> Text,
+        title -> Nullable<Text>,
+        description -> Nullable<Text>,
+        content_path -> Text,
+        manifest_xml -> Text,
+        imported_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    cmi5_blocks (id) {
+        id -> Uuid,
+        course_id -> Uuid,
+        parent_block_id -> Nullable<Uuid>,
+        block_iri -> Nullable<Text>,
+        title -> Nullable<Text>,
+        position -> Int4,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    cmi5_assignable_units (id) {
+        id -> Uuid,
+        course_id -> Uuid,
+        block_id -> Nullable<Uuid>,
+        au_iri -> Text,
+        title -> Nullable<Text>,
+        launch_url -> Text,
+        launch_parameters -> Nullable<Text>,
+        launch_method -> Nullable<Text>,
+        move_on -> Text,
+        mastery_score -> Nullable<Float8>,
+        position -> Int4,
+        training_step_id -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    cmi5_registrations (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        au_id -> Uuid,
+        actor_account_name -> Text,
+        launch_mode -> Text,
+        satisfied_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+        passed_at -> Nullable<Timestamptz>,
+        failed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    cmi5_launch_tokens (id) {
+        id -> Uuid,
+        registration_id -> Uuid,
+        fetch_token_hash -> Text,
+        session_token_hash -> Nullable<Text>,
+        fetch_consumed_at -> Nullable<Timestamptz>,
+        expires_at -> Timestamptz,
+        session_expires_at -> Timestamptz,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    cmi5_statements (id) {
+        id -> Uuid,
+        registration_id -> Uuid,
+        statement_id -> Uuid,
+        verb_iri -> Text,
+        stored -> Timestamptz,
+        statement -> Jsonb,
+        voided -> Bool,
+    }
+}
+
+diesel::table! {
+    cmi5_state_documents (id) {
+        id -> Uuid,
+        registration_id -> Uuid,
+        activity_iri -> Text,
+        agent_account_name -> Text,
+        state_id -> Text,
+        document -> Jsonb,
+        etag -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(space_device_auth -> space_devices (device_id));
 diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));
@@ -585,6 +686,19 @@ diesel::joinable!(profile_config_versions -> users (created_by));
 diesel::joinable!(password_reset_tokens -> users (user_id));
 diesel::joinable!(email_verification_tokens -> users (user_id));
 
+diesel::joinable!(cmi5_courses -> users (imported_by));
+diesel::joinable!(cmi5_blocks -> cmi5_courses (course_id));
+diesel::joinable!(cmi5_assignable_units -> cmi5_courses (course_id));
+diesel::joinable!(cmi5_assignable_units -> cmi5_blocks (block_id));
+diesel::joinable!(cmi5_assignable_units -> training_steps (training_step_id));
+diesel::joinable!(cmi5_registrations -> users (user_id));
+diesel::joinable!(cmi5_registrations -> cmi5_assignable_units (au_id));
+diesel::joinable!(cmi5_launch_tokens -> cmi5_registrations (registration_id));
+diesel::joinable!(cmi5_statements -> cmi5_registrations (registration_id));
+diesel::joinable!(cmi5_state_documents -> cmi5_registrations (registration_id));
+// cmi5_blocks -> cmi5_blocks (parent_block_id) is a self-join; like the places
+// self-reference, it is walked manually rather than registered via joinable!.
+
 diesel::allow_tables_to_appear_in_same_query!(
     audit_event_types,
     audit_logs,
@@ -621,4 +735,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     profile_config_versions,
     password_reset_tokens,
     email_verification_tokens,
+    cmi5_courses,
+    cmi5_blocks,
+    cmi5_assignable_units,
+    cmi5_registrations,
+    cmi5_launch_tokens,
+    cmi5_statements,
+    cmi5_state_documents,
 );

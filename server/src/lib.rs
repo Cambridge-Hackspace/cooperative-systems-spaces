@@ -30,6 +30,7 @@ use std::sync::Arc;
 pub mod api;
 pub mod auth;
 pub mod calendar;
+pub mod cmi5;
 pub mod config;
 pub mod cors;
 pub mod database;
@@ -56,6 +57,7 @@ pub mod tokens;
 pub mod webhooks;
 
 use crate::calendar::CalendarService;
+use crate::cmi5::Cmi5Service;
 use crate::config::ConfigManager;
 use crate::database::DatabaseManager;
 use crate::devices_inbound::DeviceInbound;
@@ -93,6 +95,9 @@ pub struct AppState {
     pub device_registry: Arc<DeviceChannelRegistry>,
     /// Shared inbound dispatcher used by both transports.
     pub device_inbound: Arc<DeviceInbound>,
+    /// cmi5 training-module service: package import, content store, admin ops,
+    /// launch, and the embedded LRS.
+    pub cmi5_service: Arc<Cmi5Service>,
     /// Groups.io mailing-list sync. `None` when the module is disabled; the
     /// admin "reconcile now" endpoint checks for it before running.
     pub groupsio_sync: Option<Arc<GroupsIoService>>,

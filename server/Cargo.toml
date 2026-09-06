@@ -41,7 +41,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Server-specific dependencies
-axum = { version = "0.8", features = ["macros", "ws"] }
+# `multipart` is enabled for cmi5 package upload -- the first and only multipart
+# surface in the app. The import route caps the body via DefaultBodyLimit; the
+# global /api nest is left untouched.
+axum = { version = "0.8", features = ["macros", "ws", "multipart"] }
 futures-util = "0.3"
 log = "0.4.28"
 config = "0.14"
@@ -112,6 +115,12 @@ comrak = "0.48.0"
 regex = "1.10"
 rand = "0.8.5"
 css_lib = {path = "../css_lib"}
+cmi5 = { path = "../cmi5" }
+
+# cmi5 package (.zip) import and export. default-features off keeps the
+# compression backends down to deflate (flate2 -> miniz_oxide, already in the
+# tree via reqwest); zstd/bzip2 are not needed for cmi5 packages.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [features]
 # Exposes DatabaseManager::disconnected(), the seam the server-contract tier

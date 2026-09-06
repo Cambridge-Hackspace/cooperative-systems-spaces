@@ -27,7 +27,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{Guard, R, ROUTES};
+use common::{Guard, ROUTES};
 use css_server::{api, test_support, AppState};
 use tower::ServiceExt;
 
@@ -173,9 +173,13 @@ async fn no_guarded_route_answers_anything_but_401_without_a_credential() {
     let mut failures: Vec<String> = Vec::new();
 
     for route in ROUTES.iter().filter(|r| r.is_guarded()) {
-        // A device token is opaque, so DeviceAuth must query to reject it.
-        // Only its shape checks are reachable without a database.
-        let device_backed = matches!(route.guard(), Guard::Device | Guard::InlineAuth);
+        // A device token is opaque, so DeviceAuth must query to reject it; the
+        // cmi5 session credential is the same shape of secret. Only their shape
+        // checks are reachable without a database.
+        let device_backed = matches!(
+            route.guard(),
+            Guard::Device | Guard::InlineAuth | Guard::Cmi5Session
+        );
 
         for cred in CREDS {
             if device_backed && !cred.shape_only {
@@ -269,6 +273,7 @@ async fn the_table_is_not_empty_and_covers_every_guard_kind() {
         Guard::Auth,
         Guard::Device,
         Guard::InlineAuth,
+        Guard::Cmi5Session,
         Guard::Public,
     ] {
         assert!(
@@ -333,7 +338,10 @@ fn asserted_pairs() -> usize {
         .iter()
         .filter(|r| r.is_guarded())
         .map(|r| {
-            if matches!(r.guard(), Guard::Device | Guard::InlineAuth) {
+            if matches!(
+                r.guard(),
+                Guard::Device | Guard::InlineAuth | Guard::Cmi5Session
+            ) {
                 shape_only
             } else {
                 CREDS.len()
@@ -355,59 +363,53 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
         .iter()
         .filter(|r| matches!(r.guard(), Guard::Device | Guard::InlineAuth))
         .count();
-    let jwt_routes = ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes;
+    let cmi5_session_routes = ROUTES
+        .iter()
+        .filter(|r| matches!(r.guard(), Guard::Cmi5Session))
+        .count();
+    let jwt_routes =
+        ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes - cmi5_session_routes;
 
     assert_eq!(device_routes, 6, "device-authenticated routes");
-    // 144, up from 140: the Groups.io module added two Auth routes
-    // (GET/PUT /api/groupsio/subscription) and two Admin routes
-    // (/api/admin/groupsio/status and /reconcile). Its inbound webhook is
-    // Public, so it is not counted here. The device surface did not move, which
-    // is the number this test actually exists to hold still.
-    assert_eq!(jwt_routes, 144, "JWT-authenticated routes");
+    // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
+    // (GET/PUT/DELETE), all authenticated by the session credential. Like the
+    // device surface, only their shape checks are reachable offline; their
+    // contents are deferred to the live tier.
+    assert_eq!(cmi5_session_routes, 6, "cmi5 LRS routes");
+    // 152, up from 140: eight cmi5 JWT-guarded routes (Staff course
+    // import/list/get/delete/export, the Admin AU->training-step binding, the
+    // Member launch, and the Member module list) plus four Groups.io routes (two
+    // Auth /api/groupsio/subscription, two Admin /api/admin/groupsio/*). The cmi5
+    // `fetch` route and the Groups.io webhook are Public, and the six LRS routes
+    // are counted separately above, so none of them land here. The device surface
+    // did not move, which is the number this test actually exists to hold still.
+    //
+    // (140 was up from 139 for `PUT /api/users/me/password`; the two
+    // training-session routes moving to `/progress/{user_id}/{start,complete}`
+    // was net zero.)
+    assert_eq!(jwt_routes, 152, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 144 * 7 + 6 * 3);
+    assert_eq!(asserted_pairs(), 152 * 7 + (6 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
-    // the live-database tier's: a device token can only be rejected on its
-    // contents by looking it up.
-    let deferred = device_routes * (CREDS.len() - 3);
+    // the live-database tier's: a device or session token can only be rejected
+    // on its contents by looking it up.
+    let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
     assert_eq!(
-        deferred, 24,
+        deferred, 48,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );
 }
 
-/// The "member or above" tier of the authorization model is empty.
-///
-/// `MemberUser` exists in `server/src/auth.rs` with its own extractor and its
-/// own rejection, and no route uses it — so no request has ever gone through
-/// that gate. rustc reports the symptom as "variant `Member` is never
-/// constructed" *in this file*, which reads like a tidying job in a test
-/// fixture rather than a statement about the product.
-///
-/// Asserting the count states it where it belongs and turns the first
-/// member-gated route into a failure that says what else has to move.
-/// `checks/tests/member_gate_is_dead.rs` carries the rest of that instruction.
-#[test]
-fn the_member_gate_currently_guards_nothing() {
-    let member_routes = ROUTES.iter().filter(|r| r.guard() == Guard::Member).count();
-    assert_eq!(
-        member_routes, 0,
-        "{member_routes} route(s) are now Guard::Member. Delete this test and \
-         add a live case to the stack battery's contract stage proving a Member \
-         is accepted and a Newbie is refused with 403 — the offline matrix \
-         cannot show acceptance, because accepting a credential means querying."
-    );
-
-    // Constructed on purpose. The arm exists for the first member-gated route,
-    // not for this assertion, and without a construction somewhere rustc calls
-    // it dead code — which is how a whole authorization tier comes to look like
-    // an unused enum variant somebody should tidy away.
-    let placeholder = R("GET", "/api/nothing-yet", Guard::Member);
-    assert_eq!(placeholder.guard(), Guard::Member);
-    assert!(placeholder.is_guarded());
-}
+// The "member or above" tier is no longer empty: `POST /api/cmi5/aus/{id}/launch`
+// is Guard::Member. The census in `the_offline_device_surface_is_exactly_this_narrow`
+// counts it among the JWT-guarded routes and the 998-pair matrix asserts it
+// refuses every invalid credential; the live "a Member is accepted, a Newbie is
+// refused 403" case lives in the stack battery's contract stage (acceptance can
+// only be shown against a database). The placeholder assertion that used to
+// stand here — and `checks/tests/member_gate_is_dead.rs` — were removed when the
+// gate went live, exactly as they instructed.
 
 #[tokio::test]
 async fn toolguard_parses_parameters_before_it_authenticates() {

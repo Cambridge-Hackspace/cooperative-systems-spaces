@@ -27,6 +27,9 @@
             <li v-if="authStore.isAuthenticated">
               <router-link to="/tools">Tools</router-link>
             </li>
+            <li v-if="authStore.isAuthenticated">
+              <router-link to="/modules">My Modules</router-link>
+            </li>
             <li v-if="showWikiInNav">
               <router-link to="/wiki">Wiki</router-link>
             </li>
@@ -45,6 +48,7 @@
                   <li><router-link to="/admin">Dashboard</router-link></li>
                   <li><router-link to="/admin/roster">Roster</router-link></li>
                   <li><router-link to="/admin/audit">Audit Log</router-link></li>
+                  <li><router-link to="/admin/cmi5">Training Modules</router-link></li>
                 </ul>
               </details>
             </li>
@@ -83,6 +87,11 @@
               >Tools</router-link
             >
           </li>
+          <li v-if="authStore.isAuthenticated">
+            <router-link to="/modules" :class="{ active: $route.name === 'my-modules' }"
+              >My Modules</router-link
+            >
+          </li>
           <li v-if="showWikiInNav">
             <router-link to="/wiki" :class="{ active: $route.path.startsWith('/wiki') }"
               >Wiki</router-link
@@ -115,6 +124,7 @@
                 <li><router-link to="/admin">Dashboard</router-link></li>
                 <li><router-link to="/admin/roster">Roster</router-link></li>
                 <li><router-link to="/admin/audit">Audit Log</router-link></li>
+                <li><router-link to="/admin/cmi5">Training Modules</router-link></li>
               </ul>
             </details>
           </li>

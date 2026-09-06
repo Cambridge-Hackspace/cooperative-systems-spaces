@@ -1,6 +1,7 @@
 // Tool and training types for the frontend
 export * from './tools'
 export * from './training'
+export * from './cmi5'
 
 // API Response types
 export interface ApiResponse<T> {

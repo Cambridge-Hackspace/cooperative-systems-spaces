@@ -29,6 +29,11 @@ pub enum Guard {
     /// an extractor — the ToolGuard device endpoints. Behaves as guarded; the
     /// divergence is recorded by `checks/tests/toolguard_auth.rs`.
     InlineAuth,
+    /// The cmi5 LRS routes, authenticated by `Cmi5SessionAuth` — an opaque
+    /// session credential resolved from the database, like a device token. Its
+    /// contents can only be rejected by a lookup, so like the device surface
+    /// only its shape checks are reachable in the offline matrix.
+    Cmi5Session,
     /// Reachable without a credential by design.
     Public,
 }
@@ -131,6 +136,21 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/auth/register", Guard::Public), // auth::register
     R("GET", "/api/calendar/events", Guard::Public), // calendar::get_calendar_events
     R("GET", "/api/calendar/events/refresh", Guard::Public), // calendar::refresh_calendar_events
+    R("POST", "/api/cmi5/aus/00000000-0000-4000-8000-000000000001/launch", Guard::Member), // cmi5::launch_au
+    R("GET", "/api/cmi5/modules", Guard::Member), // cmi5::list_my_modules
+    R("POST", "/api/cmi5/fetch", Guard::Public), // cmi5::fetch_credential
+    R("GET", "/api/cmi5/lrs/activities/state", Guard::Cmi5Session), // cmi5::lrs_get_state
+    R("PUT", "/api/cmi5/lrs/activities/state", Guard::Cmi5Session), // cmi5::lrs_put_state
+    R("DELETE", "/api/cmi5/lrs/activities/state", Guard::Cmi5Session), // cmi5::lrs_delete_state
+    R("GET", "/api/cmi5/lrs/statements", Guard::Cmi5Session), // cmi5::lrs_get_statements
+    R("PUT", "/api/cmi5/lrs/statements", Guard::Cmi5Session), // cmi5::lrs_put_statement
+    R("POST", "/api/cmi5/lrs/statements", Guard::Cmi5Session), // cmi5::lrs_post_statement
+    R("GET", "/api/cmi5/courses", Guard::Staff), // cmi5::list_courses
+    R("POST", "/api/cmi5/courses", Guard::Staff), // cmi5::import_course
+    R("DELETE", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001", Guard::Staff), // cmi5::delete_course
+    R("GET", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001", Guard::Staff), // cmi5::get_course
+    R("GET", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001/export", Guard::Staff), // cmi5::export_course
+    R("POST", "/api/cmi5/courses/00000000-0000-4000-8000-000000000001/aus/00000000-0000-4000-8000-000000000001/assign", Guard::Admin), // cmi5::assign_au_step
     R("GET", "/api/config/public", Guard::Public), // config::get_public_config
     R("GET", "/api/config/registration", Guard::Public), // config::get_registration_config
     R("GET", "/api/config/tools", Guard::Public), // config::get_tools_config

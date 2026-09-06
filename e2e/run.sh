@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -917,6 +917,29 @@ stage_journeys() {
 
   emit_junit journeys "seed=${CSS_JOURNEY_SEED:-random}" \
     "iterations=${CSS_JOURNEY_ITERATIONS:-200}"
+}
+
+# The cmi5 end-to-end journey: import a package, bind an AU to a training
+# step, launch it as a learner, drive the embedded LRS, and prove a valid
+# pass grants tool access while a forged statement does not. Needs cmi5
+# enabled in stack-config.toml.
+stage_cmi5() {
+  cases_begin cmi5
+  stack_paths
+
+  if ! tcp_open "${SERVER_PORT}"; then
+    record_case "cmi5/stack-is-up" fail "css-server is not answering"
+    emit_junit cmi5
+    return 1
+  fi
+  record_case "cmi5/stack-is-up" ok
+
+  if run_node cmi5.mjs; then :; else
+    log "cmi5 driver exited non-zero; its cases are recorded below"
+  fi
+  absorb_driver_cases
+
+  emit_junit cmi5
 }
 
 stage_health() {

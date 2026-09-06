@@ -44,6 +44,12 @@ const BUDGET: &[(&str, usize)] = &[
     // which keeps the classification.
     ("auth.rs", 4),
     ("calendar.rs", 0),
+    // All three are genuine server faults, not discarded database
+    // classification: a filesystem error extracting a package, a connection-pool
+    // failure, and a failure serializing our own launch/statement JSON. The
+    // DB-error arm of `From<Cmi5Error>` delegates to `ApiError::from`, so a
+    // missing row is still a 404 and a unique violation still a 409.
+    ("cmi5.rs", 3),
     ("config.rs", 0),
     // 1, and it is the deliberate kind this check's own message describes.
     // `create_device_invite` generates its own value -- eight emoji -- so when

@@ -276,6 +276,17 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("Door schedule ticker started (1 minute interval)");
     }
 
+    // cmi5 training-module service. Holds the content-store settings and a
+    // database handle; the `enabled` gate is checked live by the handlers.
+    let cmi5_service = Arc::new(css_server::cmi5::Cmi5Service::new(
+        db_manager.clone(),
+        &app_config.cmi5,
+    ));
+    info!(
+        "cmi5 service initialized (enabled={})",
+        app_config.cmi5.enabled
+    );
+
     // Groups.io mailing-list sync. Only wired when the module is enabled: build
     // the client and service, register its sender as a second consumer of the
     // audit-event fan-out (alongside the webhook dispatcher), and spawn the
@@ -333,6 +344,7 @@ async fn main() -> Result<(), anyhow::Error> {
         device_transport,
         device_registry,
         device_inbound,
+        cmi5_service,
         groupsio_sync,
     };
 
@@ -381,6 +393,13 @@ async fn main() -> Result<(), anyhow::Error> {
     // The SPA fallback below catches everything the router did not match --
     // including, without care, unmatched /api paths. `api::api_routes()` owns
     // its own 404 for exactly that reason; the note is there.
+    // cmi5 package content is served statically, like the SPA: the files are
+    // plain assets the launched content fetches for itself, and the security
+    // boundary is the LRS session credential, not per-file auth. Mounted
+    // unconditionally; when cmi5 is disabled the directory is absent and
+    // ServeDir simply 404s.
+    let cmi5_content = ServeDir::new(app_config.cmi5.content_dir.clone());
+
     let app = Router::new()
         .route("/metrics", get(metrics_handler).with_state(prom.clone()))
         .merge(general_route)
@@ -390,6 +409,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 .layer(prom.http_layer())
                 .layer(tower::util::option_layer(cors)),
         )
+        .nest_service("/cmi5-content", cmi5_content)
         .fallback_service(serve_dir)
         .with_state(app_state);
 
