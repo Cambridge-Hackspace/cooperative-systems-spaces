@@ -118,5 +118,7 @@ pub async fn app_state() -> AppState {
         groupsio_sync: None,
         // Likewise the membership service: off unless the module is enabled.
         membership: None,
+        // And the tool-billing service: off unless the module is enabled.
+        tool_billing: None,
     }
 }

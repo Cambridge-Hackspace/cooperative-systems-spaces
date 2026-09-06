@@ -50,6 +50,7 @@ pub mod recaptcha;
 pub mod schedules;
 pub mod schema;
 pub mod stripe;
+pub mod tool_billing;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -72,6 +73,7 @@ use crate::pages::PagesService;
 use crate::profile::AuditLogger;
 use crate::recaptcha::RecaptchaService;
 use crate::throttle::RegistrationThrottleService;
+use crate::tool_billing::ToolBillingService;
 use crate::webhooks::WebhookDispatcher;
 
 #[derive(Clone)]
@@ -102,6 +104,9 @@ pub struct AppState {
     /// Membership dues-ledger service. `None` when the module is disabled; the
     /// membership and admin endpoints check for it before running.
     pub membership: Option<Arc<MembershipService>>,
+    /// Metered tool-billing service (Phase 2). `None` when the module is
+    /// disabled; the toolguard and admin paths check for it before running.
+    pub tool_billing: Option<Arc<ToolBillingService>>,
 }
 
 /// `GET /status` — the JSON liveness handler.
