@@ -359,6 +359,17 @@ pub enum AuditEventType {
     /// the platform learning of an unsubscribe done from a Groups.io email link.
     /// The sync consumes this to remove them and never re-add.
     MailingListUnsubscribe,
+    /// Reconciliation added an address to the Groups.io group to match intended
+    /// membership. A record of what the sync did, not a member action.
+    MailingListSyncAdd,
+    /// Reconciliation removed an address from the Groups.io group -- either it
+    /// was no longer intended, or (platform owns the list) it was a subscriber
+    /// the platform did not add. A record of what the sync did.
+    MailingListSyncRemove,
+    /// A user's email address was changed. Emitted from the account-update path,
+    /// which previously recorded nothing -- so a change there would silently
+    /// desync the mailing list. The payload carries the old and new addresses.
+    UserEmailChange,
 }
 
 impl AuditEventType {
@@ -441,6 +452,9 @@ impl AuditEventType {
             Self::EmailSendFailed => "email_send_failed",
             Self::MailingListSubscribe => "mailing_list_subscribe",
             Self::MailingListUnsubscribe => "mailing_list_unsubscribe",
+            Self::MailingListSyncAdd => "mailing_list_sync_add",
+            Self::MailingListSyncRemove => "mailing_list_sync_remove",
+            Self::UserEmailChange => "user_email_change",
         }
     }
 
@@ -526,6 +540,9 @@ impl AuditEventType {
             EmailSendFailed,
             MailingListSubscribe,
             MailingListUnsubscribe,
+            MailingListSyncAdd,
+            MailingListSyncRemove,
+            UserEmailChange,
         ]
     }
 }

@@ -76,6 +76,11 @@ pub struct DatabaseManager {
     /// Optional sink for newly-created audit logs, consumed by the webhook
     /// dispatcher. Set once at startup via [`set_webhook_sender`].
     webhook_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
+    /// A second, independent sink for the same audit events, consumed by the
+    /// Groups.io mailing-list sync. Kept separate from `webhook_tx` on purpose:
+    /// the two dispatchers must not be able to starve or block one another, and
+    /// each is registered (or absent) on its own.
+    groupsio_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -121,6 +126,7 @@ impl DatabaseManager {
         Self {
             pool,
             webhook_tx: std::sync::OnceLock::new(),
+            groupsio_tx: std::sync::OnceLock::new(),
         }
     }
 }
@@ -168,6 +174,7 @@ impl DatabaseManager {
         Ok(Self {
             pool,
             webhook_tx: std::sync::OnceLock::new(),
+            groupsio_tx: std::sync::OnceLock::new(),
         })
     }
 
@@ -178,6 +185,15 @@ impl DatabaseManager {
         tx: tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>,
     ) {
         let _ = self.webhook_tx.set(tx);
+    }
+
+    /// Register the channel the Groups.io sync listens on. Called once at
+    /// startup after the sync service is created. Subsequent calls are ignored.
+    pub fn set_groupsio_sender(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>,
+    ) {
+        let _ = self.groupsio_tx.set(tx);
     }
 
     /// Get a connection from the pool
@@ -648,6 +664,10 @@ impl DatabaseManager {
         // Fan the event out to the webhook dispatcher, if one is registered.
         // Never fails the audit write: a closed/absent channel is ignored.
         if let Some(tx) = self.webhook_tx.get() {
+            let _ = tx.send(created.clone());
+        }
+        // ...and independently to the Groups.io sync, same contract.
+        if let Some(tx) = self.groupsio_tx.get() {
             let _ = tx.send(created.clone());
         }
 
@@ -3046,6 +3066,21 @@ impl DatabaseManager {
             return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
         }
         Ok(())
+    }
+
+    /// Emails of every member who should be on the mailing list: active, with a
+    /// verified address, and not opted out. This is the reconciler's notion of
+    /// "intended subscribed" -- the set Groups.io is made to mirror.
+    pub fn list_mailing_list_intended(&self) -> Result<Vec<String>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+        let mut conn = self.get_connection()?;
+        users
+            .filter(is_active.eq(true))
+            .filter(email_verified_at.is_not_null())
+            .filter(mailing_list_opt_out_at.is_null())
+            .select(email)
+            .load::<String>(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 
     // --- users.mfa_enrolled_at -------------------------------------------

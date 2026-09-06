@@ -53,6 +53,10 @@ const BUDGET: &[(&str, usize)] = &[
     ("devices.rs", 1),
     ("doors.rs", 0),
     ("errors.rs", 10),
+    // The Groups.io handlers convert database errors through `ApiError::from`,
+    // so a missing row keeps its 404 and a bad request its 400 -- no blanket
+    // 500s to spend.
+    ("groupsio.rs", 0),
     ("home_links.rs", 0),
     ("instance.rs", 0),
     ("mfa.rs", 8),
