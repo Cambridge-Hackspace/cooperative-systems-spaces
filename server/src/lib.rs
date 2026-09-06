@@ -39,6 +39,7 @@ pub mod doors;
 pub mod groupsio;
 pub mod groupsio_sync;
 pub mod mail;
+pub mod membership;
 pub mod mfa;
 pub mod models;
 pub mod mqtt;
@@ -48,6 +49,7 @@ pub mod profile_fields;
 pub mod recaptcha;
 pub mod schedules;
 pub mod schema;
+pub mod stripe;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -63,6 +65,7 @@ use crate::devices_transport::{DeviceChannelRegistry, DeviceTransport};
 use crate::doors::DoorService;
 use crate::groupsio_sync::GroupsIoService;
 use crate::mail::MailService;
+use crate::membership::MembershipService;
 use crate::mfa::MfaService;
 use crate::mqtt::MqttService;
 use crate::pages::PagesService;
@@ -96,6 +99,9 @@ pub struct AppState {
     /// Groups.io mailing-list sync. `None` when the module is disabled; the
     /// admin "reconcile now" endpoint checks for it before running.
     pub groupsio_sync: Option<Arc<GroupsIoService>>,
+    /// Membership dues-ledger service. `None` when the module is disabled; the
+    /// membership and admin endpoints check for it before running.
+    pub membership: Option<Arc<MembershipService>>,
 }
 
 /// `GET /status` — the JSON liveness handler.

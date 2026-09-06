@@ -17,6 +17,8 @@ export interface PublicPagesConfig {
 
 export interface PublicSiteConfig {
   site_name: string
+  // Org abbreviation for compact labels; optional so older servers still parse.
+  site_short_name?: string
 }
 
 export interface PublicToolConfig {
@@ -54,6 +56,15 @@ export interface PublicGroupsioConfig {
   enabled: boolean
 }
 
+export interface PublicMembershipConfig {
+  enabled: boolean
+  stripe_enabled: boolean
+  currency: string
+  due_amount: string
+  due_period: string
+  plan_name: string
+}
+
 export interface PublicAuthConfig {
   // Already ANDed with email.enabled server-side, so this is "can a member
   // actually recover an account", not "did the operator tick the box". The
@@ -78,6 +89,7 @@ export interface PublicConfig {
   calendar?: PublicCalendarConfig
   toolguard?: PublicToolGuardConfig
   groupsio?: PublicGroupsioConfig
+  membership?: PublicMembershipConfig
 }
 
 export const useConfigStore = defineStore('config', () => {
@@ -197,6 +209,29 @@ export const useConfigStore = defineStore('config', () => {
     return !!config.value?.groupsio?.enabled
   }
 
+  function membershipEnabled(): boolean {
+    return !!config.value?.membership?.enabled
+  }
+
+  function stripeEnabled(): boolean {
+    return !!config.value?.membership?.stripe_enabled
+  }
+
+  function membershipInfo(): PublicMembershipConfig | null {
+    return config.value?.membership ?? null
+  }
+
+  // The organization's display name, and its short label. Configurable so no
+  // view hardcodes the organization name; `siteShortName` falls back to the full
+  // name when no abbreviation is set.
+  function siteName(): string {
+    return config.value?.site?.site_name || ''
+  }
+
+  function siteShortName(): string {
+    return config.value?.site?.site_short_name || siteName()
+  }
+
   // Name of the profile field that holds the user's RFID/NFC card id, if
   // the server has one configured. Shared between ToolGuard and door access.
   function cardIdField(): string | null {
@@ -216,6 +251,11 @@ export const useConfigStore = defineStore('config', () => {
     calendarEnabled,
     toolguardEnabled,
     groupsioEnabled,
+    membershipEnabled,
+    stripeEnabled,
+    membershipInfo,
+    siteName,
+    siteShortName,
     cardIdField,
   }
 })

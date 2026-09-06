@@ -20,12 +20,14 @@ use css_server::doors::DoorService;
 use css_server::groupsio::GroupsioClient;
 use css_server::groupsio_sync::GroupsIoService;
 use css_server::mail::MailService;
+use css_server::membership::MembershipService;
 use css_server::mfa::MfaService;
 use css_server::mqtt::MqttService;
 use css_server::pages::PagesService;
 use css_server::profile::AuditLogger;
 use css_server::profile_fields;
 use css_server::recaptcha::RecaptchaService;
+use css_server::stripe::StripeClient;
 use css_server::throttle::RegistrationThrottleService;
 use css_server::webhooks::WebhookDispatcher;
 
@@ -317,6 +319,62 @@ async fn main() -> Result<(), anyhow::Error> {
         None
     };
 
+    // Membership dues-ledger service. Built when the module is enabled (Stripe is
+    // an optional payment layer on top -- absent it, the ledger runs cash-only).
+    // The daily renewal ticker follows the same interval idiom as the door and
+    // groups.io tickers above.
+    let membership = if app_config.membership.enabled {
+        info!("Initializing membership billing...");
+        let stripe = if app_config.stripe.enabled {
+            Some(StripeClient::new(config_manager.clone()))
+        } else {
+            None
+        };
+        let svc = MembershipService::new(
+            db_manager.clone(),
+            config_manager.clone(),
+            door_service.clone(),
+            stripe,
+        );
+
+        let interval_secs = app_config.membership.accrual_interval_secs.max(1);
+        let cycle = svc.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let outcome = cycle.run_cycle().await;
+                if !outcome.ok {
+                    if let Some(err) = &outcome.error {
+                        warn!("Membership renewal cycle did not complete: {err}");
+                    }
+                } else if outcome.dues_charged + outcome.lapsed + outcome.credited > 0 {
+                    info!(
+                        "Membership cycle: {} checked, {} dues, {} lapsed, {} credited",
+                        outcome.users_checked,
+                        outcome.dues_charged,
+                        outcome.lapsed,
+                        outcome.credited
+                    );
+                }
+            }
+        });
+        info!(
+            "Membership billing started (renewal cycle every {}s, stripe {})",
+            interval_secs,
+            if app_config.stripe.enabled {
+                "enabled"
+            } else {
+                "disabled (cash-only)"
+            }
+        );
+        Some(svc)
+    } else {
+        info!("Membership module disabled, billing not started");
+        None
+    };
+
     let app_state = AppState {
         config_manager,
         db: db_manager,
@@ -334,6 +392,7 @@ async fn main() -> Result<(), anyhow::Error> {
         device_registry,
         device_inbound,
         groupsio_sync,
+        membership,
     };
 
     // Serve frontend static files
