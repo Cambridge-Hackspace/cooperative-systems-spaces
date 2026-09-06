@@ -73,6 +73,13 @@ pub enum DoorRuleKind {
     Role,
     User,
     Card,
+    /// Holds the door's strike unlocked (no card required) whenever the rule's
+    /// schedule is active — the "public access hours" / off-period latch. The
+    /// container `rename_all = "lowercase"` would emit `openaccess`; pin the
+    /// wire/DB token to `open_access` so serde agrees with `as_str`, the CHECK
+    /// constraint, and the frontend.
+    #[serde(rename = "open_access")]
+    OpenAccess,
 }
 
 impl DoorRuleKind {
@@ -81,6 +88,7 @@ impl DoorRuleKind {
             Self::Role => "role",
             Self::User => "user",
             Self::Card => "card",
+            Self::OpenAccess => "open_access",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -88,6 +96,7 @@ impl DoorRuleKind {
             "role" => Some(Self::Role),
             "user" => Some(Self::User),
             "card" => Some(Self::Card),
+            "open_access" => Some(Self::OpenAccess),
             _ => None,
         }
     }

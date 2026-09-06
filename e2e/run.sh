@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -436,6 +436,18 @@ stage_up() {
     return 1
   fi
 
+  # The Groups.io destination for the groupsio stage. Started here with the other
+  # sinks so it is up before the server, whose reconcile ticker will reach it.
+  start_groupsio_sink
+  if wait_for "css-groupsio-sink" 20 tcp_open "${GROUPSIO_PORT}"; then
+    record_case "up/groupsio-sink" ok
+  else
+    record_case "up/groupsio-sink" fail "never accepted a connection on ${GROUPSIO_PORT}"
+    collect_stack_logs
+    emit_junit up
+    return 1
+  fi
+
   write_stack_config
   record_case "up/config-written" ok
 
@@ -788,6 +800,38 @@ stage_mail() {
 
   collect_server_log
   emit_junit mail "driver=mail.mjs"
+}
+
+# The mailing-list sync against css-groupsio-sink, a simulated Groups.io. Placed
+# after mail because it reuses the running smtp sink to read a member's
+# confirmation token (verifying makes them intended). The reconcile/webhook
+# behaviour it proves would otherwise only surface as a 500 in the fuzz log.
+stage_groupsio() {
+  cases_begin groupsio
+  stack_paths
+
+  if ! server_ready; then
+    record_case "groupsio/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit groupsio
+    return 1
+  fi
+  record_case "groupsio/stack-is-up" ok
+
+  # Its own case, for the same reason as mail's: a sink that never started makes
+  # every assertion below fail as if the sync were broken rather than absent.
+  if tcp_open "${GROUPSIO_PORT}"; then
+    record_case "groupsio/sink-is-up" ok
+  else
+    record_case "groupsio/sink-is-up" fail "nothing is listening on ${GROUPSIO_PORT}"
+    emit_junit groupsio
+    return 1
+  fi
+
+  run_node groupsio.mjs >"${OUT}/logs/groupsio.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit groupsio "driver=groupsio.mjs"
 }
 
 stage_fuzz() {
@@ -1597,6 +1641,7 @@ stage_down() {
   stop_edge
   stop_mosquitto
   stop_smtp_sink
+  stop_groupsio_sink
   stack_rm_quiet
   record_case "down/torn-down" ok
   emit_junit down

@@ -78,6 +78,20 @@ enabled = false
 currency = "USD"
 test_mode = true
 
+# Enabled and pointed at css-groupsio-sink so the groupsio stage exercises the
+# whole sync against a simulated Groups.io. api_key/webhook_secret are the fixture
+# values the driver signs with; owner@e2e.invalid is protected so the stage can
+# prove "own the list" does not evict it. sync_interval is long so the ticker
+# does not reconcile mid-battery -- the driver triggers reconcile explicitly.
+[groupsio]
+enabled = true
+api_key = "e2e-groupsio-key"
+base_url = "http://127.0.0.1:@GROUPSIO_PORT@"
+group_id = "e2e-group"
+sync_interval_secs = 3600
+webhook_secret = "e2e-groupsio-webhook-secret"
+protected_addresses = ["owner@e2e.invalid"]
+
 [reports]
 usage_reports_enabled = true
 member_reports_enabled = true

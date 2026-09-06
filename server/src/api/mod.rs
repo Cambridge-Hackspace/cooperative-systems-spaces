@@ -6,6 +6,7 @@ pub mod config;
 pub mod devices;
 pub mod doors;
 pub mod errors;
+pub mod groupsio;
 pub mod home_links;
 pub mod instance;
 pub mod mfa;
@@ -45,6 +46,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/public", schedules::public_routes())
         .nest("/public", home_links::public_routes())
         .nest("/instance", instance::instance_routes())
+        .nest("/groupsio", groupsio::routes())
         // The API's own 404, and it belongs here rather than at the composition
         // site.
         //

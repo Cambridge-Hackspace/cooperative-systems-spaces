@@ -207,6 +207,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/admin/groupsio',
+      name: 'admin-groupsio',
+      component: () => import('@/components/GroupsioManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
       path: '/admin/doors',
       redirect: { name: 'admin-facility', query: { tab: 'doors' } },
     },

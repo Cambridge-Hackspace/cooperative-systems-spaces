@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use css_edge::doors::{CompiledDoor, Decision, DoorStateSnapshot, DoorsState};
 use serde_json::Value;
 use uuid::Uuid;
@@ -45,6 +45,23 @@ fn every_case_decides_as_the_vectors_declare() {
         let name = case["name"].as_str().unwrap_or("<unnamed>");
         let compiled = &case["expect"]["server_compiled"];
 
+        // The Open Access latch is time-relative, and the vectors freeze `now`
+        // in the past. Decide against that fixed instant (via `decide_at`) so
+        // the golden cases drive the same held-unlock code production runs.
+        let now: DateTime<Utc> = case["now"]
+            .as_str()
+            .expect("now")
+            .parse()
+            .expect("now must be RFC 3339");
+        // Built from the server's *declared* output, never the edge's own
+        // reading of the rules -- including hold_unlock_until (absent/null =
+        // no hold), so a held window compiled by the server is honored here.
+        let hold_unlock_until: Option<DateTime<Utc>> = match &compiled["hold_unlock_until"] {
+            Value::Null => None,
+            Value::String(s) => Some(s.parse().expect("hold_unlock_until must be RFC 3339")),
+            _ => None,
+        };
+
         let door_id = Uuid::new_v4();
         let state = DoorsState::default();
         state.apply_snapshot(DoorStateSnapshot {
@@ -56,6 +73,7 @@ fn every_case_decides_as_the_vectors_declare() {
                 unlock_duration_ms: 4200,
                 allow_cards: strings(&compiled["allow"]),
                 deny_cards: strings(&compiled["deny"]),
+                hold_unlock_until,
             }],
         });
 
@@ -66,7 +84,7 @@ fn every_case_decides_as_the_vectors_declare() {
             decisions += 1;
             let card = expectation["card"].as_str().expect("card");
             let want = expectation["granted"].as_bool().expect("granted");
-            let got = matches!(state.decide(door_id, card), Decision::Allow { .. });
+            let got = matches!(state.decide_at(door_id, card, now), Decision::Allow { .. });
             if got != want {
                 failures.push(format!(
                     "{name}: card {card} -> granted={got}, expected {want}"
@@ -99,6 +117,7 @@ fn a_disabled_door_refuses_a_card_the_server_allowed() {
             unlock_duration_ms: 4200,
             allow_cards: vec!["A1".into()],
             deny_cards: vec![],
+            hold_unlock_until: None,
         }],
     });
     assert!(matches!(state.decide(door_id, "A1"), Decision::Deny(_)));
@@ -161,6 +180,7 @@ fn deny_wins_even_when_the_card_is_also_allowed() {
             unlock_duration_ms: 4200,
             allow_cards: vec!["A1".into(), "B2".into()],
             deny_cards: vec!["A1".into()],
+            hold_unlock_until: None,
         }],
     });
     assert!(matches!(state.decide(door_id, "A1"), Decision::Deny(_)));

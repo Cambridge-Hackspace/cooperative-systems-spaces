@@ -385,3 +385,28 @@ edge_enabled = false
 # mqtt_namespace = "css"
 # mqtt_username = "..."
 # mqtt_password = "..."
+
+# Groups.io Mailing List Integration
+# Mirrors platform membership onto a Groups.io group so the roster is never
+# hand-edited. Members auto-subscribe once their email is verified (they can opt
+# out through the platform or from a Groups.io email link), and the platform
+# owns the whole list: reconciliation removes anyone it did not add.
+[groupsio]
+# Master toggle. When false, every Groups.io endpoint rejects and no sync runs.
+enabled = false
+# Groups.io API key, sent as a bearer token. Keep this secret.
+api_key = ""
+# Base URL of the Groups.io API.
+base_url = "https://groups.io/api/v1"
+# Identifier of the group whose roster is mirrored.
+group_id = ""
+# How often the reconciliation loop diffs the roster, in seconds.
+sync_interval_secs = 300
+# Shared secret used to verify inbound Groups.io membership webhooks. Leave
+# empty to trust no inbound webhook -- the reconciliation poll still catches
+# every opt-out on its own.
+webhook_secret = ""
+# Addresses reconciliation must never remove even though the platform did not
+# add them: the group owner, moderators, and any service accounts. Without this
+# the first sync would lock the group's own managers out.
+protected_addresses = []
