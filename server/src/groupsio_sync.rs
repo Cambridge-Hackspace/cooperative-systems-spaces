@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::ConfigManager;
 use crate::database::DatabaseManager;
@@ -130,6 +130,7 @@ impl GroupsIoService {
 
         let consumer = svc.clone();
         tokio::spawn(async move {
+            info!("Groups.io sync consumer started");
             // Sequential on purpose: events for one member (subscribe then
             // unsubscribe) must apply in order. Volume is low.
             while let Some(event) = rx.recv().await {
@@ -149,6 +150,7 @@ impl GroupsIoService {
     /// Translate one audit event into a Groups.io add/remove. A no-op unless the
     /// module is enabled and the event is one we act on.
     async fn handle_event(&self, event: AuditLog) {
+        debug!("Groups.io sync: received {}", event.event_type);
         if !self.enabled() {
             return;
         }
@@ -227,12 +229,17 @@ impl GroupsIoService {
             user.email_verified_at.is_some(),
             user.mailing_list_opt_out_at.is_some(),
         );
+        debug!(
+            "Groups.io sync: event for {} (intended={})",
+            user.email, intended
+        );
         if !intended {
             return;
         }
         if let Err(e) = self.client.direct_add(&[user.email.clone()]).await {
             warn!("Groups.io sync: failed to add {}: {e}", user.email);
         } else {
+            info!("Groups.io sync: event-push added {}", user.email);
             self.record(AuditEventType::MailingListSyncAdd, Some(uid), &[user.email]);
         }
     }

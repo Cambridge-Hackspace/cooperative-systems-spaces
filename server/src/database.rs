@@ -666,9 +666,17 @@ impl DatabaseManager {
         if let Some(tx) = self.webhook_tx.get() {
             let _ = tx.send(created.clone());
         }
-        // ...and independently to the Groups.io sync, same contract.
+        // ...and independently to the Groups.io sync, same contract. A send that
+        // fails means the sender is registered but its consumer task is gone -- a
+        // real fault worth logging, unlike an absent sender (the module is simply
+        // disabled).
         if let Some(tx) = self.groupsio_tx.get() {
-            let _ = tx.send(created.clone());
+            if tx.send(created.clone()).is_err() {
+                tracing::error!(
+                    "groupsio_tx send failed (consumer gone) for {}",
+                    created.event_type
+                );
+            }
         }
 
         Ok(created)

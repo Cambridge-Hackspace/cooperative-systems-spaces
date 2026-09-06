@@ -155,15 +155,18 @@ impl ProfileValidator {
 #[derive(Clone)]
 pub struct AuditLogger {
     enabled: bool,
-    db: DatabaseManager,
+    // The shared manager, not a clone of it. `DatabaseManager` derives Clone but
+    // its audit-event sinks are `OnceLock`s that a clone does NOT share -- so a
+    // cloned copy here never sees `set_webhook_sender` / `set_groupsio_sender`,
+    // and every event emitted through this logger silently failed to fan out to
+    // the webhook dispatcher and the Groups.io sync. Holding the `Arc` shares the
+    // one instance those senders are registered on.
+    db: std::sync::Arc<DatabaseManager>,
 }
 
 impl AuditLogger {
     pub fn new(db: std::sync::Arc<DatabaseManager>) -> Self {
-        Self {
-            enabled: true,
-            db: (*db).clone(),
-        }
+        Self { enabled: true, db }
     }
 
     /// Log an audit event to the database
