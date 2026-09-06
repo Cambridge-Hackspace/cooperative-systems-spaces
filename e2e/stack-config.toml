@@ -24,6 +24,7 @@
 
 [site]
 site_name = "CSS E2E"
+site_short_name = "CSSE2E"
 site_url = "http://127.0.0.1:@SERVER_PORT@"
 admin_url = "http://127.0.0.1:@SERVER_PORT@/admin"
 timezone = "@STACK_TZ@"
@@ -71,12 +72,29 @@ text_color = "#212529"
 dark_mode_enabled = true
 
 [stripe]
-publishable_key = ""
-secret_key = ""
-webhook_secret = ""
-enabled = false
+publishable_key = "pk_test_e2e"
+secret_key = "e2e-stripe-secret"
+webhook_secret = "e2e-stripe-webhook-secret"
+enabled = true
 currency = "USD"
 test_mode = true
+price_id = "price_e2e_membership"
+base_url = "http://127.0.0.1:@STRIPE_PORT@"
+
+[membership]
+enabled = true
+due_amount = "10.00"
+due_period = "Monthly"
+# 0 so the e2e renewal check lapses exactly at a past-dated anniversary, with no
+# extra grace window to reason about in the driver.
+grace_days = 0
+member_role = "Member"
+lapsed_role = "Newbie"
+restart_on_lapse = true
+one_shot_periods = 1
+currency = "USD"
+accrual_interval_secs = 3600
+plan_name = "CSS E2E Membership"
 
 # Enabled and pointed at css-groupsio-sink so the groupsio stage exercises the
 # whole sync against a simulated Groups.io. api_key/webhook_secret are the fixture

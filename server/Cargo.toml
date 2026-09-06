@@ -26,6 +26,14 @@ path = "src/bin/smtp_sink.rs"
 name = "css-groupsio-sink"
 path = "src/bin/groupsio_sink.rs"
 
+# The stack tier's Stripe destination. Same reasoning as the sinks above: a
+# stateful in-repo fake of the small Stripe API slice the membership module
+# calls, built alongside the server, so the stripe stage needs no external
+# service or pinned image.
+[[bin]]
+name = "css-stripe-sink"
+path = "src/bin/stripe_sink.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }

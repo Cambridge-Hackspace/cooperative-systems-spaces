@@ -181,6 +181,7 @@ fi
 if command -v node >/dev/null 2>&1; then
   run "tier-9-oracle" node e2e/journeys/selftest.mjs
   run "groupsio-oracle" node e2e/journeys/groupsio-selftest.mjs
+  run "stripe-oracle" node e2e/journeys/stripe-selftest.mjs
 fi
 
 printf '\n'
