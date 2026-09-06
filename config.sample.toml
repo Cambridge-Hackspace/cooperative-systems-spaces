@@ -60,6 +60,9 @@ setup_admin_email = "admin@example.com"
 [site]
 # The display name of your site
 site_name = "Cooperative Systems Spaces"
+# Short name / abbreviation for the organization (e.g. "CHACK"). Shown in the
+# SPA wherever a compact label is wanted; leave empty to fall back to site_name.
+site_short_name = ""
 # The main URL where your site is accessible (include protocol)
 site_url = "http://localhost:4399"
 # URL for the administrative interface
@@ -130,12 +133,46 @@ publishable_key = ""
 secret_key = ""
 # Webhook endpoint secret for Stripe events
 webhook_secret = ""
-# Enable Stripe payment processing
+# Enable Stripe payment processing (requires [membership].enabled = true)
 enabled = false
 # Currency code for payments (ISO 4217 format)
 currency = "USD"
 # Use test mode (true for development, false for production)
 test_mode = true
+# Recurring price id for the membership subscription. Create this price in
+# Stripe to match [membership].due_amount and due_period; the platform does not
+# configure the Stripe price itself.
+price_id = ""
+# Base URL of the Stripe API. Leave as-is in production; overridable for testing.
+base_url = "https://api.stripe.com"
+
+[membership]
+# Membership dues-ledger + billing module. When enabled, membership is driven by
+# a non-negative credit balance: payments (Stripe or admin-logged cash) are
+# credits, periodic dues are debits deducted only when the balance covers them.
+# Works cash-only with [stripe].enabled = false.
+enabled = false
+# Dues charged each period, as a decimal string (e.g. "25.00").
+due_amount = "0.00"
+# Dues cadence: "Monthly", "Quarterly", or "Yearly".
+due_period = "Monthly"
+# Days after the anniversary before the renewal check runs (grace for a payment
+# to land). 1 = "the next day".
+grace_days = 1
+# Role granted while in good standing (must be Member or lower).
+member_role = "Member"
+# Role a member drops to on lapse (must rank below member_role).
+lapsed_role = "Newbie"
+# Start a fresh membership on return after a lapse (no back-charge for the gap).
+restart_on_lapse = true
+# How many periods a one-time payment buys (amount = due_amount * this).
+one_shot_periods = 1
+# Display currency for balances.
+currency = "USD"
+# How often the renewal-cycle ticker runs, in seconds (86400 = daily).
+accrual_interval_secs = 86400
+# Display label for the subscription/plan shown to members.
+plan_name = "Membership"
 
 # Report Configuration
 # Settings for generating and managing reports

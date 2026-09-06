@@ -2,6 +2,7 @@ mod account_tokens;
 mod devices;
 mod doors;
 mod home_links;
+mod membership;
 mod mfa;
 mod places;
 mod profile_config;
@@ -19,6 +20,7 @@ pub use account_tokens::*;
 pub use devices::*;
 pub use doors::*;
 pub use home_links::*;
+pub use membership::*;
 pub use mfa::*;
 pub use places::*;
 pub use profile_config::*;
@@ -108,6 +110,21 @@ impl UserRole {
     pub fn is_active_user(&self) -> bool {
         !matches!(self, UserRole::Unknown)
     }
+
+    /// Seniority rank, ascending: `Unknown` < `Newbie` < `Member` < `Staff` <
+    /// `Admin`. The single place role ordering is defined; use it for
+    /// "this role or higher" comparisons rather than re-deriving a mapping.
+    /// (Door and home-link access checks previously each kept a private copy of
+    /// this table; they now call here.)
+    pub fn rank(&self) -> u8 {
+        match self {
+            UserRole::Unknown => 0,
+            UserRole::Newbie => 1,
+            UserRole::Member => 2,
+            UserRole::Staff => 3,
+            UserRole::Admin => 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
@@ -147,6 +164,24 @@ pub struct User {
     /// `ALTER TABLE ADD COLUMN` appends physically and `Queryable` loads
     /// positionally, so a new column must be the last field here too.
     pub mailing_list_opt_out_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Membership dues enrollment clock. `None` means the user is not enrolled
+    /// in dues (a never-paid Newbie, or an honorary staff/admin), and the
+    /// membership logic never touches them. `Some(t)` is the anniversary at
+    /// which the next period's dues fall due; the renewal check evaluates it
+    /// after `membership.grace_days`.
+    ///
+    /// Appended for the positional-`Queryable` reason above: new columns must be
+    /// the last fields, in the same order as the migration's `ADD COLUMN`s.
+    pub membership_next_due_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Stripe customer id, linking this user to the Billing Portal and mapping
+    /// inbound webhooks back to exactly one account. Not card data.
+    pub stripe_customer_id: Option<String>,
+    /// The user's current Stripe subscription id, when they have a recurring
+    /// membership. `None` for cash-only or one-shot members.
+    pub stripe_subscription_id: Option<String>,
+    /// Last-seen Stripe subscription status, kept for display only. The ledger
+    /// balance -- not this -- is the entitlement gate.
+    pub subscription_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -400,6 +435,35 @@ pub enum AuditEventType {
     /// which previously recorded nothing -- so a change there would silently
     /// desync the mailing list. The payload carries the old and new addresses.
     UserEmailChange,
+    // Membership billing (Stripe + dues ledger)
+    //
+    // Appended at the tail, like the groups above, so a concurrent branch adding
+    // events near another group does not collide here. These record membership
+    // state changes and admin actions; their payloads carry amounts, status, and
+    // Stripe reference ids but never card data.
+    /// Membership was granted (role raised to the configured member role) because
+    /// the balance covered the dues -- from a Stripe payment, a one-shot, or an
+    /// admin-logged cash credit.
+    MembershipGranted,
+    /// Membership lapsed (role lowered to the configured lapsed role) because the
+    /// balance could not cover the period's dues. No debt is carried.
+    MembershipRevoked,
+    /// An admin logged a manual (e.g. cash) payment as a ledger credit. The
+    /// payload records the actor, subject, amount, and note -- accountability for
+    /// money taken outside Stripe.
+    MembershipPaymentRecorded,
+    /// A lapse would have demoted the last remaining admin; the role change was
+    /// refused. Recorded so the owner sees an admin who owes dues but was
+    /// protected, rather than an unexplained non-event.
+    MembershipLastAdminProtected,
+    /// A Stripe subscription was created for a member (checkout completed in
+    /// subscription mode).
+    SubscriptionStarted,
+    /// A Stripe subscription was canceled (via the Billing Portal or Stripe).
+    SubscriptionCanceled,
+    /// A Stripe invoice payment failed. Recorded for visibility; the lapse itself
+    /// happens through the balance check, not this event.
+    SubscriptionPaymentFailed,
 }
 
 impl AuditEventType {
@@ -485,6 +549,13 @@ impl AuditEventType {
             Self::MailingListSyncAdd => "mailing_list_sync_add",
             Self::MailingListSyncRemove => "mailing_list_sync_remove",
             Self::UserEmailChange => "user_email_change",
+            Self::MembershipGranted => "membership_granted",
+            Self::MembershipRevoked => "membership_revoked",
+            Self::MembershipPaymentRecorded => "membership_payment_recorded",
+            Self::MembershipLastAdminProtected => "membership_last_admin_protected",
+            Self::SubscriptionStarted => "subscription_started",
+            Self::SubscriptionCanceled => "subscription_canceled",
+            Self::SubscriptionPaymentFailed => "subscription_payment_failed",
         }
     }
 
@@ -573,6 +644,13 @@ impl AuditEventType {
             MailingListSyncAdd,
             MailingListSyncRemove,
             UserEmailChange,
+            MembershipGranted,
+            MembershipRevoked,
+            MembershipPaymentRecorded,
+            MembershipLastAdminProtected,
+            SubscriptionStarted,
+            SubscriptionCanceled,
+            SubscriptionPaymentFailed,
         ]
     }
 }
