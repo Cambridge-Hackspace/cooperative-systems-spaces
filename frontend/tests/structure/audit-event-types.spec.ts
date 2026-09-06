@@ -95,7 +95,12 @@ describe('the audit filter against the server enum', () => {
         'server event types have no option. If that went down, lower the number ' +
         'here and say so; if it went up, an event type was added without a way ' +
         'to filter for it'
-    ).toBe(57)
+      // 57 -> 62: the Groups.io module added five event types
+      // (mailing_list_subscribe / _unsubscribe / _sync_add / _sync_remove and
+      // user_email_change). They join the unfiltered set deliberately -- the
+      // filter offers a curated subset, and these are diagnostic rather than
+      // access-control events.
+    ).toBe(62)
   })
 
   // Named separately because these are the ones that matter in an
