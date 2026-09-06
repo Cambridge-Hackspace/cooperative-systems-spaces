@@ -32,6 +32,9 @@ pub enum LedgerEntryType {
     StripeRefund,
     /// A manual admin correction. Sign depends on the amount.
     Adjustment,
+    /// A metered tool-use charge (Phase 2). Debit; posted when a tool session
+    /// settles.
+    ToolUsage,
 }
 
 impl LedgerEntryType {
@@ -42,6 +45,7 @@ impl LedgerEntryType {
             LedgerEntryType::DuesCharge => "dues_charge",
             LedgerEntryType::StripeRefund => "stripe_refund",
             LedgerEntryType::Adjustment => "adjustment",
+            LedgerEntryType::ToolUsage => "tool_usage",
         }
     }
 }
@@ -69,6 +73,7 @@ impl diesel::deserialize::FromSql<crate::schema::sql_types::LedgerEntryType, die
             b"dues_charge" => Ok(LedgerEntryType::DuesCharge),
             b"stripe_refund" => Ok(LedgerEntryType::StripeRefund),
             b"adjustment" => Ok(LedgerEntryType::Adjustment),
+            b"tool_usage" => Ok(LedgerEntryType::ToolUsage),
             _ => Err("Unrecognized ledger_entry_type variant".into()),
         }
     }

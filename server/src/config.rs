@@ -306,6 +306,76 @@ impl Default for MembershipConfig {
     }
 }
 
+/// How a metered tool charges against the balance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BillingMode {
+    /// Hold the max session cost at activation; settle the actual on stop. The
+    /// balance never goes negative.
+    Prepaid,
+    /// Gate on a minimum balance; charge the actual on stop, which may dip the
+    /// balance negative and block the next activation.
+    Postpaid,
+}
+
+impl Default for BillingMode {
+    fn default() -> Self {
+        BillingMode::Prepaid
+    }
+}
+
+/// Where a metered tool's activation is authorized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActuationMode {
+    /// The edge calls the server synchronously for metered tools and gates the
+    /// energize on its decision (fail-closed if the server is unreachable).
+    OnlineSynchronous,
+    /// The edge authorizes from its cached allow-list and energizes immediately;
+    /// the server places the hold on the forwarded activation and re-broadcasts.
+    /// Preserves offline operation; accepts a bounded balance-overshoot race.
+    EdgeLocal,
+}
+
+impl Default for ActuationMode {
+    fn default() -> Self {
+        ActuationMode::EdgeLocal
+    }
+}
+
+/// Metered pay-per-use tool-billing configuration (Phase 2). Requires the
+/// membership module (it reuses that credit ledger).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolBillingConfig {
+    /// Enable metered tool billing.
+    pub enabled: bool,
+    /// Prepaid (hold/settle, never negative) or postpaid (bill-after).
+    pub billing_mode: BillingMode,
+    /// Online-synchronous (server gates before energize) or edge-local.
+    pub actuation_mode: ActuationMode,
+    /// Whether using a metered tool requires membership in good standing.
+    pub require_membership: bool,
+    /// Fallback cap on billable minutes + the prepaid hold estimate when a tool
+    /// sets no `usage_max_session_minutes`.
+    pub default_max_session_minutes: i32,
+    /// Postpaid floor: minimum balance to start a metered tool. Decimal string.
+    pub min_balance: String,
+    /// Display currency for tool charges.
+    pub currency: String,
+}
+
+impl Default for ToolBillingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            billing_mode: BillingMode::Prepaid,
+            actuation_mode: ActuationMode::EdgeLocal,
+            require_membership: true,
+            default_max_session_minutes: 120,
+            min_balance: "0".to_string(),
+            currency: "USD".to_string(),
+        }
+    }
+}
+
 /// Reporting and analytics configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportConfig {
@@ -1160,6 +1230,9 @@ pub struct AppConfig {
     /// Membership dues-ledger + billing module
     #[serde(default)]
     pub membership: MembershipConfig,
+    /// Metered pay-per-use tool-billing module (Phase 2)
+    #[serde(default)]
+    pub tool_billing: ToolBillingConfig,
 }
 
 impl Default for AppConfig {
@@ -1187,6 +1260,7 @@ impl Default for AppConfig {
             place: PlaceConfig::default(),
             groupsio: GroupsioConfig::default(),
             membership: MembershipConfig::default(),
+            tool_billing: ToolBillingConfig::default(),
         }
     }
 }
@@ -1632,6 +1706,33 @@ fn validate_config(config: &AppConfig) -> Result<()> {
                 "stripe.enabled is true but stripe.price_id is empty, so a recurring \
                  checkout has no price to sell. Set the membership price id, or set \
                  stripe.enabled = false."
+            ));
+        }
+    }
+
+    // Metered tool billing charges against the membership credit ledger, so it
+    // cannot run without the membership module, and a zero max-session makes the
+    // prepaid hold estimate and the billable-time cap meaningless. Refused at
+    // boot and reload like the guards above.
+    if config.tool_billing.enabled {
+        use std::str::FromStr;
+        if !config.membership.enabled {
+            return Err(anyhow::anyhow!(
+                "tool_billing.enabled is true but membership.enabled is false. Tool \
+                 billing charges against the membership credit ledger; enable \
+                 membership, or set tool_billing.enabled = false."
+            ));
+        }
+        if config.tool_billing.default_max_session_minutes <= 0 {
+            return Err(anyhow::anyhow!(
+                "tool_billing.default_max_session_minutes must be positive; it bounds \
+                 billable time and the prepaid hold estimate."
+            ));
+        }
+        if let Err(e) = bigdecimal::BigDecimal::from_str(config.tool_billing.min_balance.trim()) {
+            return Err(anyhow::anyhow!(
+                "tool_billing.min_balance ({:?}) is not a valid decimal amount: {e}",
+                config.tool_billing.min_balance
             ));
         }
     }

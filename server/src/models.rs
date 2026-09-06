@@ -7,6 +7,7 @@ mod mfa;
 mod places;
 mod profile_config;
 mod schedules;
+mod tool_billing;
 mod tools;
 // `pub`, not `pub(crate)`: these types appear in the public signatures of
 // handlers and models reachable through AppState, and a public item exposing a
@@ -25,6 +26,7 @@ pub use mfa::*;
 pub use places::*;
 pub use profile_config::*;
 pub use schedules::*;
+pub use tool_billing::*;
 pub use tools::*;
 pub use trainers::*;
 pub use training::*;
@@ -464,6 +466,14 @@ pub enum AuditEventType {
     /// A Stripe invoice payment failed. Recorded for visibility; the lapse itself
     /// happens through the balance check, not this event.
     SubscriptionPaymentFailed,
+    // Metered tool billing (Phase 2). Appended at the tail, like the groups
+    // above. Payloads carry amounts/minutes/session ids, never card data.
+    /// A metered tool-use session settled and posted a `tool_usage` ledger
+    /// debit. The record of money charged for a tool use.
+    ToolUsageCharged,
+    /// The sweep closed a session that was never stopped (no `tool-off`),
+    /// settling it from reported usage (or the cap).
+    ToolSessionAbandoned,
 }
 
 impl AuditEventType {
@@ -556,6 +566,8 @@ impl AuditEventType {
             Self::SubscriptionStarted => "subscription_started",
             Self::SubscriptionCanceled => "subscription_canceled",
             Self::SubscriptionPaymentFailed => "subscription_payment_failed",
+            Self::ToolUsageCharged => "tool_usage_charged",
+            Self::ToolSessionAbandoned => "tool_session_abandoned",
         }
     }
 
@@ -651,6 +663,8 @@ impl AuditEventType {
             SubscriptionStarted,
             SubscriptionCanceled,
             SubscriptionPaymentFailed,
+            ToolUsageCharged,
+            ToolSessionAbandoned,
         ]
     }
 }

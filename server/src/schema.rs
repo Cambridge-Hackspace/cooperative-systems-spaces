@@ -221,6 +221,25 @@ diesel::table! {
         external_api_key -> Nullable<Text>,
         place_id -> Nullable<Uuid>,
         schedule_id -> Nullable<Uuid>,
+        usage_flat_fee -> Nullable<Numeric>,
+        usage_rate_per_min -> Nullable<Numeric>,
+        usage_max_session_minutes -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
+    tool_usage_sessions (id) {
+        id -> Uuid,
+        tool_id -> Uuid,
+        user_id -> Uuid,
+        started_at -> Timestamptz,
+        ended_at -> Nullable<Timestamptz>,
+        hold_amount -> Numeric,
+        reported_seconds -> Nullable<Numeric>,
+        charged_amount -> Nullable<Numeric>,
+        status -> Text,
+        ledger_entry_id -> Nullable<Uuid>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -638,6 +657,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     tool_events,
     tool_trainers,
     tool_training_types,
+    tool_usage_sessions,
     tools,
     training_instructors,
     training_prerequisites,
