@@ -192,6 +192,29 @@
         </div>
       </div>
 
+      <!-- Mailing List (only when the Groups.io module is enabled) -->
+      <div v-if="groupsioEnabled" class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+          <h2 class="card-title">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+              />
+            </svg>
+            Mailing List
+          </h2>
+          <p>Groups.io sync status, recent reconciliation runs, and a manual reconcile.</p>
+          <div class="card-actions justify-end">
+            <router-link to="/admin/groupsio" class="btn btn-primary btn-sm">
+              Manage Mailing List
+            </router-link>
+          </div>
+        </div>
+      </div>
+
       <!-- Homepage links -->
       <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
@@ -396,9 +419,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 import { UserRole } from '@/types'
 
 const authStore = useAuthStore()
+const configStore = useConfigStore()
+const groupsioEnabled = computed(() => configStore.groupsioEnabled())
 
 const canAccessAdmin = computed(() => {
   return authStore.isAdmin || authStore.hasRole(UserRole.Admin)

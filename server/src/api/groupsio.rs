@@ -24,8 +24,9 @@ use sha2::Sha256;
 
 use crate::{
     api::{errors::ApiError, responses::ApiResponse},
-    auth::AuthUser,
-    models::{AuditEventType, NewAuditLog},
+    auth::{AdminUser, AuthUser},
+    groupsio_sync::ReconcileOutcome,
+    models::{AuditEventType, GroupsioSyncRun, NewAuditLog},
     AppState,
 };
 
@@ -70,6 +71,59 @@ pub fn routes() -> Router<AppState> {
         .route("/subscription", get(get_subscription))
         .route("/subscription", put(set_subscription))
         .route("/webhook", post(receive_webhook))
+}
+
+/// Admin-only routes, nested under `/api/admin/groupsio`.
+pub fn admin_routes() -> Router<AppState> {
+    Router::new()
+        .route("/status", get(admin_status))
+        .route("/reconcile", post(admin_reconcile))
+}
+
+/// The admin's view of the sync: whether it is on, how many members should be
+/// on the list, and the recent reconciliation history.
+#[derive(Debug, Serialize)]
+pub struct GroupsioStatus {
+    pub enabled: bool,
+    pub intended_count: usize,
+    pub recent_runs: Vec<GroupsioSyncRun>,
+}
+
+/// GET /api/admin/groupsio/status
+async fn admin_status(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<GroupsioStatus>>, ApiError> {
+    require_enabled(&state)?;
+    let intended_count = state
+        .db
+        .list_mailing_list_intended()
+        .map_err(ApiError::from)?
+        .len();
+    let recent_runs = state
+        .db
+        .latest_groupsio_sync_runs(20)
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::success(GroupsioStatus {
+        enabled: true,
+        intended_count,
+        recent_runs,
+    })))
+}
+
+/// POST /api/admin/groupsio/reconcile -- run a reconciliation pass now.
+async fn admin_reconcile(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<ReconcileOutcome>>, ApiError> {
+    require_enabled(&state)?;
+    // Enabled implies the service was wired at boot; a None here is a server
+    // inconsistency, not something the caller can fix -- hence 500, not 403.
+    let svc = state.groupsio_sync.clone().ok_or_else(|| {
+        ApiError::InternalServerError("Groups.io sync service is not running".to_string())
+    })?;
+    let outcome = svc.reconcile_once().await;
+    Ok(Json(ApiResponse::success(outcome)))
 }
 
 /// GET /api/groupsio/subscription -- the authenticated member's own state.

@@ -53,10 +53,11 @@ const BUDGET: &[(&str, usize)] = &[
     ("devices.rs", 1),
     ("doors.rs", 0),
     ("errors.rs", 10),
-    // The Groups.io handlers convert database errors through `ApiError::from`,
-    // so a missing row keeps its 404 and a bad request its 400 -- no blanket
-    // 500s to spend.
-    ("groupsio.rs", 0),
+    // 1: `admin_reconcile` answers 500 when the module is enabled but the sync
+    // service is absent -- a server inconsistency the caller cannot fix, so 500
+    // is the honest code. Every database error in this file goes through
+    // `ApiError::from`, keeping a missing row a 404 and a bad request a 400.
+    ("groupsio.rs", 1),
     ("home_links.rs", 0),
     ("instance.rs", 0),
     ("mfa.rs", 8),

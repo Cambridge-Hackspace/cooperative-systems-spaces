@@ -3083,6 +3083,35 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Record one Groups.io reconciliation pass.
+    pub fn record_groupsio_sync_run(
+        &self,
+        run: &crate::models::NewGroupsioSyncRun,
+    ) -> Result<crate::models::GroupsioSyncRun, DatabaseError> {
+        use crate::schema::groupsio_sync_runs;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(groupsio_sync_runs::table)
+            .values(run)
+            .returning(crate::models::GroupsioSyncRun::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The most recent reconciliation passes, newest first.
+    pub fn latest_groupsio_sync_runs(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::models::GroupsioSyncRun>, DatabaseError> {
+        use crate::schema::groupsio_sync_runs::dsl::*;
+        let mut conn = self.get_connection()?;
+        groupsio_sync_runs
+            .order(started_at.desc())
+            .limit(limit)
+            .select(crate::models::GroupsioSyncRun::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     // --- users.mfa_enrolled_at -------------------------------------------
 
     pub fn set_user_mfa_enrolled(

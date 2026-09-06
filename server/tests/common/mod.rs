@@ -73,6 +73,8 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/doors/00000000-0000-4000-8000-000000000001/rules", Guard::Admin), // doors::add_rule
     R("DELETE", "/api/admin/doors/00000000-0000-4000-8000-000000000001/rules/00000000-0000-4000-8000-000000000001", Guard::Admin), // doors::remove_rule
     R("POST", "/api/admin/doors/00000000-0000-4000-8000-000000000001/unlock", Guard::Admin), // doors::admin_unlock
+    R("POST", "/api/admin/groupsio/reconcile", Guard::Admin), // groupsio::admin_reconcile
+    R("GET", "/api/admin/groupsio/status", Guard::Admin), // groupsio::admin_status
     R("GET", "/api/admin/home-links", Guard::Admin), // home_links::list_links_admin
     R("POST", "/api/admin/home-links", Guard::Admin), // home_links::create_link
     R("DELETE", "/api/admin/home-links/00000000-0000-4000-8000-000000000001", Guard::Admin), // home_links::delete_link

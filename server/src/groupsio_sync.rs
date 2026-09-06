@@ -30,7 +30,7 @@ use tracing::{debug, error, warn};
 use crate::config::ConfigManager;
 use crate::database::DatabaseManager;
 use crate::groupsio::GroupsioClient;
-use crate::models::{AuditEventType, AuditLog, NewAuditLog};
+use crate::models::{AuditEventType, AuditLog, NewAuditLog, NewGroupsioSyncRun};
 
 /// Normalize an address for comparison: trimmed and lowercased.
 pub fn normalize_email(email: &str) -> String {
@@ -246,9 +246,28 @@ impl GroupsIoService {
         }
     }
 
-    /// Run one full reconciliation pass. Safe to call from the ticker or the
-    /// admin "reconcile now" endpoint.
+    /// Run one full reconciliation pass and record it. Safe to call from the
+    /// ticker or the admin "reconcile now" endpoint.
     pub async fn reconcile_once(&self) -> ReconcileOutcome {
+        let started_at = chrono::Utc::now();
+        let outcome = self.reconcile_apply().await;
+        let run = NewGroupsioSyncRun {
+            started_at,
+            finished_at: chrono::Utc::now(),
+            added: outcome.added as i32,
+            removed: outcome.removed as i32,
+            opted_out: outcome.opted_out as i32,
+            ok: outcome.ok,
+            error: outcome.error.clone(),
+        };
+        if let Err(e) = self.db.record_groupsio_sync_run(&run) {
+            warn!("Failed to record Groups.io sync run: {e}");
+        }
+        outcome
+    }
+
+    /// The reconciliation itself, without the run bookkeeping.
+    async fn reconcile_apply(&self) -> ReconcileOutcome {
         let mut outcome = ReconcileOutcome::default();
         if !self.enabled() {
             outcome.error = Some("Groups.io integration is disabled".to_string());

@@ -240,6 +240,36 @@ pub struct NewAuditLog {
     pub user_agent: Option<String>,
 }
 
+/// One recorded Groups.io reconciliation pass, for the admin status view.
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = groupsio_sync_runs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct GroupsioSyncRun {
+    pub id: uuid::Uuid,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+    pub added: i32,
+    pub removed: i32,
+    pub opted_out: i32,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A reconciliation pass to record.
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = groupsio_sync_runs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewGroupsioSyncRun {
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+    pub added: i32,
+    pub removed: i32,
+    pub opted_out: i32,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
 /// Audit event types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuditEventType {
