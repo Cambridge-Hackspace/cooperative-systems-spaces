@@ -174,11 +174,18 @@ impl MqttService {
                     }
                 }
                 Err(e) => {
-                    // The stream is closed: the client has been dropped or
-                    // disconnected for good. Returning ends the task instead of
-                    // spinning on an error that will not change.
+                    // The stream is closed: paho dropped the sending half, so
+                    // no further message can ever arrive and retrying the
+                    // receive would spin on an error that cannot change. (The
+                    // old code slept a second and retried, which turned this
+                    // into a 1 Hz error log for the life of the process.)
+                    //
+                    // Reported as an error, not a clean exit: a consumer that
+                    // has stopped consuming is a failure, and returning Ok here
+                    // would tell `main` the task finished its job. Devices
+                    // would go unheard with nothing above this saying so.
                     error!("MQTT stream closed, stopping consumer: {}", e);
-                    return Ok(());
+                    return Err(Box::new(e));
                 }
             }
         }

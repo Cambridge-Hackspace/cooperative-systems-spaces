@@ -313,4 +313,4 @@ edge_enabled = true
 [edge.edge_mqtt_config]
 mqtt_instance_url = "tcp://127.0.0.1:@MQTT_PORT@"
 mqtt_client_id = "css-e2e-server"
-mqtt_namespace = "css-e2e"
+mqtt_namespace = "@MQTT_NAMESPACE@"

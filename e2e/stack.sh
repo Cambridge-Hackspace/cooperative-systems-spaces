@@ -68,6 +68,12 @@ stack_require_images() {
 STACK_DIR=""
 PG_PORT="${CSS_E2E_PG_PORT:-5432}"
 MQTT_PORT="${CSS_E2E_MQTT_PORT:-1883}"
+# Templated into stack-config.toml rather than written there literally, so the
+# namespace a stage publishes to and the one the server subscribes to cannot
+# drift. A stage publishing into the wrong namespace does not error -- the
+# message simply goes nowhere, and the assertion fails for a reason that looks
+# like the product.
+MQTT_NAMESPACE="${CSS_E2E_MQTT_NAMESPACE:-css-e2e}"
 # Set by write_stack_config; the address a human types to reach this stack.
 export STACK_HOST="127.0.0.1"
 SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
@@ -324,6 +330,34 @@ stop_mosquitto() {
   if [[ -f "${STACK_DIR}/mosquitto.pid" ]]; then
     kill "$(cat "${STACK_DIR}/mosquitto.pid")" 2>/dev/null || true
     rm -f "${STACK_DIR}/mosquitto.pid"
+    return 0
+  fi
+
+  # The container path. This used to be missing, which made stop_mosquitto a
+  # silent no-op under the default provisioning -- fine while its only caller
+  # was teardown (stack_rm_quiet removes the container anyway), and wrong the
+  # moment a stage wanted to take the broker away and give it back.
+  #
+  # `rm -f` and not `stop`: start_mosquitto creates by name, so a merely stopped
+  # container of the same name makes the restart collide.
+  [[ ${PROVISION} == "external" ]] && return 0
+  pm rm -f "${C_MQTT}" >/dev/null 2>&1 || true
+  return 0
+}
+
+# Publish one MQTT message, from wherever the broker actually is.
+#
+# The host has no mosquitto_pub under container provisioning -- the broker is an
+# image -- so the publish runs inside the broker's own container there, and on
+# the host under --provision=external where the broker is a host process.
+mqtt_pub() {
+  local topic="$1" payload="$2"
+  if [[ ${PROVISION} == "external" ]]; then
+    command -v mosquitto_pub >/dev/null 2>&1 || return 1
+    mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" -t "${topic}" -m "${payload}" 2>/dev/null
+  else
+    pm exec "${C_MQTT}" mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" \
+      -t "${topic}" -m "${payload}" >/dev/null 2>&1
   fi
 }
 
@@ -458,6 +492,7 @@ write_stack_config() {
     -e "s|@PG_PORT@|${PG_PORT}|g" \
     -e "s|@PG_DB@|${PG_DB}|g" \
     -e "s|@MQTT_PORT@|${MQTT_PORT}|g" \
+    -e "s|@MQTT_NAMESPACE@|${MQTT_NAMESPACE}|g" \
     -e "s|@SMTP_PORT@|${SMTP_PORT}|g" \
     -e "s|@GROUPSIO_PORT@|${GROUPSIO_PORT}|g" \
     -e "s|^bind_address = \"127\.0\.0\.1:|bind_address = \"${bind}:|" \

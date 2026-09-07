@@ -35,6 +35,7 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@PG_PORT@", "5432"),
     ("@PG_DB@", "css"),
     ("@MQTT_PORT@", "1883"),
+    ("@MQTT_NAMESPACE@", "css-e2e"),
     ("@SMTP_PORT@", "2525"),
     ("@GROUPSIO_PORT@", "4390"),
 ];
