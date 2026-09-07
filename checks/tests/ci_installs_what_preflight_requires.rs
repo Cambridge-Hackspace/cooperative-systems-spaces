@@ -148,7 +148,12 @@ fn ci_installs_every_package_those_tools_come_from() {
     let missing: Vec<String> = required
         .iter()
         .filter(|t| !ASSUMED_PRESENT.contains(&t.as_str()))
-        .filter_map(|t| PROVIDED_BY.iter().find(|(tool, _)| tool == t).map(|(_, p)| (t, p)))
+        .filter_map(|t| {
+            PROVIDED_BY
+                .iter()
+                .find(|(tool, _)| tool == t)
+                .map(|(_, p)| (t, p))
+        })
         .filter(|(_, pkg)| !installed.iter().any(|i| i == *pkg))
         .map(|(tool, pkg)| format!("{tool} (from {pkg})"))
         .collect();
