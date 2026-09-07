@@ -318,7 +318,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev libpq-dev cmake \
             libasound2-dev libudev-dev \
-            postgresql-client mosquitto
+            postgresql-client mosquitto mosquitto-clients
           # mosquitto's package starts a broker on 1883 with its own
           # configuration. The suite starts its own, pointed at a config it
           # wrote, so the packaged service has to be out of the way first --

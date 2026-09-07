@@ -204,6 +204,20 @@ stage_preflight() {
       record_case "tool/mosquitto" fail \
         "--provision=external starts the broker itself: apt-get install -y mosquitto"
     fi
+
+    # A separate package from the broker, and separately missing: the mqttloss
+    # stage publishes with it. Asserted here for the same reason as the broker
+    # above -- without it the first thing anybody sees is
+    # "mqtt_pub failed with the broker up" in a stage about broker outages,
+    # which reads as the server having broken rather than as a tool this suite
+    # needs not being installed. Under container provisioning the publish runs
+    # inside the broker's own image, so this is an external-only requirement.
+    if command -v mosquitto_pub >/dev/null 2>&1; then
+      record_case "tool/mosquitto_pub" ok
+    else
+      record_case "tool/mosquitto_pub" fail \
+        "--provision=external publishes from the host: apt-get install -y mosquitto-clients"
+    fi
   else
     if command -v "${ENGINE}" >/dev/null 2>&1; then
       record_case "engine/${ENGINE}" ok
