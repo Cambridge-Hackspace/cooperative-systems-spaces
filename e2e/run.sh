@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -448,6 +448,18 @@ stage_up() {
     return 1
   fi
 
+  # The Stripe stand-in for the stripe stage. Started here with the other sinks
+  # so it is up before the server, whose renewal ticker will reach it.
+  start_stripe_sink
+  if wait_for "css-stripe-sink" 20 tcp_open "${STRIPE_PORT}"; then
+    record_case "up/stripe-sink" ok
+  else
+    record_case "up/stripe-sink" fail "never accepted a connection on ${STRIPE_PORT}"
+    collect_stack_logs
+    emit_junit up
+    return 1
+  fi
+
   write_stack_config
   record_case "up/config-written" ok
 
@@ -832,6 +844,61 @@ stage_groupsio() {
 
   collect_server_log
   emit_junit groupsio "driver=groupsio.mjs"
+}
+
+# The membership dues ledger against css-stripe-sink, a simulated Stripe. Proves
+# the full lifecycle with two oracles (ledger balance AND role): a signed
+# invoice.paid grants membership, a missed renewal lapses it (never negative,
+# login still works), cash restores it, an enrolled staff comes back as a plain
+# member, the last admin is never demoted, a duplicate webhook posts once, the
+# poll catches a withheld payment, and a forged signature is rejected.
+stage_stripe() {
+  cases_begin stripe
+  stack_paths
+
+  if ! server_ready; then
+    record_case "stripe/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit stripe
+    return 1
+  fi
+  record_case "stripe/stack-is-up" ok
+
+  if tcp_open "${STRIPE_PORT}"; then
+    record_case "stripe/sink-is-up" ok
+  else
+    record_case "stripe/sink-is-up" fail "nothing is listening on ${STRIPE_PORT}"
+    emit_junit stripe
+    return 1
+  fi
+
+  run_node stripe.mjs >"${OUT}/logs/stripe.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit stripe "driver=stripe.mjs"
+}
+
+# Metered pay-per-use tool billing. Drives the server toolguard endpoints
+# directly with a metered tool's per-tool key and a funded member: a hold at
+# activation, a settle on stop (never negative), per-tool-key enforcement,
+# insufficient-balance and membership denials, idempotency, and -- the one the
+# owner insisted on -- training gated before any money moves.
+stage_toolbilling() {
+  cases_begin toolbilling
+  stack_paths
+
+  if ! server_ready; then
+    record_case "toolbilling/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit toolbilling
+    return 1
+  fi
+  record_case "toolbilling/stack-is-up" ok
+
+  run_node toolbilling.mjs >"${OUT}/logs/toolbilling.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit toolbilling "driver=toolbilling.mjs"
 }
 
 stage_fuzz() {
@@ -1619,6 +1686,7 @@ stage_down() {
   stop_mosquitto
   stop_smtp_sink
   stop_groupsio_sink
+  stop_stripe_sink
   stack_rm_quiet
   record_case "down/torn-down" ok
   emit_junit down

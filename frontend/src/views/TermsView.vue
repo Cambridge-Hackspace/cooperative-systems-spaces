@@ -13,7 +13,7 @@
       <div class="alert alert-warning text-sm">
         <span>
           This draft reflects what this site's software actually does as of today. It hasn't been
-          formally adopted by Cambridge Hackspace or reviewed by legal counsel &mdash; please have
+          formally adopted by {{ siteName }} or reviewed by legal counsel &mdash; please have
           someone review it before treating it as final.
         </span>
       </div>
@@ -22,8 +22,8 @@
         <p class="leading-relaxed">
           These terms cover your use of this website and the membership system behind it &mdash;
           account registration, door and tool access, and everything else the site manages for
-          Cambridge Hackspace. By creating an account or using the site, you agree to them. If you
-          don't agree, please don't use the site, and reach out to us instead.
+          {{ siteName }}. By creating an account or using the site, you agree to them. If you don't
+          agree, please don't use the site, and reach out to us instead.
         </p>
       </section>
 
@@ -52,7 +52,7 @@
       <section>
         <h2 class="text-xl font-semibold mb-2">Intellectual property</h2>
         <p class="leading-relaxed">
-          Content on this site that's specific to Cambridge Hackspace &mdash; our name, the
+          Content on this site that's specific to {{ siteName }} &mdash; our name, the
           organization's own text and images &mdash; belongs to us. The software running this site
           is separate: it's Free Software, and its own license governs how it can be used and
           modified (see the
@@ -97,6 +97,12 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
+
 const lastUpdated = new Date().toLocaleDateString('en-US', {
   year: 'numeric',
   month: 'long',

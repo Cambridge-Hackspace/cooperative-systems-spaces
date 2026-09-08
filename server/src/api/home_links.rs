@@ -142,16 +142,6 @@ fn audit(state: &AppState, event: AuditEventType, actor: Option<Uuid>, data: ser
     }
 }
 
-fn role_level(role: &UserRole) -> u8 {
-    match role {
-        UserRole::Unknown => 0,
-        UserRole::Newbie => 1,
-        UserRole::Member => 2,
-        UserRole::Staff => 3,
-        UserRole::Admin => 4,
-    }
-}
-
 /// True iff a link with `audience` should be shown to a viewer whose role is
 /// `viewer_role` (None = signed-out).
 fn visible_to(audience: HomeLinkAudience, viewer_role: Option<&UserRole>) -> bool {
@@ -161,8 +151,8 @@ fn visible_to(audience: HomeLinkAudience, viewer_role: Option<&UserRole>) -> boo
         (HomeLinkAudience::Anonymous, Some(_)) => false,
         (HomeLinkAudience::LoggedIn, Some(_)) => true,
         (HomeLinkAudience::LoggedIn, None) => false,
-        (HomeLinkAudience::Member, Some(r)) => role_level(r) >= role_level(&UserRole::Member),
-        (HomeLinkAudience::Staff, Some(r)) => role_level(r) >= role_level(&UserRole::Staff),
+        (HomeLinkAudience::Member, Some(r)) => r.rank() >= UserRole::Member.rank(),
+        (HomeLinkAudience::Staff, Some(r)) => r.rank() >= UserRole::Staff.rank(),
         (HomeLinkAudience::Member | HomeLinkAudience::Staff, None) => false,
     }
 }

@@ -73,6 +73,7 @@ export STACK_HOST="127.0.0.1"
 SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
 SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
 GROUPSIO_PORT="${CSS_E2E_GROUPSIO_PORT:-4390}"
+STRIPE_PORT="${CSS_E2E_STRIPE_PORT:-4391}"
 PG_USER="css_user"
 PG_PASS="css_pass"
 PG_DB="css"
@@ -396,6 +397,22 @@ stop_groupsio_sink() {
   fi
 }
 
+# The Stripe stand-in for the stripe stage: answers the checkout/portal/invoices
+# calls the membership module makes, and holds paid invoices for the poll path.
+start_stripe_sink() {
+  log "starting css-stripe-sink on ${STRIPE_PORT}"
+  STRIPE_SINK_BIND="127.0.0.1:${STRIPE_PORT}" \
+    "${ROOT}/e2e/artifacts/css-stripe-sink" >"${OUT}/logs/stripe-sink.log" 2>&1 &
+  echo $! >"${STACK_DIR}/stripe-sink.pid"
+}
+
+stop_stripe_sink() {
+  if [[ -f "${STACK_DIR}/stripe-sink.pid" ]]; then
+    kill "$(cat "${STACK_DIR}/stripe-sink.pid")" 2>/dev/null || true
+    rm -f "${STACK_DIR}/stripe-sink.pid"
+  fi
+}
+
 # The runtime image: the shipping Dockerfile's runtime stage, minus the parts
 # that only matter in production. Built here rather than pulled because there is
 # no published image carrying these binaries, and built from a digest-pinned
@@ -460,6 +477,7 @@ write_stack_config() {
     -e "s|@MQTT_PORT@|${MQTT_PORT}|g" \
     -e "s|@SMTP_PORT@|${SMTP_PORT}|g" \
     -e "s|@GROUPSIO_PORT@|${GROUPSIO_PORT}|g" \
+    -e "s|@STRIPE_PORT@|${STRIPE_PORT}|g" \
     -e "s|^bind_address = \"127\.0\.0\.1:|bind_address = \"${bind}:|" \
     -e "s|http://127\.0\.0\.1:|http://${host}:|g" \
     "${ROOT}/e2e/stack-config.toml" >"${STACK_DIR}/config.toml"
@@ -631,6 +649,7 @@ run_node() {
       CSS_STACK_DIR="${STACK_DIR}" \
       CSS_DB_ENCODING="${PG_ENCODING}" \
       CSS_GROUPSIO_SINK_URL="http://127.0.0.1:${GROUPSIO_PORT}" \
+      CSS_STRIPE_SINK_URL="http://127.0.0.1:${STRIPE_PORT}" \
       node "${ROOT}/e2e/drivers/${script}" "$@"
   else
     # Configuration the drivers read, forwarded explicitly.
@@ -663,6 +682,7 @@ run_node() {
       -e CSS_STACK_DIR=/stack \
       -e CSS_DB_ENCODING="${PG_ENCODING}" \
       -e CSS_GROUPSIO_SINK_URL="http://127.0.0.1:${GROUPSIO_PORT}" \
+      -e CSS_STRIPE_SINK_URL="http://127.0.0.1:${STRIPE_PORT}" \
       -v "${ROOT}/e2e:/e2e:ro" \
       -v "${STACK_DIR}:/stack" \
       "${IMG_NODE}" node "/e2e/drivers/${script}" "$@"
