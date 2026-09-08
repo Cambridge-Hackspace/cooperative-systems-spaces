@@ -116,5 +116,9 @@ pub async fn app_state() -> AppState {
         // The mailing-list sync is wired only when the module is enabled;
         // fixtures leave it off, and reconcile-now checks for it before running.
         groupsio_sync: None,
+        // Likewise the membership service: off unless the module is enabled.
+        membership: None,
+        // And the tool-billing service: off unless the module is enabled.
+        tool_billing: None,
     }
 }

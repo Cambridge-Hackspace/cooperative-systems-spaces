@@ -191,6 +191,24 @@ const router = createRouter({
       },
     },
     {
+      path: '/admin/membership',
+      name: 'admin-membership',
+      component: () => import('@/components/MembershipManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
+      path: '/admin/tool-billing',
+      name: 'admin-tool-billing',
+      component: () => import('@/components/ToolBillingManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
       path: '/admin/doors',
       redirect: { name: 'admin-facility', query: { tab: 'doors' } },
     },

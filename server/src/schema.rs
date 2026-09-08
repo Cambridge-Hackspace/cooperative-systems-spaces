@@ -14,6 +14,10 @@ pub mod sql_types {
     pub struct SpaceDevicePlatform;
 
     #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "ledger_entry_type"))]
+    pub struct LedgerEntryType;
+
+    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "tool_category"))]
     pub struct ToolCategory;
 
@@ -33,6 +37,39 @@ pub mod sql_types {
 diesel::table! {
     audit_event_types (name) {
         name -> Text,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::LedgerEntryType;
+
+    membership_ledger (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        entry_type -> LedgerEntryType,
+        amount -> Numeric,
+        currency -> Text,
+        occurred_at -> Timestamptz,
+        description -> Nullable<Text>,
+        external_reference -> Nullable<Text>,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    membership_sync_runs (id) {
+        id -> Uuid,
+        started_at -> Timestamptz,
+        finished_at -> Timestamptz,
+        users_checked -> Int4,
+        dues_charged -> Int4,
+        lapsed -> Int4,
+        errors -> Int4,
+        ok -> Bool,
+        error -> Nullable<Text>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -184,6 +221,25 @@ diesel::table! {
         external_api_key -> Nullable<Text>,
         place_id -> Nullable<Uuid>,
         schedule_id -> Nullable<Uuid>,
+        usage_flat_fee -> Nullable<Numeric>,
+        usage_rate_per_min -> Nullable<Numeric>,
+        usage_max_session_minutes -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
+    tool_usage_sessions (id) {
+        id -> Uuid,
+        tool_id -> Uuid,
+        user_id -> Uuid,
+        started_at -> Timestamptz,
+        ended_at -> Nullable<Timestamptz>,
+        hold_amount -> Numeric,
+        reported_seconds -> Nullable<Numeric>,
+        charged_amount -> Nullable<Numeric>,
+        status -> Text,
+        ledger_entry_id -> Nullable<Uuid>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -364,6 +420,10 @@ diesel::table! {
         mfa_enrolled_at -> Nullable<Timestamptz>,
         email_verified_at -> Nullable<Timestamptz>,
         mailing_list_opt_out_at -> Nullable<Timestamptz>,
+        membership_next_due_at -> Nullable<Timestamptz>,
+        stripe_customer_id -> Nullable<Text>,
+        stripe_subscription_id -> Nullable<Text>,
+        subscription_status -> Nullable<Text>,
     }
 }
 
@@ -589,12 +649,15 @@ diesel::allow_tables_to_appear_in_same_query!(
     audit_event_types,
     audit_logs,
     groupsio_sync_runs,
+    membership_ledger,
+    membership_sync_runs,
     space_device_auth,
     space_device_auth_requests,
     space_devices,
     tool_events,
     tool_trainers,
     tool_training_types,
+    tool_usage_sessions,
     tools,
     training_instructors,
     training_prerequisites,

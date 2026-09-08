@@ -161,3 +161,30 @@ fn the_remaining_divergence_is_still_the_one_recorded_here() {
          interlock releases: delete this test and say so explicitly."
     );
 }
+
+/// Phase 2 added a second access dimension -- metered-billing affordability --
+/// on top of training. It must hold on BOTH the web self-check and the physical
+/// guard's allow-list, exactly like training, or the two silently disagree: the
+/// web UI promises access the machine denies (or vice versa). This pins the new
+/// dimension on both halves the same way the training rule is pinned above.
+#[test]
+fn the_metered_billing_gate_holds_on_both_paths() {
+    let source = database_source();
+    let web = method_body(&source, "can_access_tool");
+    let sync = method_body(&source, "get_toolguard_sync_data");
+
+    assert!(
+        web.contains("metered_gate") && web.contains("gate.authorizes"),
+        "`can_access_tool` no longer applies the metered-billing gate, so the \
+         web self-report would promise access to a metered tool the member \
+         cannot afford -- the machine would then refuse it. Reapply the gate on \
+         this path, or unify the two and delete this test with a reason."
+    );
+    assert!(
+        sync.contains("metered_gate") && sync.contains("gate.authorizes"),
+        "`get_toolguard_sync_data` no longer applies the metered-billing gate, \
+         so the edge allow-list would offer a metered tool the member cannot \
+         afford -- and in edge-local mode the tool would energize before the \
+         server could refuse it. Reapply the gate on this path."
+    );
+}

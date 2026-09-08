@@ -17,7 +17,7 @@
     <div class="my-10">
       <div class="flex items-center gap-4 max-w-3xl mx-auto mb-10">
         <div class="flex-1 border-t-2 border-dotted border-base-content/40"></div>
-        <div class="text-3xl md:text-4xl font-bold text-center px-2">Cambridge Hackspace</div>
+        <div class="text-3xl md:text-4xl font-bold text-center px-2">{{ siteName }}</div>
         <div class="flex-1 border-t-2 border-dotted border-base-content/40"></div>
       </div>
 
@@ -37,10 +37,9 @@
           <img src="/images/index_blue.png" alt="" class="w-20 h-20 rounded-full mx-auto mb-4" />
           <h3 class="text-xl font-bold mb-2">why</h3>
           <p class="text-sm text-base-content/70">
-            We've started the Cambridge Hackspace to provide a physical space where people can
-            gather and work on their projects, have access to larger or expensive tools (like the 3D
-            printers, and laser cutter), and provide a place where the community can share their
-            knowledge.
+            We've started the {{ siteName }} to provide a physical space where people can gather and
+            work on their projects, have access to larger or expensive tools (like the 3D printers,
+            and laser cutter), and provide a place where the community can share their knowledge.
           </p>
         </div>
 
@@ -94,10 +93,10 @@
             >
           </template>
           <template v-else>
-            <h2 class="text-3xl font-bold mb-3">Join Cambridge Hackspace</h2>
+            <h2 class="text-3xl font-bold mb-3">Join {{ siteName }}</h2>
             <p class="text-base-content/70 mb-4">
-              Become a Cambridge Hackspace member, join us and help support our efforts to get
-              bigger and better.
+              Become a {{ siteName }} member, join us and help support our efforts to get bigger and
+              better.
             </p>
             <router-link to="/join" class="btn btn-primary btn-lg">Become a Member</router-link>
           </template>
@@ -233,11 +232,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 import CalendarEvents from '@/components/CalendarEvents.vue'
 import { schedulesApi, homeLinksApi } from '@/utils/api'
 import type { DayOfWeek, HomeLink, HomeLinkAudience, Schedule } from '@/types'
 
 const authStore = useAuthStore()
+const configStore = useConfigStore()
+const siteName = computed(() => configStore.siteName())
 
 /** Public schedules drive the "Hours today" panel. */
 const publicSchedules = ref<Schedule[]>([])

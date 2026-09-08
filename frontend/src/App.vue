@@ -51,7 +51,7 @@
           </ul>
         </div>
         <router-link to="/" class="btn btn-ghost">
-          <img src="/images/nav_logo.png" alt="Cambridge Hackspace" class="h-10 w-auto" />
+          <img src="/images/nav_logo.png" :alt="siteName" class="h-10 w-auto" />
         </router-link>
       </div>
 
@@ -179,7 +179,7 @@
         <span>|</span>
         <router-link to="/501c3" class="link link-hover">501(c)(3)</router-link>
         <span>|</span>
-        <span>&copy; {{ new Date().getFullYear() }} Cambridge Hackspace</span>
+        <span>&copy; {{ new Date().getFullYear() }} {{ siteName }}</span>
       </nav>
     </footer>
 
@@ -307,6 +307,10 @@ const canAccessAdmin = computed(() => {
 // Pages visibility
 // Restored after the merge: dev's nav rework dropped the Pages link and its
 // computed, but `[pages] site_enabled` still gates a real feature and
+// Organization display name, configurable via server config. Falls back to the
+// historical label until the config loads, so the header/footer never flash empty.
+const siteName = computed(() => configStore.siteName())
+
 // `tests/unit/config-store.spec.ts` asserts the two links are decided
 // independently.
 const showSiteInNav = computed(() => configStore.shouldShowSiteInNav())

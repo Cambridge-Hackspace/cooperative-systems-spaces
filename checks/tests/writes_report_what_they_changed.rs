@@ -63,10 +63,21 @@ const WRITERS: &[Writer] = &[
                       costs a stale `last_used_at`, not a wrong decision.",
         ),
     },
-    // Every writer that used to be here has been fixed: each reads the row
-    // count and returns `NotFound` when it is zero. The list is empty on
-    // purpose rather than deleted, because the check below it -- "no writer
-    // matching this pattern is unlisted" -- is what stops a tenth appearing.
+    Writer {
+        name: "add_reported_seconds",
+        exempt: Some(
+            "Accumulates metered tool usage onto an OPEN session, which the \
+                      method loads and checks first. A zero-row update means the \
+                      session closed between that load and this write (a race); \
+                      the usage simply is not accumulated, and the settle path \
+                      still bounds the charge by wall-clock and the max cap, so a \
+                      miss cannot over-bill -- there is no wrong decision to make \
+                      from the count.",
+        ),
+    },
+    // Every other writer that used to be here has been fixed: each reads the row
+    // count and returns `NotFound` when it is zero. The check below -- "no writer
+    // matching this pattern is unlisted" -- is what stops a new one appearing.
 ];
 
 /// The number of writers that ignore a row count they should be reading.

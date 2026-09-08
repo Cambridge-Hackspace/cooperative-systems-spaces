@@ -186,6 +186,15 @@ pub struct Tool {
     /// Optional usability window. When set and the schedule isn't currently
     /// open, the tool is effectively unavailable.
     pub schedule_id: Option<Uuid>,
+    /// Metered-billing rates (Phase 2). A tool is "metered" iff a flat fee or a
+    /// per-minute rate is set; otherwise it is free (training-gated as before).
+    /// Appended last for the positional-`Queryable` reason `email_verified_at`
+    /// documents on the `User` model.
+    pub usage_flat_fee: Option<BigDecimal>,
+    pub usage_rate_per_min: Option<BigDecimal>,
+    /// Caps billable time and the prepaid hold estimate; `None` falls back to the
+    /// global `[tool_billing].default_max_session_minutes`.
+    pub usage_max_session_minutes: Option<i32>,
 }
 
 /// New tool for creation
@@ -208,6 +217,9 @@ pub struct NewTool {
     pub external_api_key: Option<String>,
     pub place_id: Option<Uuid>,
     pub schedule_id: Option<Uuid>,
+    pub usage_flat_fee: Option<BigDecimal>,
+    pub usage_rate_per_min: Option<BigDecimal>,
+    pub usage_max_session_minutes: Option<i32>,
 }
 
 /// Tool event model

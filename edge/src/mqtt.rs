@@ -390,6 +390,12 @@ struct LocalToolRequest {
     seconds: Option<f32>,
     #[serde(default)]
     temperature: Option<f32>,
+    /// The tool's own API key. Metered tools require it server-side (the global
+    /// key is rejected for them); the controller supplies it and the edge
+    /// forwards it. Absent for non-metered tools, which authenticate by the
+    /// edge's device token.
+    #[serde(default)]
+    api_key: Option<String>,
 }
 
 pub struct LocalMqttClient {
@@ -602,6 +608,20 @@ impl LocalMqttClient {
     async fn handle_tool_on(&self, req: LocalToolRequest) {
         use crate::toolguard::AccessResult;
 
+        // Metered tools under online-synchronous actuation: the server is the
+        // authority. Ask it (and place the hold) BEFORE energizing; if it is
+        // unreachable, deny -- fail closed, because we cannot safely bill offline.
+        if self.toolguard_state.tool_requires_online(&req.tool_id) {
+            let (authorized, reason) = self.remote_tool_on(&req).await;
+            let response_payload =
+                serde_json::json!({ "authorized": authorized, "reason": reason });
+            self.publish_local("toolguard/response/tool-on", &response_payload);
+            return;
+        }
+
+        // Otherwise decide locally from the cached allow-list (offline-capable),
+        // then best-effort forward so the server records it (and, for metered
+        // tools in edge-local mode, places the hold and re-broadcasts).
         let result = self.toolguard_state.check_access(&req.card, &req.tool_id);
 
         let (authorized, reason) = match &result {
@@ -622,10 +642,14 @@ impl LocalMqttClient {
             let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
             let card = req.card.clone();
             let tool_id = req.tool_id.clone();
+            let api_key = req.api_key.clone();
             let token = self.remote_auth_token.clone();
             let http = self.http_client.clone();
             tokio::spawn(async move {
-                let params = [("card", card.as_str()), ("tool_id", tool_id.as_str())];
+                let mut params = vec![("card", card), ("tool_id", tool_id)];
+                if let Some(k) = api_key {
+                    params.push(("api_key", k));
+                }
                 if let Err(e) = http
                     .get(&url)
                     .bearer_auth(&token)
@@ -639,6 +663,48 @@ impl LocalMqttClient {
         }
     }
 
+    /// Synchronously ask the server to authorize (and hold) a metered activation.
+    /// Returns `(authorized, reason)`. Any transport or non-2xx error is a denial
+    /// -- fail closed.
+    async fn remote_tool_on(&self, req: &LocalToolRequest) -> (bool, String) {
+        let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
+        let mut params = vec![("card", req.card.clone()), ("tool_id", req.tool_id.clone())];
+        if let Some(k) = &req.api_key {
+            params.push(("api_key", k.clone()));
+        }
+        match self
+            .http_client
+            .get(&url)
+            .bearer_auth(&self.remote_auth_token)
+            .query(&params)
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.json::<serde_json::Value>().await {
+                Ok(body) => {
+                    // The server's ToolGuardResponse for tool-on is
+                    // { status, message, tool_on }: tool_on == true means
+                    // authorized, and message carries the denial reason.
+                    let authorized = body
+                        .get("tool_on")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let reason = body
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(if authorized { "authorized" } else { "denied" })
+                        .to_string();
+                    (authorized, reason)
+                }
+                Err(e) => (false, format!("server response unreadable: {e}")),
+            },
+            Err(e) => {
+                warn!("online-sync tool-on to remote failed: {}", e);
+                (false, "server unreachable".to_string())
+            }
+        }
+    }
+
     async fn handle_tool_off(&self, req: LocalToolRequest) {
         let response_payload = serde_json::json!({ "ok": true });
         self.publish_local("toolguard/response/tool-off", &response_payload);
@@ -646,10 +712,14 @@ impl LocalMqttClient {
         let url = format!("{}/api/toolguard/tool-off", self.remote_instance_url);
         let card = req.card.clone();
         let tool_id = req.tool_id.clone();
+        let api_key = req.api_key.clone();
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         tokio::spawn(async move {
-            let params = [("card", card.as_str()), ("tool_id", tool_id.as_str())];
+            let mut params = vec![("card", card), ("tool_id", tool_id)];
+            if let Some(k) = api_key {
+                params.push(("api_key", k));
+            }
             if let Err(e) = http
                 .get(&url)
                 .bearer_auth(&token)
@@ -673,6 +743,7 @@ impl LocalMqttClient {
         let card = req.card.clone();
         let tool_id = req.tool_id.clone();
         let temperature = req.temperature;
+        let api_key = req.api_key.clone();
         tokio::spawn(async move {
             let mut params = vec![
                 ("card", card),
@@ -681,6 +752,9 @@ impl LocalMqttClient {
             ];
             if let Some(t) = temperature {
                 params.push(("temperature", t.to_string()));
+            }
+            if let Some(k) = api_key {
+                params.push(("api_key", k));
             }
             if let Err(e) = http
                 .get(&url)
