@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,mqttloss,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,mqttloss,fuzz,concurrency,journeys,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -203,6 +203,20 @@ stage_preflight() {
     else
       record_case "tool/mosquitto" fail \
         "--provision=external starts the broker itself: apt-get install -y mosquitto"
+    fi
+
+    # A separate package from the broker, and separately missing: the mqttloss
+    # stage publishes with it. Asserted here for the same reason as the broker
+    # above -- without it the first thing anybody sees is
+    # "mqtt_pub failed with the broker up" in a stage about broker outages,
+    # which reads as the server having broken rather than as a tool this suite
+    # needs not being installed. Under container provisioning the publish runs
+    # inside the broker's own image, so this is an external-only requirement.
+    if command -v mosquitto_pub >/dev/null 2>&1; then
+      record_case "tool/mosquitto_pub" ok
+    else
+      record_case "tool/mosquitto_pub" fail \
+        "--provision=external publishes from the host: apt-get install -y mosquitto-clients"
     fi
   else
     if command -v "${ENGINE}" >/dev/null 2>&1; then
@@ -899,6 +913,187 @@ stage_toolbilling() {
 
   collect_server_log
   emit_junit toolbilling "driver=toolbilling.mjs"
+}
+
+# ===========================================================================
+# mqttloss -- the HTTP server is not coupled to the MQTT broker
+# ===========================================================================
+# The only tier that can answer "does the web server survive losing the
+# broker?". `MqttService::start` used to consume through paho's synchronous
+# receiver and block a tokio worker on recv(); when the broker went away the
+# runtime starved and axum stopped calling accept(). The process stayed up and
+# the port stayed open, so every cheaper signal -- container health, a liveness
+# probe on the process, the log -- said the service was fine while it served
+# nothing.
+#
+# A source-level check pins the construct (checks/tests/
+# mqtt_never_blocks_the_runtime.rs). It cannot see the behaviour, and it would
+# not notice a *different* construct reintroducing the same outage: a blocking
+# database call, a std::sync::Mutex held across an await. That is this stage's
+# question.
+#
+# The broker is taken away and given back here rather than in the driver
+# because owning the stack is this script's job. The driver owns the API work
+# and applies the invariants (journeys/mqtt-invariants.mjs), which
+# journeys/mqtt-selftest.mjs proves actually fire.
+stage_mqttloss() {
+  cases_begin mqttloss
+  stack_paths
+
+  if ! server_ready; then
+    record_case "mqttloss/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit mqttloss
+    return 1
+  fi
+  record_case "mqttloss/stack-is-up" ok
+
+  if tcp_open "${MQTT_PORT}"; then
+    record_case "mqttloss/broker-is-up" ok
+  else
+    record_case "mqttloss/broker-is-up" fail "nothing is listening on ${MQTT_PORT}"
+    emit_junit mqttloss
+    return 1
+  fi
+
+  # The observable is "the server handled a heartbeat for THIS id", read out of
+  # its own log, and not "a device row changed".
+  #
+  # A registered device would be the stronger signal, and it is unavailable
+  # here: this cluster is LATIN1 on purpose -- the suite starts hostile -- and a
+  # device invite code is eight astral-plane emoji, so registration cannot
+  # succeed at all. Keying on an id nobody registered costs the device-row
+  # assertion and buys the stage running on the default profile rather than only
+  # under `--profile utf8`. An unknown id still proves delivery: the server can
+  # only log "Device not found" for it if the message reached the handler.
+  local before_id after_id
+  before_id="$(gen_uuid)"
+  after_id="$(gen_uuid)"
+
+  local log="${OUT}/logs/css-server.log"
+  local observed="${STACK_DIR}/mqttloss-observed.json"
+
+  # Phase 1: the PRECONDITION, asserted before the outage rather than after it.
+  # Without this a post-outage silence could mean "never worked" and would be
+  # read as "broke during the outage" -- a failure presenting several inferences
+  # away from its cause.
+  if ! mqtt_pub "${MQTT_NAMESPACE}/devices/${before_id}/heartbeat" '{}'; then
+    record_case "mqttloss/heartbeat-published-before-outage" fail "mqtt_pub failed with the broker up"
+    emit_junit mqttloss
+    return 1
+  fi
+  record_case "mqttloss/heartbeat-published-before-outage" ok
+
+  local before_seen=false
+  if wait_for "the pre-outage heartbeat to be handled" 30 server_logged "${log}" "${before_id}"; then
+    before_seen=true
+    record_case "mqttloss/heartbeat-handled-before-outage" ok
+  else
+    record_case "mqttloss/heartbeat-handled-before-outage" fail \
+      "the server never logged handling ${before_id}; it is not consuming at all, so the assertions below would prove nothing"
+  fi
+
+  # Phase 2: take the broker away, and prove it went. A broker that never
+  # stopped would make everything below pass for the wrong reason -- the trap
+  # stage_restart guards with server_stopped.
+  stop_mosquitto
+  if wait_for "mosquitto to stop" 30 broker_stopped; then
+    record_case "mqttloss/broker-stopped" ok
+  else
+    record_case "mqttloss/broker-stopped" fail "still listening on ${MQTT_PORT} after 30s; the outage never happened"
+    start_mosquitto
+    collect_server_log
+    emit_junit mqttloss
+    return 1
+  fi
+
+  # Sample the HTTP surface across the outage. Time has to pass: a server that
+  # hangs takes a moment to stop accepting, and an absence asserted instantly is
+  # not an absence. 000 is curl for "no response at all", which is precisely the
+  # symptom -- the connection sat in the accept queue until the timeout.
+  local samples="${STACK_DIR}/mqtt-samples.json"
+  local code first=1
+  : >"${samples}"
+  printf '[' >>"${samples}"
+  for _ in $(seq 1 20); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+      "http://127.0.0.1:${SERVER_PORT}/status" 2>/dev/null || echo 000)"
+    code=$((10#${code}))
+    [[ ${first} -eq 1 ]] || printf ',' >>"${samples}"
+    first=0
+    printf '{"atMs":%s,"code":%s}' "$(($(date +%s) * 1000))" "${code}" >>"${samples}"
+    sleep 1
+  done
+  printf ']' >>"${samples}"
+
+  # Phase 3: give the broker back.
+  start_mosquitto
+  if wait_for "mosquitto" 30 tcp_open "${MQTT_PORT}"; then
+    record_case "mqttloss/broker-restarted" ok
+  else
+    record_case "mqttloss/broker-restarted" fail "broker did not come back on ${MQTT_PORT}"
+    collect_server_log
+    emit_junit mqttloss
+    return 1
+  fi
+
+  # Republish until it is handled, or until we have waited longer than paho's
+  # reconnect backoff can explain. The reconnect is asynchronous and the client
+  # may not have re-subscribed at the instant the port opened; a message
+  # published into that gap is simply gone, so a single publish would make this
+  # a race rather than a test. Retrying is not weakening the assertion -- what
+  # is asserted is unchanged: a message published after the reconnect has to be
+  # received.
+  local after_seen=false
+  local waited=0
+  while [[ ${waited} -lt 90 ]]; do
+    mqtt_pub "${MQTT_NAMESPACE}/devices/${after_id}/heartbeat" '{}' || true
+    sleep 5
+    waited=$((waited + 5))
+    if server_logged "${log}" "${after_id}"; then
+      after_seen=true
+      break
+    fi
+  done
+  if [[ ${after_seen} == true ]]; then
+    record_case "mqttloss/heartbeat-handled-after-reconnect" ok
+  else
+    record_case "mqttloss/heartbeat-handled-after-reconnect" fail \
+      "the server never logged handling ${after_id} within 90s of the broker returning"
+  fi
+
+  printf '{"samples":%s,"beforeSeen":%s,"afterSeen":%s}' \
+    "$(cat "${samples}")" "${before_seen}" "${after_seen}" >"${observed}"
+
+  run_node mqttloss.mjs >"${OUT}/logs/mqttloss.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit mqttloss "driver=mqttloss.mjs"
+}
+
+broker_stopped() { ! tcp_open "${MQTT_PORT}"; }
+
+# Has the server logged anything mentioning this id? `collect_server_log` is
+# called first because under container provisioning the log only reaches the
+# file when it is pulled.
+server_logged() {
+  local log="$1" needle="$2"
+  collect_server_log
+  grep -q -- "${needle}" "${log}" 2>/dev/null
+}
+
+# A v4-shaped UUID, because the server parses the id out of the topic and a
+# string that does not parse never reaches the handler that logs it.
+gen_uuid() {
+  local h
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    cat /proc/sys/kernel/random/uuid
+  elif command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    h="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+    printf '%s-%s-4%s-8%s-%s\n' "${h:0:8}" "${h:8:4}" "${h:13:3}" "${h:17:3}" "${h:20:12}"
+  fi
 }
 
 stage_fuzz() {

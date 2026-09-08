@@ -183,6 +183,7 @@ if command -v node >/dev/null 2>&1; then
   run "groupsio-oracle" node e2e/journeys/groupsio-selftest.mjs
   run "stripe-oracle" node e2e/journeys/stripe-selftest.mjs
   run "toolbilling-oracle" node e2e/journeys/toolbilling-selftest.mjs
+  run "mqtt-oracle" node e2e/journeys/mqtt-selftest.mjs
 fi
 
 printf '\n'
