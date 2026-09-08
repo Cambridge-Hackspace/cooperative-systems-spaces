@@ -109,6 +109,7 @@ pub async fn app_state() -> AppState {
             db.clone(),
             config.toolguard.profile_field.clone(),
         )),
+        cmi5_service: Arc::new(crate::cmi5::Cmi5Service::new(db.clone(), &config.cmi5)),
         device_transport,
         device_registry,
         db,

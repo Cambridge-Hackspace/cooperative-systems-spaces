@@ -1103,3 +1103,47 @@ export const trainerApi = {
       })
   },
 }
+
+// cmi5 training modules. JSON calls go through the typed apiClient; the two
+// binary calls (multipart import, zip export) go through apiClient.raw, which
+// still carries the Bearer token but lets axios set the right Content-Type /
+// responseType.
+export const cmi5Api = {
+  listCourses() {
+    return apiClient.get<import('@/types').Cmi5Course[]>('/cmi5/courses')
+  },
+  getCourse(id: string) {
+    return apiClient.get<import('@/types').Cmi5CourseWithAus>(`/cmi5/courses/${id}`)
+  },
+  deleteCourse(id: string) {
+    return apiClient.delete<{ deleted: string }>(`/cmi5/courses/${id}`)
+  },
+  assignAu(courseId: string, auId: string, body: import('@/types').Cmi5AssignRequest) {
+    return apiClient.post<import('@/types').Cmi5AssignableUnit>(
+      `/cmi5/courses/${courseId}/aus/${auId}/assign`,
+      body
+    )
+  },
+  async importCourse(file: File): Promise<ApiResponse<import('@/types').Cmi5CourseWithAus>> {
+    const form = new FormData()
+    form.append('file', file)
+    try {
+      const res = await apiClient.raw.post('/cmi5/courses', form)
+      return res.data as ApiResponse<import('@/types').Cmi5CourseWithAus>
+    } catch (error) {
+      return envelopeError<import('@/types').Cmi5CourseWithAus>(error, 'Failed to import package')
+    }
+  },
+  async exportCourse(id: string): Promise<Blob> {
+    const res = await apiClient.raw.get(`/cmi5/courses/${id}/export`, {
+      responseType: 'blob',
+    })
+    return res.data as Blob
+  },
+  listMyModules() {
+    return apiClient.get<import('@/types').Cmi5LearnerModule[]>('/cmi5/modules')
+  },
+  launch(auId: string) {
+    return apiClient.post<import('@/types').Cmi5LaunchResponse>(`/cmi5/aus/${auId}/launch`)
+  },
+}

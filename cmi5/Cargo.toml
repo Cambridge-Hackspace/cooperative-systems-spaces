@@ -1,0 +1,24 @@
+[package]
+name = "cmi5"
+version = "0.1.0"
+edition = "2024"
+
+# Pure cmi5 / xAPI domain logic: manifest (cmi5.xml) parse + serialize, xAPI
+# statement types, statement validation + the AU session state machine, moveOn
+# evaluation, and launch-URL assembly. No database, no HTTP, no AppState -- the
+# server crate consumes these types. This mirrors `css_lib`: a dependency-light
+# library that both halves of a feature agree on.
+[dependencies]
+# `version` may not accompany `workspace = true` -- cargo ignores it and warns
+# `unused manifest key`, the noise that hides a real warning once `-D warnings`
+# is on. Shared crates come from the workspace; cmi5-only ones are pinned here.
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# cmi5-specific. quick-xml drives both manifest parse and serialize (export
+# needs both directions). thiserror 2.x is already in the workspace lock, so it
+# adds no new major here.
+quick-xml = "0.42"
+thiserror = "2"

@@ -375,3 +375,47 @@ where
         Ok(MemberUser(user))
     }
 }
+
+/// Extractor for a launched cmi5 session, authenticated by the session
+/// credential the content received from the `fetch` exchange.
+///
+/// This is deliberately *not* a JWT and shares nothing with the user-auth path:
+/// the credential is an opaque token whose hash the [`crate::cmi5::Cmi5Service`]
+/// resolves to the one registration it belongs to. It authorizes only the LRS
+/// sub-routes, and only for its own registration/actor/activity — a learner
+/// running the content cannot use it to reach any other API. Modelled on
+/// [`DeviceAuth`]: a bearer token resolved against the database, not a role.
+#[derive(Clone)]
+pub struct Cmi5SessionAuth(pub crate::cmi5::Cmi5SessionContext);
+
+impl<S> FromRequestParts<S> for Cmi5SessionAuth
+where
+    S: Send + Sync,
+    AppState: FromRef<S>,
+{
+    type Rejection = AuthError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let app_state: AppState = AppState::from_ref(state);
+
+        let auth_header = parts
+            .headers
+            .get("authorization")
+            .ok_or(AuthError::MissingCredentials)?
+            .to_str()
+            .map_err(|_| AuthError::InvalidToken)?;
+        let token = auth_header
+            .strip_prefix("Bearer ")
+            .ok_or(AuthError::InvalidToken)?;
+
+        match app_state.cmi5_service.resolve_session(token) {
+            Ok(Some(ctx)) => Ok(Cmi5SessionAuth(ctx)),
+            // A resolvable-but-invalid credential (unknown or expired) is 401,
+            // not 403: it is a bad credential, not an authenticated party
+            // reaching past its scope. Scope violations are enforced per
+            // statement in the LRS handlers, where they answer 403.
+            Ok(None) => Err(AuthError::InvalidToken),
+            Err(_) => Err(AuthError::InternalError),
+        }
+    }
+}

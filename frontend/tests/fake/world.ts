@@ -109,6 +109,9 @@ export class World {
   tools: Array<Record<string, unknown>> = []
   doors: Array<Record<string, unknown>> = []
   doorRules: Array<Record<string, unknown>> = []
+  /** cmi5 modules a learner can launch; `completed` flips when the content in the
+   *  player iframe reports a pass to the fake LRS. */
+  cmi5Modules: Array<Record<string, unknown>> = []
   /** Tokens the fake has issued, mapped to the user they belong to. */
   sessions = new Map<string, string>()
   /**
@@ -196,9 +199,27 @@ export class World {
       },
     ]
     this.doorRules = []
+    this.cmi5Modules = [
+      {
+        au_id: 'au-1',
+        au_title: 'Fake Safety Module',
+        course_id: 'course-1',
+        course_title: 'Fake Course',
+        tool_id: 'tool-1',
+        training_step_id: 'step-1',
+        completed: false,
+      },
+    ]
     this.sessions.clear()
     this.armed = []
     this.requests = []
+  }
+
+  /** Mark the module for an AU completed, as the LRS would after a pass. */
+  markCmi5Completed(auId: string) {
+    for (const m of this.cmi5Modules) {
+      if (m.au_id === auId) m.completed = true
+    }
   }
 
   /** Arm a fault for the next request(s) whose path starts with `path`. */

@@ -458,12 +458,25 @@ them into `css_lib::toolguard` is the fix; a source-level check that
 crates cannot be built.
 
 **The stack battery does not exercise several product areas.** There is no
-`accounts`, `doors`, `webhooks`, `text` or `training` stage. The contract stage
-covers authorization across the whole surface and the fuzz stage reaches every
-endpoint with an oracle that knows nothing about any of them — so the *shapes*
-are covered. What is not covered is whether a door unlock actually reaches the
-edge, whether a webhook delivery arrives, or whether a training record survives
-a round trip. Those need per-feature stages and each one is a day's work.
+`accounts`, `doors`, `webhooks` or `text` stage. The contract stage covers
+authorization across the whole surface and the fuzz stage reaches every endpoint
+with an oracle that knows nothing about any of them — so the *shapes* are
+covered. What is not covered is whether a door unlock actually reaches the edge,
+whether a webhook delivery arrives, or whether a training record survives a
+round trip. Those need per-feature stages and each one is a day's work.
+
+The `cmi5` stage is the first of those per-feature stages. It imports a package
+(the only multipart upload in the app), binds its assignable unit to a training
+step, launches it as a member, and drives the embedded LRS: it proves a valid
+`passed` statement at or above the AU's masteryScore flips physical tool access
+from denied to granted — the one claim the offline tiers cannot make, because
+accepting a credential and flipping an access decision both require a database.
+It also asserts the boundary from the other side: a `passed` forged for a
+different actor or activity, or below mastery, is refused and grants nothing; the
+fetch token is single-use; the LRS refuses a request with no session credential;
+and a Newbie is refused the launch a Member is granted. The pure
+statement-validation logic underneath is unit-tested in the `cmi5` crate; this
+stage proves the wiring.
 
 **121 handlers map a database error to a bare 500.** Ratcheted rather than
 fixed, per §8. `checks/tests/database_errors_keep_their_meaning.rs` pins the

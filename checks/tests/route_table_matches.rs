@@ -208,6 +208,7 @@ fn guard_of(src: &str, handler: &str) -> String {
         ("MemberUser", "Member"),
         ("AuthUser", "Auth"),
         ("DeviceAuth", "Device"),
+        ("Cmi5SessionAuth", "Cmi5Session"),
     ] {
         // The extractor may be written bare or fully qualified --
         // `auth: DeviceAuth` and `auth: crate::auth::DeviceAuth` are the same
