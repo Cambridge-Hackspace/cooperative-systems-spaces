@@ -106,7 +106,12 @@ describe('the audit filter against the server enum', () => {
       // billing lifecycle records, not access-control filters.
       // 69 -> 71: metered tool billing added tool_usage_charged and
       // tool_session_abandoned. Same rationale -- billing records, not filters.
-    ).toBe(71)
+      // 71 -> 74: first-class cards (#33) added four event types. Three are
+      // card-management records (card_issued / card_disabled / card_released)
+      // and join the unfiltered set deliberately, like the billing events.
+      // The fourth, revoked_card_presented, is an access-control/fraud signal
+      // and IS offered as a filter option -- so it does not count here.
+    ).toBe(74)
   })
 
   // Named separately because these are the ones that matter in an

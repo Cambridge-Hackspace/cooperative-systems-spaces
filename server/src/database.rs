@@ -8,8 +8,8 @@ use std::fmt;
 use tracing::{debug, error, info, warn};
 
 use crate::config::DatabaseConfig;
-use crate::models::{NewUser, UpdateUser, User};
-use crate::schema::users;
+use crate::models::{CardResolution, CardStatus, NewUser, NewUserCard, UpdateUser, User, UserCard};
+use crate::schema::{user_cards, users};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -436,6 +436,137 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)?;
 
         Ok(user)
+    }
+
+    /// Resolve a scanned card code to a member, regardless of card status.
+    ///
+    /// Checks first-class `user_cards` first, then falls back to the legacy
+    /// single value in `users.profile[profile_field]` (treated as active). A
+    /// live (active/disabled) card — unique per code — wins over any released
+    /// row sharing that code; a released-only code resolves to its most recent
+    /// released row so a presentation is still attributable to its old owner.
+    pub fn resolve_card(
+        &self,
+        profile_field: &str,
+        code: &str,
+    ) -> Result<CardResolution, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        // A live row (active or disabled) is unique per code.
+        let live = user_cards::table
+            .filter(user_cards::code.eq(code))
+            .filter(user_cards::status.ne(CardStatus::Released))
+            .select(UserCard::as_select())
+            .first::<UserCard>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+
+        let card = match live {
+            Some(c) => Some(c),
+            None => user_cards::table
+                .filter(user_cards::code.eq(code))
+                .filter(user_cards::status.eq(CardStatus::Released))
+                .order(user_cards::created_at.desc())
+                .select(UserCard::as_select())
+                .first::<UserCard>(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?,
+        };
+
+        if let Some(card) = card {
+            let user = users::table
+                .find(card.user_id)
+                .select(User::as_select())
+                .first::<User>(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+            return Ok(if card.status.grants_access() {
+                CardResolution::Active {
+                    user,
+                    card: Some(card),
+                }
+            } else {
+                CardResolution::Revoked { user, card }
+            });
+        }
+
+        // Legacy fallback: a single value in the profile JSONB field.
+        match self.find_user_by_profile_field(profile_field, code)? {
+            Some(user) => Ok(CardResolution::Active { user, card: None }),
+            None => Ok(CardResolution::Unknown),
+        }
+    }
+
+    /// Record that a card was just used (best-effort).
+    pub fn touch_card_last_used(&self, card_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        let mut conn = self.get_connection()?;
+        diesel::update(user_cards::table.find(card_id))
+            .set((
+                user_cards::last_used_at.eq(diesel::dsl::now),
+                user_cards::updated_at.eq(diesel::dsl::now),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// All cards belonging to a member, newest first.
+    pub fn list_user_cards(&self, user_id: uuid::Uuid) -> Result<Vec<UserCard>, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        user_cards::table
+            .filter(user_cards::user_id.eq(user_id))
+            .order(user_cards::created_at.desc())
+            .select(UserCard::as_select())
+            .load::<UserCard>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Issue a new active card to a member. Fails with a unique-violation if the
+    /// code already belongs to a live (active/disabled) card.
+    pub fn create_card(&self, user_id: uuid::Uuid, code: &str) -> Result<UserCard, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        let new_card = NewUserCard {
+            user_id,
+            code: code.to_string(),
+            status: Some(CardStatus::Active),
+        };
+        diesel::insert_into(user_cards::table)
+            .values(&new_card)
+            .returning(UserCard::as_returning())
+            .get_result::<UserCard>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Disable a card (revoke access, keep it bound to the member).
+    pub fn disable_card(
+        &self,
+        card_id: uuid::Uuid,
+        reason: Option<&str>,
+    ) -> Result<UserCard, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        diesel::update(user_cards::table.find(card_id))
+            .set((
+                user_cards::status.eq(CardStatus::Disabled),
+                user_cards::disabled_at.eq(diesel::dsl::now),
+                user_cards::disabled_reason.eq(reason.map(|s| s.to_string())),
+                user_cards::updated_at.eq(diesel::dsl::now),
+            ))
+            .returning(UserCard::as_returning())
+            .get_result::<UserCard>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Release a card back to the pool (revoke access; code may be reissued).
+    pub fn release_card(&self, card_id: uuid::Uuid) -> Result<UserCard, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        diesel::update(user_cards::table.find(card_id))
+            .set((
+                user_cards::status.eq(CardStatus::Released),
+                user_cards::released_at.eq(diesel::dsl::now),
+                user_cards::updated_at.eq(diesel::dsl::now),
+            ))
+            .returning(UserCard::as_returning())
+            .get_result::<UserCard>(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 
     /// Update user information
@@ -2253,6 +2384,21 @@ impl DatabaseManager {
             .load::<crate::models::Tool>(&mut conn)
             .map_err(DatabaseError::Diesel)?;
 
+        // First-class active cards, grouped by user, loaded once. These are
+        // unioned below with any legacy profile-field identifier(s) so both
+        // schemes work during and after migration. Disabled/released cards are
+        // excluded, so a revoked card never reaches an edge allow-list.
+        let active_cards = user_cards::table
+            .filter(user_cards::status.eq(CardStatus::Active))
+            .select((user_cards::user_id, user_cards::code))
+            .load::<(uuid::Uuid, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let mut cards_by_user: std::collections::HashMap<uuid::Uuid, Vec<String>> =
+            std::collections::HashMap::new();
+        for (uid, code) in active_cards {
+            cards_by_user.entry(uid).or_default().push(code);
+        }
+
         let mut sync_users = Vec::new();
         // Track which tools appear in at least one user's authorized list
         let mut authorized_tool_ids_set: std::collections::HashSet<uuid::Uuid> =
@@ -2262,7 +2408,7 @@ impl DatabaseManager {
             // The profile field may be either a scalar string (one identifier)
             // or an array of strings (many identifiers per user). Empty/missing
             // values are skipped.
-            let identifiers: Vec<String> = match user.profile.get(profile_field) {
+            let mut identifiers: Vec<String> = match user.profile.get(profile_field) {
                 Some(v) if v.is_string() => v
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -2280,6 +2426,15 @@ impl DatabaseManager {
                     .unwrap_or_default(),
                 _ => Vec::new(),
             };
+
+            // Union in the member's first-class active card codes (deduped).
+            if let Some(codes) = cards_by_user.get(&user.id) {
+                for code in codes {
+                    if !identifiers.contains(code) {
+                        identifiers.push(code.clone());
+                    }
+                }
+            }
 
             if identifiers.is_empty() {
                 continue;

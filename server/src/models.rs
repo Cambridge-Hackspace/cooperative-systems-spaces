@@ -1,4 +1,5 @@
 mod account_tokens;
+mod cards;
 mod cmi5;
 mod devices;
 mod doors;
@@ -19,6 +20,7 @@ mod training;
 mod webhooks;
 
 pub use account_tokens::*;
+pub use cards::*;
 pub use cmi5::*;
 pub use devices::*;
 pub use doors::*;
@@ -348,6 +350,18 @@ pub enum AuditEventType {
     ToolActivated,
     ToolDeactivated,
     ToolUsageLogged,
+    // Access card events
+    /// A known-but-revoked (disabled or released) card was presented at a tool
+    /// or door. Access is denied as usual; this distinct event exists so the
+    /// attempt can be hooked for fraud alerting. An *unknown* code stays the
+    /// ordinary quiet denial and does not emit this.
+    RevokedCardPresented,
+    /// An admin issued a new access card to a member.
+    CardIssued,
+    /// An admin disabled a member's card (lost/compromised/on-hold).
+    CardDisabled,
+    /// An admin released a member's card back to the pool for reissue.
+    CardReleased,
     // Device-related events
     DeviceInviteCreated,
     DeviceInviteUsed,
@@ -523,6 +537,10 @@ impl AuditEventType {
             Self::ToolActivated => "tool_activated",
             Self::ToolDeactivated => "tool_deactivated",
             Self::ToolUsageLogged => "tool_usage_logged",
+            Self::RevokedCardPresented => "revoked_card_presented",
+            Self::CardIssued => "card_issued",
+            Self::CardDisabled => "card_disabled",
+            Self::CardReleased => "card_released",
             Self::DeviceInviteCreated => "device_invite_created",
             Self::DeviceInviteUsed => "device_invite_used",
             Self::DeviceInviteExpired => "device_invite_expired",
@@ -626,6 +644,10 @@ impl AuditEventType {
             ToolActivated,
             ToolDeactivated,
             ToolUsageLogged,
+            RevokedCardPresented,
+            CardIssued,
+            CardDisabled,
+            CardReleased,
             DeviceInviteCreated,
             DeviceInviteUsed,
             DeviceInviteExpired,

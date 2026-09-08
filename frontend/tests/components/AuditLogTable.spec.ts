@@ -233,7 +233,7 @@ describe('the event-type filter', () => {
   // transactional-email options came with six, so the ratchet there still reads
   // 57. An option added without a server variant would be caught by the other
   // file's first test instead.
-  it('offers eighteen of the event types the server can write', async () => {
+  it('offers nineteen of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -246,8 +246,10 @@ describe('the event-type filter', () => {
         'which holds the comparison against the server enum. Went from eleven ' +
         'to twelve when training_documentation_acknowledged was added -- a record ' +
         'kept so it can be produced later is not usable if it cannot be found -- ' +
-        'and to eighteen with the six transactional-email types.'
-    ).toHaveLength(18)
+        'to eighteen with the six transactional-email types, and to nineteen with ' +
+        'revoked_card_presented (#33), an access-control signal that must be ' +
+        'isolable.'
+    ).toHaveLength(19)
   })
 
   it('titles every option it does offer', async () => {

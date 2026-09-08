@@ -276,9 +276,23 @@ async fn tool_on(
         )));
     }
 
-    let user = match find_user_by_card(&state, &req.card).await? {
-        Some(u) => u,
-        None => {
+    let user = match resolve_card(&state, &req.card).await? {
+        crate::models::CardResolution::Active { user, card } => {
+            // Record the presentation on the card that opened the tool.
+            if let Some(c) = card {
+                let _ = state.db.touch_card_last_used(c.id);
+            }
+            user
+        }
+        crate::models::CardResolution::Revoked { user, card } => {
+            // Known credential deliberately not active — deny, but raise the
+            // distinct fraud-signal event (a found/stolen card, or a member on
+            // hold), separate from the quiet unknown-card denial below.
+            log_revoked_card_presented(&state, &user, &card, &req.tool_id).await?;
+            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Card revoked").await?;
+            return Ok(Json(ToolGuardResponse::tool_denied("Card not authorized")));
+        }
+        crate::models::CardResolution::Unknown => {
             log_tool_access_denied(&state, None, &req.tool_id, "Unknown card").await?;
             return Ok(Json(ToolGuardResponse::tool_denied("Unknown card")));
         }
@@ -434,9 +448,16 @@ async fn tool_off(
         return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
     }
 
-    let user = match find_user_by_card(&state, &req.card).await? {
-        Some(u) => u,
-        None => return Ok(Json(ToolGuardResponse::error("Unknown card"))),
+    // Settle/report path: an already-open session must still close even if the
+    // card was disabled or released mid-use, so both Active and Revoked resolve
+    // to the member here; only a truly unknown code is rejected. (The revoked
+    // fraud signal is raised at tool-on, where access is actually granted.)
+    let user = match resolve_card(&state, &req.card).await? {
+        crate::models::CardResolution::Active { user, .. }
+        | crate::models::CardResolution::Revoked { user, .. } => user,
+        crate::models::CardResolution::Unknown => {
+            return Ok(Json(ToolGuardResponse::error("Unknown card")))
+        }
     };
 
     let tool = match tool {
@@ -522,9 +543,16 @@ async fn tool_log(
         return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
     }
 
-    let user = match find_user_by_card(&state, &req.card).await? {
-        Some(u) => u,
-        None => return Ok(Json(ToolGuardResponse::error("Unknown card"))),
+    // Settle/report path: an already-open session must still close even if the
+    // card was disabled or released mid-use, so both Active and Revoked resolve
+    // to the member here; only a truly unknown code is rejected. (The revoked
+    // fraud signal is raised at tool-on, where access is actually granted.)
+    let user = match resolve_card(&state, &req.card).await? {
+        crate::models::CardResolution::Active { user, .. }
+        | crate::models::CardResolution::Revoked { user, .. } => user,
+        crate::models::CardResolution::Unknown => {
+            return Ok(Json(ToolGuardResponse::error("Unknown card")))
+        }
     };
 
     let tool = match tool {
@@ -843,18 +871,48 @@ async fn validate_api_key(
     Ok(false)
 }
 
-async fn find_user_by_card(
+async fn resolve_card(
     state: &AppState,
     card: &str,
-) -> Result<Option<crate::models::User>, ApiError> {
+) -> Result<crate::models::CardResolution, ApiError> {
     let config = state.config_manager.get_config();
     let profile_field = &config.toolguard.profile_field;
     state
         .db
-        .find_user_by_profile_field(profile_field, card)
-        .map_err(|e| {
-            ApiError::InternalServerError(format!("Failed to query user by profile field: {}", e))
-        })
+        .resolve_card(profile_field, card)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to resolve card: {}", e)))
+}
+
+/// Emit the distinct high-signal audit event for a known-but-revoked
+/// (disabled/released) card presented at a tool. Denial is handled separately;
+/// this event exists purely as a hook for later fraud alerting.
+async fn log_revoked_card_presented(
+    state: &AppState,
+    user: &crate::models::User,
+    card: &crate::models::UserCard,
+    toolguard_id: &str,
+) -> Result<(), ApiError> {
+    let details = serde_json::json!({
+        "toolguard_id": toolguard_id,
+        "card_code": card.code,
+        "card_status": card.status,
+        "context": "tool",
+    });
+    let audit_logger = state.audit_logger.clone();
+    let user_id = user.id;
+    tokio::spawn(async move {
+        let _ = audit_logger
+            .log_event(
+                crate::models::AuditEventType::RevokedCardPresented,
+                Some(user_id),
+                Some(user_id),
+                details,
+                None,
+                None,
+            )
+            .await;
+    });
+    Ok(())
 }
 
 async fn find_tool_by_toolguard_id(

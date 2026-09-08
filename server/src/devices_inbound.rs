@@ -191,13 +191,27 @@ impl DeviceInbound {
             }
         };
 
+        // Resolve the scanned card to a member regardless of card status, so a
+        // disabled/released card is still attributable in the door record. A
+        // revoked card presented at a door raises the same high-signal fraud
+        // event as at a tool (recorded after the access event below).
+        let mut revoked_card: Option<(uuid::Uuid, crate::models::UserCard)> = None;
         let user_id = match event.card_id.as_deref() {
-            Some(card) if !card.is_empty() => self
-                .db
-                .find_user_by_profile_field(&self.door_profile_field, card)
-                .ok()
-                .flatten()
-                .map(|u| u.id),
+            Some(card) if !card.is_empty() => {
+                match self.db.resolve_card(&self.door_profile_field, card) {
+                    Ok(crate::models::CardResolution::Active { user, .. }) => Some(user.id),
+                    Ok(crate::models::CardResolution::Revoked { user, card }) => {
+                        let uid = user.id;
+                        revoked_card = Some((uid, card));
+                        Some(uid)
+                    }
+                    Ok(crate::models::CardResolution::Unknown) => None,
+                    Err(e) => {
+                        error!("Failed to resolve door card {}: {}", card, e);
+                        None
+                    }
+                }
+            }
             _ => None,
         };
 
@@ -228,6 +242,25 @@ impl DeviceInbound {
         if let Err(e) = self.db.insert_door_access_event(&new_event) {
             error!("Failed to insert door_access_events row: {}", e);
             return;
+        }
+
+        if let Some((uid, card)) = revoked_card {
+            let audit_log = NewAuditLog {
+                event_type: AuditEventType::RevokedCardPresented.as_str().to_string(),
+                user_id: Some(uid),
+                actor_id: Some(uid),
+                event_data: serde_json::json!({
+                    "door_id": event.door_id,
+                    "card_code": card.code,
+                    "card_status": card.status,
+                    "context": "door",
+                }),
+                ip_address: None,
+                user_agent: None,
+            };
+            if let Err(e) = self.db.create_audit_log(&audit_log) {
+                error!("Failed to create audit log for revoked card at door: {}", e);
+            }
         }
 
         let audit_type = if event.granted {

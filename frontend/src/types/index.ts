@@ -52,6 +52,31 @@ export interface User {
   meta: Record<string, unknown>
 }
 
+/** Lifecycle state of a member access card (server `card_status` enum). */
+export enum CardStatus {
+  /** Opens the member's tools/doors. */
+  Active = 'active',
+  /** Deliberately turned off (lost / compromised / on hold); still bound to the member. */
+  Disabled = 'disabled',
+  /** Returned to the pool; the code may be reissued to someone else. */
+  Released = 'released',
+}
+
+/** A member access card (RFID / fob / sticker / phone tag). */
+export interface Card {
+  id: string
+  user_id: string
+  code: string
+  status: CardStatus
+  last_used_at?: string | null
+  issued_at: string
+  disabled_at?: string | null
+  released_at?: string | null
+  disabled_reason?: string | null
+  created_at: string
+  updated_at: string
+}
+
 // Profile types
 export enum ProfileFieldType {
   Text = 'Text',

@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod calendar;
+pub mod cards;
 pub mod cmi5;
 pub mod config;
 pub mod devices;
@@ -43,6 +44,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/calendar", calendar::calendar_routes())
         .nest("/pages", pages::pages_routes())
         .nest("/devices", devices::devices_routes())
+        .nest("/cards", cards::routes())
         .nest("/doors", doors::member_routes())
         .nest("/places", places::member_routes())
         .nest("/schedules", schedules::member_routes())
