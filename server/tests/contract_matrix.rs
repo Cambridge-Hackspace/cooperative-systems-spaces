@@ -376,20 +376,17 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // device surface, only their shape checks are reachable offline; their
     // contents are deferred to the live tier.
     assert_eq!(cmi5_session_routes, 6, "cmi5 LRS routes");
-    // 152, up from 140: eight cmi5 JWT-guarded routes (Staff course
-    // import/list/get/delete/export, the Admin AU->training-step binding, the
-    // Member launch, and the Member module list) plus four Groups.io routes (two
-    // Auth /api/groupsio/subscription, two Admin /api/admin/groupsio/*). The cmi5
-    // `fetch` route and the Groups.io webhook are Public, and the six LRS routes
-    // are counted separately above, so none of them land here. The device surface
-    // did not move, which is the number this test actually exists to hold still.
-    //
-    // (140 was up from 139 for `PUT /api/users/me/password`; the two
-    // training-session routes moving to `/progress/{user_id}/{start,complete}`
-    // was net zero.)
-    assert_eq!(jwt_routes, 152, "JWT-authenticated routes");
+    // 163 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
+    // 8 cmi5. This number is the sum of two branches that each moved it and
+    // were merged here, so it was re-derived by counting ROUTES rather than
+    // by adding the two comments together: guarded rows minus the device and
+    // cmi5-session surfaces. The cmi5 `fetch` route and the Stripe and
+    // Groups.io webhooks are Public; the six LRS routes are counted above.
+    // The device surface did not move, which is the number this test exists
+    // to hold still.
+    assert_eq!(jwt_routes, 163, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 152 * 7 + (6 + 6) * 3);
+    assert_eq!(asserted_pairs(), 163 * 7 + (6 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
