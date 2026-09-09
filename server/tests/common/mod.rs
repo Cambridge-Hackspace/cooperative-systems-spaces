@@ -167,6 +167,9 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/cards/user/00000000-0000-4000-8000-000000000001", Guard::Admin), // cards::issue_card
     R("POST", "/api/cards/00000000-0000-4000-8000-000000000001/disable", Guard::Admin), // cards::disable_card
     R("POST", "/api/cards/00000000-0000-4000-8000-000000000001/release", Guard::Admin), // cards::release_card
+    R("GET", "/api/waivers/user/00000000-0000-4000-8000-000000000001", Guard::Admin), // waivers::list_user_waivers
+    R("POST", "/api/waivers/user/00000000-0000-4000-8000-000000000001/tool/00000000-0000-4000-8000-000000000001", Guard::Admin), // waivers::grant_waiver
+    R("DELETE", "/api/waivers/00000000-0000-4000-8000-000000000001", Guard::Admin), // waivers::revoke_waiver
     R("POST", "/api/doors/00000000-0000-4000-8000-000000000001/checkin", Guard::Auth), // doors::door_checkin
     R("GET", "/api/doors/00000000-0000-4000-8000-000000000001/info", Guard::Auth), // doors::door_info
     R("GET", "/api/groupsio/subscription", Guard::Auth), // groupsio::get_subscription

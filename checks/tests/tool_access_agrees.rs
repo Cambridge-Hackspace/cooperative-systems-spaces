@@ -4,7 +4,8 @@
 //! `can_access_tool` -- `check_tool_access`, `check_my_tool_access`, and the
 //! `can_access_tool` field of every `ToolTrainingOverview` the frontend
 //! renders. The toolguard sync path, which is what a physical machine
-//! interlock acts on, asks `user_has_completed_all_training_steps`.
+//! interlock acts on, builds its allow-list in `get_toolguard_sync_data`. As of
+//! #36 both resolve access through one shared rule, `user_is_authorized_for_tool`.
 //!
 //! They used to be separate implementations, and they disagreed.
 //! `can_access_tool` tested only that a `user_training_progress` row existed --
@@ -77,12 +78,13 @@ fn the_web_path_delegates_rather_than_re_deriving() {
     let body = method_body(&database_source(), "can_access_tool");
 
     assert!(
-        body.contains("self.user_has_completed_all_training_steps(user_id, tool_id)"),
-        "`can_access_tool` no longer delegates to \
-         `user_has_completed_all_training_steps`.\n\n\
+        body.contains("self.user_is_authorized_for_tool(user_id, tool_id, tool.requires_training)"),
+        "`can_access_tool` no longer delegates to the shared rule \
+         `user_is_authorized_for_tool` (which owns step-completion, the active-\
+         waiver check, and the requires_training flag).\n\n\
          Two implementations of one rule is what this check exists to stop. If \
-         the web path needs an answer the sync path does not give, change the \
-         shared function and say why both callers want the new behaviour -- do \
+         the web path needs an answer the other callers do not give, change the \
+         shared function and say why every caller wants the new behaviour -- do \
          not grow a second copy here."
     );
 }
@@ -128,37 +130,41 @@ fn the_shared_rule_still_reads_status_and_expiry() {
     );
 }
 
+// The divergence this file used to pin -- the web path honouring
+// `requires_training` while the toolguard sync path ignored it -- was closed on
+// purpose by #36. Both paths now resolve access through the one shared rule
+// `user_is_authorized_for_tool`, which reads step completion, an active waiver,
+// AND `requires_training`. The old test said, in its own failure message, to
+// delete it and state what the machine interlock now releases: a
+// `requires_training` tool with no steps is now GATED (opened by a waiver -- the
+// migrated-ToolPass case) rather than open, in the sync path as it already was
+// on the web. Replaced by a convergence assertion so "one rule" stays pinned.
 #[test]
-fn the_remaining_divergence_is_still_the_one_recorded_here() {
-    // Not a defect being asserted as correct -- a difference being held still
-    // so that closing it is a decision somebody makes on purpose.
-    //
-    // `can_access_tool` short-circuits on `tool.requires_training`. The sync
-    // path keys off `tool_has_training_steps` and never reads that flag. A tool
-    // with `requires_training = false` and training steps configured is
-    // therefore open on the web and gated at the machine.
-    //
-    // Left alone deliberately: the fix that unified the *completion* rule was
-    // strictly narrowing on the web path and could only revoke access it should
-    // never have granted. Teaching the physical guard to honour a flag that
-    // turns training off would *widen* what an interlock releases, which is not
-    // a change to make as a side effect of anything.
+fn both_access_paths_share_one_rule() {
     let source = database_source();
     let web = method_body(&source, "can_access_tool");
     let sync = method_body(&source, "get_toolguard_sync_data");
 
+    for (name, body) in [
+        ("can_access_tool", &web),
+        ("get_toolguard_sync_data", &sync),
+    ] {
+        assert!(
+            body.contains("self.user_is_authorized_for_tool("),
+            "`{name}` no longer resolves tool access through the shared rule \
+             `user_is_authorized_for_tool`. Both paths must call it, or the web \
+             self-report and the machine interlock can disagree again."
+        );
+    }
+
+    // The shared rule must still consider an active waiver, or a granted waiver
+    // silently confers no access.
+    let rule = method_body(&source, "user_is_authorized_for_tool");
     assert!(
-        web.contains("tool.requires_training"),
-        "`can_access_tool` no longer honours `requires_training`. If the two \
-         paths were unified, delete this test and say in the commit message \
-         what the physical guard now releases that it did not before."
-    );
-    assert!(
-        sync.contains("self.tool_has_training_steps(tool.id)")
-            && !sync.contains("requires_training"),
-        "the toolguard sync path now reads `requires_training`, so the \
-         divergence recorded here is closed. That is a change to what a machine \
-         interlock releases: delete this test and say so explicitly."
+        rule.contains("user_has_active_waiver"),
+        "the shared authorization rule no longer checks for an active waiver, \
+         so waivers (and the migrated ToolPass grants stored as waivers) grant \
+         no access."
     );
 }
 

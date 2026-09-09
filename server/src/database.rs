@@ -8,8 +8,11 @@ use std::fmt;
 use tracing::{debug, error, info, warn};
 
 use crate::config::DatabaseConfig;
-use crate::models::{CardResolution, CardStatus, NewUser, NewUserCard, UpdateUser, User, UserCard};
-use crate::schema::{user_cards, users};
+use crate::models::{
+    CardResolution, CardStatus, NewTrainingWaiver, NewUser, NewUserCard, TrainingWaiver,
+    UpdateUser, User, UserCard,
+};
+use crate::schema::{training_waivers, user_cards, users};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -1080,6 +1083,99 @@ impl DatabaseManager {
         Ok(true)
     }
 
+    /// Whether the user has an active (unexpired) training waiver for the tool.
+    pub fn user_has_active_waiver(
+        &self,
+        user_id: uuid::Uuid,
+        tool_id: uuid::Uuid,
+    ) -> Result<bool, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        let count: i64 = training_waivers::table
+            .filter(training_waivers::user_id.eq(user_id))
+            .filter(training_waivers::tool_id.eq(tool_id))
+            .filter(
+                training_waivers::expires_at
+                    .is_null()
+                    .or(training_waivers::expires_at.gt(diesel::dsl::now)),
+            )
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(count > 0)
+    }
+
+    /// The single source of truth for "may this user use this tool", used by
+    /// both the online tool-on path and the edge sync builder.
+    ///
+    /// - Ungated (no training steps AND not `requires_training`) → open to all.
+    /// - Otherwise authorized iff an active waiver exists, or (when the tool has
+    ///   steps) the user has completed all of them. A `requires_training` tool
+    ///   with no steps and no waiver is therefore closed — the case that lets a
+    ///   migrated ToolPass grant preserve its access restriction.
+    pub fn user_is_authorized_for_tool(
+        &self,
+        user_id: uuid::Uuid,
+        tool_id: uuid::Uuid,
+        requires_training: bool,
+    ) -> Result<bool, DatabaseError> {
+        let has_steps = self.tool_has_training_steps(tool_id)?;
+        if !has_steps && !requires_training {
+            return Ok(true);
+        }
+        if self.user_has_active_waiver(user_id, tool_id)? {
+            return Ok(true);
+        }
+        if has_steps {
+            return self.user_has_completed_all_training_steps(user_id, tool_id);
+        }
+        // requires_training, no steps, no waiver.
+        Ok(false)
+    }
+
+    /// Grant (or update, keyed on (user, tool)) a training waiver.
+    pub fn upsert_waiver(
+        &self,
+        waiver: &NewTrainingWaiver,
+    ) -> Result<TrainingWaiver, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(training_waivers::table)
+            .values(waiver)
+            .on_conflict((training_waivers::user_id, training_waivers::tool_id))
+            .do_update()
+            .set((
+                training_waivers::reason.eq(&waiver.reason),
+                training_waivers::waived_by.eq(waiver.waived_by),
+                training_waivers::expires_at.eq(waiver.expires_at),
+                training_waivers::updated_at.eq(diesel::dsl::now),
+            ))
+            .returning(TrainingWaiver::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// All waivers held by a member, newest first.
+    pub fn list_waivers_for_user(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Vec<TrainingWaiver>, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        training_waivers::table
+            .filter(training_waivers::user_id.eq(user_id))
+            .order(training_waivers::created_at.desc())
+            .select(TrainingWaiver::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Revoke (delete) a waiver by id; returns the deleted row for auditing.
+    pub fn revoke_waiver(&self, id: uuid::Uuid) -> Result<TrainingWaiver, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        diesel::delete(training_waivers::table.find(id))
+            .returning(TrainingWaiver::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     // ==================== TRAINING SYSTEM DATABASE METHODS ====================
 
     /// Create a new training step
@@ -1914,12 +2010,9 @@ impl DatabaseManager {
         // `tool_has_training_steps` and ignores `tool.requires_training`, so a
         // tool with the flag off and steps configured is answered differently
         // there than here. checks/tests/tool_access_agrees.rs pins both halves.
-        let training_ok = if !tool.requires_training {
-            true
-        } else {
-            self.user_has_completed_all_training_steps(user_id, tool_id)?
-        };
-        if !training_ok {
+        // One shared rule for the training gate: step completion, an active
+        // waiver, or the tool not being access-controlled.
+        if !self.user_is_authorized_for_tool(user_id, tool_id, tool.requires_training)? {
             return Ok(false);
         }
 
@@ -2458,12 +2551,8 @@ impl DatabaseManager {
             });
             let mut authorized_tool_ids = Vec::new();
             for tool in &all_tools {
-                let has_steps = self.tool_has_training_steps(tool.id)?;
-                let mut authorized = if has_steps {
-                    self.user_has_completed_all_training_steps(user.id, tool.id)?
-                } else {
-                    true
-                };
+                let mut authorized =
+                    self.user_is_authorized_for_tool(user.id, tool.id, tool.requires_training)?;
 
                 if authorized {
                     if let Some((gate, available, is_member)) = &metered_ctx {

@@ -315,6 +315,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    training_waivers (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        tool_id -> Uuid,
+        reason -> Text,
+        waived_by -> Nullable<Uuid>,
+        waived_at -> Timestamptz,
+        expires_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     user_tool_training (id) {
         id -> Uuid,
         user_id -> Uuid,
@@ -786,6 +800,9 @@ diesel::joinable!(cmi5_launch_tokens -> cmi5_registrations (registration_id));
 diesel::joinable!(cmi5_statements -> cmi5_registrations (registration_id));
 diesel::joinable!(cmi5_state_documents -> cmi5_registrations (registration_id));
 diesel::joinable!(user_cards -> users (user_id));
+// training_waivers has two FKs to users (user_id, waived_by), so a joinable! to
+// users would be ambiguous; only the tools association is registered.
+diesel::joinable!(training_waivers -> tools (tool_id));
 // cmi5_blocks -> cmi5_blocks (parent_block_id) is a self-join; like the places
 // self-reference, it is walked manually rather than registered via joinable!.
 
@@ -807,6 +824,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     training_prerequisites,
     training_records,
     training_steps,
+    training_waivers,
     doors,
     door_access_events,
     door_access_rules,

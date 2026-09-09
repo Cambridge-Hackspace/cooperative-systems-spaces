@@ -24,6 +24,7 @@ pub mod tools;
 pub mod trainers;
 pub mod training;
 pub mod users;
+pub mod waivers;
 pub mod webhooks;
 
 use crate::AppState;
@@ -45,6 +46,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/pages", pages::pages_routes())
         .nest("/devices", devices::devices_routes())
         .nest("/cards", cards::routes())
+        .nest("/waivers", waivers::routes())
         .nest("/doors", doors::member_routes())
         .nest("/places", places::member_routes())
         .nest("/schedules", schedules::member_routes())

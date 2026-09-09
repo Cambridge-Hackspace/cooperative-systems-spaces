@@ -111,7 +111,10 @@ describe('the audit filter against the server enum', () => {
       // and join the unfiltered set deliberately, like the billing events.
       // The fourth, revoked_card_presented, is an access-control/fraud signal
       // and IS offered as a filter option -- so it does not count here.
-    ).toBe(74)
+      // 74 -> 76: training waivers (#36) added training_waiver_granted /
+      // _revoked. Admin lifecycle records, like the card-management events --
+      // unfiltered deliberately.
+    ).toBe(76)
   })
 
   // Named separately because these are the ones that matter in an
