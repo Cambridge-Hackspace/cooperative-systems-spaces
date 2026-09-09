@@ -17,6 +17,7 @@ mod tools;
 // -D warnings. It also has to be reachable from server/tests/.
 pub mod trainers;
 mod training;
+mod waivers;
 mod webhooks;
 
 pub use account_tokens::*;
@@ -34,6 +35,7 @@ pub use tool_billing::*;
 pub use tools::*;
 pub use trainers::*;
 pub use training::*;
+pub use waivers::*;
 pub use webhooks::*;
 
 use crate::schema::{audit_logs, groupsio_sync_runs, sql_types, users};
@@ -337,6 +339,11 @@ pub enum AuditEventType {
     TrainerRemoved,
     InstructorCertified,
     InstructorRevoked,
+    /// An admin waived a member's training requirement for a tool (e.g. migrated
+    /// access, external certification, staff discretion). Carries a reason.
+    TrainingWaiverGranted,
+    /// A previously-granted training waiver was revoked.
+    TrainingWaiverRevoked,
     /// A trainee confirming, in their own name, that they have read a
     /// step's safety documentation. Distinct from
     /// TrainingSessionCompleted because the actor is the subject: it is
@@ -531,6 +538,8 @@ impl AuditEventType {
             Self::TrainerRemoved => "trainer_removed",
             Self::InstructorCertified => "instructor_certified",
             Self::InstructorRevoked => "instructor_revoked",
+            Self::TrainingWaiverGranted => "training_waiver_granted",
+            Self::TrainingWaiverRevoked => "training_waiver_revoked",
             Self::TrainingDocumentationAcknowledged => "training_documentation_acknowledged",
             Self::ToolAccessGranted => "tool_access_granted",
             Self::ToolAccessDenied => "tool_access_denied",
@@ -638,6 +647,8 @@ impl AuditEventType {
             TrainerRemoved,
             InstructorCertified,
             InstructorRevoked,
+            TrainingWaiverGranted,
+            TrainingWaiverRevoked,
             TrainingDocumentationAcknowledged,
             ToolAccessGranted,
             ToolAccessDenied,

@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -938,6 +938,30 @@ stage_cards() {
 
   collect_server_log
   emit_junit cards "driver=cards.mjs"
+}
+
+# ===========================================================================
+# waivers -- training-waiver access model and the requires_training gate (#36)
+# ===========================================================================
+# Drives tool-on to prove the shared rule: a requires_training tool with no
+# steps denies without a waiver, a granted waiver opens it, revoking re-closes
+# it, and a non-gated tool stays open. Runs against the same stack as cards.
+stage_waivers() {
+  cases_begin waivers
+  stack_paths
+
+  if ! server_ready; then
+    record_case "waivers/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit waivers
+    return 1
+  fi
+  record_case "waivers/stack-is-up" ok
+
+  run_node waivers.mjs >"${OUT}/logs/waivers.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit waivers "driver=waivers.mjs"
 }
 
 # ===========================================================================

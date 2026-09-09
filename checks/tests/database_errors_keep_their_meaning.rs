@@ -48,6 +48,9 @@ const BUDGET: &[(&str, usize)] = &[
     // `From<DatabaseError>` conversion keeps the classification -- a duplicate
     // card code is a 409, a missing card a 404, never a blanket 500.
     ("cards.rs", 0),
+    // 0. Every handler propagates its database error with `?`, so a missing
+    // waiver is a 404 and a bad insert keeps its classification -- never a 500.
+    ("waivers.rs", 0),
     // All three are genuine server faults, not discarded database
     // classification: a filesystem error extracting a package, a connection-pool
     // failure, and a failure serializing our own launch/statement JSON. The
@@ -93,7 +96,10 @@ const BUDGET: &[(&str, usize)] = &[
     // 0: the tool-billing API maps DatabaseErrors through `ApiError::from`
     // (preserving 404/409) and has no genuine server-fault 500 of its own.
     ("tool_billing.rs", 0),
-    ("toolguard.rs", 17),
+    // 17 -> 16: #36 collapsed the two separate "check steps"/"check completion"
+    // DB calls (each mapped to a 500) in the tool-on gate into one
+    // `user_is_authorized_for_tool` call, mapped once.
+    ("toolguard.rs", 16),
     ("tools.rs", 0),
     ("trainers.rs", 1),
     ("training.rs", 0),

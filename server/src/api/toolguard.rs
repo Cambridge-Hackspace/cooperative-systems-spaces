@@ -346,21 +346,17 @@ async fn tool_on(
         }
     }
 
-    let has_training_steps = state.db.tool_has_training_steps(tool.id).map_err(|e| {
-        ApiError::InternalServerError(format!("Failed to check training steps: {}", e))
-    })?;
-
-    if has_training_steps {
-        let has_completed = state
-            .db
-            .user_has_completed_all_training_steps(user.id, tool.id)
-            .map_err(|e| {
-                ApiError::InternalServerError(format!("Failed to check training completion: {}", e))
-            })?;
-        if !has_completed {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Training required").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Training required")));
-        }
+    // One shared rule: training-step completion, an active waiver, or the tool
+    // not being access-controlled. See DatabaseManager::user_is_authorized_for_tool.
+    let authorized = state
+        .db
+        .user_is_authorized_for_tool(user.id, tool.id, tool.requires_training)
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to check tool authorization: {}", e))
+        })?;
+    if !authorized {
+        log_tool_access_denied(&state, Some(&user), &req.tool_id, "Training required").await?;
+        return Ok(Json(ToolGuardResponse::tool_denied("Training required")));
     }
 
     // Metered tool billing (Phase 2). Money is the LAST gate: training passed

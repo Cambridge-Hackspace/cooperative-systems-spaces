@@ -376,17 +376,17 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // device surface, only their shape checks are reachable offline; their
     // contents are deferred to the live tier.
     assert_eq!(cmi5_session_routes, 6, "cmi5 LRS routes");
-    // 167 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
-    // 8 cmi5 + 4 first-class cards (#33: list/issue/disable/release, all Admin).
-    // This number is the sum of branches that each moved it, so it was
-    // re-derived by counting ROUTES rather than by adding the comments
+    // 170 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
+    // 8 cmi5 + 4 first-class cards (#33) + 3 training waivers (#36: list/grant/
+    // revoke, all Admin). This number is the sum of branches that each moved it,
+    // so it was re-derived by counting ROUTES rather than by adding the comments
     // together: guarded rows minus the device and cmi5-session surfaces. The
     // cmi5 `fetch` route and the Stripe and Groups.io webhooks are Public; the
     // six LRS routes are counted above. The device surface did not move, which
     // is the number this test exists to hold still.
-    assert_eq!(jwt_routes, 167, "JWT-authenticated routes");
+    assert_eq!(jwt_routes, 170, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 167 * 7 + (6 + 6) * 3);
+    assert_eq!(asserted_pairs(), 170 * 7 + (6 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
