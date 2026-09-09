@@ -32,6 +32,7 @@
           <option value="training_documentation_acknowledged">
             Safety Documentation Acknowledged
           </option>
+          <option value="revoked_card_presented">Revoked Card Presented</option>
         </select>
       </div>
 

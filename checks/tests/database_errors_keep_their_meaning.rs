@@ -44,6 +44,10 @@ const BUDGET: &[(&str, usize)] = &[
     // which keeps the classification.
     ("auth.rs", 4),
     ("calendar.rs", 0),
+    // 0. Every handler propagates its database error with `?`, so the
+    // `From<DatabaseError>` conversion keeps the classification -- a duplicate
+    // card code is a 409, a missing card a 404, never a blanket 500.
+    ("cards.rs", 0),
     // All three are genuine server faults, not discarded database
     // classification: a filesystem error extracting a package, a connection-pool
     // failure, and a failure serializing our own launch/statement JSON. The

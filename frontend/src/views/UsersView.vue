@@ -100,6 +100,9 @@
                     <router-link :to="`/profile/${user.id}`" class="btn btn-ghost btn-xs">
                       View Profile
                     </router-link>
+                    <button v-if="isAdmin" class="btn btn-ghost btn-xs" @click="openCards(user)">
+                      Manage Cards
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -127,6 +130,22 @@
         </div>
       </div>
     </div>
+    <!-- Manage cards modal -->
+    <dialog class="modal" :class="{ 'modal-open': cardUser }">
+      <div class="modal-box max-w-2xl">
+        <h3 class="font-bold text-lg mb-1">Access cards</h3>
+        <p v-if="cardUser" class="text-sm text-base-content/60 mb-4">
+          {{ cardUser.full_name }} ({{ cardUser.username }})
+        </p>
+        <AccessCardManagement v-if="cardUser" :user-id="cardUser.id" />
+        <div class="modal-action">
+          <button class="btn" @click="closeCards">Close</button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop" @click="closeCards">
+        <button>close</button>
+      </form>
+    </dialog>
   </div>
 </template>
 
@@ -136,6 +155,7 @@ import { useAuthStore } from '@/stores/auth'
 import { apiClient } from '@/utils/api'
 import { UserRole } from '@/types'
 import type { User, PaginatedResponse } from '@/types'
+import AccessCardManagement from '@/components/AccessCardManagement.vue'
 
 const authStore = useAuthStore()
 
@@ -143,12 +163,23 @@ const authStore = useAuthStore()
 const users = ref<User[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+const cardUser = ref<User | null>(null)
 
 // Computed properties
 const canAccessUsers = computed(() => {
   const user = authStore.user
   return user && (user.role === UserRole.Staff || user.role === UserRole.Admin)
 })
+
+// Card management is admin-only (the /cards API is Admin-guarded).
+const isAdmin = computed(() => authStore.user?.role === UserRole.Admin)
+
+function openCards(user: User) {
+  cardUser.value = user
+}
+function closeCards() {
+  cardUser.value = null
+}
 
 // Methods
 async function loadUsers() {

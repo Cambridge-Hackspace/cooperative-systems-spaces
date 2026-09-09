@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -913,6 +913,31 @@ stage_toolbilling() {
 
   collect_server_log
   emit_junit toolbilling "driver=toolbilling.mjs"
+}
+
+# ===========================================================================
+# cards -- first-class access-card resolution and the revoked-card fraud signal
+# ===========================================================================
+# Drives the toolguard tool-on endpoint with a member's card in each lifecycle
+# state (active grants; disabled/released deny AND raise `revoked_card_presented`;
+# unknown denies quietly). A free, no-training tool isolates card resolution from
+# the billing and training gates. Runs against the same stack as toolbilling.
+stage_cards() {
+  cases_begin cards
+  stack_paths
+
+  if ! server_ready; then
+    record_case "cards/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit cards
+    return 1
+  fi
+  record_case "cards/stack-is-up" ok
+
+  run_node cards.mjs >"${OUT}/logs/cards.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit cards "driver=cards.mjs"
 }
 
 # ===========================================================================

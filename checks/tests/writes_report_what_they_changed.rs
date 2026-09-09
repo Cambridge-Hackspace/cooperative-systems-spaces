@@ -75,6 +75,17 @@ const WRITERS: &[Writer] = &[
                       from the count.",
         ),
     },
+    Writer {
+        name: "touch_card_last_used",
+        exempt: Some(
+            "A best-effort last-used timestamp on an access card. It runs on \
+                      the tool-on path after `resolve_card` has already matched \
+                      the card, so the row exists; a zero-row update means a \
+                      concurrent delete, and failing tool access in order to \
+                      record a timestamp would be worse than losing it. Nothing \
+                      branches on the count.",
+        ),
+    },
     // Every other writer that used to be here has been fixed: each reads the row
     // count and returns `NotFound` when it is zero. The check below -- "no writer
     // matching this pattern is unlisted" -- is what stops a new one appearing.

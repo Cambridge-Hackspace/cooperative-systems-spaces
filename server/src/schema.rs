@@ -5,6 +5,15 @@ pub mod sql_types {
     #[diesel(postgres_type(name = "assessment_type"))]
     pub struct AssessmentType;
 
+    #[derive(
+        serde::Serialize,
+        serde::Deserialize,
+        diesel::sql_types::SqlType,
+        diesel::query_builder::QueryId,
+    )]
+    #[diesel(postgres_type(name = "card_status"))]
+    pub struct CardStatus;
+
     #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "space_device_kind"))]
     pub struct SpaceDeviceKind;
@@ -403,6 +412,26 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
+    use super::sql_types::CardStatus;
+
+    user_cards (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        #[max_length = 255]
+        code -> Varchar,
+        status -> CardStatus,
+        last_used_at -> Nullable<Timestamptz>,
+        issued_at -> Timestamptz,
+        disabled_at -> Nullable<Timestamptz>,
+        released_at -> Nullable<Timestamptz>,
+        disabled_reason -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
     use super::sql_types::UserRole;
 
     users (id) {
@@ -756,6 +785,7 @@ diesel::joinable!(cmi5_registrations -> cmi5_assignable_units (au_id));
 diesel::joinable!(cmi5_launch_tokens -> cmi5_registrations (registration_id));
 diesel::joinable!(cmi5_statements -> cmi5_registrations (registration_id));
 diesel::joinable!(cmi5_state_documents -> cmi5_registrations (registration_id));
+diesel::joinable!(user_cards -> users (user_id));
 // cmi5_blocks -> cmi5_blocks (parent_block_id) is a self-join; like the places
 // self-reference, it is walked manually rather than registered via joinable!.
 
@@ -786,6 +816,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     home_links,
     user_mfa_recovery_codes,
     user_mfa_totp,
+    user_cards,
     user_mfa_webauthn,
     user_tool_training,
     user_training_progress,
