@@ -407,6 +407,28 @@ export interface UpdateReceptacleRequest {
   label?: string
 }
 
+// Live telemetry (#43). Decimals travel as strings.
+export interface ToolPowerState {
+  tool_id: string
+  last_draw_amps: string | null
+  last_voltage: string | null
+  reported_max_voltage: string | null
+  reported_amperage_limit: string | null
+  last_reported_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CircuitDraw {
+  circuit_id: string
+  total_draw_amps: string
+}
+
+export interface PowerTelemetry {
+  circuits: CircuitDraw[]
+  tools: ToolPowerState[]
+}
+
 // ===== Home links (admin-curated, audience-gated) =====
 
 export type HomeLinkAudience = 'everyone' | 'anonymous' | 'logged_in' | 'member' | 'staff'

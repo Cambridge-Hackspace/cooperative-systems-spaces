@@ -116,6 +116,7 @@ pub const ROUTES: &[R] = &[
     R("DELETE", "/api/admin/power/receptacles/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::delete_receptacle
     R("GET", "/api/admin/power/receptacles/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::get_receptacle
     R("PATCH", "/api/admin/power/receptacles/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::update_receptacle
+    R("GET", "/api/admin/power/telemetry", Guard::Admin), // power::get_telemetry
     R("PUT", "/api/admin/power/tools/00000000-0000-4000-8000-000000000001/receptacle", Guard::Admin), // power::assign_tool_receptacle
     R("POST", "/api/admin/reload-config", Guard::Admin), // admin::reload_config
     R("GET", "/api/admin/roster", Guard::Admin), // admin::get_roster
@@ -218,6 +219,7 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/schedules/00000000-0000-4000-8000-000000000001", Guard::Auth), // schedules::get_schedule_member
     R("GET", "/api/toolguard", Guard::Public), // toolguard::api_status
     R("POST", "/api/toolguard/boot-reset", Guard::InlineAuth), // toolguard::boot_reset
+    R("POST", "/api/toolguard/power-report", Guard::InlineAuth), // toolguard::power_report
     R("GET", "/api/toolguard/sync", Guard::InlineAuth), // toolguard::sync
     R("GET", "/api/toolguard/tool-log", Guard::InlineAuth), // toolguard::tool_log
     R("GET", "/api/toolguard/tool-off", Guard::InlineAuth), // toolguard::tool_off

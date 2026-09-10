@@ -88,6 +88,29 @@ pub struct ToolRequest {
     pub api_key: Option<String>,
 }
 
+/// A power reading from a tool's controller (#43). The tool is named by its
+/// toolguard/external id; every measurement is optional so an older or partial
+/// firmware still parses. Authenticated like the other controller endpoints: a
+/// device Bearer token, or the tool's `external_api_key` / the global key.
+#[derive(Debug, Deserialize)]
+pub struct PowerReportRequest {
+    // Optional so an empty/partial body still deserializes: authentication (in
+    // the handler) must be reached and answer 401 before a missing field can
+    // answer 422. tool_id's presence is validated after the auth check.
+    #[serde(default)]
+    pub tool_id: Option<String>,
+    #[serde(default)]
+    pub draw_now: Option<bigdecimal::BigDecimal>,
+    #[serde(default)]
+    pub voltage_now: Option<bigdecimal::BigDecimal>,
+    #[serde(default)]
+    pub max_voltage: Option<bigdecimal::BigDecimal>,
+    #[serde(default)]
+    pub amperage_limit: Option<bigdecimal::BigDecimal>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 /// Request parameters for tool logging
 #[derive(Debug, Deserialize)]
 pub struct ToolLogRequest {
@@ -141,6 +164,7 @@ pub fn toolguard_routes() -> Router<AppState> {
         .route("/tool-log", get(tool_log))
         .route("/sync", get(sync))
         .route("/boot-reset", post(boot_reset))
+        .route("/power-report", post(power_report))
 }
 
 /// GET /api/toolguard - API status check
@@ -623,6 +647,44 @@ async fn tool_log(
     .await?;
 
     Ok(Json(ToolGuardResponse::ok_with_message("Usage logged")))
+}
+
+/// POST /api/toolguard/power-report - record a tool's latest power reading.
+///
+/// Device firmware is out of scope for #43; this is the server end of the seam
+/// firmware engineers target (via the edge, which relays a firmware report up).
+/// It stores the latest reading per tool -- the hot-path store the per-circuit
+/// aggregation (#44) sums over -- and the firmware-declared max_voltage /
+/// amperage_limit. It does NOT energize or interrupt anything.
+async fn power_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PowerReportRequest>,
+) -> Result<Json<ToolGuardResponse>, ApiError> {
+    // Authenticate before validating the body, so a credential-less request is
+    // refused with 401 rather than a 422 about the missing tool_id.
+    let toolguard_id = req.tool_id.as_deref().unwrap_or("");
+    authorize_toolguard(&state, &headers, req.api_key.as_deref(), toolguard_id).await?;
+
+    if toolguard_id.is_empty() {
+        return Err(ApiError::BadRequest("tool_id is required".to_string()));
+    }
+
+    let tool = find_tool_by_toolguard_id(&state, toolguard_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
+
+    let reading = crate::models::NewToolPowerState {
+        tool_id: tool.id,
+        last_draw_amps: req.draw_now,
+        last_voltage: req.voltage_now,
+        reported_max_voltage: req.max_voltage,
+        reported_amperage_limit: req.amperage_limit,
+        last_reported_at: chrono::Utc::now(),
+    };
+    state.db.upsert_tool_power_state(&reading)?;
+
+    Ok(Json(ToolGuardResponse::ok_with_message("Power reported")))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

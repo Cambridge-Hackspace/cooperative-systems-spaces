@@ -93,6 +93,7 @@
               <th>Breaker</th>
               <th>Voltage</th>
               <th>Amp limit</th>
+              <th>Draw</th>
               <th>Upstream</th>
               <th></th>
             </tr>
@@ -102,6 +103,9 @@
               <td>{{ c.breaker_label }}</td>
               <td>{{ c.voltage_rating }} V</td>
               <td>{{ c.amperage_limit }} A</td>
+              <td :class="circuitOverLimit(c) ? 'text-error font-semibold' : ''">
+                {{ circuitDraw(c.id) }} A
+              </td>
               <td>{{ circuitLabel(c.parent_circuit_id) }}</td>
               <td class="text-right">
                 <button class="btn btn-ghost btn-xs" @click="editCircuit(c)">Edit</button>
@@ -111,7 +115,7 @@
               </td>
             </tr>
             <tr v-if="!circuits.length">
-              <td colspan="5" class="text-center text-base-content/50">No circuits yet.</td>
+              <td colspan="6" class="text-center text-base-content/50">No circuits yet.</td>
             </tr>
           </tbody>
         </table>
@@ -260,6 +264,7 @@
             <tr>
               <th>Tool</th>
               <th>Receptacle</th>
+              <th>Last draw</th>
             </tr>
           </thead>
           <tbody>
@@ -277,9 +282,10 @@
                   </option>
                 </select>
               </td>
+              <td>{{ toolDraw(t.id) !== null ? `${toolDraw(t.id)} A` : '—' }}</td>
             </tr>
             <tr v-if="!tools.length">
-              <td colspan="2" class="text-center text-base-content/50">No tools.</td>
+              <td colspan="3" class="text-center text-base-content/50">No tools.</td>
             </tr>
           </tbody>
         </table>
@@ -293,7 +299,7 @@ import { reactive, ref } from 'vue'
 import PlacePicker from './PlacePicker.vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import { powerApi, placesApi, toolsApi } from '@/utils/api'
-import type { Place, PowerCircuit, PowerOutlet, PowerReceptacle } from '@/types'
+import type { Place, PowerCircuit, PowerOutlet, PowerReceptacle, PowerTelemetry } from '@/types'
 import type { Tool } from '@/types/tools'
 
 defineProps<{ embedded?: boolean }>()
@@ -315,6 +321,7 @@ const outlets = ref<PowerOutlet[]>([])
 const receptacles = ref<PowerReceptacle[]>([])
 const places = ref<Place[]>([])
 const tools = ref<Tool[]>([])
+const telemetry = ref<PowerTelemetry | null>(null)
 
 // ---- forms ----
 const editingCircuitId = ref<string | null>(null)
@@ -348,15 +355,27 @@ function receptacleLabel(id: string): string {
   return `${outletLabel(r.outlet_id)} / ${r.label}`
 }
 
+// Live-draw helpers (#43). Returns '0' for a circuit that has reported nothing.
+function circuitDraw(id: string): string {
+  return telemetry.value?.circuits.find((c) => c.circuit_id === id)?.total_draw_amps ?? '0'
+}
+function circuitOverLimit(c: PowerCircuit): boolean {
+  return Number(circuitDraw(c.id)) > Number(c.amperage_limit)
+}
+function toolDraw(toolId: string): string | null {
+  return telemetry.value?.tools.find((s) => s.tool_id === toolId)?.last_draw_amps ?? null
+}
+
 // ---- loaders ----
 async function loadAll() {
   loading.value = true
-  const [c, o, r, p, t] = await Promise.all([
+  const [c, o, r, p, t, tel] = await Promise.all([
     powerApi.listCircuits(),
     powerApi.listOutlets(),
     powerApi.listReceptacles(),
     placesApi.list(),
     toolsApi.getTools(),
+    powerApi.telemetry(),
   ])
   if (c.success && c.data) circuits.value = c.data
   else error.value = c.error || 'Failed to load circuits'
@@ -364,6 +383,7 @@ async function loadAll() {
   if (r.success && r.data) receptacles.value = r.data
   if (p.success && p.data) places.value = p.data
   if (t.success && t.data) tools.value = t.data
+  if (tel.success && tel.data) telemetry.value = tel.data
   loading.value = false
 }
 useReloadOnReactivate(loadAll)

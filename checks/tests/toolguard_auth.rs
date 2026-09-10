@@ -35,6 +35,9 @@ const EXPECTED: &[(&str, Auth)] = &[
     ("tool_log", Auth::Required),
     ("sync", Auth::Required),
     ("boot_reset", Auth::Required),
+    // #43 power telemetry ingest: reports a tool's latest reading, authenticated
+    // like the other controller endpoints (device token or per-tool/global key).
+    ("power_report", Auth::Required),
 ];
 
 #[derive(PartialEq, Eq, Debug)]

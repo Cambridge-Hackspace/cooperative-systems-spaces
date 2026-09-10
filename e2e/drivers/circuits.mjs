@@ -130,6 +130,90 @@ main(async () => {
       oDetail.json.data.receptacles.some((r) => r.id === recId),
     'outlet detail should list its receptacle')
 
+  // --- P2 (#43): power reporting seam + live draw --------------------------
+  // A dedicated tool that authenticates its power reports with its own external
+  // key, plugged into a second receptacle on this circuit.
+  const rec2 = await POST('/api/admin/power/receptacles', {
+    token: admin.token,
+    body: { outlet_id: outletId, label: 'Right' },
+  })
+  const rec2Id = rec2.json?.data?.id
+  const extId = `pw-${admin.username}`
+  const apiKey = `pw-secret-${admin.username}`
+  const powerTool = await POST('/api/tools', {
+    token: admin.token,
+    body: {
+      name: `PowerReportTool ${admin.username}`,
+      category: 'safety',
+      external_id: extId,
+      external_api_key: apiKey,
+    },
+  })
+  const powerToolId = powerTool.json?.data?.id
+  ok('report/tool-created', !!powerToolId, `POST /api/tools -> ${powerTool.status}`)
+  assertEq(
+    'report/assign-power-tool',
+    200,
+    (
+      await PUT(`/api/admin/power/tools/${powerToolId}/receptacle`, {
+        token: admin.token,
+        body: { receptacle_id: rec2Id },
+      })
+    ).status,
+  )
+
+  // An unauthenticated report is refused (no device token, no api key).
+  const noAuth = await POST('/api/toolguard/power-report', { body: { tool_id: extId, draw_now: '5' } })
+  assertEq('report/unauthenticated-rejected', 401, noAuth.status)
+
+  // A report authenticated by the tool's own key is accepted.
+  const rep1 = await POST('/api/toolguard/power-report', {
+    body: {
+      tool_id: extId,
+      draw_now: '5',
+      voltage_now: '119.5',
+      max_voltage: '125',
+      amperage_limit: '15',
+      api_key: apiKey,
+    },
+  })
+  assertEq('report/accepted', 200, rep1.status)
+
+  const drawOf = (t, cid) =>
+    Number((t.json?.data?.circuits ?? []).find((c) => c.circuit_id === cid)?.total_draw_amps ?? 'NaN')
+
+  // Oracle A: the reading landed on the tool's row.
+  let tel = await GET('/api/admin/power/telemetry', T)
+  assertEq('report/telemetry-ok', 200, tel.status)
+  const reading = (tel.json?.data?.tools ?? []).find((s) => s.tool_id === powerToolId)
+  ok(
+    'report/reading-recorded',
+    !!reading && Number(reading.last_draw_amps) === 5,
+    `tool_power_state row missing or wrong: ${JSON.stringify(reading)}`,
+  )
+  // Oracle B: the circuit aggregate reflects it, computed independently of the row.
+  assertEq('report/circuit-aggregate', 5, drawOf(tel, circuitId))
+
+  // Latest-only: a second report REPLACES the first -- assert the old value is
+  // gone, not merely that the new one is present.
+  assertEq(
+    'report/second-accepted',
+    200,
+    (
+      await POST('/api/toolguard/power-report', {
+        body: { tool_id: extId, draw_now: '3', api_key: apiKey },
+      })
+    ).status,
+  )
+  tel = await GET('/api/admin/power/telemetry', T)
+  assertEq('report/latest-only-overwrites', 3, drawOf(tel, circuitId))
+
+  // Unplug the power tool so the later outlet-cascade deletion is unencumbered.
+  await PUT(`/api/admin/power/tools/${powerToolId}/receptacle`, {
+    token: admin.token,
+    body: { receptacle_id: null },
+  })
+
   // --- tool <-> receptacle: uniqueness from both sides ---------------------
   const toolA = await POST('/api/tools', { token: admin.token, body: { name: `PowerToolA ${admin.username}`, category: 'safety' } })
   const toolB = await POST('/api/tools', { token: admin.token, body: { name: `PowerToolB ${admin.username}`, category: 'safety' } })
