@@ -161,6 +161,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let pg_metrics = PostgresMetrics::new(db_manager.pool().clone(), pg_config.clone())?;
     prom.add_collector(pg_metrics, pg_config.collect_interval)?;
 
+    // Optional per-tool power history (#49): register the draw/voltage gauges
+    // onto the same registry /metrics serves, when the submodule is enabled.
+    css_server::power_metrics::init(&prom.registry, app_config.power.timeseries.enabled)?;
+
     let audit_logger = AuditLogger::new(db_manager.clone());
     let throttle_service = Arc::new(RegistrationThrottleService::new());
     let mail_service = Arc::new(MailService::new(config_manager.clone()));

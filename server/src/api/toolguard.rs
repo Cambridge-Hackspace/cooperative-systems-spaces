@@ -688,6 +688,17 @@ async fn power_report(
     };
     state.db.upsert_tool_power_state(&reading)?;
 
+    // Optional history (#49): mirror the reading onto the Prometheus gauges.
+    // No-op unless the submodule is enabled.
+    {
+        use bigdecimal::ToPrimitive;
+        crate::power_metrics::record(
+            &tool.id.to_string(),
+            reading.last_draw_amps.as_ref().and_then(|d| d.to_f64()),
+            reading.last_voltage.as_ref().and_then(|v| v.to_f64()),
+        );
+    }
+
     // Fault-scoped trip (#44). A firmware self-trip locks just this tool; any
     // other report drives the server-side circuit aggregation, which trips the
     // whole circuit if its summed draw now exceeds the limit.
