@@ -208,6 +208,15 @@ main(async () => {
   tel = await GET('/api/admin/power/telemetry', T)
   assertEq('report/latest-only-overwrites', 3, drawOf(tel, circuitId))
 
+  // #49: with the history submodule enabled (stack-config), the latest reading
+  // is exposed as a per-tool Prometheus gauge on /metrics.
+  const metrics = await GET('/metrics')
+  ok(
+    'report/metrics-exposes-draw-gauge',
+    metrics.text.includes(`css_tool_power_draw_amps{tool_id="${powerToolId}"}`),
+    'the per-tool draw gauge is missing from /metrics',
+  )
+
   // Unplug the power tool so the later outlet-cascade deletion is unencumbered.
   await PUT(`/api/admin/power/tools/${powerToolId}/receptacle`, {
     token: admin.token,

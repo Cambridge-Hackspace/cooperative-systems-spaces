@@ -45,6 +45,7 @@ pub mod mfa;
 pub mod models;
 pub mod mqtt;
 pub mod pages;
+pub mod power_metrics;
 pub mod profile;
 pub mod profile_fields;
 pub mod recaptcha;

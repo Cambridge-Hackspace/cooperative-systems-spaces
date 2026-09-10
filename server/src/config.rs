@@ -921,9 +921,31 @@ impl PlaceConfig {
 pub struct PowerConfig {
     /// Master toggle. When false, the power admin endpoints reject.
     pub enabled: bool,
+    /// Optional draw/voltage history submodule (#49): expose per-tool power
+    /// readings as Prometheus gauges. Independent of `enabled` (readings flow
+    /// regardless of the topology admin).
+    #[serde(default)]
+    pub timeseries: PowerTimeseriesConfig,
 }
 
 impl Default for PowerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeseries: PowerTimeseriesConfig::default(),
+        }
+    }
+}
+
+/// Draw/voltage history submodule (#49). Default off; when on, each power report
+/// updates per-tool Prometheus gauges on the existing `/metrics` registry (no
+/// new time-series database).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowerTimeseriesConfig {
+    pub enabled: bool,
+}
+
+impl Default for PowerTimeseriesConfig {
     fn default() -> Self {
         Self { enabled: false }
     }

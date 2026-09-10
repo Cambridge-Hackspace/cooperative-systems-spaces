@@ -350,6 +350,11 @@ types = ["Room", "Spot"]
 [power]
 enabled = true
 
+# #49: draw/voltage history submodule on, so the circuits stage can assert a
+# power report shows up as a Prometheus gauge on /metrics.
+[power.timeseries]
+enabled = true
+
 [edge]
 edge_enabled = true
 
