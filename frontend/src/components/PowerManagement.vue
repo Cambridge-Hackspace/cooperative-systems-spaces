@@ -12,6 +12,14 @@
       <button class="btn btn-sm btn-ghost" @click="error = ''">Dismiss</button>
     </div>
 
+    <div v-if="lockedCircuits.length || lockedToolCount" class="alert alert-warning mb-4">
+      <span>
+        <strong>Emergency lockout active:</strong>
+        {{ lockedCircuits.length }} circuit(s) and {{ lockedToolCount }} tool(s) are held off. A
+        staff member must re-enable them once the hazard is resolved.
+      </span>
+    </div>
+
     <div role="tablist" class="tabs tabs-boxed w-fit mb-6">
       <a
         v-for="t in TABS"
@@ -105,9 +113,18 @@
               <td>{{ c.amperage_limit }} A</td>
               <td :class="circuitOverLimit(c) ? 'text-error font-semibold' : ''">
                 {{ circuitDraw(c.id) }} A
+                <span v-if="c.locked_out" class="badge badge-error badge-sm ml-1">LOCKED</span>
               </td>
               <td>{{ circuitLabel(c.parent_circuit_id) }}</td>
               <td class="text-right">
+                <button
+                  v-if="c.locked_out"
+                  class="btn btn-warning btn-xs"
+                  :title="c.lockout_reason || ''"
+                  @click="reenableCircuit(c.id)"
+                >
+                  Re-enable
+                </button>
                 <button class="btn btn-ghost btn-xs" @click="editCircuit(c)">Edit</button>
                 <button class="btn btn-ghost btn-xs text-error" @click="removeCircuit(c.id)">
                   Delete
@@ -282,7 +299,17 @@
                   </option>
                 </select>
               </td>
-              <td>{{ toolDraw(t.id) !== null ? `${toolDraw(t.id)} A` : '—' }}</td>
+              <td>
+                {{ toolDraw(t.id) !== null ? `${toolDraw(t.id)} A` : '—' }}
+                <span v-if="toolLocked(t.id)" class="badge badge-error badge-sm ml-1">LOCKED</span>
+                <button
+                  v-if="toolLocked(t.id)"
+                  class="btn btn-warning btn-xs ml-1"
+                  @click="reenableTool(t.id)"
+                >
+                  Re-enable
+                </button>
+              </td>
             </tr>
             <tr v-if="!tools.length">
               <td colspan="3" class="text-center text-base-content/50">No tools.</td>
@@ -295,7 +322,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import PlacePicker from './PlacePicker.vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import { powerApi, placesApi, toolsApi } from '@/utils/api'
@@ -364,6 +391,30 @@ function circuitOverLimit(c: PowerCircuit): boolean {
 }
 function toolDraw(toolId: string): string | null {
   return telemetry.value?.tools.find((s) => s.tool_id === toolId)?.last_draw_amps ?? null
+}
+function toolLocked(toolId: string): boolean {
+  return telemetry.value?.tools.find((s) => s.tool_id === toolId)?.locked_out ?? false
+}
+const lockedCircuits = computed(() => circuits.value.filter((c) => c.locked_out))
+const lockedToolCount = computed(
+  () => telemetry.value?.tools.filter((s) => s.locked_out).length ?? 0
+)
+
+async function reenableCircuit(id: string) {
+  const res = await powerApi.reenableCircuit(id)
+  if (!res.success) {
+    error.value = res.error || 'Failed to re-enable circuit'
+    return
+  }
+  await loadAll()
+}
+async function reenableTool(toolId: string) {
+  const res = await powerApi.reenableTool(toolId)
+  if (!res.success) {
+    error.value = res.error || 'Failed to re-enable tool'
+    return
+  }
+  await loadAll()
 }
 
 // ---- loaders ----

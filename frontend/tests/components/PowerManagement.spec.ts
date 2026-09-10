@@ -30,6 +30,8 @@ const power = vi.hoisted(() => ({
   removeReceptacle: vi.fn(),
   assignToolReceptacle: vi.fn(),
   telemetry: vi.fn(),
+  reenableCircuit: vi.fn(),
+  reenableTool: vi.fn(),
 }))
 const places = vi.hoisted(() => ({ list: vi.fn() }))
 const tools = vi.hoisted(() => ({ getTools: vi.fn() }))
@@ -50,7 +52,12 @@ const PlacePickerStub = {
 
 const ok = <T>(data: T) => Promise.resolve({ success: true, data })
 
-function circuit(id: string, label: string, parent: string | null = null) {
+function circuit(
+  id: string,
+  label: string,
+  parent: string | null = null,
+  over: Record<string, unknown> = {}
+) {
   return {
     id,
     breaker_label: label,
@@ -59,6 +66,12 @@ function circuit(id: string, label: string, parent: string | null = null) {
     parent_circuit_id: parent,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
+    locked_out: false,
+    lockout_reason: null,
+    lockout_source: null,
+    locked_out_at: null,
+    locked_out_by: null,
+    ...over,
   }
 }
 
@@ -80,6 +93,8 @@ beforeEach(() => {
   power.removeCircuit.mockReturnValue(ok(undefined))
   power.assignToolReceptacle.mockReturnValue(ok(undefined))
   power.telemetry.mockReturnValue(ok({ circuits: [], tools: [] }))
+  power.reenableCircuit.mockReturnValue(ok(undefined))
+  power.reenableTool.mockReturnValue(ok(undefined))
 })
 
 describe('PowerManagement', () => {
@@ -128,5 +143,21 @@ describe('PowerManagement', () => {
     await select.setValue('r1')
     await flushPromises()
     expect(power.assignToolReceptacle).toHaveBeenCalledWith('t1', 'r1')
+  })
+
+  it('shows the lockout banner and re-enables a locked circuit (#44)', async () => {
+    power.listCircuits.mockReturnValue(
+      ok([circuit('c1', 'A-12', null, { locked_out: true, lockout_reason: 'overload' })])
+    )
+    const w = mountPower()
+    await flushPromises()
+    // The banner surfaces the lockout...
+    expect(w.text()).toContain('Emergency lockout active')
+    // ...and a staff Re-enable control calls through.
+    const btn = w.findAll('button').find((b) => b.text() === 'Re-enable')
+    expect(btn, 'a Re-enable button for the locked circuit').toBeTruthy()
+    await btn.trigger('click')
+    await flushPromises()
+    expect(power.reenableCircuit).toHaveBeenCalledWith('c1')
   })
 })

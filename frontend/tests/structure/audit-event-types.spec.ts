@@ -118,7 +118,10 @@ describe('the audit filter against the server enum', () => {
       // (power_circuit_created/_updated/_deleted, power_outlet_*, and
       // power_receptacle_*). Admin facility-config records, not access-control
       // filters -- unfiltered deliberately, like the door/place management set.
-    ).toBe(85)
+      // 85 -> 89: power interrupt (#44) added circuit_overage_shutoff,
+      // emergency_lockout_engaged / _cleared, and firmware_selftrip_reported.
+      // Safety-lifecycle records; unfiltered deliberately alongside the rest.
+    ).toBe(89)
   })
 
   // Named separately because these are the ones that matter in an

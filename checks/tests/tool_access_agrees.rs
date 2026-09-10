@@ -166,6 +166,18 @@ fn both_access_paths_share_one_rule() {
          so waivers (and the migrated ToolPass grants stored as waivers) grant \
          no access."
     );
+
+    // #44: emergency lockout is a hard override that must live in the shared
+    // rule, so BOTH the web self-check and the edge allow-list deny a locked
+    // tool. If this check moved out to only one caller, a locked circuit could
+    // still energize a machine through the other path.
+    assert!(
+        rule.contains("tool_is_locked_out"),
+        "the shared authorization rule no longer consults `tool_is_locked_out`, \
+         so a firmware-self-tripped tool or a tool on a locked-out circuit could \
+         still be authorized. Emergency lockout must deny in the one shared rule, \
+         not in a single caller."
+    );
 }
 
 /// Phase 2 added a second access dimension -- metered-billing affordability --

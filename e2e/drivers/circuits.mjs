@@ -214,6 +214,119 @@ main(async () => {
     body: { receptacle_id: null },
   })
 
+  // --- P3 (#44): aggregation trip, fault-scoped lockout, staff re-enable ---
+  // Access is read through the shared gate (GET /training/access/{id} ->
+  // can_access_tool), so a lockout denying here proves the same rule the edge
+  // allow-list uses denies too. NOTE: this proves the server/edge decision path;
+  // it does NOT prove firmware opens a relay -- that is #29's contract.
+  const accessOf = async (toolId) => (await GET(`/api/training/access/${toolId}`, T)).json?.data
+  const circuitLocked = async (cid) =>
+    ((await GET('/api/admin/power/circuits', T)).json?.data ?? []).find((c) => c.id === cid)
+      ?.locked_out
+  const toolLockedState = async (toolId) =>
+    ((await GET('/api/admin/power/telemetry', T)).json?.data?.tools ?? []).find(
+      (s) => s.tool_id === toolId,
+    )?.locked_out
+  const auditTypes = async () => {
+    const a = await GET('/api/admin/audit-logs?limit=300', T)
+    const rows = Array.isArray(a.json?.data)
+      ? a.json.data
+      : (a.json?.data?.logs ?? a.json?.data?.items ?? [])
+    return new Set(rows.map((e) => e.event_type))
+  }
+  const reportDraw = (extId, key, draw, extra = {}) =>
+    POST('/api/toolguard/power-report', {
+      body: { tool_id: extId, draw_now: String(draw), api_key: key, ...extra },
+    })
+  const mkPowerTool = async (tag, circuitLimit) => {
+    const c = await POST('/api/admin/power/circuits', {
+      token: admin.token,
+      body: { breaker_label: `${tag}-${admin.username}`, voltage_rating: 120, amperage_limit: String(circuitLimit) },
+    })
+    const cid = c.json?.data?.id
+    const o = await POST('/api/admin/power/outlets', {
+      token: admin.token,
+      body: { circuit_id: cid, place_id: placeId, label: `${tag} outlet` },
+    })
+    const rr = await POST('/api/admin/power/receptacles', {
+      token: admin.token,
+      body: { outlet_id: o.json?.data?.id, label: `${tag}1` },
+    })
+    const ext = `pw-${tag}-${admin.username}`
+    const key = `secret-${tag}-${admin.username}`
+    const t = await POST('/api/tools', {
+      token: admin.token,
+      body: { name: `${tag}Tool ${admin.username}`, category: 'safety', external_id: ext, external_api_key: key },
+    })
+    const tid = t.json?.data?.id
+    await PUT(`/api/admin/power/tools/${tid}/receptacle`, {
+      token: admin.token,
+      body: { receptacle_id: rr.json?.data?.id },
+    })
+    return { cid, tid, ext, key }
+  }
+
+  // Circuit L (limit 10) is the one we overload; circuit M (limit 20) is the
+  // blast-radius control that must stay live.
+  const L = await mkPowerTool('L', 10)
+  const M = await mkPowerTool('M', 20)
+  await reportDraw(M.ext, M.key, 4)
+
+  // Self-test the oracle: an UNDER-limit draw must NOT trip.
+  assertEq('trip/under-limit-accepted', 200, (await reportDraw(L.ext, L.key, 5)).status)
+  assertEq('trip/under-limit-no-lock', false, await circuitLocked(L.cid))
+  assertEq('trip/access-before', true, await accessOf(L.tid))
+
+  // Overload: a draw over L's limit trips the whole circuit (server_aggregate).
+  assertEq('trip/overage-report-accepted', 200, (await reportDraw(L.ext, L.key, 15)).status)
+  assertEq('trip/circuit-locked', true, await circuitLocked(L.cid))
+  // Oracle A: the shared gate now denies the tool.
+  assertEq('trip/access-denied-when-locked', false, await accessOf(L.tid))
+  // Oracle B (blast radius): assert the OTHER circuit's tool stays authorized
+  // FIRST, then that its circuit did not lock -- a failure reads as "it shed the
+  // wrong circuit", not a missing signal.
+  assertEq('trip/other-tool-still-authorized', true, await accessOf(M.tid))
+  assertEq('trip/other-circuit-not-locked', false, await circuitLocked(M.cid))
+  const t1 = await auditTypes()
+  ok('trip/audited-overage', t1.has('circuit_overage_shutoff'), 'no circuit_overage_shutoff audit')
+  ok('trip/audited-lockout', t1.has('emergency_lockout_engaged'), 'no emergency_lockout_engaged audit')
+
+  // Re-enable is staff-only.
+  const tripMember = await account('trip_member')
+  assertEq(
+    'reenable/member-forbidden',
+    403,
+    (await POST(`/api/admin/power/circuits/${L.cid}/reenable`, { token: tripMember.token })).status,
+  )
+  assertEq(
+    'reenable/staff-ok',
+    200,
+    (await POST(`/api/admin/power/circuits/${L.cid}/reenable`, { token: admin.token })).status,
+  )
+  assertEq('reenable/circuit-unlocked', false, await circuitLocked(L.cid))
+  assertEq('reenable/access-restored', true, await accessOf(L.tid))
+
+  // Firmware self-trip is TOOL-scoped: it locks the tool, not the circuit.
+  assertEq(
+    'selftrip/report-accepted',
+    200,
+    (await reportDraw(L.ext, L.key, 2, { self_tripped: true })).status,
+  )
+  assertEq('selftrip/tool-locked', true, await toolLockedState(L.tid))
+  assertEq('selftrip/tool-access-denied', false, await accessOf(L.tid))
+  assertEq('selftrip/circuit-not-locked', false, await circuitLocked(L.cid))
+  ok(
+    'selftrip/audited',
+    (await auditTypes()).has('firmware_selftrip_reported'),
+    'no firmware_selftrip_reported audit',
+  )
+  assertEq(
+    'selftrip/tool-reenable-ok',
+    200,
+    (await POST(`/api/admin/power/tools/${L.tid}/reenable`, { token: admin.token })).status,
+  )
+  assertEq('selftrip/tool-access-restored', true, await accessOf(L.tid))
+
   // --- tool <-> receptacle: uniqueness from both sides ---------------------
   const toolA = await POST('/api/tools', { token: admin.token, body: { name: `PowerToolA ${admin.username}`, category: 'safety' } })
   const toolB = await POST('/api/tools', { token: admin.token, body: { name: `PowerToolB ${admin.username}`, category: 'safety' } })

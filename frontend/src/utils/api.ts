@@ -517,6 +517,12 @@ export const powerApi = withErrorGuard({
   telemetry() {
     return apiClient.get<import('@/types').PowerTelemetry>('/admin/power/telemetry')
   },
+  reenableCircuit(id: string) {
+    return apiClient.post<void>(`/admin/power/circuits/${id}/reenable`)
+  },
+  reenableTool(toolId: string) {
+    return apiClient.post<void>(`/admin/power/tools/${toolId}/reenable`)
+  },
 })
 
 // Wraps every method on an API object so a rejected request (network

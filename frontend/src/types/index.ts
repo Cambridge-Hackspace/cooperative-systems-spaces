@@ -337,6 +337,12 @@ export interface PowerCircuit {
   parent_circuit_id: string | null
   created_at: string
   updated_at: string
+  /** Emergency lockout (#44). `lockout_source` is server_aggregate | edge_fast_trip. */
+  locked_out: boolean
+  lockout_reason: string | null
+  lockout_source: string | null
+  locked_out_at: string | null
+  locked_out_by: string | null
 }
 
 export interface PowerCircuitDetail extends PowerCircuit {
@@ -417,6 +423,10 @@ export interface ToolPowerState {
   last_reported_at: string
   created_at: string
   updated_at: string
+  /** Tool-scoped emergency lockout from a firmware self-trip (#44). */
+  locked_out: boolean
+  lockout_reason: string | null
+  locked_out_at: string | null
 }
 
 export interface CircuitDraw {
