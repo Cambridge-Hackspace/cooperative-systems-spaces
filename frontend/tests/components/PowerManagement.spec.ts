@@ -29,6 +29,7 @@ const power = vi.hoisted(() => ({
   updateReceptacle: vi.fn(),
   removeReceptacle: vi.fn(),
   assignToolReceptacle: vi.fn(),
+  telemetry: vi.fn(),
 }))
 const places = vi.hoisted(() => ({ list: vi.fn() }))
 const tools = vi.hoisted(() => ({ getTools: vi.fn() }))
@@ -78,6 +79,7 @@ beforeEach(() => {
   power.createCircuit.mockReturnValue(ok(circuit('c2', 'B-4')))
   power.removeCircuit.mockReturnValue(ok(undefined))
   power.assignToolReceptacle.mockReturnValue(ok(undefined))
+  power.telemetry.mockReturnValue(ok({ circuits: [], tools: [] }))
 })
 
 describe('PowerManagement', () => {

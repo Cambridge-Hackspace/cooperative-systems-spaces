@@ -4516,6 +4516,58 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    // ── Tool power telemetry (#43): latest-per-tool ─────────────────────────
+
+    /// Insert-or-update the latest reading for a tool, keeping exactly one row
+    /// per tool (`ON CONFLICT (tool_id)`). Returns the stored row.
+    pub fn upsert_tool_power_state(
+        &self,
+        reading: &crate::models::NewToolPowerState,
+    ) -> Result<crate::models::ToolPowerState, DatabaseError> {
+        use crate::schema::tool_power_state::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_power_state)
+            .values(reading)
+            .on_conflict(tool_id)
+            .do_update()
+            .set((
+                last_draw_amps.eq(&reading.last_draw_amps),
+                last_voltage.eq(&reading.last_voltage),
+                reported_max_voltage.eq(&reading.reported_max_voltage),
+                reported_amperage_limit.eq(&reading.reported_amperage_limit),
+                last_reported_at.eq(&reading.last_reported_at),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::ToolPowerState::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_tool_power_state(
+        &self,
+    ) -> Result<Vec<crate::models::ToolPowerState>, DatabaseError> {
+        use crate::schema::tool_power_state::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_power_state
+            .select(crate::models::ToolPowerState::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every tool's `(id, receptacle_id)`, unpaginated -- for resolving which
+    /// circuit a tool's draw belongs to when aggregating. `get_tools` paginates,
+    /// so it cannot be used for a total that must cover every tool.
+    pub fn all_tool_receptacle_links(
+        &self,
+    ) -> Result<Vec<(uuid::Uuid, Option<uuid::Uuid>)>, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+        let mut conn = self.get_connection()?;
+        tools
+            .select((id, receptacle_id))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Set / clear the `place_id` on a device.
     pub fn set_space_device_place(
         &self,

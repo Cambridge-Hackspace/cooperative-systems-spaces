@@ -222,7 +222,14 @@ fn guard_of(src: &str, handler: &str) -> String {
     // by name rather than inferred, because taking a HeaderMap is not by itself
     // evidence of authenticating — `home_links::list_links_public` takes one to
     // derive a role best-effort and is genuinely public.
-    const INLINE_AUTH: &[&str] = &["tool_on", "tool_off", "tool_log", "sync", "boot_reset"];
+    const INLINE_AUTH: &[&str] = &[
+        "tool_on",
+        "tool_off",
+        "tool_log",
+        "sync",
+        "boot_reset",
+        "power_report",
+    ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();
     }

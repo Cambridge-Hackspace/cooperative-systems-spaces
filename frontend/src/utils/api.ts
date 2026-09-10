@@ -514,6 +514,9 @@ export const powerApi = withErrorGuard({
       receptacle_id: receptacleId,
     })
   },
+  telemetry() {
+    return apiClient.get<import('@/types').PowerTelemetry>('/admin/power/telemetry')
+  },
 })
 
 // Wraps every method on an API object so a rejected request (network

@@ -370,32 +370,33 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes =
         ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes - cmi5_session_routes;
 
-    assert_eq!(device_routes, 6, "device-authenticated routes");
+    // 7: the six pre-existing controller endpoints plus the #43 power-report
+    // ingest, all InlineAuth (a device token or a per-tool/global API key).
+    assert_eq!(device_routes, 7, "device-authenticated routes");
     // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
     // (GET/PUT/DELETE), all authenticated by the session credential. Like the
     // device surface, only their shape checks are reachable offline; their
     // contents are deferred to the live tier.
     assert_eq!(cmi5_session_routes, 6, "cmi5 LRS routes");
-    // 187 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
-    // 8 cmi5 + 4 first-class cards (#33) + 3 training waivers (#36: list/grant/
-    // revoke, all Admin) + 17 power topology (#42: circuits/outlets/receptacles
-    // CRUD -- 5 each -- plus /power/config and the tool<->receptacle assignment,
-    // all Admin). This number is the sum of branches that each moved it, so it
-    // was re-derived by counting ROUTES rather than by adding the comments
+    // 188 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
+    // 8 cmi5 + 4 first-class cards (#33) + 3 training waivers (#36) + 17 power
+    // topology (#42) + 1 power telemetry (#43: GET /admin/power/telemetry, Admin;
+    // the #43 power-report ingest is InlineAuth and counted under device_routes
+    // above, not here). This number is the sum of branches that each moved it, so
+    // it was re-derived by counting ROUTES rather than by adding the comments
     // together: guarded rows minus the device and cmi5-session surfaces. The
     // cmi5 `fetch` route and the Stripe and Groups.io webhooks are Public; the
-    // six LRS routes are counted above. The device surface did not move, which
-    // is the number this test exists to hold still.
-    assert_eq!(jwt_routes, 187, "JWT-authenticated routes");
+    // six LRS routes are counted above.
+    assert_eq!(jwt_routes, 188, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 187 * 7 + (6 + 6) * 3);
+    assert_eq!(asserted_pairs(), 188 * 7 + (7 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
     // on its contents by looking it up.
     let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
     assert_eq!(
-        deferred, 48,
+        deferred, 52,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

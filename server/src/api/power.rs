@@ -21,13 +21,15 @@ use axum::{
 use bigdecimal::BigDecimal;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
 use crate::database::DatabaseError;
 use crate::models::{
     AuditEventType, NewAuditLog, NewPowerCircuit, NewPowerOutlet, NewPowerReceptacle, PowerCircuit,
-    PowerOutlet, PowerReceptacle, UpdatePowerCircuit, UpdatePowerOutlet, UpdatePowerReceptacle,
+    PowerOutlet, PowerReceptacle, ToolPowerState, UpdatePowerCircuit, UpdatePowerOutlet,
+    UpdatePowerReceptacle,
 };
 use crate::AppState;
 
@@ -67,6 +69,7 @@ pub fn admin_routes() -> Router<AppState> {
             "/tools/{tool_id}/receptacle",
             axum::routing::put(assign_tool_receptacle),
         )
+        .route("/telemetry", get(get_telemetry))
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +160,22 @@ pub struct ReceptacleQuery {
 pub struct AssignReceptacleRequest {
     /// The receptacle to plug this tool into, or `null` to unplug it.
     pub receptacle_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CircuitDraw {
+    pub circuit_id: Uuid,
+    /// Summed latest draw (amps) over the tools on this circuit.
+    pub total_draw_amps: BigDecimal,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PowerTelemetryResponse {
+    /// One entry per circuit (0 when idle), so the UI can show draw against the
+    /// circuit's `amperage_limit`.
+    pub circuits: Vec<CircuitDraw>,
+    /// Latest reading for every tool that has reported.
+    pub tools: Vec<ToolPowerState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -728,4 +747,68 @@ async fn assign_tool_receptacle(
         message: Some("Tool receptacle updated".to_string()),
         error: None,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry (#43): latest draw per tool, aggregated per circuit
+// ---------------------------------------------------------------------------
+
+/// Latest reading per tool plus the per-circuit draw totals the live-draw UI
+/// renders. The aggregation is done in Rust over a handful of small tables
+/// rather than a SQL join: the relationship chain
+/// (tool -> receptacle -> outlet -> circuit) is short, the row counts are tiny,
+/// and reading the sum here is what lets #44's aggregation reuse the same shape.
+async fn get_telemetry(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let states = state.db.list_tool_power_state()?;
+    let links = state.db.all_tool_receptacle_links()?;
+    let receptacles = state.db.list_power_receptacles()?;
+    let outlets = state.db.list_power_outlets()?;
+    let circuits = state.db.list_power_circuits()?;
+
+    let recep_to_outlet: HashMap<Uuid, Uuid> =
+        receptacles.iter().map(|r| (r.id, r.outlet_id)).collect();
+    let outlet_to_circuit: HashMap<Uuid, Uuid> =
+        outlets.iter().map(|o| (o.id, o.circuit_id)).collect();
+    let tool_to_receptacle: HashMap<Uuid, Uuid> = links
+        .into_iter()
+        .filter_map(|(t, r)| r.map(|r| (t, r)))
+        .collect();
+
+    let mut totals: HashMap<Uuid, BigDecimal> = circuits
+        .iter()
+        .map(|c| (c.id, BigDecimal::from(0)))
+        .collect();
+    for s in &states {
+        let Some(draw) = s.last_draw_amps.as_ref() else {
+            continue;
+        };
+        let Some(rid) = tool_to_receptacle.get(&s.tool_id) else {
+            continue;
+        };
+        let Some(oid) = recep_to_outlet.get(rid) else {
+            continue;
+        };
+        let Some(cid) = outlet_to_circuit.get(oid) else {
+            continue;
+        };
+        let entry = totals.entry(*cid).or_insert_with(|| BigDecimal::from(0));
+        *entry = entry.clone() + draw.clone();
+    }
+
+    let mut circuit_draws: Vec<CircuitDraw> = totals
+        .into_iter()
+        .map(|(circuit_id, total_draw_amps)| CircuitDraw {
+            circuit_id,
+            total_draw_amps,
+        })
+        .collect();
+    circuit_draws.sort_by(|a, b| a.circuit_id.cmp(&b.circuit_id));
+
+    Ok(Json(ApiResponse::success(PowerTelemetryResponse {
+        circuits: circuit_draws,
+        tools: states,
+    })))
 }

@@ -14,7 +14,7 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::schema::{power_circuits, power_outlets, power_receptacles};
+use crate::schema::{power_circuits, power_outlets, power_receptacles, tool_power_state};
 
 // ── Circuits ───────────────────────────────────────────────────────────────
 
@@ -135,4 +135,37 @@ pub struct UpdatePowerReceptacle {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+// ── Tool power state (#43): latest-per-tool telemetry ────────────────────────
+
+#[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize)]
+#[diesel(table_name = tool_power_state, primary_key(tool_id))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ToolPowerState {
+    pub tool_id: Uuid,
+    /// Most recent measured draw (amps). `None` until the first report.
+    pub last_draw_amps: Option<BigDecimal>,
+    pub last_voltage: Option<BigDecimal>,
+    /// Firmware-declared limits about the device itself (firmware-owned, not
+    /// admin config -- see the migration).
+    pub reported_max_voltage: Option<BigDecimal>,
+    pub reported_amperage_limit: Option<BigDecimal>,
+    pub last_reported_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One reading, inserted-or-updated (`ON CONFLICT (tool_id)`) so the table keeps
+/// only the latest per tool.
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = tool_power_state)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewToolPowerState {
+    pub tool_id: Uuid,
+    pub last_draw_amps: Option<BigDecimal>,
+    pub last_voltage: Option<BigDecimal>,
+    pub reported_max_voltage: Option<BigDecimal>,
+    pub reported_amperage_limit: Option<BigDecimal>,
+    pub last_reported_at: DateTime<Utc>,
 }

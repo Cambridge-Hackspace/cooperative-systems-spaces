@@ -275,6 +275,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    tool_power_state (tool_id) {
+        tool_id -> Uuid,
+        last_draw_amps -> Nullable<Numeric>,
+        last_voltage -> Nullable<Numeric>,
+        reported_max_voltage -> Nullable<Numeric>,
+        reported_amperage_limit -> Nullable<Numeric>,
+        last_reported_at -> Timestamptz,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     tool_usage_sessions (id) {
         id -> Uuid,
         tool_id -> Uuid,
@@ -847,6 +860,7 @@ diesel::joinable!(power_outlets -> power_circuits (circuit_id));
 diesel::joinable!(power_outlets -> places (place_id));
 diesel::joinable!(power_receptacles -> power_outlets (outlet_id));
 diesel::joinable!(tools -> power_receptacles (receptacle_id));
+diesel::joinable!(tool_power_state -> tools (tool_id));
 // power_circuits -> power_circuits (parent_circuit_id) is a self-join; walked
 // manually in the ancestor helper, like places and cmi5_blocks.
 
@@ -901,4 +915,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     power_circuits,
     power_outlets,
     power_receptacles,
+    tool_power_state,
 );
