@@ -82,6 +82,11 @@ const BUDGET: &[(&str, usize)] = &[
     ("mod.rs", 0),
     ("pages.rs", 0),
     ("places.rs", 0),
+    // 0. Every handler propagates its database error with `?` or through
+    // `map_power_conflict` (which delegates to `ApiError::from` for anything but
+    // the unique/FK cases it names) -- a missing circuit is a 404, a duplicate
+    // receptacle assignment a 409, never a blanket 500.
+    ("power.rs", 0),
     // Down from 5: the validation in this file moved to `profile_fields.rs`
     // and the reads now come back from the database rather than the config
     // cache, which retired one blanket 500 along the way.

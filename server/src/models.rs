@@ -7,6 +7,7 @@ mod home_links;
 mod membership;
 mod mfa;
 mod places;
+mod power;
 mod profile_config;
 mod schedules;
 mod tool_billing;
@@ -29,6 +30,7 @@ pub use home_links::*;
 pub use membership::*;
 pub use mfa::*;
 pub use places::*;
+pub use power::*;
 pub use profile_config::*;
 pub use schedules::*;
 pub use tool_billing::*;
@@ -409,6 +411,16 @@ pub enum AuditEventType {
     PlaceUpdated,
     PlaceMoved,
     PlaceDeleted,
+    // Power topology events (#42)
+    PowerCircuitCreated,
+    PowerCircuitUpdated,
+    PowerCircuitDeleted,
+    PowerOutletCreated,
+    PowerOutletUpdated,
+    PowerOutletDeleted,
+    PowerReceptacleCreated,
+    PowerReceptacleUpdated,
+    PowerReceptacleDeleted,
     // Schedule events
     ScheduleCreated,
     ScheduleUpdated,
@@ -585,6 +597,15 @@ impl AuditEventType {
             Self::PlaceUpdated => "place_updated",
             Self::PlaceMoved => "place_moved",
             Self::PlaceDeleted => "place_deleted",
+            Self::PowerCircuitCreated => "power_circuit_created",
+            Self::PowerCircuitUpdated => "power_circuit_updated",
+            Self::PowerCircuitDeleted => "power_circuit_deleted",
+            Self::PowerOutletCreated => "power_outlet_created",
+            Self::PowerOutletUpdated => "power_outlet_updated",
+            Self::PowerOutletDeleted => "power_outlet_deleted",
+            Self::PowerReceptacleCreated => "power_receptacle_created",
+            Self::PowerReceptacleUpdated => "power_receptacle_updated",
+            Self::PowerReceptacleDeleted => "power_receptacle_deleted",
             Self::ScheduleCreated => "schedule_created",
             Self::ScheduleUpdated => "schedule_updated",
             Self::ScheduleDeleted => "schedule_deleted",
@@ -694,6 +715,15 @@ impl AuditEventType {
             PlaceUpdated,
             PlaceMoved,
             PlaceDeleted,
+            PowerCircuitCreated,
+            PowerCircuitUpdated,
+            PowerCircuitDeleted,
+            PowerOutletCreated,
+            PowerOutletUpdated,
+            PowerOutletDeleted,
+            PowerReceptacleCreated,
+            PowerReceptacleUpdated,
+            PowerReceptacleDeleted,
             ScheduleCreated,
             ScheduleUpdated,
             ScheduleDeleted,

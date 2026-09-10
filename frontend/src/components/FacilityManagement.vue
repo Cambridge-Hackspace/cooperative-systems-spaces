@@ -35,6 +35,9 @@
       >
         Schedules
       </a>
+      <a role="tab" class="tab" :class="{ 'tab-active': tab === 'power' }" @click="setTab('power')">
+        Power
+      </a>
       <a role="tab" class="tab" :class="{ 'tab-active': tab === 'graph' }" @click="setTab('graph')">
         Graph
       </a>
@@ -44,6 +47,7 @@
       <PlaceManagement v-if="tab === 'places'" embedded />
       <DoorManagement v-else-if="tab === 'doors'" embedded />
       <ScheduleManagement v-else-if="tab === 'schedules'" embedded />
+      <PowerManagement v-else-if="tab === 'power'" embedded />
       <FacilityGraph v-else />
     </KeepAlive>
   </div>
@@ -55,11 +59,12 @@ import { useRoute, useRouter } from 'vue-router'
 import PlaceManagement from './PlaceManagement.vue'
 import DoorManagement from './DoorManagement.vue'
 import ScheduleManagement from './ScheduleManagement.vue'
+import PowerManagement from './PowerManagement.vue'
 // Lazy-load the graph view — cytoscape is ~150 KB gzipped and only matters
 // when the user actually opens the Graph tab.
 const FacilityGraph = defineAsyncComponent(() => import('./FacilityGraph.vue'))
 
-type Tab = 'places' | 'doors' | 'schedules' | 'graph'
+type Tab = 'places' | 'doors' | 'schedules' | 'power' | 'graph'
 
 const route = useRoute()
 const router = useRouter()

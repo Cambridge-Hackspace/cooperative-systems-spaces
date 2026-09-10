@@ -114,7 +114,11 @@ describe('the audit filter against the server enum', () => {
       // 74 -> 76: training waivers (#36) added training_waiver_granted /
       // _revoked. Admin lifecycle records, like the card-management events --
       // unfiltered deliberately.
-    ).toBe(76)
+      // 76 -> 85: power topology (#42) added nine facility-mutation records
+      // (power_circuit_created/_updated/_deleted, power_outlet_*, and
+      // power_receptacle_*). Admin facility-config records, not access-control
+      // filters -- unfiltered deliberately, like the door/place management set.
+    ).toBe(85)
   })
 
   // Named separately because these are the ones that matter in an

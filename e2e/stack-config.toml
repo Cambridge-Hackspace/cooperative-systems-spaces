@@ -343,6 +343,13 @@ user_readme = false
 enabled = true
 types = ["Room", "Spot"]
 
+# PowerConfig::default() has `enabled = false`; enabled here so the `circuits`
+# stage can exercise the power-topology CRUD (#42). Same rationale as [place]
+# above -- a suite that switches off the module it then tests reports a pass for
+# a stage that ran nothing.
+[power]
+enabled = true
+
 [edge]
 edge_enabled = true
 

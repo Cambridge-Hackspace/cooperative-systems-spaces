@@ -4267,6 +4267,255 @@ impl DatabaseManager {
         Ok((doors_count, tools_count, devices_count))
     }
 
+    // ── Power topology (#42): circuits / outlets / receptacles ───────────────
+
+    pub fn list_power_circuits(&self) -> Result<Vec<crate::models::PowerCircuit>, DatabaseError> {
+        use crate::schema::power_circuits::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_circuits
+            .order((parent_circuit_id.asc().nulls_first(), breaker_label.asc()))
+            .select(crate::models::PowerCircuit::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_power_circuit(
+        &self,
+        cid: uuid::Uuid,
+    ) -> Result<crate::models::PowerCircuit, DatabaseError> {
+        use crate::schema::power_circuits::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_circuits
+            .find(cid)
+            .select(crate::models::PowerCircuit::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Walk `parent_circuit_id` links until a trunk is hit. Returns
+    /// `[trunk, ..., immediate_parent]` (top-down, excluding `cid`). Bounded at
+    /// 32 steps as a safety net even though the API rejects cycles on every
+    /// write. Mirrors `place_ancestors`.
+    pub fn power_circuit_ancestors(
+        &self,
+        cid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::PowerCircuit>, DatabaseError> {
+        let mut acc = Vec::new();
+        let mut current = self.get_power_circuit(cid)?.parent_circuit_id;
+        let mut depth = 0;
+        while let Some(parent) = current {
+            depth += 1;
+            if depth > 32 {
+                return Err(DatabaseError::Other(
+                    "power circuit ancestor chain exceeded 32 levels".into(),
+                ));
+            }
+            let c = self.get_power_circuit(parent)?;
+            current = c.parent_circuit_id;
+            acc.push(c);
+        }
+        acc.reverse();
+        Ok(acc)
+    }
+
+    pub fn create_power_circuit(
+        &self,
+        new_circuit: &crate::models::NewPowerCircuit,
+    ) -> Result<crate::models::PowerCircuit, DatabaseError> {
+        use crate::schema::power_circuits;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(power_circuits::table)
+            .values(new_circuit)
+            .returning(crate::models::PowerCircuit::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_power_circuit(
+        &self,
+        cid: uuid::Uuid,
+        changes: &crate::models::UpdatePowerCircuit,
+    ) -> Result<crate::models::PowerCircuit, DatabaseError> {
+        use crate::schema::power_circuits::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(power_circuits.find(cid))
+            .set(changes)
+            .returning(crate::models::PowerCircuit::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_power_circuit(&self, cid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::power_circuits::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(power_circuits.find(cid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_power_outlets(&self) -> Result<Vec<crate::models::PowerOutlet>, DatabaseError> {
+        use crate::schema::power_outlets::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_outlets
+            .order(label.asc())
+            .select(crate::models::PowerOutlet::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_outlets_for_circuit(
+        &self,
+        cid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::PowerOutlet>, DatabaseError> {
+        use crate::schema::power_outlets::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_outlets
+            .filter(circuit_id.eq(cid))
+            .order(label.asc())
+            .select(crate::models::PowerOutlet::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_power_outlet(
+        &self,
+        oid: uuid::Uuid,
+    ) -> Result<crate::models::PowerOutlet, DatabaseError> {
+        use crate::schema::power_outlets::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_outlets
+            .find(oid)
+            .select(crate::models::PowerOutlet::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_power_outlet(
+        &self,
+        new_outlet: &crate::models::NewPowerOutlet,
+    ) -> Result<crate::models::PowerOutlet, DatabaseError> {
+        use crate::schema::power_outlets;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(power_outlets::table)
+            .values(new_outlet)
+            .returning(crate::models::PowerOutlet::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_power_outlet(
+        &self,
+        oid: uuid::Uuid,
+        changes: &crate::models::UpdatePowerOutlet,
+    ) -> Result<crate::models::PowerOutlet, DatabaseError> {
+        use crate::schema::power_outlets::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(power_outlets.find(oid))
+            .set(changes)
+            .returning(crate::models::PowerOutlet::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_power_outlet(&self, oid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::power_outlets::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(power_outlets.find(oid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_receptacles_for_outlet(
+        &self,
+        oid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::PowerReceptacle>, DatabaseError> {
+        use crate::schema::power_receptacles::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_receptacles
+            .filter(outlet_id.eq(oid))
+            .order(label.asc())
+            .select(crate::models::PowerReceptacle::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_power_receptacles(
+        &self,
+    ) -> Result<Vec<crate::models::PowerReceptacle>, DatabaseError> {
+        use crate::schema::power_receptacles::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_receptacles
+            .order(label.asc())
+            .select(crate::models::PowerReceptacle::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_power_receptacle(
+        &self,
+        rid: uuid::Uuid,
+    ) -> Result<crate::models::PowerReceptacle, DatabaseError> {
+        use crate::schema::power_receptacles::dsl::*;
+        let mut conn = self.get_connection()?;
+        power_receptacles
+            .find(rid)
+            .select(crate::models::PowerReceptacle::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_power_receptacle(
+        &self,
+        new_receptacle: &crate::models::NewPowerReceptacle,
+    ) -> Result<crate::models::PowerReceptacle, DatabaseError> {
+        use crate::schema::power_receptacles;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(power_receptacles::table)
+            .values(new_receptacle)
+            .returning(crate::models::PowerReceptacle::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_power_receptacle(
+        &self,
+        rid: uuid::Uuid,
+        changes: &crate::models::UpdatePowerReceptacle,
+    ) -> Result<crate::models::PowerReceptacle, DatabaseError> {
+        use crate::schema::power_receptacles::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(power_receptacles.find(rid))
+            .set(changes)
+            .returning(crate::models::PowerReceptacle::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_power_receptacle(&self, rid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::power_receptacles::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(power_receptacles.find(rid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Assign a tool to a receptacle, or clear it (`None`). The partial-unique
+    /// index on `tools.receptacle_id` makes a second tool claiming a live
+    /// receptacle a unique violation (409), not a silent double-binding.
+    /// Returns the number of tool rows changed (0 = no such tool).
+    pub fn assign_tool_receptacle(
+        &self,
+        tid: uuid::Uuid,
+        rid: Option<uuid::Uuid>,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(tools.find(tid))
+            .set((receptacle_id.eq(rid), updated_at.eq(chrono::Utc::now())))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Set / clear the `place_id` on a device.
     pub fn set_space_device_place(
         &self,

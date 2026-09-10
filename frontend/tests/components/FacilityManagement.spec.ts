@@ -37,6 +37,7 @@ const stubs = {
   PlaceManagement: { template: '<div data-t="places" />' },
   DoorManagement: { template: '<div data-t="doors" />' },
   ScheduleManagement: { template: '<div data-t="schedules" />' },
+  PowerManagement: { template: '<div data-t="power" />' },
   FacilityGraph: { template: '<div data-t="graph" />' },
   RouterLink: { template: '<a><slot /></a>' },
   // KeepAlive is stubbed transparently, and this is a limitation of the test
@@ -80,6 +81,13 @@ describe('which tab is shown', () => {
     expect(w.find('[data-t="doors"]').exists()).toBe(true)
     expect(w.find('[data-t="places"]').exists()).toBe(false)
     expect(tabNamed(w, 'Doors').classes()).toContain('tab-active')
+  })
+
+  it('opens the Power tab from the URL (#42)', () => {
+    const w = facility({ tab: 'power' })
+    expect(w.find('[data-t="power"]').exists()).toBe(true)
+    expect(w.find('[data-t="places"]').exists()).toBe(false)
+    expect(tabNamed(w, 'Power').classes()).toContain('tab-active')
   })
 
   it('falls back to Places for a tab name that does not exist', () => {

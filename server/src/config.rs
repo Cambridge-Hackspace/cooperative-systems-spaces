@@ -915,6 +915,20 @@ impl PlaceConfig {
     }
 }
 
+/// Physical power topology module (#41): circuits, outlets, receptacles, and a
+/// tool's receptacle assignment. When disabled, the power admin/UI is hidden.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowerConfig {
+    /// Master toggle. When false, the power admin endpoints reject.
+    pub enabled: bool,
+}
+
+impl Default for PowerConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
+}
+
 /// Door access module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoorConfig {
@@ -1257,6 +1271,9 @@ pub struct AppConfig {
     /// Configurable hierarchy of places
     #[serde(default)]
     pub place: PlaceConfig,
+    /// Physical power topology module (#41)
+    #[serde(default)]
+    pub power: PowerConfig,
     /// cmi5 training-module configuration
     #[serde(default)]
     pub cmi5: Cmi5Config,
@@ -1294,6 +1311,7 @@ impl Default for AppConfig {
             edge: EdgeConfig::default(),
             door: DoorConfig::default(),
             place: PlaceConfig::default(),
+            power: PowerConfig::default(),
             cmi5: Cmi5Config::default(),
             groupsio: GroupsioConfig::default(),
             membership: MembershipConfig::default(),
