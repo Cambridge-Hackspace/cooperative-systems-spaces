@@ -452,6 +452,70 @@ export const placesApi = {
   },
 }
 
+// Power topology API (#42): circuits, outlets, receptacles, tool assignment.
+// Guarded so every method resolves to an ApiResponse shape rather than throwing.
+export const powerApi = withErrorGuard({
+  config() {
+    return apiClient.get<import('@/types').PowerConfig>('/admin/power/config')
+  },
+  listCircuits() {
+    return apiClient.get<import('@/types').PowerCircuit[]>('/admin/power/circuits')
+  },
+  getCircuit(id: string) {
+    return apiClient.get<import('@/types').PowerCircuitDetail>(`/admin/power/circuits/${id}`)
+  },
+  createCircuit(body: import('@/types').CreateCircuitRequest) {
+    return apiClient.post<import('@/types').PowerCircuit>('/admin/power/circuits', body)
+  },
+  updateCircuit(id: string, body: import('@/types').UpdateCircuitRequest) {
+    return apiClient.patch<import('@/types').PowerCircuit>(`/admin/power/circuits/${id}`, body)
+  },
+  removeCircuit(id: string) {
+    return apiClient.delete<void>(`/admin/power/circuits/${id}`)
+  },
+  listOutlets(circuitId?: string) {
+    return apiClient.get<import('@/types').PowerOutlet[]>(
+      '/admin/power/outlets',
+      circuitId ? { circuit_id: circuitId } : undefined
+    )
+  },
+  getOutlet(id: string) {
+    return apiClient.get<import('@/types').PowerOutletDetail>(`/admin/power/outlets/${id}`)
+  },
+  createOutlet(body: import('@/types').CreateOutletRequest) {
+    return apiClient.post<import('@/types').PowerOutlet>('/admin/power/outlets', body)
+  },
+  updateOutlet(id: string, body: import('@/types').UpdateOutletRequest) {
+    return apiClient.patch<import('@/types').PowerOutlet>(`/admin/power/outlets/${id}`, body)
+  },
+  removeOutlet(id: string) {
+    return apiClient.delete<void>(`/admin/power/outlets/${id}`)
+  },
+  listReceptacles(outletId?: string) {
+    return apiClient.get<import('@/types').PowerReceptacle[]>(
+      '/admin/power/receptacles',
+      outletId ? { outlet_id: outletId } : undefined
+    )
+  },
+  createReceptacle(body: import('@/types').CreateReceptacleRequest) {
+    return apiClient.post<import('@/types').PowerReceptacle>('/admin/power/receptacles', body)
+  },
+  updateReceptacle(id: string, body: import('@/types').UpdateReceptacleRequest) {
+    return apiClient.patch<import('@/types').PowerReceptacle>(
+      `/admin/power/receptacles/${id}`,
+      body
+    )
+  },
+  removeReceptacle(id: string) {
+    return apiClient.delete<void>(`/admin/power/receptacles/${id}`)
+  },
+  assignToolReceptacle(toolId: string, receptacleId: string | null) {
+    return apiClient.put<void>(`/admin/power/tools/${toolId}/receptacle`, {
+      receptacle_id: receptacleId,
+    })
+  },
+})
+
 // Wraps every method on an API object so a rejected request (network
 // failure, or any non-2xx response, since apiClient/axios reject on
 // those) resolves to the same ApiResponse<T> failure shape a handled

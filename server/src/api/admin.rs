@@ -51,6 +51,7 @@ pub fn admin_routes() -> Router<AppState> {
         .nest("/webhooks", crate::api::webhooks::admin_webhook_routes())
         .nest("/doors", crate::api::doors::admin_routes())
         .nest("/places", crate::api::places::admin_routes())
+        .nest("/power", crate::api::power::admin_routes())
         .nest("/groupsio", crate::api::groupsio::admin_routes())
         .nest("/membership", crate::api::membership::admin_routes())
         .nest("/tool-billing", crate::api::tool_billing::admin_routes())

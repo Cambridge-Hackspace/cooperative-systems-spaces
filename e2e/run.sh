@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -962,6 +962,24 @@ stage_waivers() {
 
   collect_server_log
   emit_junit waivers "driver=waivers.mjs"
+}
+
+stage_circuits() {
+  cases_begin circuits
+  stack_paths
+
+  if ! server_ready; then
+    record_case "circuits/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit circuits
+    return 1
+  fi
+  record_case "circuits/stack-is-up" ok
+
+  run_node circuits.mjs >"${OUT}/logs/circuits.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit circuits "driver=circuits.mjs"
 }
 
 # ===========================================================================

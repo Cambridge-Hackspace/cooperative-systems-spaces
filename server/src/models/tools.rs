@@ -195,6 +195,10 @@ pub struct Tool {
     /// Caps billable time and the prepaid hold estimate; `None` falls back to the
     /// global `[tool_billing].default_max_session_minutes`.
     pub usage_max_session_minutes: Option<i32>,
+    /// The power receptacle this tool plugs into (0 or 1); `None` for a battery
+    /// tool or one not yet mapped to the power topology (#42). Appended last for
+    /// the positional-`Queryable` reason the metered-billing fields document.
+    pub receptacle_id: Option<Uuid>,
 }
 
 /// New tool for creation

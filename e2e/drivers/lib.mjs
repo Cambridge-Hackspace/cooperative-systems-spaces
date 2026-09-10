@@ -102,6 +102,7 @@ export async function req(method, path, { token, apiKey, body, headers } = {}) {
 export const GET = (p, o) => req('GET', p, o)
 export const POST = (p, o) => req('POST', p, o)
 export const PUT = (p, o) => req('PUT', p, o)
+export const PATCH = (p, o) => req('PATCH', p, o)
 export const DELETE = (p, o) => req('DELETE', p, o)
 
 // ---------------------------------------------------------------------------

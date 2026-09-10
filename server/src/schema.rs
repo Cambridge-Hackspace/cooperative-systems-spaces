@@ -233,6 +233,44 @@ diesel::table! {
         usage_flat_fee -> Nullable<Numeric>,
         usage_rate_per_min -> Nullable<Numeric>,
         usage_max_session_minutes -> Nullable<Int4>,
+        receptacle_id -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    power_circuits (id) {
+        id -> Uuid,
+        #[max_length = 120]
+        breaker_label -> Varchar,
+        voltage_rating -> Int4,
+        amperage_limit -> Numeric,
+        parent_circuit_id -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    power_outlets (id) {
+        id -> Uuid,
+        circuit_id -> Uuid,
+        place_id -> Uuid,
+        #[max_length = 120]
+        label -> Varchar,
+        location -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    power_receptacles (id) {
+        id -> Uuid,
+        outlet_id -> Uuid,
+        #[max_length = 120]
+        label -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -805,6 +843,12 @@ diesel::joinable!(user_cards -> users (user_id));
 diesel::joinable!(training_waivers -> tools (tool_id));
 // cmi5_blocks -> cmi5_blocks (parent_block_id) is a self-join; like the places
 // self-reference, it is walked manually rather than registered via joinable!.
+diesel::joinable!(power_outlets -> power_circuits (circuit_id));
+diesel::joinable!(power_outlets -> places (place_id));
+diesel::joinable!(power_receptacles -> power_outlets (outlet_id));
+diesel::joinable!(tools -> power_receptacles (receptacle_id));
+// power_circuits -> power_circuits (parent_circuit_id) is a self-join; walked
+// manually in the ancestor helper, like places and cmi5_blocks.
 
 diesel::allow_tables_to_appear_in_same_query!(
     audit_event_types,
@@ -854,4 +898,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     cmi5_launch_tokens,
     cmi5_statements,
     cmi5_state_documents,
+    power_circuits,
+    power_outlets,
+    power_receptacles,
 );

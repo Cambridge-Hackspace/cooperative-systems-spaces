@@ -14,6 +14,7 @@ pub mod membership;
 pub mod mfa;
 pub mod pages;
 pub mod places;
+pub mod power;
 pub mod profiles;
 pub mod responses;
 pub mod schedules;

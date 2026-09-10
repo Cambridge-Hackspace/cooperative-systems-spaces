@@ -100,6 +100,23 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/admin/places/00000000-0000-4000-8000-000000000001", Guard::Admin), // places::get_place_admin
     R("PATCH", "/api/admin/places/00000000-0000-4000-8000-000000000001", Guard::Admin), // places::update_place
     R("GET", "/api/admin/places/config", Guard::Admin), // places::get_config
+    R("GET", "/api/admin/power/circuits", Guard::Admin), // power::list_circuits
+    R("POST", "/api/admin/power/circuits", Guard::Admin), // power::create_circuit
+    R("DELETE", "/api/admin/power/circuits/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::delete_circuit
+    R("GET", "/api/admin/power/circuits/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::get_circuit
+    R("PATCH", "/api/admin/power/circuits/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::update_circuit
+    R("GET", "/api/admin/power/config", Guard::Admin), // power::get_config
+    R("GET", "/api/admin/power/outlets", Guard::Admin), // power::list_outlets
+    R("POST", "/api/admin/power/outlets", Guard::Admin), // power::create_outlet
+    R("DELETE", "/api/admin/power/outlets/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::delete_outlet
+    R("GET", "/api/admin/power/outlets/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::get_outlet
+    R("PATCH", "/api/admin/power/outlets/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::update_outlet
+    R("GET", "/api/admin/power/receptacles", Guard::Admin), // power::list_receptacles
+    R("POST", "/api/admin/power/receptacles", Guard::Admin), // power::create_receptacle
+    R("DELETE", "/api/admin/power/receptacles/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::delete_receptacle
+    R("GET", "/api/admin/power/receptacles/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::get_receptacle
+    R("PATCH", "/api/admin/power/receptacles/00000000-0000-4000-8000-000000000001", Guard::Admin), // power::update_receptacle
+    R("PUT", "/api/admin/power/tools/00000000-0000-4000-8000-000000000001/receptacle", Guard::Admin), // power::assign_tool_receptacle
     R("POST", "/api/admin/reload-config", Guard::Admin), // admin::reload_config
     R("GET", "/api/admin/roster", Guard::Admin), // admin::get_roster
     R("GET", "/api/admin/schedules", Guard::Admin), // schedules::list_schedules_admin

@@ -321,6 +321,92 @@ export interface PlaceDetail extends Place {
   attached: PlaceAttachedCounts
 }
 
+// ===== Power topology (#42): circuits -> outlets -> receptacles =====
+
+export interface PowerConfig {
+  enabled: boolean
+}
+
+export interface PowerCircuit {
+  id: string
+  breaker_label: string
+  voltage_rating: number
+  /** Amperage limit. Decimals travel as strings. */
+  amperage_limit: string
+  /** Upstream/trunk circuit, or null for a top-level circuit. */
+  parent_circuit_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PowerCircuitDetail extends PowerCircuit {
+  /** Top-down: `[trunk, ..., immediate_parent]`. Excludes this circuit. */
+  ancestors: PowerCircuit[]
+  outlets: PowerOutlet[]
+}
+
+export interface PowerOutlet {
+  id: string
+  circuit_id: string
+  place_id: string
+  label: string
+  /** Free-text position within the room. */
+  location: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PowerOutletDetail extends PowerOutlet {
+  receptacles: PowerReceptacle[]
+}
+
+export interface PowerReceptacle {
+  id: string
+  outlet_id: string
+  label: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateCircuitRequest {
+  breaker_label: string
+  voltage_rating: number
+  amperage_limit: string
+  parent_circuit_id?: string | null
+}
+
+export interface UpdateCircuitRequest {
+  breaker_label?: string
+  voltage_rating?: number
+  amperage_limit?: string
+  /** Send null to promote to a top-level trunk; omit to leave unchanged. */
+  parent_circuit_id?: string | null
+}
+
+export interface CreateOutletRequest {
+  circuit_id: string
+  place_id: string
+  label: string
+  location?: string | null
+}
+
+export interface UpdateOutletRequest {
+  circuit_id?: string
+  place_id?: string
+  label?: string
+  location?: string | null
+}
+
+export interface CreateReceptacleRequest {
+  outlet_id: string
+  label: string
+}
+
+export interface UpdateReceptacleRequest {
+  outlet_id?: string
+  label?: string
+}
+
 // ===== Home links (admin-curated, audience-gated) =====
 
 export type HomeLinkAudience = 'everyone' | 'anonymous' | 'logged_in' | 'member' | 'staff'

@@ -45,6 +45,9 @@ export interface Tool {
   usage_flat_fee?: string | null
   usage_rate_per_min?: string | null
   usage_max_session_minutes?: number | null
+  // The power receptacle this tool plugs into (#42), or null for a battery /
+  // unmapped tool. Assigned via the Facility > Power tab.
+  receptacle_id?: string | null
   // Additional fields that may be present
   manufacturer?: string
   model?: string
