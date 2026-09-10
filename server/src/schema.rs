@@ -308,6 +308,36 @@ diesel::table! {
         status -> Text,
         ledger_entry_id -> Nullable<Uuid>,
         created_at -> Timestamptz,
+        rate_flat_fee -> Nullable<Numeric>,
+        rate_per_min -> Nullable<Numeric>,
+        tier_id -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    tool_rate_tiers (id) {
+        id -> Uuid,
+        tool_id -> Uuid,
+        #[max_length = 120]
+        name -> Varchar,
+        flat_fee -> Nullable<Numeric>,
+        rate_per_min -> Nullable<Numeric>,
+        max_session_minutes -> Nullable<Int4>,
+        active -> Bool,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    tool_tier_assignments (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        tool_id -> Uuid,
+        tier_id -> Uuid,
+        assigned_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -869,6 +899,10 @@ diesel::joinable!(power_outlets -> places (place_id));
 diesel::joinable!(power_receptacles -> power_outlets (outlet_id));
 diesel::joinable!(tools -> power_receptacles (receptacle_id));
 diesel::joinable!(tool_power_state -> tools (tool_id));
+diesel::joinable!(tool_rate_tiers -> tools (tool_id));
+diesel::joinable!(tool_tier_assignments -> tools (tool_id));
+diesel::joinable!(tool_tier_assignments -> tool_rate_tiers (tier_id));
+diesel::joinable!(tool_usage_sessions -> tool_rate_tiers (tier_id));
 // power_circuits -> power_circuits (parent_circuit_id) is a self-join; walked
 // manually in the ancestor helper, like places and cmi5_blocks.
 
@@ -924,4 +958,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     power_outlets,
     power_receptacles,
     tool_power_state,
+    tool_rate_tiers,
+    tool_tier_assignments,
 );

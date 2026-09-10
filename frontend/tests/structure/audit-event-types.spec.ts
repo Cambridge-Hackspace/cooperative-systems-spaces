@@ -121,7 +121,10 @@ describe('the audit filter against the server enum', () => {
       // 85 -> 89: power interrupt (#44) added circuit_overage_shutoff,
       // emergency_lockout_engaged / _cleared, and firmware_selftrip_reported.
       // Safety-lifecycle records; unfiltered deliberately alongside the rest.
-    ).toBe(89)
+      // 89 -> 94: per-member rate tiers (#34) added tool_rate_tier_created /
+      // _updated / _deleted and tool_tier_assigned / _unassigned. Billing-admin
+      // records, not access-control filters -- unfiltered deliberately.
+    ).toBe(94)
   })
 
   // Named separately because these are the ones that matter in an

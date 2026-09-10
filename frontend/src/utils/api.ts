@@ -525,6 +525,43 @@ export const powerApi = withErrorGuard({
   },
 })
 
+// Per-member rate tiers API (#34).
+export const tiersApi = withErrorGuard({
+  listTiers(toolId: string) {
+    return apiClient.get<import('@/types').ToolRateTier[]>(
+      `/admin/tool-tiers/tools/${toolId}/tiers`
+    )
+  },
+  createTier(toolId: string, body: import('@/types').CreateTierRequest) {
+    return apiClient.post<import('@/types').ToolRateTier>(
+      `/admin/tool-tiers/tools/${toolId}/tiers`,
+      body
+    )
+  },
+  updateTier(tierId: string, body: import('@/types').UpdateTierRequest) {
+    return apiClient.patch<import('@/types').ToolRateTier>(
+      `/admin/tool-tiers/tiers/${tierId}`,
+      body
+    )
+  },
+  removeTier(tierId: string) {
+    return apiClient.delete<void>(`/admin/tool-tiers/tiers/${tierId}`)
+  },
+  listAssignments(toolId: string) {
+    return apiClient.get<import('@/types').ToolTierAssignment[]>(
+      `/admin/tool-tiers/tools/${toolId}/assignments`
+    )
+  },
+  assignTier(userId: string, toolId: string, tierId: string) {
+    return apiClient.put<void>(`/admin/tool-tiers/users/${userId}/tools/${toolId}`, {
+      tier_id: tierId,
+    })
+  },
+  clearTier(userId: string, toolId: string) {
+    return apiClient.delete<void>(`/admin/tool-tiers/users/${userId}/tools/${toolId}`)
+  },
+})
+
 // Wraps every method on an API object so a rejected request (network
 // failure, or any non-2xx response, since apiClient/axios reject on
 // those) resolves to the same ApiResponse<T> failure shape a handled

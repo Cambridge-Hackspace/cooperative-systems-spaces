@@ -87,6 +87,13 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/membership/users/00000000-0000-4000-8000-000000000001/next-due", Guard::Admin), // membership::admin_set_next_due
     R("GET", "/api/admin/tool-billing/status", Guard::Admin), // tool_billing::admin_status
     R("GET", "/api/admin/tool-billing/users/00000000-0000-4000-8000-000000000001/sessions", Guard::Admin), // tool_billing::admin_user_sessions
+    R("DELETE", "/api/admin/tool-tiers/tiers/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_tiers::delete_tier
+    R("PATCH", "/api/admin/tool-tiers/tiers/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_tiers::update_tier
+    R("GET", "/api/admin/tool-tiers/tools/00000000-0000-4000-8000-000000000001/assignments", Guard::Admin), // tool_tiers::list_assignments
+    R("GET", "/api/admin/tool-tiers/tools/00000000-0000-4000-8000-000000000001/tiers", Guard::Admin), // tool_tiers::list_tiers
+    R("POST", "/api/admin/tool-tiers/tools/00000000-0000-4000-8000-000000000001/tiers", Guard::Admin), // tool_tiers::create_tier
+    R("DELETE", "/api/admin/tool-tiers/users/00000000-0000-4000-8000-000000000001/tools/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_tiers::clear_tier
+    R("PUT", "/api/admin/tool-tiers/users/00000000-0000-4000-8000-000000000001/tools/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_tiers::assign_tier
     R("GET", "/api/admin/home-links", Guard::Admin), // home_links::list_links_admin
     R("POST", "/api/admin/home-links", Guard::Admin), // home_links::create_link
     R("DELETE", "/api/admin/home-links/00000000-0000-4000-8000-000000000001", Guard::Admin), // home_links::delete_link

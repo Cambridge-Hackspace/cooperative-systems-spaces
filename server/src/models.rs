@@ -11,6 +11,7 @@ mod power;
 mod profile_config;
 mod schedules;
 mod tool_billing;
+mod tool_tiers;
 mod tools;
 // `pub`, not `pub(crate)`: these types appear in the public signatures of
 // handlers and models reachable through AppState, and a public item exposing a
@@ -34,6 +35,7 @@ pub use power::*;
 pub use profile_config::*;
 pub use schedules::*;
 pub use tool_billing::*;
+pub use tool_tiers::*;
 pub use tools::*;
 pub use trainers::*;
 pub use training::*;
@@ -528,6 +530,13 @@ pub enum AuditEventType {
     /// The sweep closed a session that was never stopped (no `tool-off`),
     /// settling it from reported usage (or the cap).
     ToolSessionAbandoned,
+    // Per-member rate tiers (#34). Rate changes are money changes, so who
+    // created/edited a tier and who assigned a member to one is audited.
+    ToolRateTierCreated,
+    ToolRateTierUpdated,
+    ToolRateTierDeleted,
+    ToolTierAssigned,
+    ToolTierUnassigned,
 }
 
 impl AuditEventType {
@@ -647,6 +656,11 @@ impl AuditEventType {
             Self::SubscriptionPaymentFailed => "subscription_payment_failed",
             Self::ToolUsageCharged => "tool_usage_charged",
             Self::ToolSessionAbandoned => "tool_session_abandoned",
+            Self::ToolRateTierCreated => "tool_rate_tier_created",
+            Self::ToolRateTierUpdated => "tool_rate_tier_updated",
+            Self::ToolRateTierDeleted => "tool_rate_tier_deleted",
+            Self::ToolTierAssigned => "tool_tier_assigned",
+            Self::ToolTierUnassigned => "tool_tier_unassigned",
         }
     }
 
@@ -769,6 +783,11 @@ impl AuditEventType {
             SubscriptionPaymentFailed,
             ToolUsageCharged,
             ToolSessionAbandoned,
+            ToolRateTierCreated,
+            ToolRateTierUpdated,
+            ToolRateTierDeleted,
+            ToolTierAssigned,
+            ToolTierUnassigned,
         ]
     }
 }

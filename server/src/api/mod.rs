@@ -20,6 +20,7 @@ pub mod responses;
 pub mod schedules;
 pub mod stripe;
 pub mod tool_billing;
+pub mod tool_tiers;
 pub mod toolguard;
 pub mod tools;
 pub mod trainers;

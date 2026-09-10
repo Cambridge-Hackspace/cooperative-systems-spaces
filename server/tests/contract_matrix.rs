@@ -387,9 +387,11 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // than by adding the comments together: guarded rows minus the device and
     // cmi5-session surfaces. The cmi5 `fetch` route and the Stripe and Groups.io
     // webhooks are Public; the six LRS routes are counted above.
-    assert_eq!(jwt_routes, 190, "JWT-authenticated routes");
+    // 197 = 190 + 7 per-member rate tiers (#34: tier CRUD + list-assignments +
+    // assign/clear, all Admin).
+    assert_eq!(jwt_routes, 197, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 190 * 7 + (7 + 6) * 3);
+    assert_eq!(asserted_pairs(), 197 * 7 + (7 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected

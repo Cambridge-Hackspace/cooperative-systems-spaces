@@ -109,32 +109,80 @@ impl MeteredGate {
     }
 }
 
+/// The billing rate resolved for a specific member on a tool (#34): the member's
+/// assigned tier if any, else the tool's own default. `tier_id` is `None` when
+/// the tool default was used. Produced by
+/// [`crate::database::DatabaseManager::resolve_effective_billing`].
+#[derive(Debug, Clone)]
+pub struct EffectiveRate {
+    pub flat_fee: Option<BigDecimal>,
+    pub rate_per_min: Option<BigDecimal>,
+    pub max_session_minutes: Option<i32>,
+    pub tier_id: Option<Uuid>,
+}
+
 impl MeteredGate {
-    /// Available balance a member needs to start this tool.
+    /// Available balance a member needs to start this tool, at the tool's own
+    /// default rate. Prefer [`Self::required_for_rate`] with the member's
+    /// resolved tier rate (#34).
     pub fn required_for(&self, tool: &Tool) -> BigDecimal {
+        self.required_for_rate(
+            &tool.usage_flat_fee,
+            &tool.usage_rate_per_min,
+            tool.usage_max_session_minutes,
+        )
+    }
+
+    /// Available balance a member needs, given an explicitly-resolved rate.
+    pub fn required_for_rate(
+        &self,
+        flat_fee: &Option<BigDecimal>,
+        rate_per_min: &Option<BigDecimal>,
+        max_minutes: Option<i32>,
+    ) -> BigDecimal {
         if self.prepaid {
             max_session_cost(
-                &tool.usage_flat_fee,
-                &tool.usage_rate_per_min,
-                tool.usage_max_session_minutes
-                    .unwrap_or(self.default_max_minutes),
+                flat_fee,
+                rate_per_min,
+                max_minutes.unwrap_or(self.default_max_minutes),
             )
         } else {
             self.min_balance.clone()
         }
     }
 
-    /// Whether a member with `available` balance may use `tool`. Free
-    /// (non-metered) tools are never gated by this.
+    /// Whether a member with `available` balance may use `tool` at the tool's own
+    /// default rate. Free (non-metered) tools are never gated. Prefer
+    /// [`Self::authorizes_rate`] with the member's resolved tier rate (#34).
     pub fn authorizes(&self, tool: &Tool, available: &BigDecimal, is_member: bool) -> bool {
-        if !is_metered(&tool.usage_flat_fee, &tool.usage_rate_per_min) {
+        self.authorizes_rate(
+            &tool.usage_flat_fee,
+            &tool.usage_rate_per_min,
+            tool.usage_max_session_minutes,
+            available,
+            is_member,
+        )
+    }
+
+    /// Whether a member may use a tool given an explicitly-resolved rate (the
+    /// member's tier, else the tool default). Free (rate-0/unset) tiers are never
+    /// gated -- a comped member always passes.
+    pub fn authorizes_rate(
+        &self,
+        flat_fee: &Option<BigDecimal>,
+        rate_per_min: &Option<BigDecimal>,
+        max_minutes: Option<i32>,
+        available: &BigDecimal,
+        is_member: bool,
+    ) -> bool {
+        if !is_metered(flat_fee, rate_per_min) {
             return true;
         }
         metered_access_ok(
             is_member,
             self.require_membership,
             available,
-            &self.required_for(tool),
+            &self.required_for_rate(flat_fee, rate_per_min, max_minutes),
         )
     }
 }
@@ -219,28 +267,38 @@ impl ToolBillingService {
         user.role.rank() >= self.config.get_config().membership.member_role.rank()
     }
 
-    /// What available balance a member needs to start this tool: the max session
-    /// cost (prepaid) or the configured floor (postpaid).
-    fn required_available(&self, tool: &Tool) -> BigDecimal {
+    /// What available balance a member needs to start this tool at a resolved
+    /// rate (#34): the max session cost (prepaid) or the configured floor
+    /// (postpaid). `max` falls back to the global default.
+    fn required_available_rate(&self, eff: &EffectiveRate) -> BigDecimal {
         match self.billing_mode() {
             BillingMode::Prepaid => max_session_cost(
-                &tool.usage_flat_fee,
-                &tool.usage_rate_per_min,
-                self.max_minutes(tool),
+                &eff.flat_fee,
+                &eff.rate_per_min,
+                eff.max_session_minutes.unwrap_or_else(|| {
+                    self.config
+                        .get_config()
+                        .tool_billing
+                        .default_max_session_minutes
+                }),
             ),
             BillingMode::Postpaid => self.min_balance(),
         }
     }
 
     /// Read-only gate for the allow-list and the web self-check: may this member
-    /// currently start this metered tool? No hold is placed.
+    /// currently start this metered tool, at their resolved tier rate? No hold.
     pub fn metered_authorized(&self, user: &User, tool: &Tool) -> Result<bool, DatabaseError> {
+        let eff = self.db.resolve_effective_billing(user.id, tool)?;
+        if !is_metered(&eff.flat_fee, &eff.rate_per_min) {
+            return Ok(true);
+        }
         let available = self.db.available_balance(user.id)?;
         Ok(metered_access_ok(
             self.is_member(user),
             self.require_membership(),
             &available,
-            &self.required_available(tool),
+            &self.required_available_rate(&eff),
         ))
     }
 
@@ -259,12 +317,19 @@ impl ToolBillingService {
                 "Tool already has an open session".to_string(),
             ));
         }
-        let available = self.db.available_balance(user.id)?;
-        let required = self.required_available(tool);
-        if self.require_membership() && !self.is_member(user) {
+        // #34: resolve THIS member's rate (their assigned tier, else the tool
+        // default) and gate + hold on it. A member comped to a free tier is not
+        // metered for billing purposes -- no membership block, no hold, no
+        // charge -- even on a tool that bills others.
+        let eff = self.db.resolve_effective_billing(user.id, tool)?;
+        let metered_for_user = is_metered(&eff.flat_fee, &eff.rate_per_min);
+
+        if metered_for_user && self.require_membership() && !self.is_member(user) {
             return Ok(ActivationOutcome::Denied("Membership required".to_string()));
         }
-        if available < required {
+        let required = self.required_available_rate(&eff);
+        let available = self.db.available_balance(user.id)?;
+        if metered_for_user && available < required {
             return Ok(ActivationOutcome::Denied(format!(
                 "Insufficient balance: {} available, {} required",
                 available.with_scale(2),
@@ -272,14 +337,19 @@ impl ToolBillingService {
             )));
         }
         let hold = match self.billing_mode() {
-            BillingMode::Prepaid => required.clone(),
-            BillingMode::Postpaid => zero(),
+            BillingMode::Prepaid if metered_for_user => required.clone(),
+            _ => zero(),
         };
+        // Capture the resolved rate onto the session, so settle charges from it
+        // (rate locked at start) with tier provenance.
         let session = self.db.insert_tool_session(&NewToolUsageSession {
             tool_id: tool.id,
             user_id: user.id,
             started_at: Utc::now(),
             hold_amount: hold,
+            rate_flat_fee: eff.flat_fee.clone(),
+            rate_per_min: eff.rate_per_min.clone(),
+            tier_id: eff.tier_id,
         })?;
         Ok(ActivationOutcome::Authorized(Box::new(session)))
     }
@@ -321,9 +391,22 @@ impl ToolBillingService {
         } else {
             reported.clone()
         };
+        // #34: charge from the rate captured on the session at tool-on (the
+        // member's tier, locked for the session), not the live tool rate. A
+        // session opened before #34 has null rate columns; fall back to the tool
+        // then. (The billable-time cap stays the tool's max -- a safety bound;
+        // ToolPass tiers vary rate, not the cap.)
+        let (charge_flat, charge_rate) = if session.rate_per_min.is_some()
+            || session.rate_flat_fee.is_some()
+            || session.tier_id.is_some()
+        {
+            (session.rate_flat_fee.clone(), session.rate_per_min.clone())
+        } else {
+            (tool.usage_flat_fee.clone(), tool.usage_rate_per_min.clone())
+        };
         let charge = session_charge(
-            &tool.usage_flat_fee,
-            &tool.usage_rate_per_min,
+            &charge_flat,
+            &charge_rate,
             &effective,
             self.max_minutes(tool),
         );

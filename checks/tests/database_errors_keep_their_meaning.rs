@@ -101,6 +101,10 @@ const BUDGET: &[(&str, usize)] = &[
     // 0: the tool-billing API maps DatabaseErrors through `ApiError::from`
     // (preserving 404/409) and has no genuine server-fault 500 of its own.
     ("tool_billing.rs", 0),
+    // 0. Every handler propagates its database error with `?`/`ApiError::from`
+    // (a missing tier is a 404, a bad insert keeps its classification), never a
+    // blanket 500.
+    ("tool_tiers.rs", 0),
     // 17 -> 16: #36 collapsed the two separate "check steps"/"check completion"
     // DB calls (each mapped to a 500) in the tool-on gate into one
     // `user_is_authorized_for_tool` call, mapped once.
