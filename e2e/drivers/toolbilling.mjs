@@ -21,7 +21,7 @@
 // WHAT THIS DOES NOT PROVE: postpaid dip-and-block or the per-time charge (both
 // unit-covered), nor the edge's online-sync behaviour (the edge's own tests).
 
-import { main, ok, assertEq, GET, POST, PUT, account, adminAccount } from './lib.mjs'
+import { main, ok, assertEq, GET, POST, PUT, DELETE, account, adminAccount } from './lib.mjs'
 import { toolBillingHonored } from '../journeys/toolbilling-invariants.mjs'
 
 // MUST match e2e/stack-config.toml.
@@ -205,4 +205,109 @@ await main(async () => {
     (trSessions.json?.data?.length ?? 0) === 0,
     JSON.stringify(trSessions.json?.data),
   )
+
+  // ---- #34: per-member rate tiers ----------------------------------------
+  // A flat-fee tool (default 1.00) with two tiers: Comp (0.50) and Free (0).
+  // Three members -- one on each tier and one unassigned -- must each settle at
+  // THEIR tier's rate, proven from two sides: the ledger charge AND the tier the
+  // session captured. Flat fees keep it deterministic (per-time math is unit
+  // tested).
+  const tierTool = await createMeteredTool(admin, {
+    externalId: 'e2e-tier-tool',
+    flatFee: '1.00',
+    maxMin: 5,
+  })
+  const tid = tierTool.id
+  const ext = 'e2e-tier-tool'
+
+  const compTier = await POST(`/api/admin/tool-tiers/tools/${tid}/tiers`, {
+    token: admin.token,
+    body: { name: 'Comp', flat_fee: '0.50' },
+  })
+  assertEq('tiers/create-comp', 201, compTier.status)
+  const compId = compTier.json?.data?.id
+  const freeTier = await POST(`/api/admin/tool-tiers/tools/${tid}/tiers`, {
+    token: admin.token,
+    body: { name: 'Free', flat_fee: '0', rate_per_min: '0' },
+  })
+  assertEq('tiers/create-free', 201, freeTier.status)
+  const freeId = freeTier.json?.data?.id
+
+  // Self-test: a tier that belongs to another tool cannot be assigned here.
+  const otherTool = await createMeteredTool(admin, {
+    externalId: 'e2e-tier-other',
+    flatFee: '1.00',
+    maxMin: 5,
+  })
+  const foreign = await PUT(`/api/admin/tool-tiers/users/${admin.user.id}/tools/${otherTool.id}`, {
+    token: admin.token,
+    body: { tier_id: compId },
+  })
+  assertEq('tiers/reject-foreign-tier', 400, foreign.status)
+
+  const lastSession = async (m) =>
+    (
+      await GET(`/api/admin/tool-billing/users/${m.user.id}/sessions`, { token: admin.token })
+    ).json?.data?.[0]
+
+  // Run one full session for a member and assert the settled charge + captured
+  // tier match the expectation (two oracles: the ledger charge AND the tier the
+  // session locked in).
+  const runTierCase = async (label, member, card, expectCharge, expectTierId) => {
+    const on = await toolOn(card, ext, TOOL_KEY)
+    ok(`tiers/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
+    const off = await toolOff(card, ext, TOOL_KEY)
+    assertEq(`tiers/${label}-off`, 200, off.status)
+    const s = await lastSession(member)
+    ok(
+      `tiers/${label}-charged`,
+      Math.abs(Number(s?.charged_amount) - expectCharge) < 1e-9,
+      `charged=${s?.charged_amount} expected=${expectCharge}`,
+    )
+    assertEq(`tiers/${label}-captured-tier`, expectTierId, s?.tier_id ?? null)
+  }
+
+  const tierMembers = {}
+  for (const [label, card, tierId] of [
+    ['comp', 'E2E-TIER-COMP', compId],
+    ['free', 'E2E-TIER-FREE', freeId],
+    ['default', 'E2E-TIER-DEF', null],
+  ]) {
+    const m = await account(`tier_${label}`)
+    tierMembers[label] = m
+    await setCard(m, card)
+    await fund(admin, m, '20.00') // member, balance 10
+    if (tierId) {
+      assertEq(
+        `tiers/${label}-assigned`,
+        200,
+        (
+          await PUT(`/api/admin/tool-tiers/users/${m.user.id}/tools/${tid}`, {
+            token: admin.token,
+            body: { tier_id: tierId },
+          })
+        ).status,
+      )
+    }
+  }
+
+  await runTierCase('comp', tierMembers.comp, 'E2E-TIER-COMP', 0.5, compId)
+  await runTierCase('free', tierMembers.free, 'E2E-TIER-FREE', 0.0, freeId)
+  await runTierCase('default', tierMembers.default, 'E2E-TIER-DEF', 1.0, null)
+
+  // The comp member's non-default assignment is listed for the tool...
+  const beforeClear = await GET(`/api/admin/tool-tiers/tools/${tid}/assignments`, {
+    token: admin.token,
+  })
+  ok(
+    'tiers/assignment-listed',
+    (beforeClear.json?.data ?? []).some((a) => a.user_id === tierMembers.comp.user.id),
+    JSON.stringify(beforeClear.json?.data),
+  )
+  // ...and clearing it reverts that member to the tool default (1.00).
+  const clear = await DELETE(`/api/admin/tool-tiers/users/${tierMembers.comp.user.id}/tools/${tid}`, {
+    token: admin.token,
+  })
+  assertEq('tiers/clear-assignment', 200, clear.status)
+  await runTierCase('comp-after-clear', tierMembers.comp, 'E2E-TIER-COMP', 1.0, null)
 })

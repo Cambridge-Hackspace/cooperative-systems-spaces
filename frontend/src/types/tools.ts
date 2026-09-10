@@ -127,3 +127,41 @@ export interface ToolQuery {
   page?: number
   per_page?: number
 }
+
+// Per-member rate tiers (#34). Decimals travel as strings.
+export interface ToolRateTier {
+  id: string
+  tool_id: string
+  name: string
+  flat_fee: string | null
+  rate_per_min: string | null
+  max_session_minutes: number | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ToolTierAssignment {
+  id: string
+  user_id: string
+  tool_id: string
+  tier_id: string
+  assigned_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateTierRequest {
+  name: string
+  flat_fee?: string | null
+  rate_per_min?: string | null
+  max_session_minutes?: number | null
+}
+
+export interface UpdateTierRequest {
+  name?: string
+  flat_fee?: string | null
+  rate_per_min?: string | null
+  max_session_minutes?: number | null
+  active?: boolean
+}

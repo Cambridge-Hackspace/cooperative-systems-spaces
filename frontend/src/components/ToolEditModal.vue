@@ -197,6 +197,8 @@
           </div>
         </fieldset>
 
+        <RateTierManagement v-if="toolBillingEnabled" :tool-id="props.tool.id" />
+
         <div class="form-group">
           <label for="notes">Notes</label>
           <textarea
@@ -229,6 +231,7 @@ import { toolsApi, schedulesApi } from '../utils/api'
 import type { Tool, ToolCategory } from '../types/tools'
 import type { Schedule } from '../types'
 import SchedulePicker from './SchedulePicker.vue'
+import RateTierManagement from './RateTierManagement.vue'
 import { useConfigStore } from '@/stores/config'
 import axios from 'axios'
 

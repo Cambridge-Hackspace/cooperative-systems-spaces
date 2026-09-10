@@ -1185,6 +1185,191 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    // ==================== TOOL RATE TIERS (#34) ====================
+
+    /// Resolve the effective billing rate for a member on a tool: the member's
+    /// assigned tier if any, else the tool's own default (`usage_*`). `max`
+    /// falls back tier -> tool. The one place tier resolution lives, so the web
+    /// self-check, the edge allow-list, and the session hold cannot disagree.
+    /// (An assignment applies regardless of the tier's `active` flag; `active`
+    /// only governs whether the tier is offered for new assignments.)
+    pub fn resolve_effective_billing(
+        &self,
+        uid: uuid::Uuid,
+        tool: &crate::models::Tool,
+    ) -> Result<crate::tool_billing::EffectiveRate, DatabaseError> {
+        use crate::schema::{tool_rate_tiers as t, tool_tier_assignments as a};
+        let mut conn = self.get_connection()?;
+        let assigned = a::table
+            .inner_join(t::table)
+            .filter(a::user_id.eq(uid))
+            .filter(a::tool_id.eq(tool.id))
+            .select((t::id, t::flat_fee, t::rate_per_min, t::max_session_minutes))
+            .first::<(
+                uuid::Uuid,
+                Option<bigdecimal::BigDecimal>,
+                Option<bigdecimal::BigDecimal>,
+                Option<i32>,
+            )>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        Ok(match assigned {
+            Some((tier_id, flat, rate, max)) => crate::tool_billing::EffectiveRate {
+                flat_fee: flat,
+                rate_per_min: rate,
+                max_session_minutes: max.or(tool.usage_max_session_minutes),
+                tier_id: Some(tier_id),
+            },
+            None => crate::tool_billing::EffectiveRate {
+                flat_fee: tool.usage_flat_fee.clone(),
+                rate_per_min: tool.usage_rate_per_min.clone(),
+                max_session_minutes: tool.usage_max_session_minutes,
+                tier_id: None,
+            },
+        })
+    }
+
+    pub fn list_tiers_for_tool(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::ToolRateTier>, DatabaseError> {
+        use crate::schema::tool_rate_tiers::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_rate_tiers
+            .filter(tool_id.eq(tid))
+            .order(name.asc())
+            .select(crate::models::ToolRateTier::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_tier(&self, tid: uuid::Uuid) -> Result<crate::models::ToolRateTier, DatabaseError> {
+        use crate::schema::tool_rate_tiers::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_rate_tiers
+            .find(tid)
+            .select(crate::models::ToolRateTier::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_tier(
+        &self,
+        new_tier: &crate::models::NewToolRateTier,
+    ) -> Result<crate::models::ToolRateTier, DatabaseError> {
+        use crate::schema::tool_rate_tiers;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_rate_tiers::table)
+            .values(new_tier)
+            .returning(crate::models::ToolRateTier::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn update_tier(
+        &self,
+        tid: uuid::Uuid,
+        changes: &crate::models::UpdateToolRateTier,
+    ) -> Result<crate::models::ToolRateTier, DatabaseError> {
+        use crate::schema::tool_rate_tiers::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(tool_rate_tiers.find(tid))
+            .set(changes)
+            .returning(crate::models::ToolRateTier::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn delete_tier(&self, tid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::tool_rate_tiers::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(tool_rate_tiers.find(tid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_tier_assignments_for_tool(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::ToolTierAssignment>, DatabaseError> {
+        use crate::schema::tool_tier_assignments::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_tier_assignments
+            .filter(tool_id.eq(tid))
+            .select(crate::models::ToolTierAssignment::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Assign (or re-assign, keyed on (user, tool)) a member to a rate tier.
+    pub fn upsert_tier_assignment(
+        &self,
+        assignment: &crate::models::NewToolTierAssignment,
+    ) -> Result<crate::models::ToolTierAssignment, DatabaseError> {
+        use crate::schema::tool_tier_assignments::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_tier_assignments)
+            .values(assignment)
+            .on_conflict((user_id, tool_id))
+            .do_update()
+            .set((
+                tier_id.eq(assignment.tier_id),
+                assigned_by.eq(assignment.assigned_by),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::ToolTierAssignment::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Clear a member's tier on a tool (back to the tool default). Returns the
+    /// number of rows removed (0 = none was set).
+    pub fn clear_tier_assignment(
+        &self,
+        uid: uuid::Uuid,
+        tid: uuid::Uuid,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::tool_tier_assignments::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(
+            tool_tier_assignments
+                .filter(user_id.eq(uid))
+                .filter(tool_id.eq(tid)),
+        )
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every (user, tool) tier assignment joined to its tier's rate, for
+    /// building the allow-list once without an N+1 per-(user,tool) lookup.
+    #[allow(clippy::type_complexity)]
+    pub fn all_tier_rates(
+        &self,
+    ) -> Result<
+        Vec<(
+            uuid::Uuid,
+            uuid::Uuid,
+            Option<bigdecimal::BigDecimal>,
+            Option<bigdecimal::BigDecimal>,
+            Option<i32>,
+        )>,
+        DatabaseError,
+    > {
+        use crate::schema::{tool_rate_tiers as t, tool_tier_assignments as a};
+        let mut conn = self.get_connection()?;
+        a::table
+            .inner_join(t::table)
+            .select((
+                a::user_id,
+                a::tool_id,
+                t::flat_fee,
+                t::rate_per_min,
+                t::max_session_minutes,
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     // ==================== TRAINING SYSTEM DATABASE METHODS ====================
 
     /// Create a new training step
@@ -2035,7 +2220,16 @@ impl DatabaseManager {
             };
             let available = self.available_balance(user_id)?;
             let is_member = user.role.rank() >= gate.member_role_rank;
-            if !gate.authorizes(&tool, &available, is_member) {
+            // #34: gate on THIS member's resolved rate (their tier, else the tool
+            // default), not the tool's default rate.
+            let eff = self.resolve_effective_billing(user_id, &tool)?;
+            if !gate.authorizes_rate(
+                &eff.flat_fee,
+                &eff.rate_per_min,
+                eff.max_session_minutes,
+                &available,
+                is_member,
+            ) {
                 return Ok(false);
             }
         }
@@ -2501,6 +2695,22 @@ impl DatabaseManager {
             cards_by_user.entry(uid).or_default().push(code);
         }
 
+        // #34: preload every (user, tool) tier rate once, so the per-tool
+        // affordability filter below resolves the member's rate without an N+1.
+        #[allow(clippy::type_complexity)]
+        let tier_rates: std::collections::HashMap<
+            (uuid::Uuid, uuid::Uuid),
+            (
+                Option<bigdecimal::BigDecimal>,
+                Option<bigdecimal::BigDecimal>,
+                Option<i32>,
+            ),
+        > = self
+            .all_tier_rates()?
+            .into_iter()
+            .map(|(u, t, f, r, m)| ((u, t), (f, r, m)))
+            .collect();
+
         let mut sync_users = Vec::new();
         // Track which tools appear in at least one user's authorized list
         let mut authorized_tool_ids_set: std::collections::HashSet<uuid::Uuid> =
@@ -2565,7 +2775,20 @@ impl DatabaseManager {
 
                 if authorized {
                     if let Some((gate, available, is_member)) = &metered_ctx {
-                        authorized = gate.authorizes(tool, available, *is_member);
+                        // #34: resolve this member's rate (their tier, else the
+                        // tool default) from the preloaded map.
+                        let (eflat, erate, emax) = match tier_rates.get(&(user.id, tool.id)) {
+                            Some((f, r, m)) => {
+                                (f.clone(), r.clone(), m.or(tool.usage_max_session_minutes))
+                            }
+                            None => (
+                                tool.usage_flat_fee.clone(),
+                                tool.usage_rate_per_min.clone(),
+                                tool.usage_max_session_minutes,
+                            ),
+                        };
+                        authorized =
+                            gate.authorizes_rate(&eflat, &erate, emax, available, *is_member);
                     }
                 }
 

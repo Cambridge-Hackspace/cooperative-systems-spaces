@@ -34,6 +34,13 @@ pub struct ToolUsageSession {
     /// The `tool_usage` ledger debit posted at settle; `None` while open.
     pub ledger_entry_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// The rate resolved for this member at tool-on and locked for the session
+    /// (#34): the assigned tier's rate, else the tool default. Settle charges
+    /// from these, not the live tool rate. `tier_id` NULL = the tool default was
+    /// used. Appended last for the positional `Queryable`.
+    pub rate_flat_fee: Option<BigDecimal>,
+    pub rate_per_min: Option<BigDecimal>,
+    pub tier_id: Option<Uuid>,
 }
 
 /// A session to open (activation). Everything else defaults: `ended_at`,
@@ -47,4 +54,9 @@ pub struct NewToolUsageSession {
     pub user_id: Uuid,
     pub started_at: DateTime<Utc>,
     pub hold_amount: BigDecimal,
+    /// Rate resolved for this member (#34), captured so the settle charge is
+    /// stable and carries provenance. `tier_id` NULL = the tool default rate.
+    pub rate_flat_fee: Option<BigDecimal>,
+    pub rate_per_min: Option<BigDecimal>,
+    pub tier_id: Option<Uuid>,
 }
