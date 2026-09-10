@@ -107,6 +107,10 @@ pub struct PowerReportRequest {
     pub max_voltage: Option<bigdecimal::BigDecimal>,
     #[serde(default)]
     pub amperage_limit: Option<bigdecimal::BigDecimal>,
+    /// True when the controller shut ITSELF off after exceeding its own
+    /// over-current limit (#44). Locks just this tool -- the circuit is fine.
+    #[serde(default)]
+    pub self_tripped: Option<bool>,
     #[serde(default)]
     pub api_key: Option<String>,
 }
@@ -684,10 +688,81 @@ async fn power_report(
     };
     state.db.upsert_tool_power_state(&reading)?;
 
+    // Fault-scoped trip (#44). A firmware self-trip locks just this tool; any
+    // other report drives the server-side circuit aggregation, which trips the
+    // whole circuit if its summed draw now exceeds the limit.
+    let mut lockout_changed = false;
+    if req.self_tripped == Some(true) {
+        state
+            .db
+            .engage_tool_lockout(
+                tool.id,
+                "firmware self-trip: device exceeded its own over-current limit",
+            )
+            .map_err(ApiError::from)?;
+        power_audit(
+            &state,
+            crate::models::AuditEventType::FirmwareSelftripReported,
+            serde_json::json!({ "tool_id": tool.id, "external_id": toolguard_id }),
+        );
+        power_audit(
+            &state,
+            crate::models::AuditEventType::EmergencyLockoutEngaged,
+            serde_json::json!({ "scope": "tool", "tool_id": tool.id, "source": "firmware_selftrip" }),
+        );
+        lockout_changed = true;
+    } else {
+        let tripped = state
+            .db
+            .evaluate_circuit_overages()
+            .map_err(ApiError::from)?;
+        for (cid, total, limit) in &tripped {
+            power_audit(
+                &state,
+                crate::models::AuditEventType::CircuitOverageShutoff,
+                serde_json::json!({
+                    "circuit_id": cid,
+                    "total_draw_amps": total.to_string(),
+                    "amperage_limit": limit.to_string(),
+                }),
+            );
+            power_audit(
+                &state,
+                crate::models::AuditEventType::EmergencyLockoutEngaged,
+                serde_json::json!({ "scope": "circuit", "circuit_id": cid, "source": "server_aggregate" }),
+            );
+            lockout_changed = true;
+        }
+    }
+
+    // Re-publish the allow-list so a locked circuit's / tool's tools drop off
+    // every edge's cached authorization set (the distribution mechanism a
+    // shut-off rides -- the gate already denies them on the next request).
+    if lockout_changed {
+        broadcast_toolguard_state(&state).await;
+    }
+
     Ok(Json(ToolGuardResponse::ok_with_message("Power reported")))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Write a power interrupt/lockout audit event. These are system-triggered (a
+/// controller's report tripped a limit), so there is no human actor -- the
+/// staff who clears a lockout is recorded on the re-enable path in `api::power`.
+fn power_audit(state: &AppState, event: crate::models::AuditEventType, data: serde_json::Value) {
+    let log = crate::models::NewAuditLog {
+        event_type: event.as_str().to_string(),
+        user_id: None,
+        actor_id: None,
+        event_data: data,
+        ip_address: None,
+        user_agent: None,
+    };
+    if let Err(e) = state.db.create_audit_log(&log) {
+        tracing::error!("Failed to write power audit log {}: {}", event.as_str(), e);
+    }
+}
 
 /// Extract and validate a device Bearer token from Authorization header.
 /// Returns (device_id, auth_token) on success.

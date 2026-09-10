@@ -378,18 +378,18 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // device surface, only their shape checks are reachable offline; their
     // contents are deferred to the live tier.
     assert_eq!(cmi5_session_routes, 6, "cmi5 LRS routes");
-    // 188 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
+    // 190 = 140 base + 4 Groups.io + 8 membership/Stripe + 3 tool billing +
     // 8 cmi5 + 4 first-class cards (#33) + 3 training waivers (#36) + 17 power
-    // topology (#42) + 1 power telemetry (#43: GET /admin/power/telemetry, Admin;
-    // the #43 power-report ingest is InlineAuth and counted under device_routes
-    // above, not here). This number is the sum of branches that each moved it, so
-    // it was re-derived by counting ROUTES rather than by adding the comments
-    // together: guarded rows minus the device and cmi5-session surfaces. The
-    // cmi5 `fetch` route and the Stripe and Groups.io webhooks are Public; the
-    // six LRS routes are counted above.
-    assert_eq!(jwt_routes, 188, "JWT-authenticated routes");
+    // topology (#42) + 1 power telemetry (#43) + 2 power re-enable (#44: the
+    // circuit and tool emergency re-enable, both Staff; the #44 firmware self-trip
+    // rides the existing power-report InlineAuth route). This number is the sum of
+    // branches that each moved it, so it was re-derived by counting ROUTES rather
+    // than by adding the comments together: guarded rows minus the device and
+    // cmi5-session surfaces. The cmi5 `fetch` route and the Stripe and Groups.io
+    // webhooks are Public; the six LRS routes are counted above.
+    assert_eq!(jwt_routes, 190, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 188 * 7 + (7 + 6) * 3);
+    assert_eq!(asserted_pairs(), 190 * 7 + (7 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected

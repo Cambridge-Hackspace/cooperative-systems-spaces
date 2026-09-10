@@ -1118,6 +1118,15 @@ impl DatabaseManager {
         tool_id: uuid::Uuid,
         requires_training: bool,
     ) -> Result<bool, DatabaseError> {
+        // Emergency lockout is a hard override, independent of who is asking:
+        // a tool whose own firmware self-tripped, or whose circuit is in
+        // lockout, is denied outright (#44). Checked before every other arm --
+        // including the free-tool early return below -- so a locked circuit's
+        // step-less tool is still refused. Both the web self-check and the edge
+        // allow-list resolve through this one rule, so they cannot disagree.
+        if self.tool_is_locked_out(tool_id)? {
+            return Ok(false);
+        }
         let has_steps = self.tool_has_training_steps(tool_id)?;
         if !has_steps && !requires_training {
             return Ok(true);
@@ -4566,6 +4575,246 @@ impl DatabaseManager {
             .select((id, receptacle_id))
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
+    }
+
+    // ── Power interrupt / lockout (#44) ──────────────────────────────────────
+
+    /// Summed latest draw per circuit (every circuit present, 0 when idle),
+    /// resolving each tool through receptacle -> outlet -> circuit. The one place
+    /// this aggregation lives; the telemetry endpoint and the overage evaluator
+    /// both read it so they cannot disagree.
+    pub fn circuit_draw_totals(
+        &self,
+    ) -> Result<Vec<(uuid::Uuid, bigdecimal::BigDecimal)>, DatabaseError> {
+        use bigdecimal::BigDecimal;
+        use std::collections::HashMap;
+
+        let states = self.list_tool_power_state()?;
+        let links = self.all_tool_receptacle_links()?;
+        let receptacles = self.list_power_receptacles()?;
+        let outlets = self.list_power_outlets()?;
+        let circuits = self.list_power_circuits()?;
+
+        let recep_to_outlet: HashMap<uuid::Uuid, uuid::Uuid> =
+            receptacles.iter().map(|r| (r.id, r.outlet_id)).collect();
+        let outlet_to_circuit: HashMap<uuid::Uuid, uuid::Uuid> =
+            outlets.iter().map(|o| (o.id, o.circuit_id)).collect();
+        let tool_to_receptacle: HashMap<uuid::Uuid, uuid::Uuid> = links
+            .into_iter()
+            .filter_map(|(t, r)| r.map(|r| (t, r)))
+            .collect();
+
+        let mut totals: HashMap<uuid::Uuid, BigDecimal> = circuits
+            .iter()
+            .map(|c| (c.id, BigDecimal::from(0)))
+            .collect();
+        for s in &states {
+            let Some(draw) = s.last_draw_amps.as_ref() else {
+                continue;
+            };
+            let Some(rid) = tool_to_receptacle.get(&s.tool_id) else {
+                continue;
+            };
+            let Some(oid) = recep_to_outlet.get(rid) else {
+                continue;
+            };
+            let Some(cid) = outlet_to_circuit.get(oid) else {
+                continue;
+            };
+            let entry = totals.entry(*cid).or_insert_with(|| BigDecimal::from(0));
+            *entry = entry.clone() + draw.clone();
+        }
+        let mut out: Vec<(uuid::Uuid, BigDecimal)> = totals.into_iter().collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+
+    /// True if this tool must be denied for a power reason: its OWN firmware
+    /// self-trip lockout, OR its CIRCUIT's lockout. A tool with no receptacle
+    /// (battery/unmapped) has no circuit, so only its own lockout applies.
+    pub fn tool_is_locked_out(&self, tid: uuid::Uuid) -> Result<bool, DatabaseError> {
+        let mut conn = self.get_connection()?;
+
+        // Tool-scoped (firmware self-trip).
+        {
+            use crate::schema::tool_power_state::dsl as tps;
+            let own: Option<bool> = tps::tool_power_state
+                .find(tid)
+                .select(tps::locked_out)
+                .first(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?;
+            if own == Some(true) {
+                return Ok(true);
+            }
+        }
+
+        // Circuit-scoped: tool -> receptacle -> outlet -> circuit.
+        let receptacle_id: Option<uuid::Uuid> = {
+            use crate::schema::tools::dsl as t;
+            t::tools
+                .find(tid)
+                .select(t::receptacle_id)
+                .first::<Option<uuid::Uuid>>(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?
+                .flatten()
+        };
+        let Some(rid) = receptacle_id else {
+            return Ok(false);
+        };
+        let outlet_id: Option<uuid::Uuid> = {
+            use crate::schema::power_receptacles::dsl as r;
+            r::power_receptacles
+                .find(rid)
+                .select(r::outlet_id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?
+        };
+        let Some(oid) = outlet_id else {
+            return Ok(false);
+        };
+        let circuit_id: Option<uuid::Uuid> = {
+            use crate::schema::power_outlets::dsl as o;
+            o::power_outlets
+                .find(oid)
+                .select(o::circuit_id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DatabaseError::Diesel)?
+        };
+        let Some(cid) = circuit_id else {
+            return Ok(false);
+        };
+        use crate::schema::power_circuits::dsl as c;
+        let locked: Option<bool> = c::power_circuits
+            .find(cid)
+            .select(c::locked_out)
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        Ok(locked == Some(true))
+    }
+
+    pub fn engage_circuit_lockout(
+        &self,
+        cid: uuid::Uuid,
+        source: &str,
+        reason: &str,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::power_circuits::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(power_circuits.find(cid).filter(locked_out.eq(false)))
+            .set((
+                locked_out.eq(true),
+                lockout_source.eq(Some(source.to_string())),
+                lockout_reason.eq(Some(reason.to_string())),
+                locked_out_at.eq(Some(chrono::Utc::now())),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn clear_circuit_lockout(
+        &self,
+        cid: uuid::Uuid,
+        by: Option<uuid::Uuid>,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::power_circuits::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(power_circuits.find(cid))
+            .set((
+                locked_out.eq(false),
+                lockout_source.eq(None::<String>),
+                lockout_reason.eq(None::<String>),
+                locked_out_at.eq(None::<chrono::DateTime<chrono::Utc>>),
+                locked_out_by.eq(by),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Returns the number of rows written (always 1 -- it is an upsert, so a
+    /// self-trip that arrives before any reading still records the lockout).
+    pub fn engage_tool_lockout(
+        &self,
+        tid: uuid::Uuid,
+        reason: &str,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::tool_power_state::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_power_state)
+            .values((
+                tool_id.eq(tid),
+                locked_out.eq(true),
+                lockout_reason.eq(Some(reason.to_string())),
+                locked_out_at.eq(Some(chrono::Utc::now())),
+            ))
+            .on_conflict(tool_id)
+            .do_update()
+            .set((
+                locked_out.eq(true),
+                lockout_reason.eq(Some(reason.to_string())),
+                locked_out_at.eq(Some(chrono::Utc::now())),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn clear_tool_lockout(&self, tid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::tool_power_state::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::update(tool_power_state.find(tid))
+            .set((
+                locked_out.eq(false),
+                lockout_reason.eq(None::<String>),
+                locked_out_at.eq(None::<chrono::DateTime<chrono::Utc>>),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Recompute every circuit's summed draw and engage a `server_aggregate`
+    /// lockout on any that now EXCEED their amperage_limit and are not already
+    /// locked. Returns the circuits it just tripped as `(id, total, limit)` so
+    /// the caller can audit and re-broadcast. Strictly `>`: a circuit at exactly
+    /// its rating is at capacity, not overloaded.
+    pub fn evaluate_circuit_overages(
+        &self,
+    ) -> Result<Vec<(uuid::Uuid, bigdecimal::BigDecimal, bigdecimal::BigDecimal)>, DatabaseError>
+    {
+        let totals = self.circuit_draw_totals()?;
+        let circuits = self.list_power_circuits()?;
+        let mut tripped = Vec::new();
+        for c in &circuits {
+            if c.locked_out {
+                continue;
+            }
+            let total = totals
+                .iter()
+                .find(|(id, _)| *id == c.id)
+                .map(|(_, t)| t.clone())
+                .unwrap_or_else(|| bigdecimal::BigDecimal::from(0));
+            if total > c.amperage_limit {
+                let n = self.engage_circuit_lockout(
+                    c.id,
+                    "server_aggregate",
+                    &format!(
+                        "summed draw {total} A exceeds circuit limit {} A",
+                        c.amperage_limit
+                    ),
+                )?;
+                if n > 0 {
+                    tripped.push((c.id, total, c.amperage_limit.clone()));
+                }
+            }
+        }
+        Ok(tripped)
     }
 
     /// Set / clear the `place_id` on a device.

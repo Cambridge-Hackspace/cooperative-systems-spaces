@@ -21,10 +21,9 @@ use axum::{
 use bigdecimal::BigDecimal;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, StaffUser};
 use crate::database::DatabaseError;
 use crate::models::{
     AuditEventType, NewAuditLog, NewPowerCircuit, NewPowerOutlet, NewPowerReceptacle, PowerCircuit,
@@ -70,6 +69,14 @@ pub fn admin_routes() -> Router<AppState> {
             axum::routing::put(assign_tool_receptacle),
         )
         .route("/telemetry", get(get_telemetry))
+        .route(
+            "/circuits/{id}/reenable",
+            axum::routing::post(reenable_circuit),
+        )
+        .route(
+            "/tools/{tool_id}/reenable",
+            axum::routing::post(reenable_tool),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -763,52 +770,88 @@ async fn get_telemetry(
     _admin: AdminUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let states = state.db.list_tool_power_state()?;
-    let links = state.db.all_tool_receptacle_links()?;
-    let receptacles = state.db.list_power_receptacles()?;
-    let outlets = state.db.list_power_outlets()?;
-    let circuits = state.db.list_power_circuits()?;
-
-    let recep_to_outlet: HashMap<Uuid, Uuid> =
-        receptacles.iter().map(|r| (r.id, r.outlet_id)).collect();
-    let outlet_to_circuit: HashMap<Uuid, Uuid> =
-        outlets.iter().map(|o| (o.id, o.circuit_id)).collect();
-    let tool_to_receptacle: HashMap<Uuid, Uuid> = links
-        .into_iter()
-        .filter_map(|(t, r)| r.map(|r| (t, r)))
-        .collect();
-
-    let mut totals: HashMap<Uuid, BigDecimal> = circuits
-        .iter()
-        .map(|c| (c.id, BigDecimal::from(0)))
-        .collect();
-    for s in &states {
-        let Some(draw) = s.last_draw_amps.as_ref() else {
-            continue;
-        };
-        let Some(rid) = tool_to_receptacle.get(&s.tool_id) else {
-            continue;
-        };
-        let Some(oid) = recep_to_outlet.get(rid) else {
-            continue;
-        };
-        let Some(cid) = outlet_to_circuit.get(oid) else {
-            continue;
-        };
-        let entry = totals.entry(*cid).or_insert_with(|| BigDecimal::from(0));
-        *entry = entry.clone() + draw.clone();
-    }
-
-    let mut circuit_draws: Vec<CircuitDraw> = totals
+    // One aggregation, shared with the overage evaluator (#44) so the number the
+    // UI shows and the number that trips a lockout can never disagree.
+    let circuit_draws: Vec<CircuitDraw> = state
+        .db
+        .circuit_draw_totals()?
         .into_iter()
         .map(|(circuit_id, total_draw_amps)| CircuitDraw {
             circuit_id,
             total_draw_amps,
         })
         .collect();
-    circuit_draws.sort_by(|a, b| a.circuit_id.cmp(&b.circuit_id));
 
     Ok(Json(ApiResponse::success(PowerTelemetryResponse {
         circuits: circuit_draws,
         tools: states,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Emergency re-enable (#44): staff-only, clears a lockout
+// ---------------------------------------------------------------------------
+
+/// Clear a circuit's emergency lockout. Staff-gated: a tripped circuit stays off
+/// until a person with staff authority decides the hazard is resolved. Records
+/// who cleared it and re-broadcasts so the edge allow-list restores the circuit's
+/// tools.
+async fn reenable_circuit(
+    State(state): State<AppState>,
+    staff: StaffUser,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_enabled(&state)?;
+    let cleared = state
+        .db
+        .clear_circuit_lockout(id, Some(staff.0.id))
+        .map_err(map_power_conflict)?;
+    if cleared == 0 {
+        return Err(ApiError::NotFound("Circuit not found".to_string()));
+    }
+    audit(
+        &state,
+        AuditEventType::EmergencyLockoutCleared,
+        Some(staff.0.id),
+        serde_json::json!({ "scope": "circuit", "circuit_id": id }),
+    );
+    crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    Ok(Json(ApiResponse::<()> {
+        success: true,
+        data: None,
+        message: Some("Circuit re-enabled".to_string()),
+        error: None,
+    }))
+}
+
+/// Clear a single tool's firmware-self-trip lockout. Staff-gated, idempotent
+/// (clearing a tool that is not locked is a no-op success); 404 only if the tool
+/// does not exist.
+async fn reenable_tool(
+    State(state): State<AppState>,
+    staff: StaffUser,
+    Path(tool_id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_enabled(&state)?;
+    state
+        .db
+        .get_tool_by_id(tool_id)?
+        .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
+    state
+        .db
+        .clear_tool_lockout(tool_id)
+        .map_err(map_power_conflict)?;
+    audit(
+        &state,
+        AuditEventType::EmergencyLockoutCleared,
+        Some(staff.0.id),
+        serde_json::json!({ "scope": "tool", "tool_id": tool_id }),
+    );
+    crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    Ok(Json(ApiResponse::<()> {
+        success: true,
+        data: None,
+        message: Some("Tool re-enabled".to_string()),
+        error: None,
+    }))
 }

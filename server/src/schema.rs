@@ -247,6 +247,11 @@ diesel::table! {
         parent_circuit_id -> Nullable<Uuid>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        locked_out -> Bool,
+        lockout_reason -> Nullable<Text>,
+        lockout_source -> Nullable<Text>,
+        locked_out_at -> Nullable<Timestamptz>,
+        locked_out_by -> Nullable<Uuid>,
     }
 }
 
@@ -284,6 +289,9 @@ diesel::table! {
         last_reported_at -> Timestamptz,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        locked_out -> Bool,
+        lockout_reason -> Nullable<Text>,
+        locked_out_at -> Nullable<Timestamptz>,
     }
 }
 

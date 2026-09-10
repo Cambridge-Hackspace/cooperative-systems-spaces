@@ -30,6 +30,15 @@ pub struct PowerCircuit {
     pub parent_circuit_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Emergency-lockout state (#44). Appended last for the positional
+    /// `Queryable`. `locked_out` true = the circuit tripped and is held off
+    /// until a staff member clears it; `lockout_source` records which layer
+    /// tripped it.
+    pub locked_out: bool,
+    pub lockout_reason: Option<String>,
+    pub lockout_source: Option<String>,
+    pub locked_out_at: Option<DateTime<Utc>>,
+    pub locked_out_by: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Insertable, Deserialize)]
@@ -154,6 +163,12 @@ pub struct ToolPowerState {
     pub last_reported_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Tool-scoped emergency lockout (#44): set when this tool's firmware
+    /// self-trips on its own over-current limit. Appended last for the
+    /// positional `Queryable`. Cleared only by a staff re-enable.
+    pub locked_out: bool,
+    pub lockout_reason: Option<String>,
+    pub locked_out_at: Option<DateTime<Utc>>,
 }
 
 /// One reading, inserted-or-updated (`ON CONFLICT (tool_id)`) so the table keeps
