@@ -1,5 +1,13 @@
 //! Settings that gate a feature must be read by the code that gates it.
 //!
+//! Covers the on/off gates of the optional modules -- `[email]`, the two auth
+//! flags, and `stripe`/`membership`/`groupsio` -- each named to the one function
+//! that refuses when its module is switched off. NOT a scan of every config
+//! field: most fields (theme colours, site name, homepage links) are consumed
+//! by being serialized to the frontend wholesale, so "is it read in server/src"
+//! is the wrong question for them; this file guards the behaviour-gating flags,
+//! which is the class that produced the `[email]` defect below.
+//!
 //! `[email]` shipped as nine fully specified configuration fields -- host,
 //! port, username, password, use_tls, use_ssl, from_email, from_name, enabled
 //! -- documented in `config.sample.toml` as being for "notifications, password
@@ -107,6 +115,36 @@ const FLAGS: &[Flag] = &[
         consequence: "an operator who required confirmed addresses would get \
                       unconfirmed accounts signing in, which is the state this \
                       setting has been in since it was added",
+    },
+    // Module on/off gates for the other optional features. Each is the single
+    // function that refuses when its module is switched off; a read elsewhere
+    // (an accessor, the reload-config echo) does not count, same as above.
+    Flag {
+        token: "stripe.enabled",
+        consumer: "server/src/stripe.rs",
+        within: "fn settings(&self) -> Result<Settings, StripeError>",
+        closes_with: "\n    }",
+        min_bytes: 200,
+        consequence: "a deployment with Stripe switched off would still build \
+                      live checkout sessions and honour webhooks",
+    },
+    Flag {
+        token: "membership.enabled",
+        consumer: "server/src/api/membership.rs",
+        within: "fn require_enabled(state: &AppState) -> Result<(), ApiError>",
+        closes_with: "\n}",
+        min_bytes: 100,
+        consequence: "the membership dues endpoints would answer normally on a \
+                      space that had turned the module off",
+    },
+    Flag {
+        token: "groupsio.enabled",
+        consumer: "server/src/api/groupsio.rs",
+        within: "fn require_enabled(state: &AppState) -> Result<(), ApiError>",
+        closes_with: "\n}",
+        min_bytes: 100,
+        consequence: "the Groups.io endpoints would answer on a space that had \
+                      turned the integration off",
     },
 ];
 
