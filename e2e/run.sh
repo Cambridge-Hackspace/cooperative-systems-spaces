@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -962,6 +962,29 @@ stage_waivers() {
 
   collect_server_log
   emit_junit waivers "driver=waivers.mjs"
+}
+
+# ===========================================================================
+# roles -- role gating (403). The complement to the contract tier's 401 matrix
+# (#54): a fully authenticated but low-privilege account must be refused by
+# every Admin/Staff route, and an admin must pass the same gate. Iterates the
+# endpoint corpus; needs the live stack.
+stage_roles() {
+  cases_begin roles
+  stack_paths
+
+  if ! server_ready; then
+    record_case "roles/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit roles
+    return 1
+  fi
+  record_case "roles/stack-is-up" ok
+
+  run_node roles.mjs >"${OUT}/logs/roles.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit roles "driver=roles.mjs"
 }
 
 stage_circuits() {
