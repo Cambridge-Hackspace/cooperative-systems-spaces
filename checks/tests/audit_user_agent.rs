@@ -109,6 +109,10 @@ fn no_more_call_sites_put_prose_in_the_user_agent_field() {
         .filter(|a| is_prose(a))
         .collect();
 
+    // Deliberately `==`, a tightening high-water-mark ratchet -- NOT a `<=`
+    // ceiling. A ceiling would let a site that gets fixed (dropping the count)
+    // be silently replaced by a fresh prose site later, right back up to the old
+    // number. The exactness is what makes "fix some, lower this" stick; keep it.
     assert_eq!(
         prose.len(),
         7,
