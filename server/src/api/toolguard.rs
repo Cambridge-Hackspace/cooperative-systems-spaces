@@ -169,6 +169,8 @@ pub fn toolguard_routes() -> Router<AppState> {
         .route("/sync", get(sync))
         .route("/boot-reset", post(boot_reset))
         .route("/power-report", post(power_report))
+        .route("/power-state", get(power_state))
+        .route("/power-trip", post(power_trip))
 }
 
 /// GET /api/toolguard - API status check
@@ -748,15 +750,132 @@ async fn power_report(
 
     // Re-publish the allow-list so a locked circuit's / tool's tools drop off
     // every edge's cached authorization set (the distribution mechanism a
-    // shut-off rides -- the gate already denies them on the next request).
+    // shut-off rides -- the gate already denies them on the next request), and
+    // the explicit power-state (#48) so a disconnected edge stays fail-secure.
     if lockout_changed {
         broadcast_toolguard_state(&state).await;
+        broadcast_power_state(&state).await;
     }
 
     Ok(Json(ToolGuardResponse::ok_with_message("Power reported")))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PowerStateQuery {
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+/// GET /api/toolguard/power-state - the lockout + topology snapshot the edge
+/// caches (#48). Authenticated like the other controller endpoints (a device
+/// Bearer token, which the edge uses, or the global API key); the poll fallback
+/// for the MQTT `power/state` push.
+async fn power_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PowerStateQuery>,
+) -> Result<Json<css_lib::wire::PowerStatePayload>, ApiError> {
+    authorize_toolguard(&state, &headers, q.api_key.as_deref(), "").await?;
+    let payload = state.db.power_state_snapshot().map_err(ApiError::from)?;
+    Ok(Json(payload))
+}
+
+/// A circuit overload the edge detected locally (#48). Fields optional so an
+/// unauthenticated request is refused 401 before a missing field is a 422.
+#[derive(Debug, Deserialize)]
+pub struct PowerTripRequest {
+    #[serde(default)]
+    pub circuit_id: Option<Uuid>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+/// POST /api/toolguard/power-trip - the edge_fast_trip ingest (#48). The edge
+/// summed draw across its local devices on a circuit and tripped; the server
+/// records the lockout authoritatively (`lockout_source = edge_fast_trip`) and
+/// re-broadcasts. Authenticated like the other controller endpoints.
+async fn power_trip(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PowerTripRequest>,
+) -> Result<Json<ToolGuardResponse>, ApiError> {
+    authorize_toolguard(&state, &headers, req.api_key.as_deref(), "").await?;
+
+    let Some(circuit_id) = req.circuit_id else {
+        return Err(ApiError::BadRequest("circuit_id is required".to_string()));
+    };
+    let reason = req
+        .reason
+        .unwrap_or_else(|| "edge-reported circuit overload".to_string());
+
+    let engaged = state
+        .db
+        .engage_circuit_lockout(circuit_id, "edge_fast_trip", &reason)
+        .map_err(ApiError::from)?;
+
+    if engaged > 0 {
+        power_audit(
+            &state,
+            crate::models::AuditEventType::CircuitOverageShutoff,
+            serde_json::json!({ "circuit_id": circuit_id, "source": "edge_fast_trip" }),
+        );
+        power_audit(
+            &state,
+            crate::models::AuditEventType::EmergencyLockoutEngaged,
+            serde_json::json!({ "scope": "circuit", "circuit_id": circuit_id, "source": "edge_fast_trip" }),
+        );
+        broadcast_power_state(&state).await;
+        broadcast_toolguard_state(&state).await;
+    }
+
+    Ok(Json(ToolGuardResponse::ok_with_message("Circuit tripped")))
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Push the power lockout + topology snapshot (#48) to every approved device.
+/// Sibling of `broadcast_toolguard_state`; called whenever a lockout changes.
+pub async fn broadcast_power_state(state: &AppState) {
+    let Some(mqtt_service) = state.mqtt_service.clone() else {
+        return;
+    };
+    let payload = match state.db.power_state_snapshot() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Failed to build power-state snapshot: {}", e);
+            return;
+        }
+    };
+    let bytes = match serde_json::to_vec(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("Failed to serialize power-state payload: {}", e);
+            return;
+        }
+    };
+    let devices = match state.db.list_approved_devices() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to list devices for power-state broadcast: {}", e);
+            return;
+        }
+    };
+    for device_id in devices {
+        if let Err(e) = mqtt_service.publish_to_device(
+            device_id,
+            css_lib::wire::kinds::POWER_STATE,
+            bytes.clone(),
+        ) {
+            tracing::warn!(
+                "Failed to publish power-state to device {}: {}",
+                device_id,
+                e
+            );
+        }
+    }
+}
 
 /// Write a power interrupt/lockout audit event. These are system-triggered (a
 /// controller's report tripped a limit), so there is no human actor -- the

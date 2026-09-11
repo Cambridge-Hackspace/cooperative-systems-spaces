@@ -229,6 +229,8 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/toolguard", Guard::Public), // toolguard::api_status
     R("POST", "/api/toolguard/boot-reset", Guard::InlineAuth), // toolguard::boot_reset
     R("POST", "/api/toolguard/power-report", Guard::InlineAuth), // toolguard::power_report
+    R("GET", "/api/toolguard/power-state", Guard::InlineAuth), // toolguard::power_state
+    R("POST", "/api/toolguard/power-trip", Guard::InlineAuth), // toolguard::power_trip
     R("GET", "/api/toolguard/sync", Guard::InlineAuth), // toolguard::sync
     R("GET", "/api/toolguard/tool-log", Guard::InlineAuth), // toolguard::tool_log
     R("GET", "/api/toolguard/tool-off", Guard::InlineAuth), // toolguard::tool_off

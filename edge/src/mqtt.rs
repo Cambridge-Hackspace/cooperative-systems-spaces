@@ -12,6 +12,7 @@ use crate::doors::{
     self, Decision, DoorsEvent, DoorsState, LocalScanRequest, LocalUnlockResponse, UnlockCommand,
 };
 use crate::edge_inbound::EdgeInbound;
+use crate::power::PowerState;
 use crate::registration::{get_auth_token, get_device_id};
 use crate::system_info::get_system_info;
 use crate::toolguard::ToolGuardState;
@@ -126,6 +127,8 @@ impl EdgeMqttClient {
             format!("{}/devices/{}/doors/state", self.namespace, self.device_id);
         let doors_unlock_topic =
             format!("{}/devices/{}/doors/unlock", self.namespace, self.device_id);
+        let power_state_topic =
+            format!("{}/devices/{}/power/state", self.namespace, self.device_id);
 
         self.client
             .subscribe(&name_topic, 1)
@@ -146,6 +149,10 @@ impl EdgeMqttClient {
             .subscribe(&doors_unlock_topic, 1)
             .wait()
             .context("Failed to subscribe to doors/unlock topic")?;
+        self.client
+            .subscribe(&power_state_topic, 1)
+            .wait()
+            .context("Failed to subscribe to power/state topic")?;
 
         info!(
             "Subscribed to command topics with namespace: {}",
@@ -375,6 +382,10 @@ pub async fn run_mqtt_event_loop(
 const LOCAL_TOOL_ON_REQ: &str = "toolguard/request/tool-on";
 const LOCAL_TOOL_OFF_REQ: &str = "toolguard/request/tool-off";
 const LOCAL_TOOL_LOG_REQ: &str = "toolguard/request/tool-log";
+/// Firmware power reading (#48) — `{ tool_id, draw_now, voltage_now, ... }`.
+const LOCAL_TOOL_POWER_REQ: &str = "toolguard/request/power";
+/// Ack for a power report.
+const LOCAL_TOOL_POWER_RESP: &str = "toolguard/response/power";
 const LOCAL_KIOSK_REFRESH: &str = "kiosk/refresh";
 /// RFID scan from the local hardware bridge — `{ door_id, card_id }`.
 const LOCAL_DOOR_SCAN_REQ: &str = "door/request/scan";
@@ -398,9 +409,29 @@ struct LocalToolRequest {
     api_key: Option<String>,
 }
 
+/// A firmware power reading on the local broker (#48). The edge records it for
+/// local aggregation, relays it to the server, and (on a local overage) trips.
+#[derive(Debug, Deserialize)]
+struct LocalPowerRequest {
+    tool_id: String,
+    #[serde(default)]
+    draw_now: Option<f64>,
+    #[serde(default)]
+    voltage_now: Option<f64>,
+    #[serde(default)]
+    max_voltage: Option<f64>,
+    #[serde(default)]
+    amperage_limit: Option<f64>,
+    #[serde(default)]
+    self_tripped: Option<bool>,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
 pub struct LocalMqttClient {
     client: mqtt::AsyncClient,
     toolguard_state: Arc<ToolGuardState>,
+    power_state: Arc<PowerState>,
     remote_instance_url: String,
     remote_auth_token: String,
     http_client: Client,
@@ -413,9 +444,11 @@ pub struct LocalMqttClient {
 }
 
 impl LocalMqttClient {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         mqtt_config: &MqttConfig,
         toolguard_state: Arc<ToolGuardState>,
+        power_state: Arc<PowerState>,
         remote_instance_url: String,
         remote_auth_token: String,
         doors_state: Arc<DoorsState>,
@@ -457,6 +490,7 @@ impl LocalMqttClient {
             Self {
                 client,
                 toolguard_state,
+                power_state,
                 remote_instance_url,
                 remote_auth_token,
                 http_client: Client::new(),
@@ -482,6 +516,10 @@ impl LocalMqttClient {
             .wait()
             .context("Failed to subscribe to tool-log requests")?;
         self.client
+            .subscribe(LOCAL_TOOL_POWER_REQ, 1)
+            .wait()
+            .context("Failed to subscribe to power requests")?;
+        self.client
             .subscribe(LOCAL_KIOSK_REFRESH, 0)
             .wait()
             .context("Failed to subscribe to kiosk refresh topic")?;
@@ -501,6 +539,11 @@ impl LocalMqttClient {
 
         if topic == LOCAL_DOOR_SCAN_REQ {
             self.handle_door_scan(payload).await;
+            return;
+        }
+
+        if topic == LOCAL_TOOL_POWER_REQ {
+            self.handle_power(payload).await;
             return;
         }
 
@@ -608,6 +651,18 @@ impl LocalMqttClient {
     async fn handle_tool_on(&self, req: LocalToolRequest) {
         use crate::toolguard::AccessResult;
 
+        // Power lockout (#48) is a hard, fail-secure deny checked first: a tool
+        // whose circuit tripped or that the server locked stays refused even if
+        // the server is now unreachable (the lockout is sticky in the cache).
+        if self.power_state.is_locked(&req.tool_id) {
+            let response_payload = serde_json::json!({
+                "authorized": false,
+                "reason": "Tool is locked out (power)"
+            });
+            self.publish_local("toolguard/response/tool-on", &response_payload);
+            return;
+        }
+
         // Metered tools under online-synchronous actuation: the server is the
         // authority. Ask it (and place the hold) BEFORE energizing; if it is
         // unreachable, deny -- fail closed, because we cannot safely bill offline.
@@ -661,6 +716,68 @@ impl LocalMqttClient {
                 }
             });
         }
+    }
+
+    /// A firmware power reading (#48): record it for edge-local aggregation, trip
+    /// + report any circuit now over its amperage limit, forward the reading to
+    /// the server (which aggregates too), and ack. Decimal fields go up as
+    /// strings, matching the server's tested `power-report` wire format.
+    async fn handle_power(&self, payload: &[u8]) {
+        let req: LocalPowerRequest = match serde_json::from_slice(payload) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Failed to parse local power request: {}", e);
+                return;
+            }
+        };
+
+        if let Some(draw) = req.draw_now {
+            self.power_state
+                .record_draw(&req.tool_id, draw, chrono::Utc::now());
+        }
+
+        // Edge-local fast-trip: any circuit now over its limit is tripped locally
+        // (its tools denied immediately via the sticky cache) and reported up.
+        for circuit_id in self.power_state.evaluate_overages() {
+            self.power_state.mark_tripped(&circuit_id);
+            warn!(
+                "Edge fast-trip: circuit {} over its amperage limit",
+                circuit_id
+            );
+            let url = format!("{}/api/toolguard/power-trip", self.remote_instance_url);
+            let token = self.remote_auth_token.clone();
+            let http = self.http_client.clone();
+            let body = serde_json::json!({
+                "circuit_id": circuit_id,
+                "reason": "edge-local aggregation over amperage limit",
+            });
+            tokio::spawn(async move {
+                if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
+                    warn!("Failed to report edge fast-trip to remote: {}", e);
+                }
+            });
+        }
+
+        // Relay the reading to the server (it aggregates + records latest draw).
+        let url = format!("{}/api/toolguard/power-report", self.remote_instance_url);
+        let token = self.remote_auth_token.clone();
+        let http = self.http_client.clone();
+        let body = serde_json::json!({
+            "tool_id": req.tool_id,
+            "draw_now": req.draw_now.map(|v| v.to_string()),
+            "voltage_now": req.voltage_now.map(|v| v.to_string()),
+            "max_voltage": req.max_voltage.map(|v| v.to_string()),
+            "amperage_limit": req.amperage_limit.map(|v| v.to_string()),
+            "self_tripped": req.self_tripped,
+            "api_key": req.api_key,
+        });
+        tokio::spawn(async move {
+            if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
+                warn!("Failed to forward power report to remote: {}", e);
+            }
+        });
+
+        self.publish_local(LOCAL_TOOL_POWER_RESP, &serde_json::json!({ "ok": true }));
     }
 
     /// Synchronously ask the server to authorize (and hold) a metered activation.

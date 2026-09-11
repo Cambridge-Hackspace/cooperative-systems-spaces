@@ -41,6 +41,44 @@ pub mod kinds {
     pub const TOOLGUARD_STATE: &str = "toolguard/state";
     pub const DOORS_STATE: &str = "doors/state";
     pub const DOORS_UNLOCK: &str = "doors/unlock";
+    /// Power lockout + topology snapshot (#48). Carries the currently-locked
+    /// tool ids (the edge caches these and stays fail-secure when disconnected)
+    /// and the circuit topology + amperage limits the edge needs to aggregate
+    /// draw locally and fast-trip.
+    pub const POWER_STATE: &str = "power/state";
+}
+
+/// The `power/state` snapshot the server pushes to the edge (#48). All ids are
+/// stringified (UUIDs) and `amperage_limit` is a decimal string, so this shared
+/// type needs no uuid/decimal/time dependency; the edge parses as needed and
+/// matches tool ids the same way it matches the allow-list (external_id, then
+/// UUID string).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PowerStatePayload {
+    /// When the server built this snapshot (RFC 3339). Advisory only; lockout is
+    /// sticky and never expires on age (deny-biased fail-secure).
+    pub as_of: String,
+    /// Tools currently locked out (own firmware self-trip OR their circuit).
+    pub locked_tool_ids: Vec<String>,
+    /// Every circuit and its amperage limit, for edge-local aggregation.
+    pub circuits: Vec<PowerStateCircuit>,
+    /// Every tool's external id and resolved circuit, for edge-local aggregation.
+    pub tools: Vec<PowerStateTool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowerStateCircuit {
+    pub id: String,
+    /// Decimal string (amps).
+    pub amperage_limit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowerStateTool {
+    pub id: String,
+    pub external_id: Option<String>,
+    /// The circuit this tool draws from, or `None` if unmapped.
+    pub circuit_id: Option<String>,
 }
 
 #[cfg(test)]

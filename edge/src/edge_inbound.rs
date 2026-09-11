@@ -9,13 +9,14 @@
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use css_lib::wire::kinds;
+use css_lib::wire::{kinds, PowerStatePayload};
 use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::doors::{DoorStateSnapshot, DoorsState, UnlockCommand};
 use crate::mqtt::DoorsUnlockSender;
+use crate::power::PowerState;
 use crate::toolguard::ToolGuardState;
 
 #[derive(Deserialize)]
@@ -28,6 +29,7 @@ pub struct EdgeInbound {
     pub config_manager: Arc<RwLock<Config>>,
     pub toolguard_state: Arc<ToolGuardState>,
     pub doors_state: Arc<DoorsState>,
+    pub power_state: Arc<PowerState>,
     pub doors_unlock_tx: DoorsUnlockSender,
 }
 
@@ -46,6 +48,17 @@ impl EdgeInbound {
             kinds::TOOLGUARD_STATE => match self.toolguard_state.apply_sync_bytes(payload) {
                 Ok(()) => info!("ToolGuard state updated via inbound transport"),
                 Err(e) => warn!("Failed to parse toolguard state payload: {}", e),
+            },
+            kinds::POWER_STATE => match serde_json::from_slice::<PowerStatePayload>(payload) {
+                Ok(snapshot) => {
+                    let locked = snapshot.locked_tool_ids.len();
+                    self.power_state.apply_state(snapshot);
+                    info!(
+                        "Power state updated via inbound transport ({} locked)",
+                        locked
+                    );
+                }
+                Err(e) => warn!("Failed to parse power/state payload: {}", e),
             },
             kinds::DOORS_STATE => match serde_json::from_slice::<DoorStateSnapshot>(payload) {
                 Ok(snapshot) => {

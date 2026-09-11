@@ -15,6 +15,7 @@ pub mod config;
 pub mod doors;
 pub mod edge_inbound;
 pub mod mqtt;
+pub mod power;
 pub mod registration;
 pub mod static_files;
 pub mod system_info;

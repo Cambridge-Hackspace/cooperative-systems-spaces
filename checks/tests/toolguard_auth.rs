@@ -38,6 +38,10 @@ const EXPECTED: &[(&str, Auth)] = &[
     // #43 power telemetry ingest: reports a tool's latest reading, authenticated
     // like the other controller endpoints (device token or per-tool/global key).
     ("power_report", Auth::Required),
+    // #48 edge power lockout: the edge polls the lockout+topology snapshot
+    // (device-authed, like sync) and reports an edge_fast_trip.
+    ("power_state", Auth::Required),
+    ("power_trip", Auth::Required),
 ];
 
 #[derive(PartialEq, Eq, Debug)]

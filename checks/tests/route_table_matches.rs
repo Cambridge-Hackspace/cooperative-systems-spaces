@@ -229,6 +229,8 @@ fn guard_of(src: &str, handler: &str) -> String {
         "sync",
         "boot_reset",
         "power_report",
+        "power_state",
+        "power_trip",
     ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();

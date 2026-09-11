@@ -336,6 +336,91 @@ main(async () => {
   )
   assertEq('selftrip/tool-access-restored', true, await accessOf(L.tid))
 
+  // --- #48: edge_fast_trip ingest + power-state snapshot -------------------
+  // POST /power-trip is how a disconnected edge that tripped a circuit locally
+  // reports it back; GET /power-state is the lockout+topology the edge caches.
+  // Both authenticate like the other controller endpoints (device token, or
+  // the shared global key we use here since the e2e has no device token).
+  const GLOBAL_KEY = 'e2e-global-key' // [toolguard].global_api_key
+  const circuitSource = async (cid) =>
+    ((await GET('/api/admin/power/circuits', T)).json?.data ?? []).find((c) => c.id === cid)
+      ?.lockout_source
+
+  // Auth is reached BEFORE the body is validated: an unauthenticated trip is a
+  // 401, not a 400-for-missing-circuit. Assert the credential gate first.
+  assertEq(
+    'fasttrip/unauth-401',
+    401,
+    (await POST('/api/toolguard/power-trip', { body: { circuit_id: L.cid } })).status,
+  )
+  // Authenticated but no target circuit -> 400 (not a 500, not a silent lock).
+  assertEq(
+    'fasttrip/missing-circuit-400',
+    400,
+    (await POST('/api/toolguard/power-trip', { body: { api_key: GLOBAL_KEY } })).status,
+  )
+
+  // The edge_fast_trip itself: it engages a whole-circuit lockout recorded with
+  // lockout_source = edge_fast_trip, and denies through the shared gate.
+  assertEq('fasttrip/access-before', true, await accessOf(L.tid))
+  assertEq(
+    'fasttrip/accepted',
+    200,
+    (await POST('/api/toolguard/power-trip', {
+      body: { api_key: GLOBAL_KEY, circuit_id: L.cid, reason: 'edge summed over limit' },
+    })).status,
+  )
+  assertEq('fasttrip/circuit-locked', true, await circuitLocked(L.cid))
+  // Oracle A: the shared gate denies (same rule the edge allow-list reads).
+  assertEq('fasttrip/access-denied', false, await accessOf(L.tid))
+  // Oracle B: the lockout is attributed to the edge layer, not server_aggregate.
+  assertEq('fasttrip/source-edge', 'edge_fast_trip', await circuitSource(L.cid))
+  ok(
+    'fasttrip/audited',
+    (await auditTypes()).has('emergency_lockout_engaged'),
+    'no emergency_lockout_engaged audit for edge_fast_trip',
+  )
+
+  // GET /power-state must now report L's tool locked, with the topology the edge
+  // needs to aggregate: the circuit (with its amperage limit) and the tool
+  // resolved onto that circuit via the receptacle->outlet->circuit walk.
+  const psRes = await GET(`/api/toolguard/power-state?api_key=${GLOBAL_KEY}`)
+  assertEq('powerstate/ok', 200, psRes.status)
+  const ps = psRes.json
+  ok(
+    'powerstate/locks-tripped-tool',
+    (ps?.locked_tool_ids ?? []).includes(L.tid),
+    `locked_tool_ids=${JSON.stringify(ps?.locked_tool_ids)}`,
+  )
+  ok(
+    'powerstate/circuit-with-limit',
+    (ps?.circuits ?? []).some((c) => c.id === L.cid && c.amperage_limit === '10'),
+    `circuits=${JSON.stringify(ps?.circuits)}`,
+  )
+  ok(
+    'powerstate/tool-resolved-to-circuit',
+    (ps?.tools ?? []).some(
+      (t) => t.id === L.tid && t.external_id === L.ext && t.circuit_id === L.cid,
+    ),
+    `tools=${JSON.stringify(ps?.tools)}`,
+  )
+  // Self-test the snapshot oracle: M's tool is NOT locked and its circuit is not
+  // reported as tripped -- a snapshot that locked everything would pass a naive
+  // "includes L" check but fail here.
+  ok(
+    'powerstate/other-tool-not-locked',
+    !(ps?.locked_tool_ids ?? []).includes(M.tid),
+    `locked_tool_ids=${JSON.stringify(ps?.locked_tool_ids)}`,
+  )
+
+  // Clean up: staff re-enable clears the edge_fast_trip lockout.
+  assertEq(
+    'fasttrip/reenable-ok',
+    200,
+    (await POST(`/api/admin/power/circuits/${L.cid}/reenable`, { token: admin.token })).status,
+  )
+  assertEq('fasttrip/access-restored', true, await accessOf(L.tid))
+
   // --- tool <-> receptacle: uniqueness from both sides ---------------------
   const toolA = await POST('/api/tools', { token: admin.token, body: { name: `PowerToolA ${admin.username}`, category: 'safety' } })
   const toolB = await POST('/api/tools', { token: admin.token, body: { name: `PowerToolB ${admin.username}`, category: 'safety' } })

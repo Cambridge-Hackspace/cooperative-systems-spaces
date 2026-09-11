@@ -5040,6 +5040,79 @@ impl DatabaseManager {
         Ok(tripped)
     }
 
+    /// Build the power-lockout + topology snapshot the server pushes to the edge
+    /// (#48): the currently-locked tool ids (own firmware self-trip OR their
+    /// circuit), plus every circuit's amperage limit and every tool's resolved
+    /// circuit, so the edge can fail-secure and aggregate draw locally. Computed
+    /// from a handful of small loads (no N+1 `tool_is_locked_out` walk).
+    pub fn power_state_snapshot(&self) -> Result<css_lib::wire::PowerStatePayload, DatabaseError> {
+        use std::collections::{HashMap, HashSet};
+
+        let circuits = self.list_power_circuits()?;
+        let receptacles = self.list_power_receptacles()?;
+        let outlets = self.list_power_outlets()?;
+        let states = self.list_tool_power_state()?;
+
+        let tool_rows: Vec<(uuid::Uuid, Option<String>, Option<uuid::Uuid>)> = {
+            use crate::schema::tools::dsl::*;
+            let mut conn = self.get_connection()?;
+            tools
+                .select((id, external_id, receptacle_id))
+                .load(&mut conn)
+                .map_err(DatabaseError::Diesel)?
+        };
+
+        let recep_to_outlet: HashMap<uuid::Uuid, uuid::Uuid> =
+            receptacles.iter().map(|r| (r.id, r.outlet_id)).collect();
+        let outlet_to_circuit: HashMap<uuid::Uuid, uuid::Uuid> =
+            outlets.iter().map(|o| (o.id, o.circuit_id)).collect();
+        let locked_circuits: HashSet<uuid::Uuid> = circuits
+            .iter()
+            .filter(|c| c.locked_out)
+            .map(|c| c.id)
+            .collect();
+        let own_locked: HashSet<uuid::Uuid> = states
+            .iter()
+            .filter(|s| s.locked_out)
+            .map(|s| s.tool_id)
+            .collect();
+
+        let tool_circuit = |receptacle_id: Option<uuid::Uuid>| -> Option<uuid::Uuid> {
+            let rid = receptacle_id?;
+            let oid = recep_to_outlet.get(&rid)?;
+            outlet_to_circuit.get(oid).copied()
+        };
+
+        let mut locked_tool_ids = Vec::new();
+        let mut tools_out = Vec::new();
+        for (tid, ext, rid) in tool_rows {
+            let circuit = tool_circuit(rid);
+            let locked =
+                own_locked.contains(&tid) || circuit.is_some_and(|c| locked_circuits.contains(&c));
+            if locked {
+                locked_tool_ids.push(tid.to_string());
+            }
+            tools_out.push(css_lib::wire::PowerStateTool {
+                id: tid.to_string(),
+                external_id: ext,
+                circuit_id: circuit.map(|c| c.to_string()),
+            });
+        }
+
+        Ok(css_lib::wire::PowerStatePayload {
+            as_of: chrono::Utc::now().to_rfc3339(),
+            locked_tool_ids,
+            circuits: circuits
+                .iter()
+                .map(|c| css_lib::wire::PowerStateCircuit {
+                    id: c.id.to_string(),
+                    amperage_limit: c.amperage_limit.to_string(),
+                })
+                .collect(),
+            tools: tools_out,
+        })
+    }
+
     /// Set / clear the `place_id` on a device.
     pub fn set_space_device_place(
         &self,

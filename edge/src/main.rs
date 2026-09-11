@@ -152,6 +152,9 @@ async fn main() -> Result<()> {
             let (toolguard_state_inner, state_notify_rx) = ToolGuardState::new_with_notify();
             let toolguard_state = Arc::new(toolguard_state_inner);
 
+            // Shared power lockout + local fast-trip state (#48).
+            let power_state = Arc::new(css_edge::power::PowerState::new());
+
             // Shared door cache + cross-client bridges. `doors_unlock_*` flows
             // remote → local (server-issued unlocks → local relay).
             // `doors_event_*` flows local → remote (scans → server audit log).
@@ -223,6 +226,33 @@ async fn main() -> Result<()> {
                 });
             }
 
+            // ── Periodic power-state poll (#48): the fallback for the power/state
+            // push, so a reconnecting edge refreshes its lockout snapshot. ──────
+            {
+                let power = Arc::clone(&power_state);
+                let instance_url = remote_instance_url.clone();
+                let auth_token = remote_auth_token.clone();
+                tokio::spawn(async move {
+                    let client = Client::new();
+                    let mut ticker = interval(Duration::from_secs(sync_interval_secs));
+                    loop {
+                        ticker.tick().await;
+                        let url = format!("{}/api/toolguard/power-state", instance_url);
+                        match client.get(&url).bearer_auth(&auth_token).send().await {
+                            Ok(resp) if resp.status().is_success() => match resp.json().await {
+                                Ok(payload) => {
+                                    power.apply_state(payload);
+                                    info!("Power state synced from remote");
+                                }
+                                Err(e) => warn!("Failed to parse power-state response: {}", e),
+                            },
+                            Ok(resp) => warn!("Power-state poll returned HTTP {}", resp.status()),
+                            Err(e) => warn!("Power-state poll request failed: {}", e),
+                        }
+                    }
+                });
+            }
+
             // ── Local MQTT client (if configured) ────────────────────────────
             // state_notify_rx is consumed by the local event loop; if no local MQTT
             // is configured we drop it so the sender's try_send just silently discards.
@@ -235,6 +265,7 @@ async fn main() -> Result<()> {
                 match LocalMqttClient::new(
                     local_mqtt_cfg,
                     Arc::clone(&toolguard_state),
+                    Arc::clone(&power_state),
                     remote_instance_url.clone(),
                     remote_auth_token.clone(),
                     Arc::clone(&doors_state),
@@ -308,6 +339,7 @@ async fn main() -> Result<()> {
                 config_manager: config_arc.clone(),
                 toolguard_state: Arc::clone(&toolguard_state),
                 doors_state: Arc::clone(&doors_state),
+                power_state: Arc::clone(&power_state),
                 doors_unlock_tx: doors_unlock_tx.clone(),
             });
 
