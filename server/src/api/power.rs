@@ -816,6 +816,7 @@ async fn reenable_circuit(
         serde_json::json!({ "scope": "circuit", "circuit_id": id }),
     );
     crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    crate::api::toolguard::broadcast_power_state(&state).await;
     Ok(Json(ApiResponse::<()> {
         success: true,
         data: None,
@@ -848,6 +849,7 @@ async fn reenable_tool(
         serde_json::json!({ "scope": "tool", "tool_id": tool_id }),
     );
     crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    crate::api::toolguard::broadcast_power_state(&state).await;
     Ok(Json(ApiResponse::<()> {
         success: true,
         data: None,
