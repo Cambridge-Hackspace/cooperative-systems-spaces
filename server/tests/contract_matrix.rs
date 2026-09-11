@@ -1,7 +1,9 @@
 //! Tier 4: every route × every credential state that carries no valid user.
 //!
-//! 165 routes x 7 credential states. Runs in-process over the real router with
-//! a non-connecting database, so it needs no PostgreSQL and no containers.
+//! The whole route table x 7 credential states. Runs in-process over the real
+//! router with a non-connecting database, so it needs no PostgreSQL and no
+//! containers. (The exact route count is derived and asserted below, not quoted
+//! here -- it grows with the API.)
 //!
 //! The expectation is deliberately **one line**, not a thousand hand-written
 //! cells: *no route behind a guard ever answers anything but 401 without a
@@ -264,7 +266,7 @@ async fn the_table_is_not_empty_and_covers_every_guard_kind() {
     // above pass vacuously.
     assert!(
         ROUTES.len() > 150,
-        "only {} routes in the table; the API has ~165",
+        "only {} routes in the table; the API has many more than that",
         ROUTES.len()
     );
     for guard in [
@@ -314,7 +316,7 @@ async fn the_database_is_never_reached_by_a_rejected_request() {
 async fn guarded_routes_are_not_asserted_for_role_gating() {
     // Not a test of the server — a test of this file's own honesty.
     //
-    // It would be easy to read "165 routes x 7 credentials, all green" as "the
+    // It would be easy to read "every route x 7 credentials, all green" as "the
     // authorization matrix is covered". It is not: every case here carries *no*
     // valid user, so the difference between Admin, Staff, Member and Auth is
     // never exercised. A route whose guard was downgraded from AdminUser to
