@@ -194,3 +194,160 @@ impl ToolGuardState {
             .unwrap_or(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(id: Uuid, ext: &str, status: ToolStatus) -> SyncTool {
+        SyncTool {
+            id,
+            external_id: Some(ext.to_string()),
+            name: "T".to_string(),
+            status,
+            requires_online: false,
+        }
+    }
+    fn user(card: &str, active: bool, authorized: Vec<Uuid>) -> SyncUser {
+        SyncUser {
+            profile_field_value: card.to_string(),
+            full_name: "N".to_string(),
+            is_active: active,
+            authorized_tool_ids: authorized,
+        }
+    }
+    fn state_with(tools: Vec<SyncTool>, users: Vec<SyncUser>) -> ToolGuardState {
+        let s = ToolGuardState::new();
+        s.apply_sync(SyncPayload {
+            device_id: Uuid::from_u128(0xD),
+            profile_field: "card".to_string(),
+            tools,
+            users,
+        });
+        s
+    }
+
+    #[test]
+    fn cold_start_denies_to_be_safe() {
+        // No sync payload loaded yet: deny rather than energize. This is the
+        // fail-secure property, and it is the negative control that keeps the
+        // "authorized" case below from being vacuous.
+        let s = ToolGuardState::new();
+        assert_eq!(s.check_access("card-1", "t-ext"), AccessResult::UnknownCard);
+    }
+
+    #[test]
+    fn authorized_when_active_listed_and_idle() {
+        let tid = Uuid::from_u128(1);
+        let s = state_with(
+            vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            vec![user("card-1", true, vec![tid])],
+        );
+        assert_eq!(s.check_access("card-1", "t-ext"), AccessResult::Authorized);
+        // The tool id resolves by external id OR the UUID string.
+        assert_eq!(
+            s.check_access("card-1", &tid.to_string()),
+            AccessResult::Authorized
+        );
+    }
+
+    #[test]
+    fn unknown_card_is_denied() {
+        let tid = Uuid::from_u128(1);
+        let s = state_with(
+            vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            vec![user("card-1", true, vec![tid])],
+        );
+        assert_eq!(s.check_access("nope", "t-ext"), AccessResult::UnknownCard);
+    }
+
+    #[test]
+    fn inactive_user_is_denied_before_the_tool_is_even_looked_up() {
+        let tid = Uuid::from_u128(1);
+        // The user is otherwise fully authorized -- only is_active flips -- so a
+        // pass here would mean the active gate did nothing.
+        let s = state_with(
+            vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            vec![user("card-1", false, vec![tid])],
+        );
+        assert_eq!(
+            s.check_access("card-1", "t-ext"),
+            AccessResult::UserInactive
+        );
+    }
+
+    #[test]
+    fn a_tool_absent_from_the_payload_is_not_authorized() {
+        let tid = Uuid::from_u128(1);
+        let s = state_with(
+            vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            vec![user("card-1", true, vec![tid])],
+        );
+        assert_eq!(
+            s.check_access("card-1", "some-other-tool"),
+            AccessResult::ToolNotAuthorized
+        );
+    }
+
+    #[test]
+    fn a_tool_the_user_is_not_listed_for_is_not_authorized() {
+        let tid = Uuid::from_u128(1);
+        let other = Uuid::from_u128(2);
+        // Tool exists and user is active, but the user's allow-list holds a
+        // DIFFERENT tool -- isolates the per-tool authorization check.
+        let s = state_with(
+            vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            vec![user("card-1", true, vec![other])],
+        );
+        assert_eq!(
+            s.check_access("card-1", "t-ext"),
+            AccessResult::ToolNotAuthorized
+        );
+    }
+
+    #[test]
+    fn a_non_idle_tool_is_unavailable_and_names_its_status() {
+        let tid = Uuid::from_u128(1);
+        // Self-test the Idle gate: an otherwise-authorized scan is refused for
+        // every non-Idle status, and the status word is surfaced lowercased.
+        for (st, word) in [
+            (ToolStatus::InUse, "inuse"),
+            (ToolStatus::Maintenance, "maintenance"),
+            (ToolStatus::Broken, "broken"),
+            (ToolStatus::Repair, "repair"),
+            (ToolStatus::Retired, "retired"),
+        ] {
+            let s = state_with(
+                vec![tool(tid, "t-ext", st.clone())],
+                vec![user("card-1", true, vec![tid])],
+            );
+            assert_eq!(
+                s.check_access("card-1", "t-ext"),
+                AccessResult::ToolUnavailable(word.to_string()),
+                "status {:?} should be reported unavailable and lowercased",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn requires_online_reflects_the_flag_and_defaults_offline_capable() {
+        let tid = Uuid::from_u128(1);
+        let mut flagged = tool(tid, "t-ext", ToolStatus::Idle);
+        flagged.requires_online = true;
+        let s = state_with(vec![flagged], vec![]);
+        assert!(s.tool_requires_online("t-ext"), "matched by external id");
+        assert!(s.tool_requires_online(&tid.to_string()), "matched by uuid");
+        assert!(
+            !s.tool_requires_online("unknown-tool"),
+            "an unknown tool defaults to offline-capable"
+        );
+
+        // A tool present but not flagged -> false.
+        let s2 = state_with(vec![tool(tid, "t-ext", ToolStatus::Idle)], vec![]);
+        assert!(!s2.tool_requires_online("t-ext"));
+
+        // No state at all -> false (the offline-capable default).
+        assert!(!ToolGuardState::new().tool_requires_online("t-ext"));
+    }
+}
