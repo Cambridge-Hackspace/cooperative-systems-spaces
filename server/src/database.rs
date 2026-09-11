@@ -4809,7 +4809,6 @@ impl DatabaseManager {
     pub fn circuit_draw_totals(
         &self,
     ) -> Result<Vec<(uuid::Uuid, bigdecimal::BigDecimal)>, DatabaseError> {
-        use bigdecimal::BigDecimal;
         use std::collections::HashMap;
 
         let states = self.list_tool_power_state()?;
@@ -4827,29 +4826,20 @@ impl DatabaseManager {
             .filter_map(|(t, r)| r.map(|r| (t, r)))
             .collect();
 
-        let mut totals: HashMap<uuid::Uuid, BigDecimal> = circuits
+        // The DB loads are the I/O; the per-circuit summation is pure and
+        // unit-tested directly (see `sum_draw_per_circuit`).
+        let circuit_ids: Vec<uuid::Uuid> = circuits.iter().map(|c| c.id).collect();
+        let tool_draws: Vec<(uuid::Uuid, bigdecimal::BigDecimal)> = states
             .iter()
-            .map(|c| (c.id, BigDecimal::from(0)))
+            .filter_map(|s| s.last_draw_amps.as_ref().map(|d| (s.tool_id, d.clone())))
             .collect();
-        for s in &states {
-            let Some(draw) = s.last_draw_amps.as_ref() else {
-                continue;
-            };
-            let Some(rid) = tool_to_receptacle.get(&s.tool_id) else {
-                continue;
-            };
-            let Some(oid) = recep_to_outlet.get(rid) else {
-                continue;
-            };
-            let Some(cid) = outlet_to_circuit.get(oid) else {
-                continue;
-            };
-            let entry = totals.entry(*cid).or_insert_with(|| BigDecimal::from(0));
-            *entry = entry.clone() + draw.clone();
-        }
-        let mut out: Vec<(uuid::Uuid, BigDecimal)> = totals.into_iter().collect();
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(out)
+        Ok(sum_draw_per_circuit(
+            &circuit_ids,
+            &tool_draws,
+            &tool_to_receptacle,
+            &recep_to_outlet,
+            &outlet_to_circuit,
+        ))
     }
 
     /// True if this tool must be denied for a power reason: its OWN firmware
@@ -5013,28 +5003,23 @@ impl DatabaseManager {
     {
         let totals = self.circuit_draw_totals()?;
         let circuits = self.list_power_circuits()?;
+
+        // The over-limit selection (strictly `>`, skipping already-locked
+        // circuits) is pure and unit-tested directly (see `overloaded_circuits`);
+        // only the lockout write below touches the DB.
+        let candidates: Vec<(uuid::Uuid, bigdecimal::BigDecimal, bool)> = circuits
+            .iter()
+            .map(|c| (c.id, c.amperage_limit.clone(), c.locked_out))
+            .collect();
         let mut tripped = Vec::new();
-        for c in &circuits {
-            if c.locked_out {
-                continue;
-            }
-            let total = totals
-                .iter()
-                .find(|(id, _)| *id == c.id)
-                .map(|(_, t)| t.clone())
-                .unwrap_or_else(|| bigdecimal::BigDecimal::from(0));
-            if total > c.amperage_limit {
-                let n = self.engage_circuit_lockout(
-                    c.id,
-                    "server_aggregate",
-                    &format!(
-                        "summed draw {total} A exceeds circuit limit {} A",
-                        c.amperage_limit
-                    ),
-                )?;
-                if n > 0 {
-                    tripped.push((c.id, total, c.amperage_limit.clone()));
-                }
+        for (id, total, limit) in overloaded_circuits(&candidates, &totals) {
+            let n = self.engage_circuit_lockout(
+                id,
+                "server_aggregate",
+                &format!("summed draw {total} A exceeds circuit limit {limit} A"),
+            )?;
+            if n > 0 {
+                tripped.push((id, total, limit));
             }
         }
         Ok(tripped)
@@ -5243,5 +5228,172 @@ impl DatabaseManager {
             .select(crate::models::ProfileConfigVersion::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
+    }
+}
+
+// ── Power aggregation: the pure arithmetic behind the lockout (#44/#53) ───────
+//
+// These are the safety calculation split out from their DB methods so they can
+// be unit-tested directly (the e2e `circuits` stage exercises the same math end
+// to end, but a pure test is a cheaper, sharper oracle for the boundary and the
+// blast radius). `circuit_draw_totals` and `evaluate_circuit_overages` are the
+// only callers.
+
+/// Sum each tool's latest draw onto its circuit via the
+/// tool -> receptacle -> outlet -> circuit maps. Every circuit in `circuit_ids`
+/// is present in the result (0 when idle); a tool that resolves to no circuit
+/// contributes nowhere. Sorted by circuit id.
+fn sum_draw_per_circuit(
+    circuit_ids: &[uuid::Uuid],
+    tool_draws: &[(uuid::Uuid, bigdecimal::BigDecimal)],
+    tool_to_receptacle: &std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
+    recep_to_outlet: &std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
+    outlet_to_circuit: &std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
+) -> Vec<(uuid::Uuid, bigdecimal::BigDecimal)> {
+    use bigdecimal::BigDecimal;
+    use std::collections::HashMap;
+
+    let mut totals: HashMap<uuid::Uuid, BigDecimal> = circuit_ids
+        .iter()
+        .map(|c| (*c, BigDecimal::from(0)))
+        .collect();
+    for (tool_id, draw) in tool_draws {
+        let Some(rid) = tool_to_receptacle.get(tool_id) else {
+            continue;
+        };
+        let Some(oid) = recep_to_outlet.get(rid) else {
+            continue;
+        };
+        let Some(cid) = outlet_to_circuit.get(oid) else {
+            continue;
+        };
+        let entry = totals.entry(*cid).or_insert_with(|| BigDecimal::from(0));
+        *entry = entry.clone() + draw.clone();
+    }
+    let mut out: Vec<(uuid::Uuid, BigDecimal)> = totals.into_iter().collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Select the circuits that must trip: summed draw strictly greater than the
+/// amperage limit and not already locked, as `(id, total, limit)`, preserving
+/// the input order. Strictly `>` -- a circuit at exactly its rating is at
+/// capacity, not overloaded. A circuit with no reported draw is treated as 0.
+fn overloaded_circuits(
+    circuits: &[(uuid::Uuid, bigdecimal::BigDecimal, bool)],
+    totals: &[(uuid::Uuid, bigdecimal::BigDecimal)],
+) -> Vec<(uuid::Uuid, bigdecimal::BigDecimal, bigdecimal::BigDecimal)> {
+    use bigdecimal::BigDecimal;
+
+    let mut out = Vec::new();
+    for (id, limit, locked) in circuits {
+        if *locked {
+            continue;
+        }
+        let total = totals
+            .iter()
+            .find(|(cid, _)| cid == id)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_else(|| BigDecimal::from(0));
+        if &total > limit {
+            out.push((*id, total, limit.clone()));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod overage_math_tests {
+    use super::{overloaded_circuits, sum_draw_per_circuit};
+    use bigdecimal::BigDecimal;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn bd(n: i64) -> BigDecimal {
+        BigDecimal::from(n)
+    }
+    fn id(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn overloaded_trips_only_the_over_limit_unlocked_circuit() {
+        let (c1, c2, c3) = (id(1), id(2), id(3));
+        // c1 over (12 > 10); c2 exactly at rating (not over); c3 over but ALREADY
+        // locked (must be skipped, not re-tripped).
+        let circuits = vec![(c1, bd(10), false), (c2, bd(10), false), (c3, bd(10), true)];
+        let totals = vec![(c1, bd(12)), (c2, bd(10)), (c3, bd(99))];
+        let trip = overloaded_circuits(&circuits, &totals);
+        // Blast radius: only c1.
+        assert_eq!(
+            trip.iter().map(|(i, _, _)| *i).collect::<Vec<_>>(),
+            vec![c1]
+        );
+        assert_eq!(trip[0].1, bd(12), "surfaces the summed total");
+        assert_eq!(trip[0].2, bd(10), "surfaces the limit");
+    }
+
+    #[test]
+    fn the_strict_greater_than_boundary_holds_from_both_sides() {
+        // Self-test the safety boundary: under and AT the rating do not trip;
+        // one unit over does. A `>=` regression would fail the "at" case.
+        let c = id(1);
+        assert!(
+            overloaded_circuits(&[(c, bd(10), false)], &[(c, bd(9))]).is_empty(),
+            "under the rating"
+        );
+        assert!(
+            overloaded_circuits(&[(c, bd(10), false)], &[(c, bd(10))]).is_empty(),
+            "exactly at the rating is at capacity, not overloaded"
+        );
+        assert_eq!(
+            overloaded_circuits(&[(c, bd(10), false)], &[(c, bd(11))]).len(),
+            1,
+            "one unit over the rating trips"
+        );
+    }
+
+    #[test]
+    fn a_circuit_with_no_reported_draw_defaults_to_zero_and_does_not_trip() {
+        let c = id(1);
+        assert!(overloaded_circuits(&[(c, bd(10), false)], &[]).is_empty());
+    }
+
+    #[test]
+    fn draw_sums_onto_the_right_circuit_and_does_not_leak() {
+        // Two tools on c1 (6+6=12), one on c2 (4); a tool with no receptacle
+        // mapping contributes to nothing.
+        let (c1, c2) = (id(1), id(2));
+        let (t1, t2, t3, t4) = (id(11), id(12), id(13), id(14));
+        let (r1, r2, r3) = (id(21), id(22), id(23));
+        let (o1, o2) = (id(31), id(32));
+        let tool_to_receptacle: HashMap<Uuid, Uuid> =
+            [(t1, r1), (t2, r2), (t3, r3)].into_iter().collect();
+        let recep_to_outlet: HashMap<Uuid, Uuid> =
+            [(r1, o1), (r2, o1), (r3, o2)].into_iter().collect();
+        let outlet_to_circuit: HashMap<Uuid, Uuid> = [(o1, c1), (o2, c2)].into_iter().collect();
+        let tool_draws = vec![(t1, bd(6)), (t2, bd(6)), (t3, bd(4)), (t4, bd(99))];
+
+        let totals = sum_draw_per_circuit(
+            &[c1, c2],
+            &tool_draws,
+            &tool_to_receptacle,
+            &recep_to_outlet,
+            &outlet_to_circuit,
+        );
+        assert_eq!(totals, vec![(c1, bd(12)), (c2, bd(4))]);
+    }
+
+    #[test]
+    fn every_circuit_is_present_even_when_idle() {
+        let (c1, c2) = (id(1), id(2));
+        let totals = sum_draw_per_circuit(
+            &[c1, c2],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(totals, vec![(c1, bd(0)), (c2, bd(0))]);
     }
 }
