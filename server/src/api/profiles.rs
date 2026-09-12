@@ -87,7 +87,8 @@ async fn get_user_profile(
     if auth_user.0.id != user_id
         && !state
             .db
-            .role_has_permission(auth_user.0.role.as_str(), "profiles.manage")
+            .user_has_permission(auth_user.0.id, "profiles.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "You can only view your own profile".to_string(),
@@ -120,7 +121,8 @@ async fn update_user_profile(
     if auth_user.0.id != user_id
         && !state
             .db
-            .role_has_permission(auth_user.0.role.as_str(), "profiles.manage")
+            .user_has_permission(auth_user.0.id, "profiles.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "You can only update your own profile".to_string(),

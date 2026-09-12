@@ -379,6 +379,17 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
         user_id.insert(u.tp.clone(), id);
     }
 
+    // RBAC (#65): authorization resolves through `user_roles`, so every loaded
+    // user needs the assignment matching their primary role -- without it a
+    // loaded member would be denied every gated route. These inserts bypass
+    // `create_user` (which syncs this in-process), so sync it here. Idempotent.
+    diesel::sql_query(
+        "INSERT INTO user_roles (user_id, role_id) \
+         SELECT u.id, r.id FROM users u JOIN roles r ON r.name = u.role::text \
+         ON CONFLICT DO NOTHING",
+    )
+    .execute(conn)?;
+
     // Tool default rate = the "Default Rate" tier's rate, if the tool has one.
     let mut tool_default_rate: HashMap<String, Option<BigDecimal>> = HashMap::new();
     for t in &s.tiers {

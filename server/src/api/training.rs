@@ -210,7 +210,8 @@ async fn get_training_roster(
     // Check if user is either staff or a trainer for any tool
     if !state
         .db
-        .role_has_permission(user.0.role.as_str(), "training.certify")
+        .user_has_permission(user.0.id, "training.certify")
+        .map_err(ApiError::from)?
         && !is_user_a_trainer(&state, user.0.id).await?
     {
         return Err(ApiError::Forbidden(
@@ -241,7 +242,8 @@ async fn get_training_roster_for_tool(
 
     if !state
         .db
-        .role_has_permission(user.0.role.as_str(), "training.certify")
+        .user_has_permission(user.0.id, "training.certify")
+        .map_err(ApiError::from)?
         && !is_trainer_for_tool
     {
         return Err(ApiError::Forbidden(
@@ -288,7 +290,8 @@ async fn get_training_history_for_tool(
 
     if !state
         .db
-        .role_has_permission(user.0.role.as_str(), "training.certify")
+        .user_has_permission(user.0.id, "training.certify")
+        .map_err(ApiError::from)?
         && !is_trainer_for_tool
     {
         return Err(ApiError::Forbidden(
@@ -629,7 +632,8 @@ async fn get_user_tool_training_overview(
     if user.0.id != target_user_id
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "training.certify")
+            .user_has_permission(user.0.id, "training.certify")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training overview".to_string(),
@@ -690,7 +694,8 @@ async fn get_user_training_progress_by_user(
     if user.0.id != target_user_id
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "training.certify")
+            .user_has_permission(user.0.id, "training.certify")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training progress".to_string(),
@@ -715,7 +720,8 @@ async fn get_specific_progress(
     if user.0.id != target_user_id
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "training.certify")
+            .user_has_permission(user.0.id, "training.certify")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training progress".to_string(),
@@ -740,7 +746,8 @@ async fn update_training_progress(
     // Check if user can update this progress
     let can_update = state
         .db
-        .role_has_permission(user.0.role.as_str(), "training.certify")
+        .user_has_permission(user.0.id, "training.certify")
+        .map_err(ApiError::from)?
         || state
             .db
             .is_certified_instructor(user.0.id, step_id)
@@ -781,7 +788,8 @@ async fn start_training_session(
     if user.0.id != target_user_id
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "training.certify")
+            .user_has_permission(user.0.id, "training.certify")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "Cannot start training for another user".to_string(),
@@ -864,7 +872,8 @@ async fn complete_training_session(
     let is_self_attestation = step.self_attestable && user.0.id == target_user_id;
     let can_complete = state
         .db
-        .role_has_permission(user.0.role.as_str(), "training.certify")
+        .user_has_permission(user.0.id, "training.certify")
+        .map_err(ApiError::from)?
         || state
             .db
             .is_certified_instructor(user.0.id, payload.training_step_id)

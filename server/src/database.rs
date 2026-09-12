@@ -223,6 +223,51 @@ impl DatabaseManager {
         self.rbac().has_permission_for_role_name(role_name, key)
     }
 
+    /// Does the user hold `key` through any of their assigned roles (expanded by
+    /// inheritance)? The multi-role enforcement entry point: resolves the user's
+    /// `user_roles` set against the cached graph. Fallible because it reads the
+    /// assignment table per call -- the extractors re-load it every request so a
+    /// role change takes effect without re-issuing the token.
+    pub fn user_has_permission(
+        &self,
+        user_id: uuid::Uuid,
+        key: &str,
+    ) -> Result<bool, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        let role_ids =
+            crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)?;
+        Ok(self.rbac().has_permission(&role_ids, key))
+    }
+
+    /// A user's assigned role names and their effective permissions, both sorted.
+    /// Backs `GET /api/auth/me`, so the frontend can gate on permissions and show
+    /// the roles a user holds. Resolves through `user_roles` -- the same source
+    /// enforcement reads -- so what `me` reports and what the gates enforce agree.
+    pub fn user_roles_and_permissions(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<(Vec<String>, Vec<String>), DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        // Two single-table reads rather than a join: the RBAC tables are
+        // deliberately not registered for cross-table queries in schema.rs, and
+        // the role set per user is tiny.
+        let ids = crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)?;
+        let mut names: Vec<String> = roles::table
+            .filter(roles::id.eq_any(&ids))
+            .select(roles::name)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        names.sort();
+        let mut permissions: Vec<String> = self
+            .rbac()
+            .effective_permissions(&ids)
+            .into_iter()
+            .collect();
+        permissions.sort();
+        Ok((names, permissions))
+    }
+
     /// A full read of the RBAC configuration for the admin API: every role, the
     /// permission catalog, the role x permission grants, and the inheritance
     /// edges. Returned as raw rows for the handler to assemble; read straight
@@ -408,17 +453,60 @@ pub async fn initialize_database(
     Ok(db_manager)
 }
 
+/// Replace a user's role assignments with the single role named `role_name`.
+///
+/// Phase 3 keeps `users.role` (the primary role) and `user_roles` in lockstep:
+/// authorization resolves through `user_roles`, so every `users.role` write
+/// funnels through here inside the same transaction. Multi-role assignment
+/// (adding roles beyond the primary) writes `user_roles` directly and is layered
+/// on separately; until then a user has exactly one assignment, matching their
+/// primary role. An unseeded role name clears the assignments rather than
+/// failing -- consistent with the resolver, which grants an unknown role nothing.
+fn sync_user_roles_to(
+    conn: &mut PgConnection,
+    user_id: uuid::Uuid,
+    role_name: &str,
+) -> Result<(), diesel::result::Error> {
+    use crate::schema::{roles, user_roles};
+    diesel::delete(user_roles::table.filter(user_roles::user_id.eq(user_id))).execute(conn)?;
+    let role_id: Option<uuid::Uuid> = roles::table
+        .filter(roles::name.eq(role_name))
+        .select(roles::id)
+        .first::<uuid::Uuid>(conn)
+        .optional()?;
+    if let Some(role_id) = role_id {
+        diesel::insert_into(user_roles::table)
+            .values((
+                user_roles::user_id.eq(user_id),
+                user_roles::role_id.eq(role_id),
+            ))
+            .on_conflict((user_roles::user_id, user_roles::role_id))
+            .do_nothing()
+            .execute(conn)?;
+    }
+    Ok(())
+}
+
 /// User-related database operations
 impl DatabaseManager {
-    /// Create a new user
+    /// Create a new user.
+    ///
+    /// Runs in a transaction so the `user_roles` assignment lands with the row:
+    /// authorization resolves through `user_roles`, so a user inserted without a
+    /// matching assignment would be denied every gated route. Keeps the single
+    /// `users.role` and `user_roles` in lockstep (one row, the primary role);
+    /// multi-role assignment is layered on later.
     pub fn create_user(&self, new_user: &NewUser) -> Result<User, DatabaseError> {
         let mut conn = self.get_connection()?;
-
-        diesel::insert_into(users::table)
-            .values(new_user)
-            .returning(User::as_returning())
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        conn.transaction::<User, diesel::result::Error, _>(|conn| {
+            let user = diesel::insert_into(users::table)
+                .values(new_user)
+                .returning(User::as_returning())
+                .get_result::<User>(conn)?;
+            sync_user_roles_to(conn, user.id, user.role.as_str())?;
+            Ok(user)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Update a tool
@@ -676,13 +764,20 @@ impl DatabaseManager {
             updates.updated_at = Some(chrono::Utc::now().naive_utc());
         }
 
-        let updated_user = diesel::update(users::table.filter(users::id.eq(user_id)))
-            .set(&updates)
-            .returning(User::as_returning())
-            .get_result::<User>(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-
-        Ok(updated_user)
+        // A role change must re-sync `user_roles`, which authorization reads;
+        // do both in one transaction so they cannot drift apart.
+        let role_changed = updates.role.is_some();
+        conn.transaction::<User, diesel::result::Error, _>(|conn| {
+            let updated_user = diesel::update(users::table.filter(users::id.eq(user_id)))
+                .set(&updates)
+                .returning(User::as_returning())
+                .get_result::<User>(conn)?;
+            if role_changed {
+                sync_user_roles_to(conn, updated_user.id, updated_user.role.as_str())?;
+            }
+            Ok(updated_user)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Update user profile only
@@ -3795,27 +3890,46 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
-    /// How many active admins exist. The last-admin guard reads this before a
-    /// billing-driven demotion: an Admin whose lapse would take the count to
-    /// zero is never demoted.
+    /// How many active users have administrator access. The last-admin guard
+    /// reads this before a billing-driven demotion: an admin whose lapse would
+    /// take the count to zero is never demoted.
     ///
-    /// The active filter runs in SQL, but the `role == Admin` count is done in
-    /// Rust: a `.filter(role.eq(...))` on the custom `user_role` enum column
-    /// would require `sql_types::UserRole: QueryId`, which the generated schema
-    /// does not derive -- and deriving it there is a change a `diesel
-    /// print-schema` regeneration would silently drop. Loading a single enum
-    /// column needs no such bound, and the active-user set is small.
+    /// "Admin" is no longer the `users.role == Admin` enum value but *effective*
+    /// authority: an active user any of whose assigned roles grants `admin.access`
+    /// through inheritance. Resolving that is the resolver's job, so this loads
+    /// the active users' role assignments in one join and expands them against
+    /// the cached graph. The join runs in SQL; the inheritance closure (which SQL
+    /// cannot express without a recursive CTE) runs in Rust over a small set.
     pub fn count_active_admins(&self) -> Result<i64, DatabaseError> {
-        use crate::schema::users::dsl::*;
+        use crate::schema::{user_roles, users};
         let mut conn = self.get_connection()?;
-        let roles: Vec<crate::models::UserRole> = users
-            .filter(is_active.eq(true))
-            .select(role)
+        // Two single-table reads rather than a join (the RBAC tables are not
+        // registered for cross-table queries): the active user ids, and every
+        // role assignment, grouped and expanded in Rust over the cached graph.
+        let active: std::collections::HashSet<uuid::Uuid> = users::table
+            .filter(users::is_active.eq(true))
+            .select(users::id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)?
+            .into_iter()
+            .collect();
+        let assignments: Vec<(uuid::Uuid, uuid::Uuid)> = user_roles::table
+            .select((user_roles::user_id, user_roles::role_id))
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)?;
-        Ok(roles
-            .iter()
-            .filter(|r| **r == crate::models::UserRole::Admin)
+
+        let mut by_user: std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+            std::collections::HashMap::new();
+        for (uid, role_id) in assignments {
+            if active.contains(&uid) {
+                by_user.entry(uid).or_default().push(role_id);
+            }
+        }
+
+        let graph = self.rbac();
+        Ok(by_user
+            .values()
+            .filter(|role_ids| graph.has_permission(role_ids, "admin.access"))
             .count() as i64)
     }
 

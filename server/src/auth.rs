@@ -327,7 +327,8 @@ where
 
         if !app_state
             .db
-            .role_has_permission(user.role.as_str(), "admin.access")
+            .user_has_permission(user.id, "admin.access")
+            .map_err(|_| AuthError::InternalError)?
         {
             return Err(AuthError::Forbidden("administrator access"));
         }
@@ -353,7 +354,8 @@ where
 
         if !app_state
             .db
-            .role_has_permission(user.role.as_str(), "staff.access")
+            .user_has_permission(user.id, "staff.access")
+            .map_err(|_| AuthError::InternalError)?
         {
             return Err(AuthError::Forbidden("staff access"));
         }
@@ -379,7 +381,8 @@ where
 
         if !app_state
             .db
-            .role_has_permission(user.role.as_str(), "member.access")
+            .user_has_permission(user.id, "member.access")
+            .map_err(|_| AuthError::InternalError)?
         {
             return Err(AuthError::Forbidden("member access"));
         }

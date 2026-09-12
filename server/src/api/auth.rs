@@ -326,17 +326,13 @@ async fn me(
     auth_user: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<CurrentUserResponse>>, ApiError> {
-    // Resolve the caller's effective permissions through the RBAC graph. Keyed on
-    // the single primary role for now; a later phase resolves the multi-role
-    // `user_roles` set here instead. Sorted so the payload is deterministic.
-    let graph = state.db.rbac();
-    let role_name = auth_user.0.role.as_str();
-    let mut permissions: Vec<String> = graph
-        .effective_permissions_by_names(&[role_name])
-        .into_iter()
-        .collect();
-    permissions.sort();
-    let roles = vec![role_name.to_string()];
+    // Resolve the caller's assigned roles and effective permissions through the
+    // RBAC graph, from the same `user_roles` set the gates enforce on -- so what
+    // `me` reports matches what the extractors allow. Both come back sorted.
+    let (roles, permissions) = state
+        .db
+        .user_roles_and_permissions(auth_user.0.id)
+        .map_err(ApiError::from)?;
 
     Ok(Json(ApiResponse::success(CurrentUserResponse {
         user: UserResponse::from(auth_user.0),

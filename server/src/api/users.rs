@@ -89,7 +89,8 @@ async fn get_user_by_id(
     if auth_user.0.id != user_id
         && !state
             .db
-            .role_has_permission(auth_user.0.role.as_str(), "users.manage")
+            .user_has_permission(auth_user.0.id, "users.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "You can only view your own profile".to_string(),
@@ -116,7 +117,8 @@ async fn update_user(
     if auth_user.0.id != user_id
         && !state
             .db
-            .role_has_permission(auth_user.0.role.as_str(), "users.manage")
+            .user_has_permission(auth_user.0.id, "users.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "You can only update your own profile".to_string(),
@@ -126,7 +128,8 @@ async fn update_user(
     // Non-staff users cannot update is_active or role
     if !state
         .db
-        .role_has_permission(auth_user.0.role.as_str(), "users.manage")
+        .user_has_permission(auth_user.0.id, "users.manage")
+        .map_err(ApiError::from)?
         && (payload.is_active.is_some() || payload.role.is_some())
     {
         return Err(ApiError::Forbidden(
@@ -139,7 +142,8 @@ async fn update_user(
         if *new_role == UserRole::Admin
             && !state
                 .db
-                .role_has_permission(auth_user.0.role.as_str(), "admin.access")
+                .user_has_permission(auth_user.0.id, "admin.access")
+                .map_err(ApiError::from)?
         {
             return Err(ApiError::Forbidden(
                 "Only admins can assign admin role".to_string(),
@@ -402,7 +406,8 @@ async fn update_user_theme(
     if auth_user.0.id != user_id
         && !state
             .db
-            .role_has_permission(auth_user.0.role.as_str(), "admin.access")
+            .user_has_permission(auth_user.0.id, "admin.access")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "You can only update your own theme".to_string(),
