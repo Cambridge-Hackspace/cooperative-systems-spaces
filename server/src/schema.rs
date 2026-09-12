@@ -835,6 +835,47 @@ diesel::table! {
     }
 }
 
+// ── RBAC (#65) ───────────────────────────────────────────────────────────────
+diesel::table! {
+    permissions (key) {
+        key -> Text,
+        description -> Text,
+    }
+}
+
+diesel::table! {
+    roles (id) {
+        id -> Uuid,
+        name -> Text,
+        description -> Text,
+        is_system -> Bool,
+        level -> Int2,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    role_permissions (role_id, permission_key) {
+        role_id -> Uuid,
+        permission_key -> Text,
+    }
+}
+
+diesel::table! {
+    role_inheritance (role_id, inherits_role_id) {
+        role_id -> Uuid,
+        inherits_role_id -> Uuid,
+    }
+}
+
+diesel::table! {
+    user_roles (user_id, role_id) {
+        user_id -> Uuid,
+        role_id -> Uuid,
+    }
+}
+
 diesel::joinable!(space_device_auth -> space_devices (device_id));
 diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));

@@ -48,6 +48,7 @@ pub mod pages;
 pub mod power_metrics;
 pub mod profile;
 pub mod profile_fields;
+pub mod rbac;
 pub mod recaptcha;
 pub mod schedules;
 pub mod schema;
