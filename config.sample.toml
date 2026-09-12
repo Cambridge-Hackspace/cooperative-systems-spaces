@@ -217,24 +217,6 @@ default_export_format = "csv"
 # Automatically email reports to administrators
 email_reports = false
 
-# Space Directory Configuration
-# Settings for the cooperative spaces directory and mapping
-[space_directory]
-# Enable the space directory feature
-enabled = true
-# Format for displaying coordinates (decimal, dms)
-coordinate_format = "decimal"
-# Maximum spaces allowed per directory listing
-max_spaces_per_directory = 1000
-# Enable search functionality within directories
-search_enabled = true
-# Enable filtering options (by type, size, etc.)
-filtering_enabled = true
-# Default visibility for new spaces (public, members, private)
-default_visibility = "public"
-# Allow non-members to view space listings
-allow_anonymous_viewing = true
-
 # Sentry Error Tracking Configuration
 # Settings for error monitoring and performance tracking
 [sentry]
