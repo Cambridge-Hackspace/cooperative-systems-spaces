@@ -9,8 +9,8 @@ use crate::{
     api::{
         errors::ApiError,
         responses::{
-            ApiResponse, EmailVerificationRequest, LoginRequest, LoginResponse,
-            PasswordResetConsumeRequest, PasswordResetRequest, RegisterRequest,
+            ApiResponse, CurrentUserResponse, EmailVerificationRequest, LoginRequest,
+            LoginResponse, PasswordResetConsumeRequest, PasswordResetRequest, RegisterRequest,
             ResendVerificationRequest, UserResponse,
         },
     },
@@ -322,8 +322,27 @@ async fn login(
 }
 
 // Get current user info (protected endpoint)
-async fn me(auth_user: AuthUser) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
-    Ok(Json(ApiResponse::success(UserResponse::from(auth_user.0))))
+async fn me(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<CurrentUserResponse>>, ApiError> {
+    // Resolve the caller's effective permissions through the RBAC graph. Keyed on
+    // the single primary role for now; a later phase resolves the multi-role
+    // `user_roles` set here instead. Sorted so the payload is deterministic.
+    let graph = state.db.rbac();
+    let role_name = auth_user.0.role.as_str();
+    let mut permissions: Vec<String> = graph
+        .effective_permissions_by_names(&[role_name])
+        .into_iter()
+        .collect();
+    permissions.sort();
+    let roles = vec![role_name.to_string()];
+
+    Ok(Json(ApiResponse::success(CurrentUserResponse {
+        user: UserResponse::from(auth_user.0),
+        roles,
+        permissions,
+    })))
 }
 
 // Logout endpoint (for completeness, JWT is stateless)

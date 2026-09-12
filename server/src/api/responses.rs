@@ -143,6 +143,20 @@ impl From<crate::models::User> for UserResponse {
     }
 }
 
+/// The `/auth/me` payload: the user plus their RBAC roles and *effective*
+/// permissions (resolved through role inheritance). The frontend gates on
+/// `permissions` rather than on a hardcoded role hierarchy. `UserResponse` is
+/// flattened in, so existing consumers that read `role`/`id`/etc. off the top
+/// level keep working. `roles` is the user's role names -- currently the single
+/// primary role, and the multi-role set once assignment lands.
+#[derive(Debug, Serialize)]
+pub struct CurrentUserResponse {
+    #[serde(flatten)]
+    pub user: UserResponse,
+    pub roles: Vec<String>,
+    pub permissions: Vec<String>,
+}
+
 // Update user request model
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {
