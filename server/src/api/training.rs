@@ -208,7 +208,11 @@ async fn get_training_roster(
     user: AuthUser,
 ) -> Result<Json<ApiResponse<Vec<User>>>, ApiError> {
     // Check if user is either staff or a trainer for any tool
-    if !user.0.role.can_access_staff() && !is_user_a_trainer(&state, user.0.id).await? {
+    if !state
+        .db
+        .role_has_permission(user.0.role.as_str(), "training.certify")
+        && !is_user_a_trainer(&state, user.0.id).await?
+    {
         return Err(ApiError::Forbidden(
             "Must be a trainer or staff to access training roster".to_string(),
         ));
@@ -235,7 +239,11 @@ async fn get_training_roster_for_tool(
         .is_user_trainer_for_tool(user.0.id, tool_id)
         .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
-    if !user.0.role.can_access_staff() && !is_trainer_for_tool {
+    if !state
+        .db
+        .role_has_permission(user.0.role.as_str(), "training.certify")
+        && !is_trainer_for_tool
+    {
         return Err(ApiError::Forbidden(
             "Must be a trainer for this tool or staff to access tool training roster".to_string(),
         ));
@@ -278,7 +286,11 @@ async fn get_training_history_for_tool(
         .is_user_trainer_for_tool(user.0.id, tool_id)
         .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
-    if !user.0.role.can_access_staff() && !is_trainer_for_tool {
+    if !state
+        .db
+        .role_has_permission(user.0.role.as_str(), "training.certify")
+        && !is_trainer_for_tool
+    {
         return Err(ApiError::Forbidden(
             "Must be a trainer for this tool or staff to access training history".to_string(),
         ));
@@ -614,7 +626,11 @@ async fn get_user_tool_training_overview(
     Path((tool_id, target_user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<ToolTrainingOverview>>, ApiError> {
     // Users can view their own overview, staff can view anyone's
-    if user.0.id != target_user_id && !user.0.role.can_access_staff() {
+    if user.0.id != target_user_id
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "training.certify")
+    {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training overview".to_string(),
         ));
@@ -671,7 +687,11 @@ async fn get_user_training_progress_by_user(
     Query(query): Query<TrainingQuery>,
 ) -> Result<Json<ApiResponse<Vec<UserTrainingProgress>>>, ApiError> {
     // Users can view their own progress, staff can view anyone's
-    if user.0.id != target_user_id && !user.0.role.can_access_staff() {
+    if user.0.id != target_user_id
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "training.certify")
+    {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training progress".to_string(),
         ));
@@ -692,7 +712,11 @@ async fn get_specific_progress(
     Path((target_user_id, step_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<Option<UserTrainingProgress>>>, ApiError> {
     // Users can view their own progress, staff can view anyone's
-    if user.0.id != target_user_id && !user.0.role.can_access_staff() {
+    if user.0.id != target_user_id
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "training.certify")
+    {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training progress".to_string(),
         ));
@@ -714,7 +738,9 @@ async fn update_training_progress(
     Json(payload): Json<UpdateProgressRequest>,
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
     // Check if user can update this progress
-    let can_update = user.0.role.can_access_staff()
+    let can_update = state
+        .db
+        .role_has_permission(user.0.role.as_str(), "training.certify")
         || state
             .db
             .is_certified_instructor(user.0.id, step_id)
@@ -752,7 +778,11 @@ async fn start_training_session(
 ) -> Result<Json<ApiResponse<UserTrainingProgress>>, ApiError> {
     // Users can start their own training; staff can start it for someone
     // else (instructor-led sessions).
-    if user.0.id != target_user_id && !user.0.role.can_access_staff() {
+    if user.0.id != target_user_id
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "training.certify")
+    {
         return Err(ApiError::Forbidden(
             "Cannot start training for another user".to_string(),
         ));
@@ -832,7 +862,9 @@ async fn complete_training_session(
     // completing their own self-attestable step is attesting, whatever their
     // role, and is held to the attestation rules below.
     let is_self_attestation = step.self_attestable && user.0.id == target_user_id;
-    let can_complete = user.0.role.can_access_staff()
+    let can_complete = state
+        .db
+        .role_has_permission(user.0.role.as_str(), "training.certify")
         || state
             .db
             .is_certified_instructor(user.0.id, payload.training_step_id)

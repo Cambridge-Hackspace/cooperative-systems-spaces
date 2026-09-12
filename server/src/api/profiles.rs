@@ -84,7 +84,11 @@ async fn get_user_profile(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<ProfileResponse>>, ApiError> {
     // Users can view their own profile, or staff/admin users can view any profile
-    if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .role_has_permission(auth_user.0.role.as_str(), "profiles.manage")
+    {
         return Err(ApiError::Forbidden(
             "You can only view your own profile".to_string(),
         ));
@@ -113,7 +117,11 @@ async fn update_user_profile(
     Json(payload): Json<UpdateProfileRequest>,
 ) -> Result<Json<ApiResponse<ProfileResponse>>, ApiError> {
     // Users can only update their own profile, unless they're staff/admin
-    if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .role_has_permission(auth_user.0.role.as_str(), "profiles.manage")
+    {
         return Err(ApiError::Forbidden(
             "You can only update your own profile".to_string(),
         ));

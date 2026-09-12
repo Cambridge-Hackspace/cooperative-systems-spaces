@@ -86,7 +86,11 @@ async fn get_user_by_id(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
     // Users can view their own profile, or staff/admin users can view any profile
-    if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .role_has_permission(auth_user.0.role.as_str(), "users.manage")
+    {
         return Err(ApiError::Forbidden(
             "You can only view your own profile".to_string(),
         ));
@@ -109,14 +113,20 @@ async fn update_user(
     Json(payload): Json<UpdateUserRequest>,
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
     // Users can only update their own profile, unless they're staff/admin
-    if auth_user.0.id != user_id && !auth_user.0.role.can_access_staff() {
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .role_has_permission(auth_user.0.role.as_str(), "users.manage")
+    {
         return Err(ApiError::Forbidden(
             "You can only update your own profile".to_string(),
         ));
     }
 
     // Non-staff users cannot update is_active or role
-    if !auth_user.0.role.can_access_staff()
+    if !state
+        .db
+        .role_has_permission(auth_user.0.role.as_str(), "users.manage")
         && (payload.is_active.is_some() || payload.role.is_some())
     {
         return Err(ApiError::Forbidden(
@@ -126,7 +136,11 @@ async fn update_user(
 
     // Only admins can set admin role
     if let Some(ref new_role) = payload.role {
-        if *new_role == UserRole::Admin && !auth_user.0.role.can_access_admin() {
+        if *new_role == UserRole::Admin
+            && !state
+                .db
+                .role_has_permission(auth_user.0.role.as_str(), "admin.access")
+        {
             return Err(ApiError::Forbidden(
                 "Only admins can assign admin role".to_string(),
             ));
@@ -385,7 +399,11 @@ async fn update_user_theme(
     Json(payload): Json<UpdateThemeRequest>,
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
     // Users can only update their own theme (unless admin)
-    if auth_user.0.id != user_id && auth_user.0.role != UserRole::Admin {
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .role_has_permission(auth_user.0.role.as_str(), "admin.access")
+    {
         return Err(ApiError::Forbidden(
             "You can only update your own theme".to_string(),
         ));

@@ -7,7 +7,7 @@
 //!
 //! It is a false positive, and the suggested fix would be a regression. The
 //! handler does gate on
-//! `can_access_staff() || is_certified_instructor(user, payload.training_step_id)`,
+//! `role_has_permission(.., "training.certify") || is_certified_instructor(user, payload.training_step_id)`,
 //! which is both stronger and correctly scoped. Requiring
 //! `user.0.id == target_user_id` for non-staff would mean a certified
 //! instructor could only complete their *own* training and could no longer
@@ -102,9 +102,9 @@ fn starting_a_session_is_your_own_or_staff() {
          so any authenticated user can start training on anyone's behalf."
     );
     assert!(
-        body.contains("can_access_staff()"),
-        "`start_training_session` no longer checks for staff, so the \
-         instructor-led case is either broken or ungated."
+        body.contains("role_has_permission(user.0.role.as_str(), \"training.certify\")"),
+        "`start_training_session` no longer checks the `training.certify` \
+         permission, so the instructor-led case is either broken or ungated."
     );
     assert!(
         body.contains("ApiError::Forbidden"),
@@ -118,8 +118,8 @@ fn completing_a_session_is_staff_or_an_instructor_for_that_step() {
     let body = handler_body(&training_source(), "complete_training_session");
 
     assert!(
-        body.contains("can_access_staff()"),
-        "`complete_training_session` no longer checks for staff."
+        body.contains("role_has_permission(user.0.role.as_str(), \"training.certify\")"),
+        "`complete_training_session` no longer checks the `training.certify` permission."
     );
     assert!(
         body.contains("is_certified_instructor(user.0.id, payload.training_step_id)"),

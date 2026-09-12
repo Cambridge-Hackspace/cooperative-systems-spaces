@@ -20,11 +20,36 @@ use std::collections::{HashMap, HashSet};
 
 use css_checks::repo_root;
 
-const MIGRATION: &str = "server/migrations/2026-09-12-130000-0000_add_rbac/up.sql";
-
+/// Every migration `up.sql`, concatenated. The RBAC seed is spread across more
+/// than one migration -- the tier roles and inheritance land in the Phase 1
+/// migration, and later migrations add granular permissions and grants -- so
+/// the ladder the resolver actually sees is the union of them all. Parsing the
+/// whole corpus (rather than one pinned file) keeps this oracle honest as the
+/// catalog grows.
 fn seed_sql() -> String {
-    std::fs::read_to_string(repo_root().join(MIGRATION))
-        .unwrap_or_else(|e| panic!("cannot read {MIGRATION}: {e}"))
+    let root = repo_root().join("server/migrations");
+    let mut files = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().is_some_and(|n| n == "up.sql") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut sql = String::new();
+    for f in files {
+        sql.push_str(&std::fs::read_to_string(&f).unwrap_or_default());
+        sql.push_str("\n;\n");
+    }
+    sql
 }
 
 /// Split a single SQL statement's `VALUES (...), (...)` list into rows of
@@ -107,18 +132,28 @@ fn value_rows(stmt: &str) -> Vec<Vec<String>> {
     rows
 }
 
-/// The statement beginning with `INSERT INTO <table>` (semicolon-terminated).
-fn statement(sql: &str, insert_into: &str) -> String {
-    let upper = sql.to_uppercase();
-    let needle = format!("INSERT INTO {}", insert_into.to_uppercase());
-    let start = upper
-        .find(&needle)
-        .unwrap_or_else(|| panic!("no `INSERT INTO {insert_into}` in the seed"));
-    let end = sql[start..]
-        .find(';')
-        .map(|e| start + e)
-        .unwrap_or(sql.len());
-    sql[start..end].to_string()
+/// Every statement beginning `INSERT INTO <table>` across the concatenated
+/// migration corpus. There can be more than one per table -- e.g. grants are
+/// seeded in one migration and extended in another -- and all of them count.
+/// Splitting on `;` is safe: the RBAC seed's INSERTs contain no inner
+/// semicolons. The table name is matched at a word boundary so `roles` does not
+/// also catch `role_permissions`, `role_inheritance`, or `user_roles`.
+fn statements(sql: &str, insert_into: &str) -> Vec<String> {
+    let needle = format!("insert into {}", insert_into.to_lowercase());
+    sql.split(';')
+        .filter(|stmt| {
+            let lower = stmt.to_lowercase();
+            match lower.find(&needle) {
+                Some(pos) => lower[pos + needle.len()..]
+                    .chars()
+                    .next()
+                    .map(|c| !(c.is_alphanumeric() || c == '_'))
+                    .unwrap_or(true),
+                None => false,
+            }
+        })
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Transitive closure of `roles` over the inheritance edges (inclusive),
@@ -161,40 +196,46 @@ fn parse_seed(
 ) {
     // roles: (name, description, is_system, level)
     let mut levels = HashMap::new();
-    for row in value_rows(&statement(sql, "roles")) {
-        assert_eq!(row.len(), 4, "roles seed tuple shape changed: {row:?}");
-        let level: i64 = row[3]
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("role {}'s level is not an integer: {:?}", row[0], row[3]));
-        levels.insert(row[0].clone(), level);
+    for stmt in statements(sql, "roles") {
+        for row in value_rows(&stmt) {
+            assert_eq!(row.len(), 4, "roles seed tuple shape changed: {row:?}");
+            let level: i64 = row[3].trim().parse().unwrap_or_else(|_| {
+                panic!("role {}'s level is not an integer: {:?}", row[0], row[3])
+            });
+            levels.insert(row[0].clone(), level);
+        }
     }
 
-    // role_permissions: JOIN (VALUES ('member','member.access'), ...)
+    // role_permissions: JOIN (VALUES ('member','member.access'), ...), possibly
+    // across several migrations.
     let mut own: HashMap<String, HashSet<String>> = HashMap::new();
-    for row in value_rows(&statement(sql, "role_permissions")) {
-        assert_eq!(
-            row.len(),
-            2,
-            "role_permissions seed tuple shape changed: {row:?}"
-        );
-        own.entry(row[0].clone())
-            .or_default()
-            .insert(row[1].clone());
+    for stmt in statements(sql, "role_permissions") {
+        for row in value_rows(&stmt) {
+            assert_eq!(
+                row.len(),
+                2,
+                "role_permissions seed tuple shape changed: {row:?}"
+            );
+            own.entry(row[0].clone())
+                .or_default()
+                .insert(row[1].clone());
+        }
     }
 
     // role_inheritance: JOIN (VALUES ('admin','staff'), ...) child->parent
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
-    for row in value_rows(&statement(sql, "role_inheritance")) {
-        assert_eq!(
-            row.len(),
-            2,
-            "role_inheritance seed tuple shape changed: {row:?}"
-        );
-        edges
-            .entry(row[0].clone())
-            .or_default()
-            .push(row[1].clone());
+    for stmt in statements(sql, "role_inheritance") {
+        for row in value_rows(&stmt) {
+            assert_eq!(
+                row.len(),
+                2,
+                "role_inheritance seed tuple shape changed: {row:?}"
+            );
+            edges
+                .entry(row[0].clone())
+                .or_default()
+                .push(row[1].clone());
+        }
     }
 
     (levels, own, edges)
@@ -248,6 +289,52 @@ fn seed_reproduces_the_legacy_ladder() {
                 should,
                 "effective permissions diverged from the legacy ladder: \
                  role `{role}` {} have `{perm}` but the seed says it {}",
+                if should { "should" } else { "should NOT" },
+                if has { "does" } else { "does not" },
+            );
+        }
+    }
+}
+
+/// Phase 2 migrated the in-handler `can_access_staff()` overrides (users,
+/// profiles, trainers, training) onto granular permissions. Those gates
+/// previously admitted staff and admin and nobody else, so the granular grants
+/// must reproduce exactly that: held by `staff` (and `admin` via inheritance),
+/// denied to `member`, `newbie`, and `unknown`. If a future migration widened a
+/// grant -- say, handed `users.manage` to `member` -- a route that still reads
+/// like a staff gate would quietly admit members, and this catches it.
+#[test]
+fn granular_gate_permissions_reproduce_the_staff_override() {
+    let sql = seed_sql();
+    let (_levels, own, edges) = parse_seed(&sql);
+
+    // The permissions the migrated in-handler gates consult. Keep in lockstep
+    // with the `role_has_permission(.., "..")` calls in server/src/api/*.rs.
+    let staff_gates = [
+        "users.manage",
+        "profiles.manage",
+        "training.certify",
+        "trainers.manage",
+    ];
+    let roles = ["unknown", "newbie", "member", "staff", "admin"];
+
+    for perm in staff_gates {
+        // Anti-vacuity: the permission has to actually exist as a grant, or the
+        // "denied to everyone below staff" checks would pass over a typo.
+        assert!(
+            own.values().any(|keys| keys.contains(perm)),
+            "`{perm}` is granted to no role at all -- either the migration is \
+             missing or the permission key was renamed without updating this \
+             oracle and the handlers that read it."
+        );
+        for role in roles {
+            let has = effective_perms(role, &own, &edges).contains(perm);
+            let should = role == "staff" || role == "admin";
+            assert_eq!(
+                has,
+                should,
+                "granular gate `{perm}` is held by the wrong roles: `{role}` {} \
+                 have it but the staff-override rule says it {}",
                 if should { "should" } else { "should NOT" },
                 if has { "does" } else { "does not" },
             );
