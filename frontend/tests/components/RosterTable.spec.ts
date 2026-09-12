@@ -51,6 +51,9 @@ const mocks = vi.hoisted(() => ({
   activateUser: vi.fn(),
   deactivateUser: vi.fn(),
   resetUserMfa: vi.fn(),
+  rbacConfig: vi.fn(),
+  assignUserRole: vi.fn(),
+  unassignUserRole: vi.fn(),
 }))
 
 vi.mock('@/utils/api', () => ({
@@ -61,6 +64,11 @@ vi.mock('@/utils/api', () => ({
     deactivateUser: mocks.deactivateUser,
   },
   adminApi: { resetUserMfa: mocks.resetUserMfa },
+  rbacApi: {
+    config: mocks.rbacConfig,
+    assignUserRole: mocks.assignUserRole,
+    unassignUserRole: mocks.unassignUserRole,
+  },
   apiClient: {},
 }))
 
@@ -79,6 +87,10 @@ const deactivateUser = mocks.deactivateUser as unknown as ReturnType<
 >
 const resetUserMfa = mocks.resetUserMfa as unknown as ReturnType<
   typeof vi.fn<(id: string) => Envelope>
+>
+const rbacConfig = mocks.rbacConfig as unknown as ReturnType<typeof vi.fn<() => Envelope>>
+const assignUserRole = mocks.assignUserRole as unknown as ReturnType<
+  typeof vi.fn<(userId: string, roleId: string) => Envelope>
 >
 
 const ADMIN_ID = '00000000-0000-4000-8000-00000000000a'
@@ -124,7 +136,15 @@ async function mountRoster(role: UserRole, users: User[]) {
 }
 
 beforeEach(() => {
-  for (const m of [getAllUsers, updateUserRole, activateUser, deactivateUser, resetUserMfa]) {
+  for (const m of [
+    getAllUsers,
+    updateUserRole,
+    activateUser,
+    deactivateUser,
+    resetUserMfa,
+    rbacConfig,
+    assignUserRole,
+  ]) {
     m.mockReset()
   }
 })
@@ -376,5 +396,59 @@ describe('status changes', () => {
 
     expect(wrapper.emitted('error')?.[0]?.[0]).toBe('Not permitted')
     expect(wrapper.find('table').exists()).toBe(true)
+  })
+})
+
+describe('the multi-role editor', () => {
+  it('offers a "Manage roles" control on other rows for an admin, but not on the own row', async () => {
+    const { wrapper } = await mountRoster(UserRole.Admin, [
+      user({ id: ADMIN_ID, username: 'viewer', role: UserRole.Admin }),
+      user({ id: 'other', username: 'other' }),
+    ])
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].find('button[title="Manage roles"]').exists()).toBe(false)
+    expect(rows[1].find('button[title="Manage roles"]').exists()).toBe(true)
+  })
+
+  it('assigns an additional role through the RBAC API', async () => {
+    rbacConfig.mockResolvedValue({
+      success: true,
+      data: {
+        roles: [
+          {
+            id: 'r-staff',
+            name: 'staff',
+            description: '',
+            is_system: true,
+            level: 3,
+            inherits: [],
+            permissions: [],
+          },
+        ],
+        permissions: [],
+      },
+    })
+    assignUserRole.mockResolvedValue({ success: true })
+
+    const { wrapper } = await mountRoster(UserRole.Admin, [
+      user({ id: 'other', username: 'other' }),
+    ])
+    await wrapper.find('button[title="Manage roles"]').trigger('click')
+    await flushPromises()
+    // Panel is open and the catalog loaded.
+    expect(rbacConfig).toHaveBeenCalledTimes(1)
+    const addBtn = wrapper.findAll('button').find((b) => b.text() === 'Add')
+    await addBtn.trigger('click')
+    await flushPromises()
+    expect(assignUserRole).toHaveBeenCalledWith('other', 'r-staff')
+  })
+
+  it('does not open the manage panel on mount, so the role editor still offers exactly four roles', async () => {
+    // Guards the existing "four assignable roles" assertion: the manage panel's
+    // own <select> must not leak options into the primary role editor.
+    const { wrapper } = await mountRoster(UserRole.Admin, [user({ id: 'other' })])
+    await wrapper.find('button[title="Edit role"]').trigger('click')
+    const options = wrapper.findAll('option').map((o) => o.text())
+    expect(options).toEqual(['Newbie', 'Member', 'Staff', 'Admin'])
   })
 })

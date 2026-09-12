@@ -137,6 +137,46 @@
                       />
                     </svg>
                   </button>
+                  <button
+                    v-if="canEditRoles && user.id !== authStore.user?.id"
+                    class="btn btn-ghost btn-xs"
+                    title="Manage roles"
+                    @click.stop="openManageRoles(user)"
+                  >
+                    +roles
+                  </button>
+                </div>
+                <div
+                  v-if="managingRolesFor === user.id"
+                  class="mt-2 p-2 border border-base-300 rounded-lg bg-base-200 space-y-2"
+                >
+                  <div class="text-xs opacity-70">
+                    Assign or remove additional roles (beyond the primary role above).
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <select v-model="manageRoleChoice" class="select select-bordered select-xs">
+                      <option v-for="r in catalogRoles" :key="r.id" :value="r.id">
+                        {{ r.name }}
+                      </option>
+                    </select>
+                    <button
+                      class="btn btn-xs btn-primary"
+                      :disabled="roleActionBusy || !manageRoleChoice"
+                      @click="assignRole(user)"
+                    >
+                      Add
+                    </button>
+                    <button
+                      class="btn btn-xs"
+                      :disabled="roleActionBusy || !manageRoleChoice"
+                      @click="removeRoleFromUser(user)"
+                    >
+                      Remove
+                    </button>
+                    <button class="btn btn-xs btn-ghost" @click="managingRolesFor = null">
+                      Close
+                    </button>
+                  </div>
                 </div>
               </td>
 
@@ -309,8 +349,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { adminApi, userApi } from '@/utils/api'
-import type { User, UserRole } from '@/types'
+import { adminApi, rbacApi, userApi } from '@/utils/api'
+import type { User, UserRole, RbacRole } from '@/types'
 import { UserRole as UserRoleEnum } from '@/types'
 
 // Props and Emits
@@ -336,6 +376,16 @@ const editingUser = ref<string | null>(null)
 const editingRole = ref<UserRole | null>(null)
 const isUpdatingRole = ref(false)
 const isUpdatingStatus = ref(false)
+
+// Multi-role management (#65): assign/remove additional roles beyond the primary.
+// The roster API returns only the primary role, so the catalog is loaded lazily
+// when a manage panel is first opened; a user's current additional assignments
+// are not listed here (a follow-up endpoint would show them).
+const managingRolesFor = ref<string | null>(null)
+const catalogRoles = ref<RbacRole[]>([])
+const catalogLoaded = ref(false)
+const manageRoleChoice = ref<string>('')
+const roleActionBusy = ref(false)
 
 // Available roles for dropdown
 const availableRoles = computed(() => [
@@ -465,6 +515,42 @@ const canToggleStatus = (user: User): boolean => {
   if (!canToggleUserStatus.value) return false
   if (String(user.id) === String(authStore.user?.id)) return false // Can't deactivate self
   return true
+}
+
+const openManageRoles = async (user: User) => {
+  managingRolesFor.value = user.id
+  if (!catalogLoaded.value) {
+    const res = await rbacApi.config()
+    if (res.success && res.data) {
+      catalogRoles.value = [...res.data.roles].sort((a, b) => a.level - b.level)
+      catalogLoaded.value = true
+      if (!manageRoleChoice.value && catalogRoles.value.length > 0) {
+        manageRoleChoice.value = catalogRoles.value[0].id
+      }
+    } else {
+      emit('error', res.error || 'Failed to load roles')
+    }
+  }
+}
+
+const assignRole = async (user: User) => {
+  if (!manageRoleChoice.value) return
+  roleActionBusy.value = true
+  const res = await rbacApi.assignUserRole(user.id, manageRoleChoice.value)
+  if (!res.success) {
+    emit('error', res.error || 'Failed to assign role')
+  }
+  roleActionBusy.value = false
+}
+
+const removeRoleFromUser = async (user: User) => {
+  if (!manageRoleChoice.value) return
+  roleActionBusy.value = true
+  const res = await rbacApi.unassignUserRole(user.id, manageRoleChoice.value)
+  if (!res.success) {
+    emit('error', res.error || 'Failed to remove role')
+  }
+  roleActionBusy.value = false
 }
 
 const startEditingRole = (user: User) => {

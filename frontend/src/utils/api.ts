@@ -403,6 +403,39 @@ export const homeLinksApi = {
   },
 }
 
+// RBAC administration API (#65): roles, the permission matrix, inheritance, and
+// user role assignment.
+export const rbacApi = withErrorGuard({
+  config() {
+    return apiClient.get<import('@/types').RbacConfig>('/admin/rbac')
+  },
+  createRole(body: import('@/types').CreateRoleRequest) {
+    return apiClient.post<import('@/types').RbacRole>('/admin/rbac/roles', body)
+  },
+  updateRole(id: string, body: import('@/types').UpdateRoleRequest) {
+    return apiClient.patch<import('@/types').RbacRole>(`/admin/rbac/roles/${id}`, body)
+  },
+  removeRole(id: string) {
+    return apiClient.delete<void>(`/admin/rbac/roles/${id}`)
+  },
+  /** Replace a role's direct permission grants with the given set. */
+  setPermissions(id: string, permissions: string[]) {
+    return apiClient.put<void>(`/admin/rbac/roles/${id}/permissions`, { permissions })
+  },
+  /** Replace a role's inheritance edges with the given set of role ids. */
+  setInheritance(id: string, inherits: string[]) {
+    return apiClient.put<void>(`/admin/rbac/roles/${id}/inheritance`, { inherits })
+  },
+  /** Grant a user an additional role. */
+  assignUserRole(userId: string, roleId: string) {
+    return apiClient.post<void>(`/admin/users/${userId}/roles`, { role_id: roleId })
+  },
+  /** Remove a role from a user. */
+  unassignUserRole(userId: string, roleId: string) {
+    return apiClient.delete<void>(`/admin/users/${userId}/roles/${roleId}`)
+  },
+})
+
 // Schedules API
 export const schedulesApi = {
   list() {

@@ -155,6 +155,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/admin/rbac',
+      name: 'admin-rbac',
+      component: () => import('@/views/RolesAdminView.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
       path: '/admin/devices',
       name: 'admin-devices',
       component: () => import('@/components/DeviceManagement.vue'),

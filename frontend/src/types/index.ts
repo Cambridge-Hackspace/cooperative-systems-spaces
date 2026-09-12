@@ -39,6 +39,10 @@ export interface User {
   updated_at: string
   /** Set when the user has at least one confirmed MFA method. */
   mfa_enrolled_at?: string | null
+  /** RBAC role names the user holds (from /auth/me). */
+  roles?: string[]
+  /** Effective RBAC permission keys (from /auth/me). */
+  permissions?: string[]
   /**
    * Whether the address has been confirmed.
    *
@@ -660,4 +664,38 @@ export interface WebhookDelivery {
   error: string | null
   request_payload: unknown
   created_at: string
+}
+
+// --- RBAC administration (#65) ---
+export interface RbacRole {
+  id: string
+  name: string
+  description: string
+  is_system: boolean
+  level: number
+  /** Role ids this role inherits from directly. */
+  inherits: string[]
+  /** Permission keys granted directly to this role (not via inheritance). */
+  permissions: string[]
+}
+
+export interface RbacPermission {
+  key: string
+  description: string
+}
+
+export interface RbacConfig {
+  roles: RbacRole[]
+  permissions: RbacPermission[]
+}
+
+export interface CreateRoleRequest {
+  name: string
+  description?: string
+  level?: number
+}
+
+export interface UpdateRoleRequest {
+  description?: string
+  level?: number
 }

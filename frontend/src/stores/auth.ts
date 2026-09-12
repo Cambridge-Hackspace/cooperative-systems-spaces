@@ -22,6 +22,10 @@ export const useAuthStore = defineStore('auth', () => {
   const pendingMfa = ref<MfaChallenge | null>(null)
   /** True when the just-completed login flagged the user must enroll in MFA. */
   const mustEnrollMfa = ref(false)
+  /** RBAC role names the signed-in user holds, from /auth/me. */
+  const roles = ref<string[]>([])
+  /** Effective RBAC permission keys, from /auth/me. Gated UI reads these. */
+  const permissions = ref<string[]>([])
 
   // Getters
   const isAuthenticated = computed(() => !!token.value && !!user.value)
@@ -40,6 +44,12 @@ export const useAuthStore = defineStore('auth', () => {
     const role = String(user.value.role).toLowerCase()
     return role === 'member' || role === 'staff' || role === 'admin'
   })
+  /** True when the user's effective permissions include `key`. */
+  const hasPermission = (key: string): boolean => permissions.value.includes(key)
+  /** True when the user holds any of `keys`. */
+  const hasAnyPermission = (keys: string[]): boolean =>
+    keys.some((k) => permissions.value.includes(k))
+
   const userRole = computed(() => user.value?.role)
   const userName = computed(() => user.value?.username)
   const userFullName = computed(() => user.value?.full_name)
@@ -123,6 +133,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const logout = () => {
+    roles.value = []
+    permissions.value = []
     user.value = null
     token.value = null
     localStorage.removeItem('css_token')
@@ -138,10 +150,15 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = null
 
     try {
-      const response = await apiClient.get<User>('/auth/me')
+      const response = await apiClient.get<User & { roles?: string[]; permissions?: string[] }>(
+        '/auth/me'
+      )
 
       if (response.success && response.data) {
         user.value = response.data
+        // /auth/me flattens the user and adds the RBAC role + permission sets.
+        roles.value = response.data.roles ?? []
+        permissions.value = response.data.permissions ?? []
         return true
       } else {
         // Token might be invalid
@@ -231,6 +248,10 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     isStaff,
     isMember,
+    roles,
+    permissions,
+    hasPermission,
+    hasAnyPermission,
     userRole,
     userName,
     userFullName,
