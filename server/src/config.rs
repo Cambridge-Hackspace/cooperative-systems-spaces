@@ -409,39 +409,6 @@ impl Default for ReportConfig {
     }
 }
 
-/// Space directory and mapping configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpaceDirectoryConfig {
-    /// Enable space directory functionality
-    pub enabled: bool,
-    /// Default space coordinates format
-    pub coordinate_format: String,
-    /// Maximum number of spaces per directory
-    pub max_spaces_per_directory: u32,
-    /// Enable space search functionality
-    pub search_enabled: bool,
-    /// Enable space filtering
-    pub filtering_enabled: bool,
-    /// Default space visibility
-    pub default_visibility: String,
-    /// Allow anonymous space viewing
-    pub allow_anonymous_viewing: bool,
-}
-
-impl Default for SpaceDirectoryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            coordinate_format: "decimal".to_string(),
-            max_spaces_per_directory: 1000,
-            search_enabled: true,
-            filtering_enabled: true,
-            default_visibility: "public".to_string(),
-            allow_anonymous_viewing: true,
-        }
-    }
-}
-
 /// Sentry error tracking configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SentryConfig {
@@ -1261,8 +1228,6 @@ pub struct AppConfig {
     pub stripe: StripeConfig,
     /// Reporting configuration
     pub reports: ReportConfig,
-    /// Space directory settings
-    pub space_directory: SpaceDirectoryConfig,
     /// Sentry error tracking
     pub sentry: SentryConfig,
     /// Database configuration
@@ -1318,7 +1283,6 @@ impl Default for AppConfig {
             theme: ThemeConfig::default(),
             stripe: StripeConfig::default(),
             reports: ReportConfig::default(),
-            space_directory: SpaceDirectoryConfig::default(),
             sentry: SentryConfig::default(),
             database: DatabaseConfig::default(),
             server: ServerConfig::default(),

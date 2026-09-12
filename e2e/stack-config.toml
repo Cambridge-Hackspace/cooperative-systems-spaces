@@ -134,15 +134,6 @@ max_reports_retained = 30
 default_export_format = "csv"
 email_reports = false
 
-[space_directory]
-enabled = true
-coordinate_format = "decimal"
-max_spaces_per_directory = 1000
-search_enabled = true
-filtering_enabled = true
-default_visibility = "public"
-allow_anonymous_viewing = true
-
 [sentry]
 environment = "e2e"
 traces_sample_rate = 0.0
