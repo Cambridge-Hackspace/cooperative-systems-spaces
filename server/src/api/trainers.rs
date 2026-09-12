@@ -287,7 +287,8 @@ async fn create_training_record(
     if !is_trainer
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "trainers.manage")
+            .user_has_permission(user.0.id, "trainers.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "User is not authorized as a trainer for this tool".to_string(),
@@ -349,7 +350,8 @@ async fn get_training_records(
     // Staff can view all records, regular users can only view their own records
     let (trainer_filter, trainee_filter) = if state
         .db
-        .role_has_permission(user.0.role.as_str(), "trainers.manage")
+        .user_has_permission(user.0.id, "trainers.manage")
+        .map_err(ApiError::from)?
     {
         // Staff can use any filters
         (query.trainer_id, query.trainee_id)
@@ -415,7 +417,8 @@ async fn get_user_training_records(
     if user.0.id != target_user_id
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "trainers.manage")
+            .user_has_permission(user.0.id, "trainers.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training records".to_string(),
@@ -455,7 +458,8 @@ async fn update_training_record(
     if existing_record.record.trainer_user_id != user.0.id
         && !state
             .db
-            .role_has_permission(user.0.role.as_str(), "trainers.manage")
+            .user_has_permission(user.0.id, "trainers.manage")
+            .map_err(ApiError::from)?
     {
         return Err(ApiError::Forbidden(
             "Cannot update other trainers' records".to_string(),
