@@ -59,7 +59,12 @@ impl R {
 /// Every method × path the API router registers.
 pub const ROUTES: &[R] = &[
     R("GET", "/api/admin/audit-logs", Guard::Admin), // admin::get_audit_logs
-    R("GET", "/api/admin/rbac", Guard::Admin), // admin::get_rbac
+    R("GET", "/api/admin/rbac", Guard::Admin), // rbac_admin::get_rbac
+    R("POST", "/api/admin/rbac/roles", Guard::Admin), // rbac_admin::create_role
+    R("PATCH", "/api/admin/rbac/roles/00000000-0000-4000-8000-000000000001", Guard::Admin), // rbac_admin::update_role
+    R("DELETE", "/api/admin/rbac/roles/00000000-0000-4000-8000-000000000001", Guard::Admin), // rbac_admin::delete_role
+    R("PUT", "/api/admin/rbac/roles/00000000-0000-4000-8000-000000000001/permissions", Guard::Admin), // rbac_admin::set_role_permissions
+    R("PUT", "/api/admin/rbac/roles/00000000-0000-4000-8000-000000000001/inheritance", Guard::Admin), // rbac_admin::set_role_inheritance
     R("GET", "/api/admin/devices", Guard::Admin), // devices::list_devices
     R("DELETE", "/api/admin/devices/00000000-0000-4000-8000-000000000001", Guard::Admin), // devices::delete_device
     R("PATCH", "/api/admin/devices/00000000-0000-4000-8000-000000000001/name", Guard::Admin), // devices::rename_device
@@ -139,6 +144,8 @@ pub const ROUTES: &[R] = &[
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/deactivate", Guard::Admin), // admin::deactivate_user
     R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/mfa", Guard::Admin), // admin::reset_user_mfa
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/role", Guard::Admin), // admin::update_user_role
+    R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::assign_user_role
+    R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles/00000000-0000-4000-8000-000000000001", Guard::Admin), // admin::unassign_user_role
     R("GET", "/api/admin/webhooks", Guard::Admin), // webhooks::list_webhooks
     R("POST", "/api/admin/webhooks", Guard::Admin), // webhooks::create_webhook
     R("DELETE", "/api/admin/webhooks/00000000-0000-4000-8000-000000000001", Guard::Admin), // webhooks::delete_webhook

@@ -124,7 +124,12 @@ describe('the audit filter against the server enum', () => {
       // 89 -> 94: per-member rate tiers (#34) added tool_rate_tier_created /
       // _updated / _deleted and tool_tier_assigned / _unassigned. Billing-admin
       // records, not access-control filters -- unfiltered deliberately.
-    ).toBe(94)
+      // 94 -> 101: data-driven RBAC administration (#65) added role_created /
+      // _updated / _deleted, role_permissions_changed, role_inheritance_changed,
+      // and user_role_assigned / _unassigned. These are surfaced on the RBAC
+      // admin screen itself; in the general audit filter they join the
+      // unfiltered admin-lifecycle set, like the facility/billing records above.
+    ).toBe(101)
   })
 
   // Named separately because these are the ones that matter in an

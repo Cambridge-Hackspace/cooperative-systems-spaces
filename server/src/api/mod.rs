@@ -16,6 +16,7 @@ pub mod pages;
 pub mod places;
 pub mod power;
 pub mod profiles;
+pub mod rbac_admin;
 pub mod responses;
 pub mod schedules;
 pub mod stripe;
