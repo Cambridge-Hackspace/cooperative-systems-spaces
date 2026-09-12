@@ -61,6 +61,10 @@ RUN apt-get update && apt-get install -y \
 # Copy compiled server binary (with embedded migrations)
 COPY --from=backend-builder /app/target/release/css-server /app/server
 
+# One-shot ToolPass data loader (#38); present in the image so it can be run as
+# `podman run ... /app/toolpass-load ...` against the stack's Postgres.
+COPY --from=backend-builder /app/target/release/toolpass-load /app/toolpass-load
+
 # Copy frontend build
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 

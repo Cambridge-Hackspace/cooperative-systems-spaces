@@ -34,6 +34,10 @@ path = "src/bin/groupsio_sink.rs"
 name = "css-stripe-sink"
 path = "src/bin/stripe_sink.rs"
 
+[[bin]]
+name = "toolpass-load"
+path = "src/bin/toolpass_load.rs"
+
 [dependencies]
 # Workspace dependencies
 anyhow = { workspace = true }
@@ -63,6 +67,10 @@ icalendar = "0.16"
 # Diesel ORM and database dependencies
 diesel = { version = "2.1.4", features = ["postgres", "chrono", "uuid", "r2d2", "serde_json", "numeric"] }
 diesel_migrations = "2.1.0"
+# One-shot ToolPass loader (toolpass-load bin) reads the intermediate SQLite;
+# `bundled` compiles SQLite from source so it needs no system libsqlite (and
+# builds the same on the arm64 image).
+rusqlite = { version = "0.31", features = ["bundled"] }
 dotenvy = "0.15.7"
 url = "2.5.7"
 rust_decimal = "1.33"

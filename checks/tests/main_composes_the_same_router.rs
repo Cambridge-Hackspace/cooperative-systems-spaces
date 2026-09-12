@@ -84,6 +84,11 @@ const SEPARATE_BINARIES: &[&str] = &[
     // `stripe` stage, which asserts the ledger balance and role rather than what
     // the client claimed to send.
     "bin/stripe_sink.rs",
+    // The one-shot ToolPass -> CSS data loader (#38). It composes no HTTP routes
+    // at all -- it reads a staging SQLite and writes rows through Diesel -- but
+    // lives under bin/, so this list is what says it is deliberate. It is not an
+    // API surface; it is a migration tool run by hand against a target database.
+    "bin/toolpass_load.rs",
 ];
 
 /// Every `.route("...")` literal in a file, comments stripped.
