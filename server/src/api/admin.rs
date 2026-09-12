@@ -45,7 +45,10 @@ pub fn admin_routes() -> Router<AppState> {
             axum::routing::delete(reset_user_mfa),
         )
         .route("/audit-logs", get(get_audit_logs))
-        .route("/users/{user_id}/roles", post(assign_user_role))
+        .route(
+            "/users/{user_id}/roles",
+            post(assign_user_role).get(list_user_roles),
+        )
         .route(
             "/users/{user_id}/roles/{role_id}",
             axum::routing::delete(unassign_user_role),
@@ -76,6 +79,33 @@ pub fn admin_routes() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 pub struct AssignRoleRequest {
     pub role_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssignedRole {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// `GET /api/admin/users/{user_id}/roles` — the roles a user currently holds.
+async fn list_user_roles(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<Vec<AssignedRole>>>, ApiError> {
+    state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+    let roles = state
+        .db
+        .user_assigned_roles(user_id)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .map(|(id, name)| AssignedRole { id, name })
+        .collect();
+    Ok(Json(ApiResponse::success(roles)))
 }
 
 /// `POST /api/admin/users/{user_id}/roles` — grant a user an additional role.

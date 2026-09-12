@@ -153,6 +153,26 @@
                   <div class="text-xs opacity-70">
                     Assign or remove additional roles (beyond the primary role above).
                   </div>
+                  <div class="flex flex-wrap items-center gap-1">
+                    <span v-if="assignedRoles.length === 0" class="text-xs opacity-60">
+                      No additional roles assigned.
+                    </span>
+                    <span
+                      v-for="ar in assignedRoles"
+                      :key="ar.id"
+                      class="badge badge-outline badge-sm gap-1"
+                    >
+                      {{ ar.name }}
+                      <button
+                        class="btn btn-ghost btn-xs px-1"
+                        :disabled="roleActionBusy"
+                        title="Remove this role"
+                        @click="removeRoleFromUser(user, ar.id)"
+                      >
+                        &times;
+                      </button>
+                    </span>
+                  </div>
                   <div class="flex flex-wrap items-center gap-2">
                     <select v-model="manageRoleChoice" class="select select-bordered select-xs">
                       <option v-for="r in catalogRoles" :key="r.id" :value="r.id">
@@ -350,7 +370,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { adminApi, rbacApi, userApi } from '@/utils/api'
-import type { User, UserRole, RbacRole } from '@/types'
+import type { User, UserRole, RbacRole, AssignedUserRole } from '@/types'
 import { UserRole as UserRoleEnum } from '@/types'
 
 // Props and Emits
@@ -386,6 +406,8 @@ const catalogRoles = ref<RbacRole[]>([])
 const catalogLoaded = ref(false)
 const manageRoleChoice = ref<string>('')
 const roleActionBusy = ref(false)
+// The roles the currently-managed user holds (GET /admin/users/{id}/roles, #74).
+const assignedRoles = ref<AssignedUserRole[]>([])
 
 // Available roles for dropdown
 const availableRoles = computed(() => [
@@ -517,8 +539,18 @@ const canToggleStatus = (user: User): boolean => {
   return true
 }
 
+const loadAssignedRoles = async (userId: string) => {
+  const res = await rbacApi.listUserRoles(userId)
+  if (res.success && res.data) {
+    assignedRoles.value = res.data
+  } else {
+    emit('error', res.error || 'Failed to load the user’s roles')
+  }
+}
+
 const openManageRoles = async (user: User) => {
   managingRolesFor.value = user.id
+  assignedRoles.value = []
   if (!catalogLoaded.value) {
     const res = await rbacApi.config()
     if (res.success && res.data) {
@@ -531,6 +563,7 @@ const openManageRoles = async (user: User) => {
       emit('error', res.error || 'Failed to load roles')
     }
   }
+  await loadAssignedRoles(user.id)
 }
 
 const assignRole = async (user: User) => {
@@ -539,16 +572,21 @@ const assignRole = async (user: User) => {
   const res = await rbacApi.assignUserRole(user.id, manageRoleChoice.value)
   if (!res.success) {
     emit('error', res.error || 'Failed to assign role')
+  } else {
+    await loadAssignedRoles(user.id)
   }
   roleActionBusy.value = false
 }
 
-const removeRoleFromUser = async (user: User) => {
-  if (!manageRoleChoice.value) return
+const removeRoleFromUser = async (user: User, roleId?: string) => {
+  const target = roleId ?? manageRoleChoice.value
+  if (!target) return
   roleActionBusy.value = true
-  const res = await rbacApi.unassignUserRole(user.id, manageRoleChoice.value)
+  const res = await rbacApi.unassignUserRole(user.id, target)
   if (!res.success) {
     emit('error', res.error || 'Failed to remove role')
+  } else {
+    await loadAssignedRoles(user.id)
   }
   roleActionBusy.value = false
 }

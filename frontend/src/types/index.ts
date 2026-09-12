@@ -689,6 +689,12 @@ export interface RbacConfig {
   permissions: RbacPermission[]
 }
 
+/** A role a user currently holds, as returned by GET /admin/users/{id}/roles. */
+export interface AssignedUserRole {
+  id: string
+  name: string
+}
+
 export interface CreateRoleRequest {
   name: string
   description?: string

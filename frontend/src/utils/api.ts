@@ -426,6 +426,10 @@ export const rbacApi = withErrorGuard({
   setInheritance(id: string, inherits: string[]) {
     return apiClient.put<void>(`/admin/rbac/roles/${id}/inheritance`, { inherits })
   },
+  /** The roles a user currently holds (id + name). */
+  listUserRoles(userId: string) {
+    return apiClient.get<import('@/types').AssignedUserRole[]>(`/admin/users/${userId}/roles`)
+  },
   /** Grant a user an additional role. */
   assignUserRole(userId: string, roleId: string) {
     return apiClient.post<void>(`/admin/users/${userId}/roles`, { role_id: roleId })
