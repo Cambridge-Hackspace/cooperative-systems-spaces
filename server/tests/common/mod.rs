@@ -59,6 +59,7 @@ impl R {
 /// Every method × path the API router registers.
 pub const ROUTES: &[R] = &[
     R("GET", "/api/admin/audit-logs", Guard::Admin), // admin::get_audit_logs
+    R("GET", "/api/admin/rbac", Guard::Admin), // admin::get_rbac
     R("GET", "/api/admin/devices", Guard::Admin), // devices::list_devices
     R("DELETE", "/api/admin/devices/00000000-0000-4000-8000-000000000001", Guard::Admin), // devices::delete_device
     R("PATCH", "/api/admin/devices/00000000-0000-4000-8000-000000000001/name", Guard::Admin), // devices::rename_device

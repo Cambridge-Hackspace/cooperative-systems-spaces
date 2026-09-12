@@ -45,6 +45,7 @@ pub fn admin_routes() -> Router<AppState> {
             axum::routing::delete(reset_user_mfa),
         )
         .route("/audit-logs", get(get_audit_logs))
+        .route("/rbac", get(get_rbac))
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
         .nest("/devices", crate::api::devices::admin_devices_routes())
@@ -58,6 +59,80 @@ pub fn admin_routes() -> Router<AppState> {
         .nest("/tool-tiers", crate::api::tool_tiers::admin_routes())
         .nest("/schedules", crate::api::schedules::admin_routes())
         .nest("/home-links", crate::api::home_links::admin_routes())
+}
+
+// ---- RBAC read view (#65 Phase 3) -------------------------------------------
+//
+// `GET /api/admin/rbac` returns every role, the permission catalog, and each
+// role's direct grants and inheritance edges -- the data the admin UI renders
+// as the role x permission matrix and the inheritance graph. Read-only in this
+// phase; create/edit/assign land alongside it later. Effective (inherited)
+// permissions are not expanded here: the client gets raw grants + edges so the
+// UI can show "granted directly" distinctly from "inherited".
+
+#[derive(Debug, Serialize)]
+pub struct RoleView {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub is_system: bool,
+    pub level: i16,
+    /// Role ids this role inherits from directly.
+    pub inherits: Vec<Uuid>,
+    /// Permission keys granted directly to this role (not counting inheritance).
+    pub permissions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PermissionView {
+    pub key: String,
+    pub description: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RbacView {
+    pub roles: Vec<RoleView>,
+    pub permissions: Vec<PermissionView>,
+}
+
+async fn get_rbac(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<RbacView>>, ApiError> {
+    let (roles, permissions, grants, edges) = state.db.rbac_snapshot().map_err(ApiError::from)?;
+
+    let mut own: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
+    for (role_id, key) in grants {
+        own.entry(role_id).or_default().push(key);
+    }
+    let mut inherits: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+    for (role_id, parent) in edges {
+        inherits.entry(role_id).or_default().push(parent);
+    }
+
+    let roles = roles
+        .into_iter()
+        .map(|r| {
+            let mut permissions = own.remove(&r.id).unwrap_or_default();
+            permissions.sort();
+            RoleView {
+                id: r.id,
+                name: r.name,
+                description: r.description,
+                is_system: r.is_system,
+                level: r.level,
+                inherits: inherits.remove(&r.id).unwrap_or_default(),
+                permissions,
+            }
+        })
+        .collect();
+
+    let permissions = permissions
+        .into_iter()
+        .map(|(key, description)| PermissionView { key, description })
+        .collect();
+
+    Ok(Json(ApiResponse::success(RbacView { roles, permissions })))
 }
 
 /// Reload configuration from disk (admin only)

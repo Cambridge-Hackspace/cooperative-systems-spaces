@@ -223,6 +223,49 @@ impl DatabaseManager {
         self.rbac().has_permission_for_role_name(role_name, key)
     }
 
+    /// A full read of the RBAC configuration for the admin API: every role, the
+    /// permission catalog, the role x permission grants, and the inheritance
+    /// edges. Returned as raw rows for the handler to assemble; read straight
+    /// from the tables (not the cached graph) so descriptions and `is_system`
+    /// come through and the view reflects the database exactly.
+    #[allow(clippy::type_complexity)]
+    pub fn rbac_snapshot(
+        &self,
+    ) -> Result<
+        (
+            Vec<crate::rbac::Role>,
+            Vec<(String, String)>,         // permissions: (key, description)
+            Vec<(uuid::Uuid, String)>,     // role_permissions: (role_id, permission_key)
+            Vec<(uuid::Uuid, uuid::Uuid)>, // role_inheritance: (role_id, inherits_role_id)
+        ),
+        DatabaseError,
+    > {
+        use crate::schema::{permissions, role_inheritance, role_permissions, roles};
+        let mut conn = self.get_connection()?;
+        let role_rows: Vec<crate::rbac::Role> = roles::table
+            .select(crate::rbac::Role::as_select())
+            .order(roles::level.asc())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let perm_rows: Vec<(String, String)> = permissions::table
+            .select((permissions::key, permissions::description))
+            .order(permissions::key.asc())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let grant_rows: Vec<(uuid::Uuid, String)> = role_permissions::table
+            .select((role_permissions::role_id, role_permissions::permission_key))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let edge_rows: Vec<(uuid::Uuid, uuid::Uuid)> = role_inheritance::table
+            .select((
+                role_inheritance::role_id,
+                role_inheritance::inherits_role_id,
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok((role_rows, perm_rows, grant_rows, edge_rows))
+    }
+
     /// Register the channel the webhook dispatcher listens on. Called once at
     /// startup after the dispatcher is created. Subsequent calls are ignored.
     pub fn set_webhook_sender(
