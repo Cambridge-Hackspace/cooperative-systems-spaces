@@ -137,6 +137,21 @@ impl UserRole {
             UserRole::Admin => 4,
         }
     }
+
+    /// The role's canonical name, identical to its wire encoding and to the
+    /// `roles.name` seeded by the RBAC migration. This is the key the RBAC
+    /// resolver ([`crate::rbac::RoleGraph`]) looks a user's role up by, so it
+    /// must stay in lockstep with the `ToSql` encoding above and the migration
+    /// seed. Prefer this over matching the enum when resolving permissions.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UserRole::Unknown => "unknown",
+            UserRole::Newbie => "newbie",
+            UserRole::Member => "member",
+            UserRole::Staff => "staff",
+            UserRole::Admin => "admin",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]

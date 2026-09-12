@@ -323,8 +323,12 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
+        let app_state: AppState = AppState::from_ref(state);
 
-        if !user.role.can_access_admin() {
+        if !app_state
+            .db
+            .role_has_permission(user.role.as_str(), "admin.access")
+        {
             return Err(AuthError::Forbidden("administrator access"));
         }
 
@@ -345,8 +349,12 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
+        let app_state: AppState = AppState::from_ref(state);
 
-        if !user.role.can_access_staff() {
+        if !app_state
+            .db
+            .role_has_permission(user.role.as_str(), "staff.access")
+        {
             return Err(AuthError::Forbidden("staff access"));
         }
 
@@ -367,8 +375,12 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
+        let app_state: AppState = AppState::from_ref(state);
 
-        if !user.role.can_access_member() {
+        if !app_state
+            .db
+            .role_has_permission(user.role.as_str(), "member.access")
+        {
             return Err(AuthError::Forbidden("member access"));
         }
 

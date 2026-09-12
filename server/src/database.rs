@@ -84,6 +84,13 @@ pub struct DatabaseManager {
     /// the two dispatchers must not be able to starve or block one another, and
     /// each is registered (or absent) on its own.
     groupsio_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::models::AuditLog>>,
+    /// Cached RBAC role graph (roles + permission matrix + inheritance), the
+    /// authorization decisions read from. Loaded once at startup by
+    /// [`reload_rbac`] after migrations seed it; held behind an `RwLock` so a
+    /// future role/permission edit can rebuild it in place (Phase 3) without a
+    /// restart. Defaults to an empty graph, which grants nothing -- so a manager
+    /// that was never loaded denies rather than silently permits.
+    rbac_graph: std::sync::Arc<std::sync::RwLock<std::sync::Arc<crate::rbac::RoleGraph>>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -130,6 +137,9 @@ impl DatabaseManager {
             pool,
             webhook_tx: std::sync::OnceLock::new(),
             groupsio_tx: std::sync::OnceLock::new(),
+            rbac_graph: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
+                crate::rbac::RoleGraph::default(),
+            ))),
         }
     }
 }
@@ -178,7 +188,39 @@ impl DatabaseManager {
             pool,
             webhook_tx: std::sync::OnceLock::new(),
             groupsio_tx: std::sync::OnceLock::new(),
+            rbac_graph: std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(
+                crate::rbac::RoleGraph::default(),
+            ))),
         })
+    }
+
+    /// Rebuild the cached RBAC role graph from the database. Called once at
+    /// startup after migrations have seeded the roles, and again (Phase 3) after
+    /// any role/permission/inheritance edit. Fails loudly if the RBAC tables are
+    /// missing or unreadable -- an unseeded graph would deny every gated route.
+    pub fn reload_rbac(&self) -> Result<(), DatabaseError> {
+        let mut conn = self.get_connection()?;
+        let graph = crate::rbac::RoleGraph::load(&mut conn).map_err(DatabaseError::Diesel)?;
+        *self
+            .rbac_graph
+            .write()
+            .expect("rbac_graph lock is never held across a panic") = std::sync::Arc::new(graph);
+        Ok(())
+    }
+
+    /// A snapshot of the cached RBAC role graph.
+    pub fn rbac(&self) -> std::sync::Arc<crate::rbac::RoleGraph> {
+        self.rbac_graph
+            .read()
+            .expect("rbac_graph lock is never held across a panic")
+            .clone()
+    }
+
+    /// Does the role named `role_name` (through inheritance) hold `key`? The
+    /// enforcement entry point for the extractors and in-handler gates. Reads
+    /// the cached graph, so it is infallible and allocation-cheap.
+    pub fn role_has_permission(&self, role_name: &str, key: &str) -> bool {
+        self.rbac().has_permission_for_role_name(role_name, key)
     }
 
     /// Register the channel the webhook dispatcher listens on. Called once at
@@ -311,6 +353,11 @@ pub async fn initialize_database(
 
     // Perform initial health check
     db_manager.health_check()?;
+
+    // Load the RBAC role graph now that migrations have seeded it. Done here,
+    // after health_check, so a broken schema surfaces as a startup failure
+    // rather than as every gated route silently denying at runtime.
+    db_manager.reload_rbac()?;
 
     let status = db_manager.pool_status();
     info!("Database initialization complete. {}", status);

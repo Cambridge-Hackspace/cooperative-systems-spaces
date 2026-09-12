@@ -284,7 +284,11 @@ async fn create_training_record(
         .is_active_tool_trainer(payload.tool_id, user.0.id)
         .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
 
-    if !is_trainer && !user.0.role.can_access_staff() {
+    if !is_trainer
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "trainers.manage")
+    {
         return Err(ApiError::Forbidden(
             "User is not authorized as a trainer for this tool".to_string(),
         ));
@@ -343,7 +347,10 @@ async fn get_training_records(
     Query(query): Query<TrainingRecordsQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrainingRecordWithUsers>>>, ApiError> {
     // Staff can view all records, regular users can only view their own records
-    let (trainer_filter, trainee_filter) = if user.0.role.can_access_staff() {
+    let (trainer_filter, trainee_filter) = if state
+        .db
+        .role_has_permission(user.0.role.as_str(), "trainers.manage")
+    {
         // Staff can use any filters
         (query.trainer_id, query.trainee_id)
     } else {
@@ -405,7 +412,11 @@ async fn get_user_training_records(
     Query(query): Query<serde_json::Value>,
 ) -> Result<Json<ApiResponse<Vec<TrainingRecordWithUsers>>>, ApiError> {
     // Users can view their own records, staff can view anyone's
-    if user.0.id != target_user_id && !user.0.role.can_access_staff() {
+    if user.0.id != target_user_id
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "trainers.manage")
+    {
         return Err(ApiError::Forbidden(
             "Cannot view other users' training records".to_string(),
         ));
@@ -441,7 +452,11 @@ async fn update_training_record(
         .ok_or_else(|| ApiError::NotFound("Training record not found".to_string()))?;
 
     // Check permissions: trainers can update their own records, staff can update any
-    if existing_record.record.trainer_user_id != user.0.id && !user.0.role.can_access_staff() {
+    if existing_record.record.trainer_user_id != user.0.id
+        && !state
+            .db
+            .role_has_permission(user.0.role.as_str(), "trainers.manage")
+    {
         return Err(ApiError::Forbidden(
             "Cannot update other trainers' records".to_string(),
         ));

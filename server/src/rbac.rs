@@ -1,13 +1,18 @@
-//! Role-based access control model + resolver (#65, Phase 1).
+//! Role-based access control model + resolver (#65).
 //!
-//! Phase 1 adds the data model (roles, permissions, the role x permission matrix,
-//! role inheritance, and user<->role assignments) and a resolver that computes a
-//! user's *effective* permissions and tier level. It is NOT yet wired into
-//! enforcement -- the extractors still read `users.role` -- so behaviour is
-//! unchanged; Phase 2 switches the gates onto this. The seed migration mirrors
-//! the legacy 5-role ladder, so `effective_permissions` reproduces the old
-//! `can_access_*` tiers (see the pure logic + tests below and the source oracle
-//! `checks/tests/rbac_seed_reproduces_the_ladder.rs`).
+//! The data model (roles, permissions, the role x permission matrix, role
+//! inheritance, and user<->role assignments) lives in the `..._add_rbac`
+//! migration; this resolver computes a user's *effective* permissions and tier
+//! level from it. As of Phase 2 it is the enforcement path: the auth extractors
+//! and the in-handler gates resolve through [`RoleGraph::has_permission_for_role_name`]
+//! (keyed on `users.role`), and [`crate::database::DatabaseManager`] caches the
+//! graph. Phase 3 will switch the key from the single `users.role` to the
+//! multi-role `user_roles` assignment.
+//!
+//! The seed migration mirrors the legacy 5-role ladder, so `effective_permissions`
+//! reproduces the old `can_access_*` tiers exactly -- proven by the pure tests
+//! below and the source oracle `checks/tests/rbac_seed_reproduces_the_ladder.rs`,
+//! so switching enforcement onto it changed no behaviour.
 
 use std::collections::{HashMap, HashSet};
 
@@ -84,6 +89,27 @@ impl RoleGraph {
 
     pub fn role_id(&self, name: &str) -> Option<Uuid> {
         self.by_name.get(name).copied()
+    }
+
+    /// Effective permissions for a set of roles named by their `roles.name`.
+    /// Names that do not resolve are skipped (an unseeded role grants nothing).
+    pub fn effective_permissions_by_names(&self, names: &[&str]) -> HashSet<String> {
+        let ids: Vec<Uuid> = names
+            .iter()
+            .filter_map(|n| self.by_name.get(*n).copied())
+            .collect();
+        self.effective_permissions(&ids)
+    }
+
+    /// Does the role named `role_name` (via inheritance) hold `key`? This is the
+    /// enforcement entry point in Phase 2, where a user carries a single role
+    /// name (`users.role`); Phase 3 switches to the multi-role `user_roles`
+    /// assignment. An unknown role name holds nothing, so it denies.
+    pub fn has_permission_for_role_name(&self, role_name: &str, key: &str) -> bool {
+        match self.by_name.get(role_name) {
+            Some(id) => self.has_permission(&[*id], key),
+            None => false,
+        }
     }
 
     /// Every role reachable from `roles` via inheritance (inclusive). Cycle-safe.
