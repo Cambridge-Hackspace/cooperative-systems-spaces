@@ -41,6 +41,10 @@ pub struct ToolUsageSession {
     pub rate_flat_fee: Option<BigDecimal>,
     pub rate_per_min: Option<BigDecimal>,
     pub tier_id: Option<Uuid>,
+    /// Idempotency/provenance key for a session imported from an external system
+    /// (#38, e.g. a ToolPass session id); `None` for a live session the app
+    /// opened itself. Appended last for the positional `Queryable`.
+    pub source_reference: Option<String>,
 }
 
 /// A session to open (activation). Everything else defaults: `ended_at`,
