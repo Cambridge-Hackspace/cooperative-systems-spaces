@@ -152,6 +152,15 @@ main(async () => {
     })
     assertEq('roles/assign-role', 200, assigned.status, `assign -> ${assigned.status}`)
 
+    // The read endpoint (#74) reflects the assignment.
+    const listed = await GET(`/api/admin/users/${low.user.id}/roles`, { token: admin.token })
+    assertEq('roles/list-user-roles', 200, listed.status, `list roles -> ${listed.status}`)
+    ok(
+      'roles/list-shows-assigned',
+      (listed.json?.data ?? []).some((r) => r.id === roleId),
+      `assigned role ${roleId} not present in GET /users/{id}/roles`,
+    )
+
     // Same token: enforcement re-reads user_roles each request, so the grant
     // takes effect without re-issuing the JWT.
     const after = await req(memberRoute.method, fillM(memberRoute.template), { token: low.token })
@@ -167,6 +176,13 @@ main(async () => {
 
     const afterRemove = await req(memberRoute.method, fillM(memberRoute.template), { token: low.token })
     assertEq('roles/member-route-denied-after-unassign', 403, afterRemove.status, `after unassign -> ${afterRemove.status}`)
+
+    const listedAfter = await GET(`/api/admin/users/${low.user.id}/roles`, { token: admin.token })
+    ok(
+      'roles/list-hides-unassigned',
+      !(listedAfter.json?.data ?? []).some((r) => r.id === roleId),
+      `unassigned role ${roleId} still present in GET /users/{id}/roles`,
+    )
   }
 
   // Cycle rejection: A inherits B is fine; B inherits A closes a cycle and must

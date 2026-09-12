@@ -298,6 +298,25 @@ impl DatabaseManager {
         crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)
     }
 
+    /// A user's assigned roles as `(id, name)`, ordered by name -- for the roster
+    /// UI to show which roles a user holds. Two single-table reads (the RBAC
+    /// tables are not registered for cross-table queries).
+    pub fn user_assigned_roles(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Vec<(uuid::Uuid, String)>, DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        let ids = crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)?;
+        let mut out: Vec<(uuid::Uuid, String)> = roles::table
+            .filter(roles::id.eq_any(&ids))
+            .select((roles::id, roles::name))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        Ok(out)
+    }
+
     /// The permission catalog keys (for validating grants).
     pub fn permission_keys(&self) -> Result<Vec<String>, DatabaseError> {
         use crate::schema::permissions;

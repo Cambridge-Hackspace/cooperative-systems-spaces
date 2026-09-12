@@ -144,6 +144,7 @@ pub const ROUTES: &[R] = &[
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/deactivate", Guard::Admin), // admin::deactivate_user
     R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/mfa", Guard::Admin), // admin::reset_user_mfa
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/role", Guard::Admin), // admin::update_user_role
+    R("GET", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::list_user_roles
     R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::assign_user_role
     R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles/00000000-0000-4000-8000-000000000001", Guard::Admin), // admin::unassign_user_role
     R("GET", "/api/admin/webhooks", Guard::Admin), // webhooks::list_webhooks

@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   deactivateUser: vi.fn(),
   resetUserMfa: vi.fn(),
   rbacConfig: vi.fn(),
+  listUserRoles: vi.fn(),
   assignUserRole: vi.fn(),
   unassignUserRole: vi.fn(),
 }))
@@ -66,6 +67,7 @@ vi.mock('@/utils/api', () => ({
   adminApi: { resetUserMfa: mocks.resetUserMfa },
   rbacApi: {
     config: mocks.rbacConfig,
+    listUserRoles: mocks.listUserRoles,
     assignUserRole: mocks.assignUserRole,
     unassignUserRole: mocks.unassignUserRole,
   },
@@ -147,6 +149,10 @@ beforeEach(() => {
   ]) {
     m.mockReset()
   }
+  // The manage panel reads the user's current roles when it opens; default it to
+  // an empty set so tests that don't care about it don't have to stub it.
+  mocks.listUserRoles.mockReset()
+  mocks.listUserRoles.mockResolvedValue({ success: true, data: [] })
 })
 
 describe('the refresh seam', () => {
@@ -441,6 +447,49 @@ describe('the multi-role editor', () => {
     await addBtn.trigger('click')
     await flushPromises()
     expect(assignUserRole).toHaveBeenCalledWith('other', 'r-staff')
+  })
+
+  it('shows the roles a user already holds and removes one by its chip', async () => {
+    rbacConfig.mockResolvedValue({
+      success: true,
+      data: {
+        roles: [
+          {
+            id: 'r-staff',
+            name: 'staff',
+            description: '',
+            is_system: true,
+            level: 3,
+            inherits: [],
+            permissions: [],
+          },
+        ],
+        permissions: [],
+      },
+    })
+    // The user currently holds an extra "staff" role.
+    mocks.listUserRoles.mockResolvedValue({
+      success: true,
+      data: [{ id: 'r-staff', name: 'staff' }],
+    })
+    mocks.unassignUserRole.mockResolvedValue({ success: true })
+
+    const { wrapper } = await mountRoster(UserRole.Admin, [
+      user({ id: 'other', username: 'other' }),
+    ])
+    await wrapper.find('button[title="Manage roles"]').trigger('click')
+    await flushPromises()
+
+    // The held role is displayed as a chip.
+    expect(wrapper.text()).toContain('staff')
+    expect(mocks.listUserRoles).toHaveBeenCalledWith('other')
+
+    // Its remove (×) button unassigns that specific role.
+    const chipRemove = wrapper.findAll('button').find((b) => b.text().includes('×'))
+    expect(chipRemove).toBeTruthy()
+    await chipRemove.trigger('click')
+    await flushPromises()
+    expect(mocks.unassignUserRole).toHaveBeenCalledWith('other', 'r-staff')
   })
 
   it('does not open the manage panel on mount, so the role editor still offers exactly four roles', async () => {
