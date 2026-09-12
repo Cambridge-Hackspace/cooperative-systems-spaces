@@ -311,6 +311,7 @@ diesel::table! {
         rate_flat_fee -> Nullable<Numeric>,
         rate_per_min -> Nullable<Numeric>,
         tier_id -> Nullable<Uuid>,
+        source_reference -> Nullable<Text>,
     }
 }
 

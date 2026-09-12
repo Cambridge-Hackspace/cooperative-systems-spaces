@@ -38,9 +38,25 @@ use css_server::models::{
     UserRole,
 };
 use css_server::schema::{
-    membership_ledger, tool_rate_tiers, tool_tier_assignments, tools, training_waivers, user_cards,
-    users,
+    membership_ledger, tool_rate_tiers, tool_tier_assignments, tool_usage_sessions, tools,
+    training_waivers, user_cards, users,
 };
+
+/// Insert shape for a migrated historical session. `status` is `settled` (a
+/// completed session) and `hold_amount` 0 -- the prepaid-hold concept does not
+/// apply to an import; `source_reference` carries the ToolPass session id for
+/// idempotency/provenance.
+#[derive(diesel::Insertable)]
+#[diesel(table_name = tool_usage_sessions)]
+struct NewMigratedSession {
+    tool_id: Uuid,
+    user_id: Uuid,
+    started_at: DateTime<Utc>,
+    hold_amount: BigDecimal,
+    reported_seconds: Option<BigDecimal>,
+    status: String,
+    source_reference: Option<String>,
+}
 
 const MIGRATION_EMAIL: &str = "toolpass-migration@invalid.local";
 const MIGRATION_USERNAME: &str = "toolpass_migration";
@@ -94,6 +110,14 @@ struct SLedger {
     ext_ref: String,
 }
 
+struct SSession {
+    source_ref: String,
+    user_tp: String,
+    tool_tp: String,
+    started_at: DateTime<Utc>,
+    reported_seconds: Option<BigDecimal>,
+}
+
 struct Staged {
     users: Vec<SUser>,
     tools: Vec<STool>,
@@ -102,6 +126,7 @@ struct Staged {
     assignments: Vec<SAssign>,
     waivers: Vec<SWaiver>,
     ledger: Vec<SLedger>,
+    sessions: Vec<SSession>,
 }
 
 fn role_of(s: &str) -> UserRole {
@@ -261,6 +286,25 @@ fn read_staged(path: &str) -> Result<Staged, Box<dyn Error>> {
         });
     }
 
+    let mut sessions = Vec::new();
+    let mut st = sq.prepare(
+        "SELECT source_ref,user_tp_id,tool_tp_id,started_at,reported_seconds FROM stg_sessions",
+    )?;
+    let mut rows = st.query([])?;
+    while let Some(r) = rows.next()? {
+        let secs: Option<String> = r.get(4)?;
+        sessions.push(SSession {
+            source_ref: r.get(0)?,
+            user_tp: r.get(1)?,
+            tool_tp: r.get(2)?,
+            started_at: ts(&r.get::<_, String>(3)?)?,
+            reported_seconds: match secs {
+                Some(s) => Some(bd(&s)?),
+                None => None,
+            },
+        });
+    }
+
     Ok(Staged {
         users,
         tools,
@@ -269,6 +313,7 @@ fn read_staged(path: &str) -> Result<Staged, Box<dyn Error>> {
         assignments,
         waivers,
         ledger,
+        sessions,
     })
 }
 
@@ -282,6 +327,7 @@ struct Counts {
     waivers: usize,
     ledger: usize,
     ledger_members_skipped: usize,
+    sessions: usize,
 }
 
 /// All Postgres writes, in FK order. Diesel errors only (SQLite is already read).
@@ -538,6 +584,40 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
         }
     }
 
+    // Sessions -- historical usage records. Idempotent at the phase level: if any
+    // migrated session (source_reference set) already exists, skip the phase.
+    // status is `settled` and hold_amount 0 -- the prepaid-hold concept does not
+    // apply to an import.
+    let existing_sessions: i64 = tool_usage_sessions::table
+        .filter(tool_usage_sessions::source_reference.is_not_null())
+        .count()
+        .get_result(conn)?;
+    if existing_sessions == 0 {
+        let batch: Vec<NewMigratedSession> = s
+            .sessions
+            .iter()
+            .filter_map(|se| {
+                let uid = user_id.get(&se.user_tp)?;
+                let tid = tool_id.get(&se.tool_tp)?;
+                Some(NewMigratedSession {
+                    tool_id: *tid,
+                    user_id: *uid,
+                    started_at: se.started_at,
+                    hold_amount: BigDecimal::from(0),
+                    reported_seconds: se.reported_seconds.clone(),
+                    status: "settled".to_string(),
+                    source_reference: Some(se.source_ref.clone()),
+                })
+            })
+            .collect();
+        for chunk in batch.chunks(LEDGER_CHUNK) {
+            diesel::insert_into(tool_usage_sessions::table)
+                .values(chunk)
+                .execute(conn)?;
+            c.sessions += chunk.len();
+        }
+    }
+
     Ok(c)
 }
 
@@ -613,7 +693,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     eprintln!("reading staged SQLite: {sqlite}");
     let staged = read_staged(&sqlite)?;
     eprintln!(
-        "staged: {} users, {} tools, {} cards, {} tiers, {} assignments, {} waivers, {} ledger",
+        "staged: {} users, {} tools, {} cards, {} tiers, {} assignments, {} waivers, {} ledger, {} sessions",
         staged.users.len(),
         staged.tools.len(),
         staged.cards.len(),
@@ -621,6 +701,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         staged.assignments.len(),
         staged.waivers.len(),
         staged.ledger.len(),
+        staged.sessions.len(),
     );
     let admins = staged
         .users
