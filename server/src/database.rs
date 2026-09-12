@@ -268,6 +268,212 @@ impl DatabaseManager {
         Ok((names, permissions))
     }
 
+    // ===== RBAC administration (#65 Phase 3c) =====================================
+    //
+    // Writes to the roles / role_permissions / role_inheritance tables change the
+    // cached graph, so each calls `reload_rbac` after committing. Writes to
+    // `user_roles` (assignment) do not touch the graph -- only which roles a user
+    // holds -- so they skip the reload. Policy (protecting system roles, cycle
+    // rejection, last-admin protection) lives in the handlers so it can answer a
+    // 4xx; these methods just perform the write.
+
+    /// One role by id, or `None`.
+    pub fn get_role(
+        &self,
+        role_id: uuid::Uuid,
+    ) -> Result<Option<crate::rbac::Role>, DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        roles::table
+            .find(role_id)
+            .select(crate::rbac::Role::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The role ids assigned to a user (for last-admin simulation in the UI).
+    pub fn user_role_ids(&self, user_id: uuid::Uuid) -> Result<Vec<uuid::Uuid>, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)
+    }
+
+    /// The permission catalog keys (for validating grants).
+    pub fn permission_keys(&self) -> Result<Vec<String>, DatabaseError> {
+        use crate::schema::permissions;
+        let mut conn = self.get_connection()?;
+        permissions::table
+            .select(permissions::key)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Create a custom (non-system) role.
+    pub fn create_role(
+        &self,
+        name: &str,
+        description: &str,
+        level: i16,
+    ) -> Result<crate::rbac::Role, DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        let role = diesel::insert_into(roles::table)
+            .values((
+                roles::name.eq(name),
+                roles::description.eq(description),
+                roles::level.eq(level),
+            ))
+            .returning(crate::rbac::Role::as_returning())
+            .get_result::<crate::rbac::Role>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        self.reload_rbac()?;
+        Ok(role)
+    }
+
+    /// Update a role's description and/or level (name and `is_system` are fixed).
+    pub fn update_role(
+        &self,
+        role_id: uuid::Uuid,
+        description: Option<String>,
+        level: Option<i16>,
+    ) -> Result<crate::rbac::Role, DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        let role = conn
+            .transaction::<crate::rbac::Role, diesel::result::Error, _>(|conn| {
+                if let Some(d) = &description {
+                    diesel::update(roles::table.find(role_id))
+                        .set(roles::description.eq(d))
+                        .execute(conn)?;
+                }
+                if let Some(l) = level {
+                    diesel::update(roles::table.find(role_id))
+                        .set(roles::level.eq(l))
+                        .execute(conn)?;
+                }
+                diesel::update(roles::table.find(role_id))
+                    .set(roles::updated_at.eq(chrono::Utc::now()))
+                    .execute(conn)?;
+                roles::table
+                    .find(role_id)
+                    .select(crate::rbac::Role::as_select())
+                    .first(conn)
+            })
+            .map_err(DatabaseError::Diesel)?;
+        self.reload_rbac()?;
+        Ok(role)
+    }
+
+    /// Delete a role. FK cascades remove its grants, inheritance edges, and user
+    /// assignments. The handler refuses this for system roles.
+    pub fn delete_role(&self, role_id: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        let n = diesel::delete(roles::table.find(role_id))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        self.reload_rbac()?;
+        Ok(n)
+    }
+
+    /// Replace a role's direct permission grants with `keys`.
+    pub fn set_role_permissions(
+        &self,
+        role_id: uuid::Uuid,
+        keys: &[String],
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::role_permissions;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            diesel::delete(role_permissions::table.filter(role_permissions::role_id.eq(role_id)))
+                .execute(conn)?;
+            for key in keys {
+                diesel::insert_into(role_permissions::table)
+                    .values((
+                        role_permissions::role_id.eq(role_id),
+                        role_permissions::permission_key.eq(key),
+                    ))
+                    .on_conflict((role_permissions::role_id, role_permissions::permission_key))
+                    .do_nothing()
+                    .execute(conn)?;
+            }
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)?;
+        self.reload_rbac()?;
+        Ok(())
+    }
+
+    /// Replace a role's inheritance edges (the roles it inherits from). The
+    /// handler validates acyclicity before calling.
+    pub fn set_role_inheritance(
+        &self,
+        role_id: uuid::Uuid,
+        parents: &[uuid::Uuid],
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::role_inheritance;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            diesel::delete(role_inheritance::table.filter(role_inheritance::role_id.eq(role_id)))
+                .execute(conn)?;
+            for parent in parents {
+                diesel::insert_into(role_inheritance::table)
+                    .values((
+                        role_inheritance::role_id.eq(role_id),
+                        role_inheritance::inherits_role_id.eq(parent),
+                    ))
+                    .on_conflict((
+                        role_inheritance::role_id,
+                        role_inheritance::inherits_role_id,
+                    ))
+                    .do_nothing()
+                    .execute(conn)?;
+            }
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)?;
+        self.reload_rbac()?;
+        Ok(())
+    }
+
+    /// Assign a role to a user (idempotent). Does not change the graph, so no
+    /// reload. Leaves `users.role` (the denormalized primary) untouched.
+    pub fn assign_user_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_id: uuid::Uuid,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_roles;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(user_roles::table)
+            .values((
+                user_roles::user_id.eq(user_id),
+                user_roles::role_id.eq(role_id),
+            ))
+            .on_conflict((user_roles::user_id, user_roles::role_id))
+            .do_nothing()
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// Remove a role assignment from a user. Returns the number of rows removed.
+    pub fn unassign_user_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_id: uuid::Uuid,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::user_roles;
+        let mut conn = self.get_connection()?;
+        diesel::delete(
+            user_roles::table
+                .filter(user_roles::user_id.eq(user_id))
+                .filter(user_roles::role_id.eq(role_id)),
+        )
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
     /// A full read of the RBAC configuration for the admin API: every role, the
     /// permission catalog, the role x permission grants, and the inheritance
     /// edges. Returned as raw rows for the handler to assemble; read straight

@@ -122,6 +122,9 @@ const BUDGET: &[(&str, usize)] = &[
     // can be sidestepped by laundering the error through another type first.
     ("users.rs", 3),
     ("webhooks.rs", 0),
+    // The RBAC admin API (#65 Phase 3) maps every database failure through
+    // `ApiError::from`, so it has no blanket-500 of its own.
+    ("rbac_admin.rs", 0),
 ];
 
 fn counts() -> Vec<(String, usize)> {

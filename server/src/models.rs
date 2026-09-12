@@ -552,6 +552,16 @@ pub enum AuditEventType {
     ToolRateTierDeleted,
     ToolTierAssigned,
     ToolTierUnassigned,
+    // Data-driven RBAC administration (#65). Who changed a role, the permission
+    // matrix, the inheritance graph, or a user's role assignments -- all of
+    // which change who can do what, so all audited.
+    RoleCreated,
+    RoleUpdated,
+    RoleDeleted,
+    RolePermissionsChanged,
+    RoleInheritanceChanged,
+    UserRoleAssigned,
+    UserRoleUnassigned,
 }
 
 impl AuditEventType {
@@ -676,6 +686,13 @@ impl AuditEventType {
             Self::ToolRateTierDeleted => "tool_rate_tier_deleted",
             Self::ToolTierAssigned => "tool_tier_assigned",
             Self::ToolTierUnassigned => "tool_tier_unassigned",
+            Self::RoleCreated => "role_created",
+            Self::RoleUpdated => "role_updated",
+            Self::RoleDeleted => "role_deleted",
+            Self::RolePermissionsChanged => "role_permissions_changed",
+            Self::RoleInheritanceChanged => "role_inheritance_changed",
+            Self::UserRoleAssigned => "user_role_assigned",
+            Self::UserRoleUnassigned => "user_role_unassigned",
         }
     }
 
@@ -803,6 +820,13 @@ impl AuditEventType {
             ToolRateTierDeleted,
             ToolTierAssigned,
             ToolTierUnassigned,
+            RoleCreated,
+            RoleUpdated,
+            RoleDeleted,
+            RolePermissionsChanged,
+            RoleInheritanceChanged,
+            UserRoleAssigned,
+            UserRoleUnassigned,
         ]
     }
 }

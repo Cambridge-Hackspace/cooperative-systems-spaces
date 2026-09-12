@@ -86,6 +86,17 @@ const WRITERS: &[Writer] = &[
                       branches on the count.",
         ),
     },
+    Writer {
+        name: "assign_user_role",
+        exempt: Some(
+            "An idempotent role grant: `on_conflict do_nothing`, so the count is \
+                      1 (assigned) or 0 (already held), and both are success. The \
+                      handler validates the user and role exist first, so a zero \
+                      here is not a missing target -- it is a duplicate grant, \
+                      which is the intended no-op. Unassign, by contrast, returns \
+                      the count and 404s on zero.",
+        ),
+    },
     // Every other writer that used to be here has been fixed: each reads the row
     // count and returns `NotFound` when it is zero. The check below -- "no writer
     // matching this pattern is unlisted" -- is what stops a new one appearing.

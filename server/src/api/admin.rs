@@ -45,7 +45,12 @@ pub fn admin_routes() -> Router<AppState> {
             axum::routing::delete(reset_user_mfa),
         )
         .route("/audit-logs", get(get_audit_logs))
-        .route("/rbac", get(get_rbac))
+        .route("/users/{user_id}/roles", post(assign_user_role))
+        .route(
+            "/users/{user_id}/roles/{role_id}",
+            axum::routing::delete(unassign_user_role),
+        )
+        .nest("/rbac", crate::api::rbac_admin::admin_routes())
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
         .nest("/devices", crate::api::devices::admin_devices_routes())
@@ -61,78 +66,113 @@ pub fn admin_routes() -> Router<AppState> {
         .nest("/home-links", crate::api::home_links::admin_routes())
 }
 
-// ---- RBAC read view (#65 Phase 3) -------------------------------------------
+// ---- User <-> role assignment (#65 Phase 3) --------------------------------
 //
-// `GET /api/admin/rbac` returns every role, the permission catalog, and each
-// role's direct grants and inheritance edges -- the data the admin UI renders
-// as the role x permission matrix and the inheritance graph. Read-only in this
-// phase; create/edit/assign land alongside it later. Effective (inherited)
-// permissions are not expanded here: the client gets raw grants + edges so the
-// UI can show "granted directly" distinctly from "inherited".
+// The multi-role assignment surface. `users.role` stays the denormalized primary
+// role (edited via `PUT /users/{id}/role`); these endpoints add and remove the
+// *additional* roles a user holds. Authorization is the union across all of
+// them, so an assignment takes effect on the user's next request.
 
-#[derive(Debug, Serialize)]
-pub struct RoleView {
-    pub id: Uuid,
-    pub name: String,
-    pub description: String,
-    pub is_system: bool,
-    pub level: i16,
-    /// Role ids this role inherits from directly.
-    pub inherits: Vec<Uuid>,
-    /// Permission keys granted directly to this role (not counting inheritance).
-    pub permissions: Vec<String>,
+#[derive(Debug, Deserialize)]
+pub struct AssignRoleRequest {
+    pub role_id: Uuid,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PermissionView {
-    pub key: String,
-    pub description: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RbacView {
-    pub roles: Vec<RoleView>,
-    pub permissions: Vec<PermissionView>,
-}
-
-async fn get_rbac(
-    _admin: AdminUser,
+/// `POST /api/admin/users/{user_id}/roles` — grant a user an additional role.
+async fn assign_user_role(
+    admin_user: AdminUser,
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<RbacView>>, ApiError> {
-    let (roles, permissions, grants, edges) = state.db.rbac_snapshot().map_err(ApiError::from)?;
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<AssignRoleRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+    let role = state
+        .db
+        .get_role(payload.role_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("role not found".to_string()))?;
 
-    let mut own: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
-    for (role_id, key) in grants {
-        own.entry(role_id).or_default().push(key);
+    state
+        .db
+        .assign_user_role(user_id, payload.role_id)
+        .map_err(ApiError::from)?;
+
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserRoleAssigned,
+            Some(user_id),
+            Some(admin_user.0.id),
+            serde_json::json!({ "role_id": role.id, "role": role.name }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("failed to log user role assignment: {e}");
     }
-    let mut inherits: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
-    for (role_id, parent) in edges {
-        inherits.entry(role_id).or_default().push(parent);
+    Ok(Json(ApiResponse::success(())))
+}
+
+/// `DELETE /api/admin/users/{user_id}/roles/{role_id}` — remove a role from a
+/// user. Refused if it would drop the last administrator's `admin.access`.
+async fn unassign_user_role(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path((user_id, role_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    // Last-admin protection: if the user is currently an effective admin and
+    // removing this role would drop that, and they are the only active admin,
+    // refuse -- otherwise the deployment could lock everyone out of admin.
+    if state
+        .db
+        .user_has_permission(user_id, "admin.access")
+        .map_err(ApiError::from)?
+    {
+        let remaining: Vec<Uuid> = state
+            .db
+            .user_role_ids(user_id)
+            .map_err(ApiError::from)?
+            .into_iter()
+            .filter(|r| *r != role_id)
+            .collect();
+        let still_admin = state.db.rbac().has_permission(&remaining, "admin.access");
+        if !still_admin && state.db.count_active_admins().map_err(ApiError::from)? <= 1 {
+            return Err(ApiError::Forbidden(
+                "cannot remove the last administrator's admin access".to_string(),
+            ));
+        }
     }
 
-    let roles = roles
-        .into_iter()
-        .map(|r| {
-            let mut permissions = own.remove(&r.id).unwrap_or_default();
-            permissions.sort();
-            RoleView {
-                id: r.id,
-                name: r.name,
-                description: r.description,
-                is_system: r.is_system,
-                level: r.level,
-                inherits: inherits.remove(&r.id).unwrap_or_default(),
-                permissions,
-            }
-        })
-        .collect();
+    let removed = state
+        .db
+        .unassign_user_role(user_id, role_id)
+        .map_err(ApiError::from)?;
+    if removed == 0 {
+        return Err(ApiError::NotFound(
+            "the user does not hold that role".to_string(),
+        ));
+    }
 
-    let permissions = permissions
-        .into_iter()
-        .map(|(key, description)| PermissionView { key, description })
-        .collect();
-
-    Ok(Json(ApiResponse::success(RbacView { roles, permissions })))
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserRoleUnassigned,
+            Some(user_id),
+            Some(admin_user.0.id),
+            serde_json::json!({ "role_id": role_id }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("failed to log user role unassignment: {e}");
+    }
+    Ok(Json(ApiResponse::success(())))
 }
 
 /// Reload configuration from disk (admin only)

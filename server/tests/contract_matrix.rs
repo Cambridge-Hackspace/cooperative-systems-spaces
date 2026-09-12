@@ -392,10 +392,13 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // webhooks are Public; the six LRS routes are counted above.
     // 197 = 190 + 7 per-member rate tiers (#34: tier CRUD + list-assignments +
     // assign/clear, all Admin).
-    // 198 = 197 + the RBAC read view (#65 Phase 3: GET /api/admin/rbac, Admin).
-    assert_eq!(jwt_routes, 198, "JWT-authenticated routes");
+    // 198 = 197 + the RBAC read view (#65 Phase 3a: GET /api/admin/rbac, Admin).
+    // 205 = 198 + the RBAC write API (#65 Phase 3c, all Admin): role create /
+    // update / delete, set-permissions, set-inheritance, and user role
+    // assign / unassign.
+    assert_eq!(jwt_routes, 205, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 198 * 7 + (9 + 6) * 3);
+    assert_eq!(asserted_pairs(), 205 * 7 + (9 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
