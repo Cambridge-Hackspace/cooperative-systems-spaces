@@ -94,7 +94,9 @@ async fn get_membership(
     let balance = state.db.user_balance(u.id).map_err(ApiError::from)?;
     Ok(Json(ApiResponse::success(MembershipView {
         enrolled: u.membership_next_due_at.is_some(),
-        is_member: u.role.rank() >= cfg.membership.member_role.rank(),
+        is_member: state
+            .db
+            .role_has_permission(u.role.as_str(), "member.access"),
         balance: balance.with_scale(2).to_string(),
         currency: cfg.membership.currency.clone(),
         next_due_at: u.membership_next_due_at,

@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthService};
 use crate::models::{
-    AuditEventType, HomeLink, HomeLinkAudience, NewAuditLog, NewHomeLink, UpdateHomeLink, UserRole,
+    AuditEventType, HomeLink, HomeLinkAudience, NewAuditLog, NewHomeLink, UpdateHomeLink,
 };
 use crate::AppState;
 
@@ -142,30 +142,38 @@ fn audit(state: &AppState, event: AuditEventType, actor: Option<Uuid>, data: ser
     }
 }
 
-/// True iff a link with `audience` should be shown to a viewer whose role is
-/// `viewer_role` (None = signed-out).
-fn visible_to(audience: HomeLinkAudience, viewer_role: Option<&UserRole>) -> bool {
-    match (audience, viewer_role) {
+/// True iff a link with `audience` should be shown to a viewer whose effective
+/// tier `level` is `viewer_level` (None = signed-out). The `Member`/`Staff`
+/// audiences gate on the tier levels resolved from the RBAC graph, replacing the
+/// legacy `UserRole::rank()` comparison.
+fn visible_to(
+    audience: HomeLinkAudience,
+    viewer_level: Option<i16>,
+    member_level: i16,
+    staff_level: i16,
+) -> bool {
+    match (audience, viewer_level) {
         (HomeLinkAudience::Everyone, _) => true,
         (HomeLinkAudience::Anonymous, None) => true,
         (HomeLinkAudience::Anonymous, Some(_)) => false,
         (HomeLinkAudience::LoggedIn, Some(_)) => true,
         (HomeLinkAudience::LoggedIn, None) => false,
-        (HomeLinkAudience::Member, Some(r)) => r.rank() >= UserRole::Member.rank(),
-        (HomeLinkAudience::Staff, Some(r)) => r.rank() >= UserRole::Staff.rank(),
+        (HomeLinkAudience::Member, Some(l)) => l >= member_level,
+        (HomeLinkAudience::Staff, Some(l)) => l >= staff_level,
         (HomeLinkAudience::Member | HomeLinkAudience::Staff, None) => false,
     }
 }
 
 /// Best-effort: parse an `Authorization: Bearer <jwt>` header and resolve the
-/// caller's role. Returns `None` for unauthenticated / invalid tokens, which
-/// is the same behavior we want from the gate's perspective.
-fn role_from_headers(state: &AppState, headers: &HeaderMap) -> Option<UserRole> {
+/// caller's effective tier level. Returns `None` for unauthenticated / invalid
+/// tokens, which is the same behavior we want from the gate's perspective.
+fn role_level_from_headers(state: &AppState, headers: &HeaderMap) -> Option<i16> {
     let auth = headers.get("authorization")?.to_str().ok()?;
     let token = auth.strip_prefix("Bearer ")?;
     let cfg = state.config_manager.get_config();
     let svc = AuthService::new(&state.db, &cfg.auth.jwt_secret);
-    svc.get_user_from_token(token).ok().map(|u| u.role)
+    let user = svc.get_user_from_token(token).ok()?;
+    state.db.rbac().level_of_name(user.role.as_str())
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +184,12 @@ async fn list_links_public(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let viewer_role = role_from_headers(&state, &headers);
+    let viewer_level = role_level_from_headers(&state, &headers);
+    // Resolve the audience thresholds once from the graph (the "Member" audience
+    // means the member tier and up; "Staff" the staff tier and up).
+    let graph = state.db.rbac();
+    let member_level = graph.level_of_name("member").unwrap_or(i16::MAX);
+    let staff_level = graph.level_of_name("staff").unwrap_or(i16::MAX);
     let now = chrono::Utc::now();
     let rows = state.db.list_home_links()?;
     let resp: Vec<HomeLinkResponse> = rows
@@ -186,7 +199,7 @@ async fn list_links_public(
         .filter(|r| r.expires_at.map(|t| t > now).unwrap_or(true))
         .filter_map(|r| {
             let audience = HomeLinkAudience::parse(&r.audience)?;
-            if visible_to(audience, viewer_role.as_ref()) {
+            if visible_to(audience, viewer_level, member_level, staff_level) {
                 Some(HomeLinkResponse::from_row(r))
             } else {
                 None
@@ -313,54 +326,49 @@ async fn delete_link(
 mod tests {
     use super::*;
 
+    // The seeded tier levels the graph resolves: newbie 1, member 2, staff 3,
+    // admin 4. The audience thresholds are member_level=2, staff_level=3.
+    const NEWBIE: i16 = 1;
+    const MEMBER: i16 = 2;
+    const STAFF: i16 = 3;
+    const ADMIN: i16 = 4;
+    const MEMBER_LEVEL: i16 = 2;
+    const STAFF_LEVEL: i16 = 3;
+
+    fn vis(audience: HomeLinkAudience, viewer_level: Option<i16>) -> bool {
+        visible_to(audience, viewer_level, MEMBER_LEVEL, STAFF_LEVEL)
+    }
+
     #[test]
     fn everyone_sees_everyone() {
-        assert!(visible_to(HomeLinkAudience::Everyone, None));
-        assert!(visible_to(
-            HomeLinkAudience::Everyone,
-            Some(&UserRole::Member)
-        ));
+        assert!(vis(HomeLinkAudience::Everyone, None));
+        assert!(vis(HomeLinkAudience::Everyone, Some(MEMBER)));
     }
 
     #[test]
     fn anonymous_only_when_signed_out() {
-        assert!(visible_to(HomeLinkAudience::Anonymous, None));
-        assert!(!visible_to(
-            HomeLinkAudience::Anonymous,
-            Some(&UserRole::Newbie)
-        ));
+        assert!(vis(HomeLinkAudience::Anonymous, None));
+        assert!(!vis(HomeLinkAudience::Anonymous, Some(NEWBIE)));
     }
 
     #[test]
     fn logged_in_hidden_when_signed_out() {
-        assert!(!visible_to(HomeLinkAudience::LoggedIn, None));
-        assert!(visible_to(
-            HomeLinkAudience::LoggedIn,
-            Some(&UserRole::Newbie)
-        ));
+        assert!(!vis(HomeLinkAudience::LoggedIn, None));
+        assert!(vis(HomeLinkAudience::LoggedIn, Some(NEWBIE)));
     }
 
     #[test]
     fn member_gate_respects_hierarchy() {
-        assert!(!visible_to(
-            HomeLinkAudience::Member,
-            Some(&UserRole::Newbie)
-        ));
-        assert!(visible_to(
-            HomeLinkAudience::Member,
-            Some(&UserRole::Member)
-        ));
-        assert!(visible_to(HomeLinkAudience::Member, Some(&UserRole::Staff)));
-        assert!(visible_to(HomeLinkAudience::Member, Some(&UserRole::Admin)));
+        assert!(!vis(HomeLinkAudience::Member, Some(NEWBIE)));
+        assert!(vis(HomeLinkAudience::Member, Some(MEMBER)));
+        assert!(vis(HomeLinkAudience::Member, Some(STAFF)));
+        assert!(vis(HomeLinkAudience::Member, Some(ADMIN)));
     }
 
     #[test]
     fn staff_gate_respects_hierarchy() {
-        assert!(!visible_to(
-            HomeLinkAudience::Staff,
-            Some(&UserRole::Member)
-        ));
-        assert!(visible_to(HomeLinkAudience::Staff, Some(&UserRole::Staff)));
-        assert!(visible_to(HomeLinkAudience::Staff, Some(&UserRole::Admin)));
+        assert!(!vis(HomeLinkAudience::Staff, Some(MEMBER)));
+        assert!(vis(HomeLinkAudience::Staff, Some(STAFF)));
+        assert!(vis(HomeLinkAudience::Staff, Some(ADMIN)));
     }
 }

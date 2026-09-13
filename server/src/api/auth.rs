@@ -287,7 +287,10 @@ async fn login(
 
     // Flag users whose role requires enrollment under the current policy so
     // the frontend can route them to the enrollment page on first sight.
-    let must_enroll = config.auth.mfa.is_required_for(&user.role) && user.mfa_enrolled_at.is_none();
+    let is_staff = state
+        .db
+        .role_has_permission(user.role.as_str(), "staff.access");
+    let must_enroll = config.auth.mfa.is_required_for(is_staff) && user.mfa_enrolled_at.is_none();
 
     let response = LoginResponse {
         token,
