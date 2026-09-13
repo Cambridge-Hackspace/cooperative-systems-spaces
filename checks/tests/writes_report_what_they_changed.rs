@@ -49,6 +49,16 @@ struct Writer {
 /// the two agree in both directions.
 const WRITERS: &[Writer] = &[
     Writer {
+        name: "record_step_completion",
+        exempt: Some(
+            "The shared training-completion path: an upsert \
+                      (`on_conflict ... do_update`) of one `user_training_progress` \
+                      row, so the count is always 1 and carries no missing-target \
+                      signal. It is the write cmi5 and any sign-off flow route \
+                      through so web and edge access agree (`tool_access_agrees`).",
+        ),
+    },
+    Writer {
         name: "health_check",
         exempt: Some(
             "`SELECT 1`. There is no row being addressed, so there is no \
@@ -279,7 +289,6 @@ fn the_two_writers_already_fixed_stay_fixed() {
     /// here is the same defect coming back, so it is a gate rather than part of
     /// the ratchet above.
     const ALREADY_FIXED: &[&str] = &[
-        "remove_tool_trainer",
         "mark_recovery_code_used",
         "confirm_user_totp",
         "set_user_mfa_enrolled",

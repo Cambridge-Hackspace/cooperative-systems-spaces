@@ -5,17 +5,15 @@
 //! `user_training_progress` (Completed + unexpired) for a tool's steps, and the
 //! toolguard sync path reads the same via a sibling query; `tool_access_agrees`
 //! pins the two halves together. The trainer sign-off path writes those rows
-//! through `create_training_record`, which upserts the progress row and records
-//! a training_records entry, and its caller then broadcasts the new state to
-//! edge devices.
+//! through `record_step_completion`, which upserts the progress row, and its
+//! caller then broadcasts the new state to edge devices.
 //!
 //! If the cmi5 grant instead did a raw `insert_into(user_training_progress)` or
-//! touched `user_tool_training`, it would (a) skip the training_records audit
-//! trail, (b) risk diverging from the shape `can_access_tool` expects, and
-//! (c) most importantly bypass the broadcast, so a member could pass a course
-//! and the door would not know. This check forbids that: the cmi5 service must
-//! reach access only via `create_training_record`, and the grant must be
-//! followed by a toolguard broadcast.
+//! touched `user_tool_training`, it would (a) risk diverging from the shape
+//! `can_access_tool` expects, and (b) most importantly bypass the broadcast, so a
+//! member could pass a course and the door would not know. This check forbids
+//! that: the cmi5 service must reach access only via `record_step_completion`,
+//! and the grant must be followed by a toolguard broadcast.
 //!
 //! Text-level, so it runs without a database or the compiler.
 
@@ -53,15 +51,14 @@ fn strip(src: &str) -> String {
 }
 
 #[test]
-fn the_grant_goes_through_create_training_record() {
+fn the_grant_goes_through_record_step_completion() {
     let code = cmi5_service_code();
     assert!(
-        code.contains("create_training_record"),
-        "server/src/cmi5.rs no longer calls create_training_record. If the grant \
+        code.contains("record_step_completion"),
+        "server/src/cmi5.rs no longer calls record_step_completion. If the grant \
          path changed, it must still write access through a shared function that \
-         upserts user_training_progress and records a training_records row — not \
-         by hand — or the web and edge access checks can diverge and the audit \
-         trail is lost."
+         upserts user_training_progress -- not by hand -- or the web and edge \
+         access checks can diverge."
     );
 }
 
@@ -78,14 +75,14 @@ fn the_cmi5_service_never_writes_the_access_tables_directly() {
     // user_training_progress to show a learner what they have completed — so this
     // forbids only the insert/update/delete builders targeting these tables, not
     // any mention of them. The one legitimate *write* to user_training_progress
-    // is inside create_training_record, which lives in database.rs, not here.
+    // is inside record_step_completion, which lives in database.rs, not here.
     for table in ["user_training_progress", "user_tool_training"] {
         for verb in ["insert_into", "update", "delete"] {
             for pat in [format!("{verb}({table}"), format!("{verb}( {table}")] {
                 assert!(
                     !flat.contains(&pat),
                     "server/src/cmi5.rs writes `{table}` directly (`{pat}…`). The \
-                     cmi5 grant must go through create_training_record, not touch \
+                     cmi5 grant must go through record_step_completion, not touch \
                      the access tables itself."
                 );
             }

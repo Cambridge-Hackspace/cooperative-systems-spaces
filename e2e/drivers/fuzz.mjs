@@ -223,7 +223,6 @@ const KNOWN = [
   // every *other* 5xx on these routes.
   ...[
     ['POST', '/api/tools/{id}/training-types'],
-    ['POST', '/api/tools/{id}/trainers'],
     ['POST', '/api/tools/user-training/{id}'],
     ['DELETE', '/api/tools/user-training/{id}'],
   ].map(([method, template]) => ({

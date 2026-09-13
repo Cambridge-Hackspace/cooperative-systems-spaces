@@ -17,7 +17,6 @@ mod tools;
 // handlers and models reachable through AppState, and a public item exposing a
 // crate-private type trips `private_interfaces`, which is a hard error under
 // -D warnings. It also has to be reachable from server/tests/.
-pub mod trainers;
 mod training;
 mod waivers;
 mod webhooks;
@@ -37,7 +36,6 @@ pub use schedules::*;
 pub use tool_billing::*;
 pub use tool_tiers::*;
 pub use tools::*;
-pub use trainers::*;
 pub use training::*;
 pub use waivers::*;
 pub use webhooks::*;

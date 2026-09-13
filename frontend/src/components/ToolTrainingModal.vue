@@ -18,32 +18,6 @@
           <h4>Training Management</h4>
           <div class="admin-actions">
             <button class="btn btn-primary" @click="addNewStep">Add Training Step</button>
-            <!--            <button @click="viewAllProgress" class="btn fondary">-->
-            <!--              View All Users' Progress-->
-            <!--            </button>-->
-            <button class="btn btn-info" @click="showTrainerManagement = true">
-              Manage Trainers
-            </button>
-            <!-- OR embed it inline -->
-            <button
-              class="btn btn-success"
-              @click="showRecordTrainingForm = !showRecordTrainingForm"
-            >
-              {{ showRecordTrainingForm ? 'Cancel Recording' : 'Record Training Session' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Trainer Section for Trainers -->
-        <div v-if="isTrainer && !canManageTraining" class="trainer-section">
-          <h4>Trainer Actions</h4>
-          <div class="trainer-actions">
-            <button
-              class="btn btn-success"
-              @click="showRecordTrainingForm = !showRecordTrainingForm"
-            >
-              {{ showRecordTrainingForm ? 'Cancel Recording' : 'Record Training Session' }}
-            </button>
             <button class="btn btn-secondary" @click="viewTrainingHistory">
               View Training Records
             </button>
@@ -122,119 +96,6 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Inline Record Training Form -->
-        <div
-          v-if="showRecordTrainingForm"
-          class="record-training-form bg-primary text-primary-content"
-        >
-          <h4>📝 Record Training Session</h4>
-
-          <div v-if="loadingUsersForRecord" class="loading">
-            <div class="spinner"></div>
-            <p>Loading users...</p>
-          </div>
-
-          <form v-else class="record-form" @submit.prevent="submitRecordForm">
-            <div class="form-row">
-              <div class="form-group">
-                <label for="record-step">Training Step *</label>
-                <select
-                  id="record-step"
-                  v-model="recordFormData.training_step_id"
-                  class="form-control select select-secondary"
-                  required
-                >
-                  <option value="">Select training step...</option>
-                  <option
-                    v-for="stepWithProgress in trainingOverview?.steps"
-                    :key="stepWithProgress.step.id"
-                    :value="stepWithProgress.step.id"
-                  >
-                    Step {{ stepWithProgress.step.step_number }}
-
-                    : {{ stepWithProgress.step.step_name }}
-                  </option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="record-trainee">Trainee</label>
-                <select
-                  id="record-trainee"
-                  v-model="recordFormData.trainee_user_id"
-                  class="form-control select select-secondary"
-                  required
-                >
-                  <option value="">Select trainee...</option>
-                  <option v-for="row in usersForRecord" :key="row.id" :value="row.id">
-                    {{ row.full_name || row.username }} ({{ row.email }})
-                  </option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="record-date">Training Date</label>
-                <input
-                  id="record-date"
-                  v-model="recordFormData.training_date"
-                  type="date"
-                  class="form-control input"
-                  :max="today"
-                  required
-                />
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="record-status">Completion Status</label>
-                <select
-                  id="record-status"
-                  v-model="recordFormData.completion_status"
-                  class="form-control select"
-                  required
-                >
-                  <option value="completed">✅ Completed</option>
-                  <option value="partial">⏳ Partial</option>
-                  <option value="failed">❌ Failed</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="record-minutes">Duration (Minutes)</label>
-                <input
-                  id="record-minutes"
-                  v-model.number="recordFormData.minutes_trained"
-                  type="number"
-                  min="1"
-                  max="480"
-                  class="form-control input"
-                  placeholder="e.g. 60"
-                />
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label for="record-notes">Training Notes</label>
-              <textarea
-                id="record-notes"
-                v-model="recordFormData.notes"
-                class="form-control textarea"
-                rows="3"
-                placeholder="Notes about the training session..."
-              ></textarea>
-            </div>
-
-            <div v-if="recordError" class="error">{{ recordError }}</div>
-
-            <div class="form-actions">
-              <button type="submit" :disabled="recordSubmitting" class="btn btn-secondary">
-                {{ recordSubmitting ? 'Recording...' : 'Record Training' }}
-              </button>
-            </div>
-          </form>
         </div>
 
         <div v-if="loading" class="loading">
@@ -564,22 +425,6 @@
       @close="showCreateStepModal = false"
       @created="onStepCreated"
     />
-
-    <!-- Trainer Management Modal -->
-    <TrainerManagement
-      v-if="showTrainerManagement"
-      :tool="tool"
-      @close="showTrainerManagement = false"
-      @trainer-updated="onTrainerUpdatedWithAuthCheck"
-    />
-
-    <!-- Record Training Modal -->
-    <RecordTrainingModal
-      v-if="showRecordTraining"
-      :tool="tool"
-      @close="showRecordTraining = false"
-      @recorded="onTrainingRecorded"
-    />
   </div>
 </template>
 
@@ -587,7 +432,6 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { trainingApi } from '../utils/api'
-import { trainerApi } from '../utils/api'
 import { userApi } from '../utils/api'
 import type {
   Tool,
@@ -595,8 +439,6 @@ import type {
   ToolTrainingOverview,
   TrainingStepWithProgress,
   AssessmentType,
-  CreateTrainingRecordRequest,
-  TrainingCompletionStatus,
   User,
 } from '../types'
 import StartTrainingModal from './StartTrainingModal.vue'
@@ -604,9 +446,6 @@ import CompleteTrainingModal from './CompleteTrainingModal.vue'
 import ToolTrainingSetupModal from './ToolTrainingSetupModal.vue'
 import CreateTrainingStepModal from './CreateTrainingStepModal.vue'
 import EditTrainingStepModal from './EditTrainingStepModal.vue'
-import TrainerManagement from './TrainerManagement.vue'
-import RecordTrainingModal from './RecordTrainingModal.vue'
-import { localDate } from '@/lib/dates'
 import { materialsUrlError } from '@/lib/trainingMaterials'
 
 interface Props {
@@ -632,29 +471,10 @@ const showCompleteModal = ref(false)
 const showSetupModal = ref(false)
 const showEditStepModal = ref(false)
 const showCreateStepModal = ref(false)
-const showTrainerManagement = ref(false)
-const showRecordTraining = ref(false)
-const isTrainerForTool = ref(false)
-const showRecordTrainingForm = ref(false)
-const loadingUsersForRecord = ref(false)
-const usersForRecord = ref<User[]>([])
 const trainingHistory = ref<any[]>([])
 const showTrainingHistory = ref(false)
 const loadingTrainingHistory = ref(false)
 const trainingHistoryError = ref('')
-const recordError = ref('')
-const recordSubmitting = ref(false)
-const recordFormData = ref<CreateTrainingRecordRequest>({
-  tool_id: '',
-  training_step_id: '',
-  trainee_user_id: '',
-  training_date: localDate(),
-  completion_status: 'completed' as TrainingCompletionStatus,
-  minutes_trained: undefined,
-  skills_covered: undefined,
-  notes: '',
-  next_steps: '',
-})
 const selectedStep = ref<TrainingStep | null>(null)
 
 // Computed
@@ -665,13 +485,6 @@ const canManageTraining = computed(() => {
 
 const isInstructor = computed(() => {
   return canManageTraining.value
-})
-
-const isTrainer = computed(() => {
-  // Checks if user is an authorized trainer for this specific tool
-  // This is populated by checkTrainerAuthorization() function
-  // Also includes admins/staff who can manage all training
-  return isTrainerForTool.value || canManageTraining.value
 })
 
 const canStartTraining = computed(() => {
@@ -754,10 +567,6 @@ const acknowledge = async (s: TrainingStepWithProgress) => {
     attesting.value = null
   }
 }
-
-// See RecordTrainingModal, which has the same inline form and had the same
-// UTC default and ceiling.
-const today = computed(() => localDate())
 
 // Methods
 const closeModal = () => {
@@ -905,15 +714,6 @@ const onStepDeleted = () => {
   emit('training-updated')
 }
 
-// New event handlers for trainer management
-
-const onTrainingRecorded = () => {
-  showRecordTraining.value = false
-  // Reload training overview to reflect new training records
-  void loadTrainingOverview()
-  emit('training-updated')
-}
-
 const viewTrainingHistory = async () => {
   try {
     showTrainingHistory.value = true
@@ -935,115 +735,9 @@ const viewTrainingHistory = async () => {
   }
 }
 
-// Check if user is an authorized trainer for this tool
-const checkTrainerAuthorization = async () => {
-  if (!auth.user?.id) {
-    isTrainerForTool.value = false
-    return
-  }
-
-  try {
-    const response = await trainerApi.checkTrainerAuthorization(props.tool.id, auth.user.id)
-    if (response.success && response.data) {
-      isTrainerForTool.value = !!response.data
-    } else {
-      isTrainerForTool.value = false
-    }
-  } catch (err) {
-    console.error('Error checking trainer authorization:', err)
-    isTrainerForTool.value = false
-  }
-}
-
-// Update trainer authorization when trainers are updated
-const onTrainerUpdatedWithAuthCheck = () => {
-  showTrainerManagement.value = false
-  // Reload training overview to get updated trainer status
-  void loadTrainingOverview()
-  // Check trainer authorization again since assignments may have changed
-  void checkTrainerAuthorization()
-  emit('training-updated')
-}
-
-// Record training functionality
-const loadUsersForRecord = async () => {
-  try {
-    loadingUsersForRecord.value = true
-    recordError.value = ''
-
-    // Use the new training-specific roster endpoint that includes tool context
-    const response = await userApi.getUsersForTraining(props.tool.id)
-
-    if (response.success && response.data?.items) {
-      usersForRecord.value = response.data.items.filter((user: User) => user.is_active)
-    } else {
-      recordError.value = response.error || 'Failed to load users'
-    }
-  } catch (err: any) {
-    recordError.value = err.message || 'Failed to load users'
-  } finally {
-    loadingUsersForRecord.value = false
-  }
-}
-
-const submitRecordForm = async () => {
-  try {
-    recordSubmitting.value = true
-    recordError.value = ''
-
-    // Prepare the data
-    const requestData: CreateTrainingRecordRequest = {
-      ...recordFormData.value,
-      tool_id: props.tool.id,
-      notes: recordFormData.value.notes || undefined,
-      next_steps: recordFormData.value.next_steps || undefined,
-    }
-
-    const response = await trainerApi.createTrainingRecord(requestData)
-
-    if (response.success) {
-      // Reset form
-      recordFormData.value = {
-        tool_id: '',
-        training_step_id: '',
-        trainee_user_id: '',
-        training_date: localDate(),
-        completion_status: 'completed' as TrainingCompletionStatus,
-        minutes_trained: undefined,
-        skills_covered: undefined,
-        notes: '',
-        next_steps: '',
-      }
-
-      showRecordTrainingForm.value = false
-      // Reload training overview
-      void loadTrainingOverview()
-      emit('training-updated')
-    } else {
-      recordError.value = response.error || 'Failed to record training session'
-    }
-  } catch (err: any) {
-    recordError.value = err.message || 'Failed to record training session'
-  } finally {
-    recordSubmitting.value = false
-  }
-}
-
-// Watch for record training form visibility
-watch(
-  () => showRecordTrainingForm.value,
-  (newValue) => {
-    if (newValue && usersForRecord.value.length === 0) {
-      void loadUsersForRecord()
-    }
-  }
-)
-
 // Lifecycle
 onMounted(() => {
-  // Load training overview and check trainer authorization
   void loadTrainingOverview()
-  void checkTrainerAuthorization()
 })
 
 // Watch for tool changes
@@ -1051,7 +745,6 @@ watch(
   () => props.tool.id,
   () => {
     void loadTrainingOverview()
-    void checkTrainerAuthorization()
   }
 )
 </script>

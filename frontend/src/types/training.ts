@@ -16,12 +16,6 @@ export enum AssessmentType {
   ObservationOnly = 'observation_only',
 }
 
-export enum TrainingCompletionStatus {
-  Completed = 'completed',
-  Partial = 'partial',
-  Failed = 'failed',
-}
-
 export interface TrainingStep {
   id: string
   tool_id: string
@@ -190,92 +184,4 @@ export interface ToolWithTraining {
   completed_steps_count: number
   created_at: string
   updated_at: string
-}
-
-// ==================== TRAINER ASSIGNMENT TYPES ====================
-
-export interface ToolTrainer {
-  id: string
-  user_id: string
-  tool_id: string
-  authorized_by: string
-  authorized_at: string
-  notes?: string
-  expires_at?: string
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface ToolTrainerWithUser {
-  trainer: ToolTrainer
-  user_name: string
-  user_email: string
-  user_full_name?: string
-}
-
-export interface AssignTrainerRequest {
-  user_id: string
-  tool_id: string
-  notes?: string
-  expires_at?: string
-}
-
-export interface UpdateTrainerRequest {
-  notes?: string
-  expires_at?: string
-  is_active?: boolean
-}
-
-// Training record types
-export interface TrainingRecord {
-  id: string
-  tool_id: string
-  training_step_id?: string
-  trainee_user_id: string
-  trainer_user_id: string
-  training_date: string
-  completion_status: TrainingCompletionStatus
-  minutes_trained?: number
-  skills_covered?: string[]
-  notes?: string
-  next_steps?: string
-  created_at: string
-  updated_at: string
-}
-
-export interface TrainingRecordWithUsers {
-  record: TrainingRecord
-  trainee_name: string
-  trainer_name: string
-  tool_name: string
-}
-
-export interface CreateTrainingRecordRequest {
-  tool_id: string
-  training_step_id?: string
-  trainee_user_id: string
-  training_date: string
-  completion_status: TrainingCompletionStatus
-  minutes_trained?: number
-  skills_covered?: string[]
-  notes?: string
-  next_steps?: string
-}
-
-export interface UpdateTrainingRecordRequest {
-  completion_status?: TrainingCompletionStatus
-  minutes_trained?: number
-  training_step_id?: string
-  skills_covered?: string[]
-  notes?: string
-  next_steps?: string
-}
-
-export interface TrainingRecordsQuery {
-  tool_id?: string
-  trainer_id?: string
-  trainee_id?: string
-  limit?: number
-  offset?: number
 }

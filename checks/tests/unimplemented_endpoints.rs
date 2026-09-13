@@ -86,11 +86,6 @@ const KNOWN_STUBS: &[(&str, &str, &str)] = &[
     ),
     (
         "tools.rs",
-        "authorize_trainer",
-        "POST /api/tools/{tool_id}/trainers",
-    ),
-    (
-        "tools.rs",
         "complete_training",
         "POST /api/tools/user-training/{training_id}",
     ),
@@ -166,10 +161,11 @@ fn every_stub_says_what_it_is() {
 fn the_frontend_knows_which_calls_are_stubs() {
     // It does not, and this records that rather than asserting it.
     //
-    // The training UI calls two of these four. Nothing in `api.ts` marks them,
+    // The training UI calls one of these stubs. Nothing in `api.ts` marks it,
     // and `.catch` turns the 501 into the same generic "Failed to ..." every
     // other failure produces -- so a user is told the operation failed and a
     // developer reading the frontend cannot tell a stub from a bug.
+    // (Was two; the tool-trainer stub and its client call were retired.)
     //
     // Asserted as a count so that wiring any of them up, or marking them in the
     // client, fails here and prompts this note to be revised.
@@ -187,9 +183,9 @@ fn the_frontend_knows_which_calls_are_stubs() {
         .count();
 
     assert_eq!(
-        mentioned, 2,
+        mentioned, 1,
         "the number of unimplemented endpoints the frontend calls has changed \
-         (was 2). Either one was implemented, one was removed from the client, \
+         (was 1). Either one was implemented, one was removed from the client, \
          or a new stub is now being called. Whichever it is, the note in this \
          test needs updating: the frontend has no way to tell a 501 stub from a \
          real failure, because api.ts wraps every call in .catch and produces \

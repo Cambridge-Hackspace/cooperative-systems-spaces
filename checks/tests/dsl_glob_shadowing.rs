@@ -30,6 +30,10 @@
 //! the duplicate simply did not follow it. That is exactly the kind of thing a
 //! check is for and a code review is not.
 //!
+//! (The `tool_trainers` code in the example above has since been retired; the
+//! narrative is kept as the origin of this check. Its anti-vacuity example now
+//! points at `training_waivers`, another table with `user_id`/`tool_id` columns.)
+//!
 //! This check is source-as-data and needs no database, no server crate, and no
 //! compilation of anything. It runs in milliseconds.
 
@@ -260,9 +264,9 @@ fn both_sides_were_actually_parsed() {
     );
     assert!(
         tables
-            .get("tool_trainers")
+            .get("training_waivers")
             .is_some_and(|c| c.contains("user_id") && c.contains("tool_id")),
-        "tool_trainers' columns did not parse; this check's own example would not be caught"
+        "training_waivers' columns did not parse; this check's own example would not be caught"
     );
 
     let total: usize = server_sources().iter().map(|p| functions_in(p).len()).sum();
@@ -313,8 +317,8 @@ fn no_dsl_glob_shadows_a_parameter() {
          for every row. It typechecks; rustc's only complaint is \"unused \
          variable\", several lines away. A query written that way in an UPDATE \
          touches the whole table.\n\n\
-         The convention already in use is a `_param` suffix, as in \
-         `DatabaseManager::remove_tool_trainer`.",
+         The convention already in use is a `_param` suffix on the shadowed \
+         parameters (e.g. `user_id_param`).",
         offenders.join("\n")
     );
 }

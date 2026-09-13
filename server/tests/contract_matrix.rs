@@ -398,9 +398,12 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // assign / unassign.
     // 206 = 205 + GET a user's assigned roles (#74, Admin), so the roster can
     // show which additional roles a user holds.
-    assert_eq!(jwt_routes, 206, "JWT-authenticated routes");
+    // 195 = 206 - 11 for retiring the redundant tool-trainer / free-form
+    // training-record subsystem (2 tools/{id}/trainers + 9 /api/trainers/**).
+    // The structured instructor/step/session model is unchanged.
+    assert_eq!(jwt_routes, 195, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 206 * 7 + (9 + 6) * 3);
+    assert_eq!(asserted_pairs(), 195 * 7 + (9 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected

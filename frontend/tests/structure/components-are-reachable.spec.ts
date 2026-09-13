@@ -8,17 +8,15 @@ import { describe, expect, it } from 'vitest'
  * A `.vue` file under `src/components` that no other file references cannot
  * render. It still type-checks, still lints, still gets a tier-2 spec written
  * for it, and still looks from the outside like part of the product — which is
- * exactly how two of them came to carry defects nobody had reported:
+ * exactly how one came to carry a defect nobody had reported:
  *
- *   - `AssignTrainerModal` never emits `assigned` on success, so the parent is
- *     never told an assignment happened. There is no parent.
  *   - `ToolTrainingCard` opens its template with a red `background: red` debug
  *     banner reading "ToolTrainingCard is rendering!". Nobody has seen it.
  *
- * Both defects are real and both specs pin them, because the day either
- * component is wired up the defects arrive with it. What the specs must not
- * claim is that users are hitting them today, and this check is what keeps the
- * two facts attached to each other.
+ * The defect is real and its spec pins it, because the day the component is
+ * wired up the defect arrives with it. What the spec must not claim is that
+ * users are hitting it today, and this check is what keeps the two facts
+ * attached to each other.
  *
  * A ratchet: the list may shrink, by wiring a component up or deleting it. It
  * may not grow silently.
@@ -31,9 +29,6 @@ const FRONTEND_ROOT = process.cwd()
 
 /** Components known to be referenced by nothing, with why they still exist. */
 const UNREFERENCED: Record<string, string> = {
-  AssignTrainerModal:
-    'Superseded by the assign form inlined in TrainerManagement.vue, which is ' +
-    'the one that works. This copy never emits `assigned`.',
   ToolTrainingCard:
     'Superseded by ToolTrainingModal, which renders the same training flow. ' +
     'This copy still carries a red debug banner in its template.',

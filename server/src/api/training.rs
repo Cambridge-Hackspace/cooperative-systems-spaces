@@ -207,15 +207,17 @@ async fn get_training_roster(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<ApiResponse<Vec<User>>>, ApiError> {
-    // Check if user is either staff or a trainer for any tool
+    // Signing off training is a staff capability (training.certify), granted
+    // through RBAC. (Previously this also admitted per-tool "trainers", a
+    // parallel authorization that has been retired in favour of the structured
+    // instructor/step model.)
     if !state
         .db
         .user_has_permission(user.0.id, "training.certify")
         .map_err(ApiError::from)?
-        && !is_user_a_trainer(&state, user.0.id).await?
     {
         return Err(ApiError::Forbidden(
-            "Must be a trainer or staff to access training roster".to_string(),
+            "Must have training.certify to access the training roster".to_string(),
         ));
     }
 
@@ -234,22 +236,17 @@ async fn get_training_roster_for_tool(
     user: AuthUser,
     Path(tool_id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Vec<User>>>, ApiError> {
-    // Check if user is either staff or a trainer for this specific tool
-    let is_trainer_for_tool = state
-        .db
-        .is_user_trainer_for_tool(user.0.id, tool_id)
-        .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
-
+    // Signing off training is a staff capability (training.certify).
     if !state
         .db
         .user_has_permission(user.0.id, "training.certify")
         .map_err(ApiError::from)?
-        && !is_trainer_for_tool
     {
         return Err(ApiError::Forbidden(
-            "Must be a trainer for this tool or staff to access tool training roster".to_string(),
+            "Must have training.certify to access the tool training roster".to_string(),
         ));
     }
+    let _ = tool_id;
 
     // Get all active users - for now, all trainers can see all users
     // In the future, this could be filtered based on:
@@ -265,14 +262,6 @@ async fn get_training_roster_for_tool(
     Ok(Json(ApiResponse::success(users)))
 }
 
-/// Helper function to check if user is a trainer for any tool
-async fn is_user_a_trainer(state: &AppState, user_id: Uuid) -> Result<bool, ApiError> {
-    state
-        .db
-        .is_user_trainer_for_any_tool(user_id)
-        .map_err(|e| ApiError::from_db("Failed to check if user is trainer", e))
-}
-
 // ==================== TRAINING HISTORY ====================
 
 /// Get training history for a specific tool (Trainers for that tool and Staff)
@@ -282,20 +271,14 @@ async fn get_training_history_for_tool(
     Path(tool_id): Path<Uuid>,
     Query(query): Query<TrainingHistoryQuery>,
 ) -> Result<Json<ApiResponse<Vec<TrainingHistoryRecord>>>, ApiError> {
-    // Check if user is either staff or a trainer for this specific tool
-    let is_trainer_for_tool = state
-        .db
-        .is_user_trainer_for_tool(user.0.id, tool_id)
-        .map_err(|e| ApiError::from_db("Failed to check trainer status", e))?;
-
+    // Signing off / viewing training is a staff capability (training.certify).
     if !state
         .db
         .user_has_permission(user.0.id, "training.certify")
         .map_err(ApiError::from)?
-        && !is_trainer_for_tool
     {
         return Err(ApiError::Forbidden(
-            "Must be a trainer for this tool or staff to access training history".to_string(),
+            "Must have training.certify to access training history".to_string(),
         ));
     }
 
