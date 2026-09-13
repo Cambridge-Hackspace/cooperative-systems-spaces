@@ -178,21 +178,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    tool_trainers (id) {
-        id -> Uuid,
-        user_id -> Uuid,
-        tool_id -> Uuid,
-        authorized_by -> Uuid,
-        authorized_at -> Timestamptz,
-        notes -> Nullable<Text>,
-        expires_at -> Nullable<Timestamptz>,
-        is_active -> Bool,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     tool_training_types (id) {
         id -> Uuid,
         tool_id -> Uuid,
@@ -361,24 +346,6 @@ diesel::table! {
         training_step_id -> Uuid,
         prerequisite_step_id -> Uuid,
         created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    training_records (id) {
-        id -> Uuid,
-        tool_id -> Uuid,
-        trainee_user_id -> Uuid,
-        trainer_user_id -> Uuid,
-        training_date -> Date,
-        completion_status -> Varchar,
-        minutes_trained -> Nullable<Int4>,
-        skills_covered -> Nullable<Array<Nullable<Text>>>,
-        notes -> Nullable<Text>,
-        next_steps -> Nullable<Text>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-        training_step_id -> Nullable<Uuid>,
     }
 }
 
@@ -879,13 +846,10 @@ diesel::table! {
 diesel::joinable!(space_device_auth -> space_devices (device_id));
 diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));
-diesel::joinable!(tool_trainers -> tools (tool_id));
 diesel::joinable!(tool_training_types -> tools (tool_id));
 diesel::joinable!(tool_training_types -> users (created_by));
 diesel::joinable!(tools -> users (created_by));
 diesel::joinable!(training_instructors -> training_steps (training_step_id));
-diesel::joinable!(training_records -> tools (tool_id));
-diesel::joinable!(training_records -> training_steps (training_step_id));
 diesel::joinable!(training_steps -> tools (tool_id));
 diesel::joinable!(training_steps -> users (created_by));
 diesel::joinable!(user_tool_training -> tool_training_types (training_type_id));
@@ -958,13 +922,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     space_device_auth_requests,
     space_devices,
     tool_events,
-    tool_trainers,
     tool_training_types,
     tool_usage_sessions,
     tools,
     training_instructors,
     training_prerequisites,
-    training_records,
     training_steps,
     training_waivers,
     doors,

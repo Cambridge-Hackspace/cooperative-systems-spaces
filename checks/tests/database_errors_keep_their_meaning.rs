@@ -110,7 +110,6 @@ const BUDGET: &[(&str, usize)] = &[
     // `user_is_authorized_for_tool` call, mapped once.
     ("toolguard.rs", 16),
     ("tools.rs", 0),
-    ("trainers.rs", 1),
     ("training.rs", 0),
     // 3, not 2: `change_own_password` (the self-service path, added with the
     // profiles work) hashes the new password, and an Argon2 failure is the

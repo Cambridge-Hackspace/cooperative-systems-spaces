@@ -355,13 +355,6 @@ const UNRESOLVED: &[(&str, &str)] = &[
          Note the sibling DELETE /api/training/prerequisites/{id} at :679 does \
          resolve, so only the create path is wrong.",
     ),
-    (
-        "/api/trainers/users",
-        "userApi.getUsersForTraining GETs here (utils/api.ts:195) and already \
-         has an explicit 404 fallback, so this one was known: somebody hit it, \
-         worked around it, and left the call in place. No such route exists; \
-         the roster comes from /api/admin/roster.",
-    ),
 ];
 
 #[test]

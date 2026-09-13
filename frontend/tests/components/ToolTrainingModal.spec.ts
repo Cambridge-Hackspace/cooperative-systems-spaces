@@ -28,10 +28,7 @@ import { nextTick } from 'vue'
 
 const mocks = vi.hoisted(() => ({
   getToolTrainingOverview: vi.fn(),
-  checkTrainerAuthorization: vi.fn(),
-  createTrainingRecord: vi.fn(),
   getTrainingHistory: vi.fn(),
-  getUsersForTraining: vi.fn(),
   startTrainingSession: vi.fn(),
   completeTrainingSession: vi.fn(),
 }))
@@ -41,13 +38,8 @@ vi.mock('@/utils/api', () => ({
     startTrainingSession: mocks.startTrainingSession,
     completeTrainingSession: mocks.completeTrainingSession,
   },
-  trainerApi: {
-    checkTrainerAuthorization: mocks.checkTrainerAuthorization,
-    createTrainingRecord: mocks.createTrainingRecord,
-  },
   userApi: {
     getTrainingHistory: mocks.getTrainingHistory,
-    getUsersForTraining: mocks.getUsersForTraining,
   },
 }))
 
@@ -126,8 +118,6 @@ const stubs = {
     props: ['step', 'tool', 'existingSteps'],
     template: '<div class="edit-step-modal" />',
   },
-  TrainerManagement: { props: ['tool'], template: '<div class="trainer-management" />' },
-  RecordTrainingModal: { props: ['tool'], template: '<div class="record-modal" />' },
   // Rendered by the internal-document branch. Stubbed as an anchor so `to` is
   // observable as an attribute, and because tests/setup.ts turns an unresolved
   // component into a failure rather than console noise.
@@ -137,10 +127,7 @@ const stubs = {
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset()
   mocks.getToolTrainingOverview.mockResolvedValue({ success: true, data: overview() })
-  mocks.checkTrainerAuthorization.mockResolvedValue({ success: true, data: false })
   mocks.getTrainingHistory.mockResolvedValue({ success: true, data: [] })
-  mocks.getUsersForTraining.mockResolvedValue({ success: true, data: { items: [] } })
-  mocks.createTrainingRecord.mockResolvedValue({ success: true })
   mocks.startTrainingSession.mockResolvedValue({ success: true, data: {} })
   mocks.completeTrainingSession.mockResolvedValue({ success: true, data: {} })
   authState.user = { id: 'u1', role: UserRole.Member }
@@ -337,10 +324,9 @@ describe('the "no training required" branch', () => {
 })
 
 describe('what it loads', () => {
-  it('reads the overview and the trainer check on open', async () => {
+  it('reads the overview on open', async () => {
     await modal()
     expect(mocks.getToolTrainingOverview).toHaveBeenCalledWith('tool-1', 'me')
-    expect(mocks.checkTrainerAuthorization).toHaveBeenCalledWith('tool-1', 'u1')
   })
 
   it('tells the parent whether the tool may be used', async () => {
@@ -348,22 +334,14 @@ describe('what it loads', () => {
     expect(w.emitted('training-status-changed')?.[0]).toEqual(['tool-1', true])
   })
 
-  it('reloads both when the tool changes', async () => {
+  it('reloads when the tool changes', async () => {
     const w = await modal()
     mocks.getToolTrainingOverview.mockClear()
-    mocks.checkTrainerAuthorization.mockClear()
 
     await w.setProps({ tool: { ...TOOL, id: 'tool-2' } })
     await flushPromises()
 
     expect(mocks.getToolTrainingOverview).toHaveBeenCalledTimes(1)
-    expect(mocks.checkTrainerAuthorization).toHaveBeenCalledTimes(1)
-  })
-
-  it('checks no authorization for a signed-out visitor', async () => {
-    authState.user = null
-    await modal()
-    expect(mocks.checkTrainerAuthorization).not.toHaveBeenCalled()
   })
 
   it('reports a refused overview', async () => {
@@ -385,77 +363,6 @@ describe('who sees the management controls', () => {
     asRole(UserRole.Staff)
     expect(labels(await modal())).toContain('Add Training Step')
   })
-
-  it('shows a trainer-only section to an authorized trainer who is not staff', async () => {
-    asRole(UserRole.Member)
-    mocks.checkTrainerAuthorization.mockResolvedValue({ success: true, data: true })
-    const w = await modal()
-    expect(w.find('.trainer-section').exists()).toBe(true)
-  })
-
-  it('does not show it to a member who is not a trainer', async () => {
-    asRole(UserRole.Member)
-    const w = await modal()
-    expect(w.find('.trainer-section').exists()).toBe(false)
-  })
-
-  it('treats a refused authorization check as "not a trainer"', async () => {
-    asRole(UserRole.Member)
-    mocks.checkTrainerAuthorization.mockResolvedValue({ success: false, error: 'boom' })
-    const w = await modal()
-    expect(w.find('.trainer-section').exists()).toBe(false)
-  })
-})
-
-describe('recording a session inline', () => {
-  it('loads the training roster the first time the form is opened, and not again', async () => {
-    asRole(UserRole.Staff)
-    mocks.getUsersForTraining.mockResolvedValue({
-      success: true,
-      data: { items: [{ id: 'u2', is_active: true, full_name: 'Ada' }] },
-    })
-    const w = await modal()
-
-    const toggleFor = (wr: Wrapper) => {
-      const t = wr.findAll('button').find((b) => b.text().includes('Record'))
-      if (!t) throw new Error('no record-training control')
-      return t
-    }
-
-    await toggleFor(w).trigger('click')
-    await flushPromises()
-    expect(mocks.getUsersForTraining).toHaveBeenCalledWith('tool-1')
-    expect(mocks.getUsersForTraining).toHaveBeenCalledTimes(1)
-
-    // Closed and reopened: the guard is `usersForRecord.length === 0`, so a
-    // second open must not re-fetch. Opening once cannot tell the guard from
-    // its absence.
-    await toggleFor(w).trigger('click')
-    await flushPromises()
-    await toggleFor(w).trigger('click')
-    await flushPromises()
-    expect(
-      mocks.getUsersForTraining,
-      'the roster is fetched again on reopen -- if the guard was removed ' +
-        'deliberately, delete this expectation'
-    ).toHaveBeenCalledTimes(1)
-  })
-
-  // FIXED, alongside RecordTrainingModal, which has the same inline form.
-  it("defaults the training date to the instructor's date", async () => {
-    asRole(UserRole.Staff)
-    vi.setSystemTime(new Date('2026-01-16T02:00:00Z'))
-    expect(new Date().getDate(), 'the suite timezone is not what this assumes').toBe(15)
-
-    const w = await modal()
-    const toggle = w.findAll('button').find((b) => b.text().includes('Record'))
-    if (!toggle) throw new Error('no record-training control')
-    await toggle.trigger('click')
-    await flushPromises()
-
-    expect((w.find('input[type="date"]').element as HTMLInputElement).value).toBe('2026-01-15')
-    vi.setSystemTime(new Date('2026-01-15T12:00:00.000Z'))
-  })
 })
 
 describe('the child modals it owns', () => {
@@ -476,22 +383,6 @@ describe('the child modals it owns', () => {
     expect(mocks.getToolTrainingOverview).toHaveBeenCalledTimes(1)
     expect(w.emitted('training-updated')).toHaveLength(1)
     expect(w.find('.start-modal').exists()).toBe(false)
-  })
-
-  it('re-checks trainer authorization after the trainer list changes', async () => {
-    asRole(UserRole.Staff)
-    const w = await modal()
-    const open = w.findAll('button').find((b) => b.text().includes('Trainer'))
-    if (!open) throw new Error('no trainer-management control')
-    await open.trigger('click')
-    await nextTick()
-
-    mocks.checkTrainerAuthorization.mockClear()
-    const tm = w.findComponent(stubs.TrainerManagement)
-    ;(tm.vm as unknown as { $emit: (e: string) => void }).$emit('trainer-updated')
-    await flushPromises()
-
-    expect(mocks.checkTrainerAuthorization).toHaveBeenCalledTimes(1)
   })
 })
 

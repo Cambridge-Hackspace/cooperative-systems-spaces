@@ -253,8 +253,6 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/tools/00000000-0000-4000-8000-000000000001/events", Guard::Staff), // tools::get_tool_events
     R("POST", "/api/tools/00000000-0000-4000-8000-000000000001/events", Guard::Staff), // tools::add_tool_event
     R("PUT", "/api/tools/00000000-0000-4000-8000-000000000001/status", Guard::Staff), // tools::change_tool_status
-    R("GET", "/api/tools/00000000-0000-4000-8000-000000000001/trainers", Guard::Staff), // tools::get_tool_trainers
-    R("POST", "/api/tools/00000000-0000-4000-8000-000000000001/trainers", Guard::Staff), // tools::authorize_trainer
     R("GET", "/api/tools/00000000-0000-4000-8000-000000000001/training-types", Guard::Staff), // tools::get_tool_training_types
     R("POST", "/api/tools/00000000-0000-4000-8000-000000000001/training-types", Guard::Staff), // tools::create_training_type
     R("GET", "/api/tools/00000000-0000-4000-8000-000000000001/user-training", Guard::Auth), // tools::get_user_training_for_tool
@@ -263,15 +261,6 @@ pub const ROUTES: &[R] = &[
     R("DELETE", "/api/tools/user-training/00000000-0000-4000-8000-000000000001", Guard::Staff), // tools::revoke_training
     R("POST", "/api/tools/user-training/00000000-0000-4000-8000-000000000001", Guard::Staff), // tools::complete_training
     R("GET", "/api/tools/visible", Guard::Auth), // tools::list_visible_tools
-    R("GET", "/api/trainers/tools/00000000-0000-4000-8000-000000000001/trainers", Guard::Auth), // trainers::get_tool_trainers
-    R("POST", "/api/trainers/tools/00000000-0000-4000-8000-000000000001/trainers", Guard::Staff), // trainers::assign_tool_trainer
-    R("DELETE", "/api/trainers/tools/00000000-0000-4000-8000-000000000001/trainers/00000000-0000-4000-8000-000000000001", Guard::Staff), // trainers::remove_tool_trainer
-    R("PUT", "/api/trainers/tools/00000000-0000-4000-8000-000000000001/trainers/00000000-0000-4000-8000-000000000001", Guard::Staff), // trainers::update_tool_trainer
-    R("GET", "/api/trainers/tools/00000000-0000-4000-8000-000000000001/trainers/check/00000000-0000-4000-8000-000000000001", Guard::Auth), // trainers::check_trainer_authorization
-    R("GET", "/api/trainers/training-records", Guard::Auth), // trainers::get_training_records
-    R("POST", "/api/trainers/training-records", Guard::Auth), // trainers::create_training_record
-    R("PUT", "/api/trainers/training-records/00000000-0000-4000-8000-000000000001", Guard::Auth), // trainers::update_training_record
-    R("GET", "/api/trainers/users/00000000-0000-4000-8000-000000000001/training-records", Guard::Auth), // trainers::get_user_training_records
     R("GET", "/api/training/access/00000000-0000-4000-8000-000000000001", Guard::Auth), // training::check_my_tool_access
     R("GET", "/api/training/access/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000001", Guard::Staff), // training::check_tool_access
     R("GET", "/api/training/history/00000000-0000-4000-8000-000000000001", Guard::Auth), // training::get_training_history_for_tool

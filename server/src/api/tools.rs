@@ -10,8 +10,8 @@ use crate::{
     api::{errors::ApiError, responses::ApiResponse},
     auth::{AuthUser, StaffUser},
     models::{
-        trainers::ToolTrainer, NewTool, NewToolEvent, Tool, ToolCategory, ToolEvent, ToolStatus,
-        ToolTrainingType, UserToolTraining,
+        NewTool, NewToolEvent, Tool, ToolCategory, ToolEvent, ToolStatus, ToolTrainingType,
+        UserToolTraining,
     },
     AppState,
 };
@@ -98,10 +98,6 @@ pub fn tools_routes() -> Router<AppState> {
         .route(
             "/{tool_id}/training-types",
             get(get_tool_training_types).post(create_training_type),
-        )
-        .route(
-            "/{tool_id}/trainers",
-            get(get_tool_trainers).post(authorize_trainer),
         )
         // User training records
         .route("/{tool_id}/user-training", get(get_user_training_for_tool))
@@ -424,26 +420,6 @@ async fn create_training_type(
     // TODO: Implement training type creation
     Err(ApiError::NotImplemented(
         "Training type creation not yet implemented".to_string(),
-    ))
-}
-
-async fn get_tool_trainers(
-    _staff: StaffUser,
-    State(_state): State<AppState>,
-    Path(_tool_id): Path<Uuid>,
-) -> Result<Json<ApiResponse<Vec<ToolTrainer>>>, ApiError> {
-    // TODO: Implement trainers retrieval
-    Ok(Json(ApiResponse::success(vec![])))
-}
-
-async fn authorize_trainer(
-    _staff: StaffUser,
-    State(_state): State<AppState>,
-    Path(_tool_id): Path<Uuid>,
-) -> Result<Json<ApiResponse<ToolTrainer>>, ApiError> {
-    // TODO: Implement trainer authorization
-    Err(ApiError::NotImplemented(
-        "Trainer authorization not yet implemented".to_string(),
     ))
 }
 

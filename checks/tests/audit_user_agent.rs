@@ -1,10 +1,10 @@
-//! `log_event`'s last argument is `user_agent`, and seven call sites treat it
+//! `log_event`'s last argument is `user_agent`, and four call sites treat it
 //! as a description.
 //!
 //! The signature is
 //! `log_event(event_type, user_id, actor_id, event_data, ip_address, user_agent)`.
-//! Seven calls -- four in `api/training.rs`, three in `api/trainers.rs` -- pass
-//! a human sentence to the last one, so rows in `audit_logs` carry text like
+//! Four calls in `api/training.rs` pass a human sentence to the last one, so
+//! rows in `audit_logs` carry text like
 //! `Training step 'Lathe safety' created` in the column that is supposed to
 //! record which client made the request.
 //!
@@ -28,7 +28,7 @@
 
 use css_checks::read;
 
-const SOURCES: [&str; 2] = ["server/src/api/training.rs", "server/src/api/trainers.rs"];
+const SOURCES: [&str; 1] = ["server/src/api/training.rs"];
 
 /// The sixth argument of every `.log_event(` call in `source`, split by paren
 /// depth. Operates on chars throughout: mixing char and byte offsets is how a
@@ -95,7 +95,7 @@ fn the_scanner_still_finds_the_call_sites() {
     // forever while checking nothing.
     let args = all_user_agent_args();
     assert!(
-        args.len() >= 9,
+        args.len() >= 6,
         "parsed {} log_event call sites out of {SOURCES:?}, which is too few to \
          be right: {args:?}",
         args.len()
@@ -115,7 +115,7 @@ fn no_more_call_sites_put_prose_in_the_user_agent_field() {
     // number. The exactness is what makes "fix some, lower this" stick; keep it.
     assert_eq!(
         prose.len(),
-        7,
+        4,
         "the number of log_event calls passing a human sentence as `user_agent` \
          changed.\n\n\
          If it went UP: the sixth argument is the client's user agent, not a \

@@ -27,15 +27,6 @@ import type {
   CertifyInstructorRequest,
   ToolTrainingOverview,
   TrainingQuery,
-  ToolTrainer,
-  ToolTrainerWithUser,
-  AssignTrainerRequest,
-  UpdateTrainerRequest,
-  TrainingRecord,
-  TrainingRecordWithUsers,
-  CreateTrainingRecordRequest,
-  UpdateTrainingRecordRequest,
-  TrainingRecordsQuery,
 } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 
@@ -263,37 +254,11 @@ export const userApi = {
         return response
       })
       .catch((error) => {
-        // If training roster endpoint fails, try the old trainer-specific endpoint
-        if (error.response?.status === 404) {
-          console.log('Training roster endpoint not available, trying legacy trainer endpoint')
-          return apiClient
-            .get('/trainers/users')
-            .then((response) => {
-              if (response.success && response.data) {
-                const users = Array.isArray(response.data)
-                  ? response.data
-                  : (response.data as any).items || []
-                return {
-                  success: true,
-                  data: {
-                    items: users,
-                    page: 1,
-                    per_page: users.length,
-                    total: users.length,
-                    total_pages: 1,
-                  },
-                }
-              }
-              return response
-            })
-            .catch((legacyError) => {
-              // If both training roster and legacy trainer endpoints fail, try admin roster for admins
-              if (legacyError.response?.status === 401 || legacyError.response?.status === 403) {
-                console.log('Trainer endpoints not accessible, trying admin roster')
-                return this.getAllUsers()
-              }
-              throw legacyError
-            })
+        // If the roster is forbidden for this caller, fall back to the admin
+        // roster (admins can always read it).
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          console.log('Training roster not accessible, trying admin roster')
+          return this.getAllUsers()
         }
 
         console.error('Error fetching users for training:', error)
@@ -1121,133 +1086,6 @@ export const trainingApi = {
       console.error('Error revoking instructor certification:', error)
       return envelopeError(error, 'Failed to revoke instructor certification')
     })
-  },
-}
-
-// Trainer assignment API
-export const trainerApi = {
-  // === Tool Trainer Management ===
-
-  // Assign a trainer to a tool (staff only)
-  assignToolTrainer(data: AssignTrainerRequest): Promise<ApiResponse<ToolTrainer>> {
-    return apiClient
-      .post<ToolTrainer>(`/trainers/tools/${data.tool_id}/trainers`, data)
-      .catch((error) => {
-        console.error('Error assigning tool trainer:', error)
-        return envelopeError(error, 'Failed to assign tool trainer')
-      })
-  },
-
-  // Get trainers for a tool
-  getToolTrainers(
-    toolId: string,
-    includeInactive: boolean = false
-  ): Promise<ApiResponse<ToolTrainerWithUser[]>> {
-    return apiClient
-      .get<ToolTrainerWithUser[]>(`/trainers/tools/${toolId}/trainers`, {
-        include_inactive: includeInactive,
-      })
-      .catch((error) => {
-        console.error('Error fetching tool trainers:', error)
-        return { ...envelopeError(error, 'Failed to fetch tool trainers'), data: [] }
-      })
-  },
-
-  // Update trainer assignment (staff only)
-  updateToolTrainer(
-    toolId: string,
-    userId: string,
-    data: UpdateTrainerRequest
-  ): Promise<ApiResponse<ToolTrainer>> {
-    return apiClient
-      .put<ToolTrainer>(`/trainers/tools/${toolId}/trainers/${userId}`, data)
-      .catch((error) => {
-        console.error('Error updating tool trainer:', error)
-        return envelopeError(error, 'Failed to update tool trainer')
-      })
-  },
-
-  // Remove trainer from tool (staff only)
-  removeToolTrainer(toolId: string, userId: string): Promise<ApiResponse<void>> {
-    return apiClient.delete<void>(`/trainers/tools/${toolId}/trainers/${userId}`).catch((error) => {
-      console.error('Error removing tool trainer:', error)
-      return envelopeError(error, 'Failed to remove tool trainer')
-    })
-  },
-
-  // Check if user is authorized trainer for tool
-  checkTrainerAuthorization(toolId: string, userId: string): Promise<ApiResponse<boolean>> {
-    return apiClient
-      .get<boolean>(`/trainers/tools/${toolId}/trainers/check/${userId}`)
-      .catch((error) => {
-        // Don't log error as this might be expected for non-trainers
-        console.debug('Trainer authorization check result:', error.response?.status)
-        if (error.response?.status === 401 || error.response?.status === 403) {
-          // User is not authorized as trainer, return false instead of error
-          return { success: true, data: false }
-        }
-        console.error('Error checking trainer authorization:', error)
-        return {
-          ...envelopeError(error, 'Failed to check trainer authorization'),
-          data: false,
-        }
-      })
-  },
-
-  // === Training Records ===
-
-  // Create training record (trainers only)
-  createTrainingRecord(data: CreateTrainingRecordRequest): Promise<ApiResponse<TrainingRecord>> {
-    return apiClient.post<TrainingRecord>('/trainers/training-records', data).catch((error) => {
-      console.error('Error creating training record:', error)
-      return envelopeError(error, 'Failed to create training record')
-    })
-  },
-
-  // Get training records with filters
-  getTrainingRecords(
-    query?: TrainingRecordsQuery
-  ): Promise<ApiResponse<TrainingRecordWithUsers[]>> {
-    return apiClient
-      .get<TrainingRecordWithUsers[]>('/trainers/training-records', query)
-      .catch((error) => {
-        console.error('Error fetching training records:', error)
-        return {
-          ...envelopeError(error, 'Failed to fetch training records'),
-          data: [],
-        }
-      })
-  },
-
-  // Update training record (trainers and staff)
-  updateTrainingRecord(
-    recordId: string,
-    data: UpdateTrainingRecordRequest
-  ): Promise<ApiResponse<TrainingRecord>> {
-    return apiClient
-      .put<TrainingRecord>(`/trainers/training-records/${recordId}`, data)
-      .catch((error) => {
-        console.error('Error updating training record:', error)
-        return envelopeError(error, 'Failed to update training record')
-      })
-  },
-
-  // Get training records for a user
-  getUserTrainingRecords(
-    userId: string,
-    asTrainer: boolean = false
-  ): Promise<ApiResponse<TrainingRecordWithUsers[]>> {
-    return apiClient
-      .get<TrainingRecordWithUsers[]>(`/trainers/users/${userId}/training-records`, {
-        as_trainer: asTrainer,
-      })
-      .catch((error) => {
-        console.error('Error fetching user training records:', error)
-        return {
-          ...envelopeError(error, 'Failed to fetch user training records'),
-          data: [],
-        }
-      })
   },
 }
 

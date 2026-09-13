@@ -40,7 +40,7 @@ use crate::database::DatabaseManager;
 use crate::models::{
     AssignCmi5AuStep, Cmi5AssignableUnit, Cmi5Block, Cmi5Course, Cmi5Registration,
     NewCmi5AssignableUnit, NewCmi5Block, NewCmi5Course, NewCmi5LaunchToken, NewCmi5Registration,
-    NewCmi5StateDocument, NewCmi5Statement, NewTrainingRecord, TrainingStatus, TrainingStep,
+    NewCmi5StateDocument, NewCmi5Statement, TrainingStatus, TrainingStep,
 };
 use crate::schema::{
     cmi5_assignable_units, cmi5_blocks, cmi5_courses, cmi5_launch_tokens, cmi5_registrations,
@@ -759,23 +759,18 @@ impl Cmi5Service {
             .get_training_step_by_id(step_id)?
             .ok_or(Cmi5Error::StepNotFound)?;
 
-        let record = NewTrainingRecord {
-            tool_id: step.tool_id,
-            training_step_id: Some(step_id),
-            trainee_user_id: session.user_id,
-            // Self-directed, system-verified completion: the learner is both the
-            // subject and, for the record, the actor. The note names the cmi5
-            // module so history reads as "completed the cmi5 course", not "was
-            // signed off by a trainer".
-            trainer_user_id: session.user_id,
-            training_date: Utc::now().date_naive(),
-            completion_status: "completed".to_string(),
-            minutes_trained: None,
-            skills_covered: None,
-            notes: Some(format!("Completed via cmi5 module {}", au.au_iri)),
-            next_steps: None,
-        };
-        self.db.create_training_record(&record)?;
+        // Self-directed, system-verified completion: the learner is both the
+        // subject and, for the record, the actor (instructor), so history reads
+        // as "completed the cmi5 course" rather than "signed off by a trainer".
+        // Goes through the shared completion path in `database.rs` so the web and
+        // edge access checks stay in agreement (`tool_access_agrees`).
+        self.db.record_step_completion(
+            session.user_id,
+            step_id,
+            session.user_id,
+            "completed",
+            Some(format!("Completed via cmi5 module {}", au.au_iri)),
+        )?;
 
         Ok(GrantInfo {
             user_id: session.user_id,

@@ -24,7 +24,6 @@ pub mod tool_billing;
 pub mod tool_tiers;
 pub mod toolguard;
 pub mod tools;
-pub mod trainers;
 pub mod training;
 pub mod users;
 pub mod waivers;
@@ -41,7 +40,6 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/profiles", profiles::profile_routes())
         .nest("/tools", tools::tools_routes())
         .nest("/training", training::training_router())
-        .nest("/trainers", trainers::trainers_router())
         .nest("/cmi5", cmi5::cmi5_router())
         .nest("/config", config::config_routes())
         .nest("/toolguard", toolguard::toolguard_routes())
