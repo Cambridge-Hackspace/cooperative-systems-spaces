@@ -50,7 +50,7 @@ main(async () => {
   const member = await account('cmi5member')
   const promote = await PUT(`/api/users/${member.user.id}`, {
     token: admin.token,
-    body: { role: 'Member' },
+    body: { role: 'active' },
   })
   ok('cmi5/member-promoted', promote.status === 200, `promote -> ${promote.status}`)
 

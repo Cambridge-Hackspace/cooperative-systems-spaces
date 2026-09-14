@@ -4,7 +4,7 @@ use console::style;
 use uuid::Uuid;
 
 use crate::client::{
-    ApiClient, ApiResponse, PaginatedResponse, UpdateUserRequest, UserResponse, UserRole,
+    role, ApiClient, ApiResponse, PaginatedResponse, UpdateUserRequest, UserResponse,
 };
 use crate::config::CliConfig;
 use crate::output;
@@ -245,7 +245,7 @@ async fn handle_update_user(
     // First, resolve the user ID
     let user_uuid = resolve_user_id(client, user_id).await?;
 
-    let role_enum = if let Some(role_str) = role {
+    let validated_role = if let Some(role_str) = role {
         Some(parse_role(&role_str)?)
     } else {
         None
@@ -257,7 +257,7 @@ async fn handle_update_user(
         full_name,
         password,
         is_active: active,
-        role: role_enum,
+        role: validated_role,
     };
 
     let path = format!("/api/users/{}", user_uuid);
@@ -320,15 +320,16 @@ async fn handle_promote_user(client: &ApiClient, user_id: &str) -> Result<()> {
     let response: ApiResponse<UserResponse> = client.get(&path).await?;
     let user = response.data.context("No user data in response")?;
 
-    let new_role = match user.role {
-        UserRole::Unknown => UserRole::Newbie,
-        UserRole::Newbie => UserRole::Member,
-        UserRole::Member => UserRole::Staff,
-        UserRole::Staff => UserRole::Admin,
-        UserRole::Admin => {
-            output::print_warning("User is already at maximum role (Admin)");
+    let new_role = match role::TIERS.iter().position(|&t| t == user.role) {
+        Some(i) if i + 1 < role::TIERS.len() => role::TIERS[i + 1],
+        Some(_) => {
+            output::print_warning("User is already at maximum role (admin)");
             return Ok(());
         }
+        None => anyhow::bail!(
+            "User's role ({}) is not on the tier ladder; set it explicitly with `set-role`",
+            user.role
+        ),
     };
 
     let update_request = UpdateUserRequest {
@@ -337,7 +338,7 @@ async fn handle_promote_user(client: &ApiClient, user_id: &str) -> Result<()> {
         full_name: None,
         password: None,
         is_active: None,
-        role: Some(new_role),
+        role: Some(new_role.to_string()),
     };
 
     let response: ApiResponse<UserResponse> = client.put(&path, &update_request).await?;
@@ -364,15 +365,16 @@ async fn handle_demote_user(client: &ApiClient, user_id: &str) -> Result<()> {
     let response: ApiResponse<UserResponse> = client.get(&path).await?;
     let user = response.data.context("No user data in response")?;
 
-    let new_role = match user.role {
-        UserRole::Admin => UserRole::Staff,
-        UserRole::Staff => UserRole::Member,
-        UserRole::Member => UserRole::Newbie,
-        UserRole::Newbie => UserRole::Unknown,
-        UserRole::Unknown => {
-            output::print_warning("User is already at minimum role (Unknown)");
+    let new_role = match role::TIERS.iter().position(|&t| t == user.role) {
+        Some(i) if i > 0 => role::TIERS[i - 1],
+        Some(_) => {
+            output::print_warning("User is already at minimum role (guest)");
             return Ok(());
         }
+        None => anyhow::bail!(
+            "User's role ({}) is not on the tier ladder; set it explicitly with `set-role`",
+            user.role
+        ),
     };
 
     let update_request = UpdateUserRequest {
@@ -381,7 +383,7 @@ async fn handle_demote_user(client: &ApiClient, user_id: &str) -> Result<()> {
         full_name: None,
         password: None,
         is_active: None,
-        role: Some(new_role),
+        role: Some(new_role.to_string()),
     };
 
     let response: ApiResponse<UserResponse> = client.put(&path, &update_request).await?;
@@ -420,17 +422,16 @@ async fn resolve_user_id(client: &ApiClient, user_id: &str) -> Result<Uuid> {
     }
 }
 
-fn parse_role(role_str: &str) -> Result<UserRole> {
-    match role_str.to_lowercase().as_str() {
-        "unknown" => Ok(UserRole::Unknown),
-        "newbie" => Ok(UserRole::Newbie),
-        "member" => Ok(UserRole::Member),
-        "staff" => Ok(UserRole::Staff),
-        "admin" => Ok(UserRole::Admin),
-        _ => anyhow::bail!(
-            "Invalid role: {}. Valid roles: unknown, newbie, member, staff, admin",
-            role_str
-        ),
+fn parse_role(role_str: &str) -> Result<String> {
+    let lower = role_str.to_lowercase();
+    if role::is_tier(&lower) {
+        Ok(lower)
+    } else {
+        anyhow::bail!(
+            "Invalid role: {}. Valid roles: {}",
+            role_str,
+            role::TIERS.join(", ")
+        )
     }
 }
 #[cfg(test)]
@@ -440,11 +441,11 @@ mod tests {
     #[test]
     fn parse_role_accepts_every_role_case_insensitively() {
         for (input, expected) in [
-            ("unknown", UserRole::Unknown),
-            ("NEWBIE", UserRole::Newbie),
-            ("Member", UserRole::Member),
-            ("sTaFf", UserRole::Staff),
-            ("admin", UserRole::Admin),
+            ("guest", "guest"),
+            ("HISTORICAL", "historical"),
+            ("Active", "active"),
+            ("sTaFf", "staff"),
+            ("admin", "admin"),
         ] {
             assert_eq!(parse_role(input).unwrap(), expected, "input {input:?}");
         }
@@ -455,7 +456,7 @@ mod tests {
         let err = parse_role("superuser").unwrap_err().to_string();
         assert!(err.contains("superuser"), "{err}");
         assert!(
-            err.contains("unknown, newbie, member, staff, admin"),
+            err.contains("guest, historical, active, staff, admin"),
             "{err}"
         );
     }

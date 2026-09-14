@@ -212,10 +212,12 @@ function getRoleBadgeClass(role: string) {
       return 'badge-error'
     case 'staff':
       return 'badge-warning'
-    case 'member':
+    case 'active':
       return 'badge-info'
-    case 'newbie':
+    case 'historical':
       return 'badge-success'
+    case 'guest':
+      return 'badge-ghost'
     default:
       return 'badge-ghost'
   }

@@ -170,26 +170,23 @@ async fn register(
     let config = state.config_manager.get_config();
     let should_be_admin = config.should_grant_admin_role(&payload.email);
 
-    // Create new user with appropriate role
-    let new_user = if should_be_admin {
-        use crate::models::UserRole;
-        NewUser::with_role(
-            payload.username,
-            payload.email,
-            password_hash,
-            payload.full_name,
-            UserRole::Admin,
-        )
+    // New users get the `guest` tier; the setup admin address gets `admin`.
+    let assigned_role = if should_be_admin {
+        crate::models::role::ADMIN
     } else {
-        NewUser::new(
-            payload.username,
-            payload.email,
-            password_hash,
-            payload.full_name,
-        )
+        crate::models::role::GUEST
     };
+    let new_user = NewUser::new(
+        payload.username,
+        payload.email,
+        password_hash,
+        payload.full_name,
+    );
 
-    let created_user = state.db.create_user(&new_user).map_err(ApiError::from)?;
+    let created_user = state
+        .db
+        .create_user(&new_user, assigned_role)
+        .map_err(ApiError::from)?;
 
     // Clear throttle on successful registration
     if config.registration_challenge.enabled && config.registration_challenge.throttle_enabled {
@@ -205,9 +202,9 @@ async fn register(
             created_user.id,
             &created_user.username,
             &created_user.email,
-            "Newbie", // Default role for new users
-            None,     // No IP tracking for now
-            None,     // No User-Agent tracking for now
+            assigned_role, // role assigned to the new user
+            None,          // No IP tracking for now
+            None,          // No User-Agent tracking for now
         )
         .await
     {
@@ -228,7 +225,7 @@ async fn register(
     };
 
     Ok(Json(ApiResponse::success_with_message(
-        UserResponse::from(created_user),
+        UserResponse::from_user(created_user, assigned_role.to_string()),
         message,
     )))
 }
@@ -289,12 +286,17 @@ async fn login(
     // the frontend can route them to the enrollment page on first sight.
     let is_staff = state
         .db
-        .role_has_permission(user.role.as_str(), "staff.access");
+        .user_has_permission(user.id, "staff.access")
+        .map_err(ApiError::from)?;
     let must_enroll = config.auth.mfa.is_required_for(is_staff) && user.mfa_enrolled_at.is_none();
 
+    let primary_role = state
+        .db
+        .user_primary_role(user.id)
+        .map_err(ApiError::from)?;
     let response = LoginResponse {
         token,
-        user: UserResponse::from(user.clone()),
+        user: UserResponse::from_user(user.clone(), primary_role),
         expires_in: (config.auth.jwt_expiration_hours as i64) * 60 * 60,
         must_enroll_mfa: if must_enroll { Some(true) } else { None },
     };
@@ -336,9 +338,13 @@ async fn me(
         .db
         .user_roles_and_permissions(auth_user.0.id)
         .map_err(ApiError::from)?;
+    let primary_role = state
+        .db
+        .user_primary_role(auth_user.0.id)
+        .map_err(ApiError::from)?;
 
     Ok(Json(ApiResponse::success(CurrentUserResponse {
-        user: UserResponse::from(auth_user.0),
+        user: UserResponse::from_user(auth_user.0, primary_role),
         roles,
         permissions,
     })))
@@ -604,7 +610,6 @@ async fn password_reset_consume(
                 password_hash: Some(password_hash),
                 full_name: None,
                 is_active: None,
-                role: None,
                 profile: None,
                 meta: None,
                 updated_at: Some(chrono::Utc::now().naive_utc()),

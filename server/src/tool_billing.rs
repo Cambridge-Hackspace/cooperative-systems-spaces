@@ -261,9 +261,8 @@ impl ToolBillingService {
         }
     }
 
-    fn is_member(&self, user: &User) -> bool {
-        self.db
-            .role_has_permission(user.role.as_str(), "member.access")
+    fn is_member(&self, user: &User) -> Result<bool, DatabaseError> {
+        self.db.user_has_permission(user.id, "member.access")
     }
 
     /// What available balance a member needs to start this tool at a resolved
@@ -294,7 +293,7 @@ impl ToolBillingService {
         }
         let available = self.db.available_balance(user.id)?;
         Ok(metered_access_ok(
-            self.is_member(user),
+            self.is_member(user)?,
             self.require_membership(),
             &available,
             &self.required_available_rate(&eff),
@@ -323,7 +322,7 @@ impl ToolBillingService {
         let eff = self.db.resolve_effective_billing(user.id, tool)?;
         let metered_for_user = is_metered(&eff.flat_fee, &eff.rate_per_min);
 
-        if metered_for_user && self.require_membership() && !self.is_member(user) {
+        if metered_for_user && self.require_membership() && !self.is_member(user)? {
             return Ok(ActivationOutcome::Denied("Membership required".to_string()));
         }
         let required = self.required_available_rate(&eff);

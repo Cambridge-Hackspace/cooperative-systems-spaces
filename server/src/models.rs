@@ -40,115 +40,38 @@ pub use training::*;
 pub use waivers::*;
 pub use webhooks::*;
 
-use crate::schema::{audit_logs, groupsio_sync_runs, sql_types, users};
+use crate::schema::{audit_logs, groupsio_sync_runs, users};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use uuid::Uuid;
 
-/// User role enum for granular permissions
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
-)]
-#[diesel(sql_type = sql_types::UserRole)]
-pub enum UserRole {
-    /// User status unknown (default for security)
-    Unknown,
-    /// New user, basic access only
-    Newbie,
-    /// Full member with standard access
-    Member,
-    /// Staff member with elevated privileges
-    Staff,
-    /// Administrator with full access
-    Admin,
-}
+/// The canonical seeded role names, in ascending tier order. Authorization is
+/// data-driven (see [`crate::rbac::RoleGraph`] + the `roles` table); these
+/// constants exist only so app code that assigns a tier role -- registration,
+/// the roster editor, the membership state machine -- refers to the seed by a
+/// checked name rather than a bare string literal.
+pub mod role {
+    pub const GUEST: &str = "guest";
+    pub const HISTORICAL: &str = "historical";
+    pub const ACTIVE: &str = "active";
+    pub const STAFF: &str = "staff";
+    pub const ADMIN: &str = "admin";
 
-// Implement Diesel traits for UserRole enum
-impl diesel::serialize::ToSql<sql_types::UserRole, diesel::pg::Pg> for UserRole {
-    fn to_sql<'b>(
-        &'b self,
-        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
-    ) -> diesel::serialize::Result {
-        match self {
-            UserRole::Unknown => out.write_all(b"unknown")?,
-            UserRole::Newbie => out.write_all(b"newbie")?,
-            UserRole::Member => out.write_all(b"member")?,
-            UserRole::Staff => out.write_all(b"staff")?,
-            UserRole::Admin => out.write_all(b"admin")?,
-        }
-        Ok(diesel::serialize::IsNull::No)
-    }
-}
+    /// The tier roles a user can hold as their single primary role, lowest to
+    /// highest. (Additional non-tier roles may also be granted via user_roles.)
+    pub const TIERS: [&str; 5] = [GUEST, HISTORICAL, ACTIVE, STAFF, ADMIN];
 
-impl diesel::deserialize::FromSql<sql_types::UserRole, diesel::pg::Pg> for UserRole {
-    fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
-        match bytes.as_bytes() {
-            b"unknown" => Ok(UserRole::Unknown),
-            b"newbie" => Ok(UserRole::Newbie),
-            b"member" => Ok(UserRole::Member),
-            b"staff" => Ok(UserRole::Staff),
-            b"admin" => Ok(UserRole::Admin),
-            _ => Err("Unrecognized enum variant".into()),
-        }
-    }
-}
-
-impl Default for UserRole {
-    fn default() -> Self {
-        UserRole::Unknown
-    }
-}
-
-impl UserRole {
-    /// Check if user has admin privileges
-    pub fn can_access_admin(&self) -> bool {
-        matches!(self, UserRole::Admin)
+    /// Whether `name` is one of the assignable tier roles.
+    pub fn is_tier(name: &str) -> bool {
+        TIERS.contains(&name)
     }
 
-    /// Check if user has staff privileges
-    pub fn can_access_staff(&self) -> bool {
-        matches!(self, UserRole::Staff | UserRole::Admin)
-    }
-
-    /// Check if user has member privileges
-    pub fn can_access_member(&self) -> bool {
-        matches!(self, UserRole::Member | UserRole::Staff | UserRole::Admin)
-    }
-
-    pub fn is_active_user(&self) -> bool {
-        !matches!(self, UserRole::Unknown)
-    }
-
-    /// Seniority rank, ascending: `Unknown` < `Newbie` < `Member` < `Staff` <
-    /// `Admin`. The single place role ordering is defined; use it for
-    /// "this role or higher" comparisons rather than re-deriving a mapping.
-    /// (Door and home-link access checks previously each kept a private copy of
-    /// this table; they now call here.)
-    pub fn rank(&self) -> u8 {
-        match self {
-            UserRole::Unknown => 0,
-            UserRole::Newbie => 1,
-            UserRole::Member => 2,
-            UserRole::Staff => 3,
-            UserRole::Admin => 4,
-        }
-    }
-
-    /// The role's canonical name, identical to its wire encoding and to the
-    /// `roles.name` seeded by the RBAC migration. This is the key the RBAC
-    /// resolver ([`crate::rbac::RoleGraph`]) looks a user's role up by, so it
-    /// must stay in lockstep with the `ToSql` encoding above and the migration
-    /// seed. Prefer this over matching the enum when resolving permissions.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UserRole::Unknown => "unknown",
-            UserRole::Newbie => "newbie",
-            UserRole::Member => "member",
-            UserRole::Staff => "staff",
-            UserRole::Admin => "admin",
-        }
+    /// The tier's rank on the `TIERS` ladder, 1 (guest) to 5 (admin); `None`
+    /// for a name that is not a tier role. This mirrors the seeded RBAC levels
+    /// but needs no database -- config validation at boot has no `RoleGraph`.
+    pub fn tier_rank(name: &str) -> Option<usize> {
+        TIERS.iter().position(|&t| t == name).map(|i| i + 1)
     }
 }
 
@@ -164,7 +87,6 @@ pub struct User {
     pub is_active: bool,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
-    pub role: UserRole,
     pub profile: serde_json::Value,
     pub meta: serde_json::Value,
     /// Set when the user confirms their first MFA method; cleared when the
@@ -218,7 +140,6 @@ pub struct NewUser {
     pub password_hash: String,
     pub full_name: String,
     pub is_active: Option<bool>,
-    pub role: Option<UserRole>,
     pub profile: Option<serde_json::Value>,
     pub meta: Option<serde_json::Value>,
 }
@@ -232,7 +153,6 @@ pub struct UpdateUser {
     pub password_hash: Option<String>,
     pub full_name: Option<String>,
     pub is_active: Option<bool>,
-    pub role: Option<UserRole>,
     pub profile: Option<serde_json::Value>,
     pub updated_at: Option<NaiveDateTime>,
     pub meta: Option<serde_json::Value>,
@@ -246,26 +166,6 @@ impl NewUser {
             password_hash,
             full_name,
             is_active: Some(true),
-            role: Some(UserRole::Newbie),
-            profile: Some(serde_json::json!({})),
-            meta: Some(serde_json::json!({})),
-        }
-    }
-
-    pub fn with_role(
-        username: String,
-        email: String,
-        password_hash: String,
-        full_name: String,
-        role: UserRole,
-    ) -> Self {
-        Self {
-            username,
-            email,
-            password_hash,
-            full_name,
-            is_active: Some(true),
-            role: Some(role),
             profile: Some(serde_json::json!({})),
             meta: Some(serde_json::json!({})),
         }

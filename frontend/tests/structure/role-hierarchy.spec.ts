@@ -18,11 +18,11 @@ import { describe, expect, it } from 'vitest'
  * test keeps its own copy and therefore keeps its value.
  */
 const EXPECTED: Record<string, number> = {
-  unknown: 0,
-  newbie: 1,
-  member: 2,
-  staff: 3,
-  admin: 4,
+  guest: 1,
+  historical: 2,
+  active: 3,
+  staff: 4,
+  admin: 5,
 }
 
 // `process.cwd()` rather than `new URL(..., import.meta.url)`.

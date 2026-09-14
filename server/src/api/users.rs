@@ -16,7 +16,7 @@ use crate::{
         },
     },
     auth::{AdminUser, AuthUser, PasswordHashUtil},
-    models::{AuditEventType, NewAuditLog, UpdateUser, UserRole},
+    models::{AuditEventType, NewAuditLog, UpdateUser},
     profile::AuditLogger,
     AppState,
 };
@@ -72,7 +72,13 @@ async fn list_users(
         .list_users_paginated(limit, offset)
         .map_err(ApiError::from)?;
 
-    let user_responses: Vec<UserResponse> = users.into_iter().map(UserResponse::from).collect();
+    let user_responses: Vec<UserResponse> = users
+        .into_iter()
+        .map(|u| {
+            let role = state.db.user_primary_role(u.id).map_err(ApiError::from)?;
+            Ok::<_, ApiError>(UserResponse::from_user(u, role))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let paginated_response = PaginatedResponse::new(user_responses, page, per_page, total_count);
 
@@ -103,7 +109,13 @@ async fn get_user_by_id(
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
-    Ok(Json(ApiResponse::success(UserResponse::from(user))))
+    let role = state
+        .db
+        .user_primary_role(user.id)
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::success(UserResponse::from_user(
+        user, role,
+    ))))
 }
 
 // Update user
@@ -137,9 +149,13 @@ async fn update_user(
         ));
     }
 
-    // Only admins can set admin role
+    // A requested role must be one of the assignable tier roles.
     if let Some(ref new_role) = payload.role {
-        if *new_role == UserRole::Admin
+        if !crate::models::role::is_tier(new_role) {
+            return Err(ApiError::BadRequest(format!("unknown role: {new_role}")));
+        }
+        // Only admins can grant the admin role.
+        if new_role == crate::models::role::ADMIN
             && !state
                 .db
                 .user_has_permission(auth_user.0.id, "admin.access")
@@ -158,6 +174,10 @@ async fn update_user(
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
+    // The tier role (if requested) is applied to user_roles after the row
+    // update, since it no longer lives on the users table.
+    let requested_role = payload.role.clone();
+
     // Prepare update data
     let mut update_data = UpdateUser {
         username: payload.username,
@@ -165,7 +185,6 @@ async fn update_user(
         full_name: payload.full_name,
         password_hash: None,
         is_active: payload.is_active,
-        role: payload.role,
         profile: None, // For now, profile updates will be handled separately
         updated_at: Some(Utc::now().naive_utc()),
         meta: None, // Meta is system-managed, not user-editable via this endpoint
@@ -217,6 +236,14 @@ async fn update_user(
         .update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
 
+    // Apply a requested tier-role change through user_roles (validated above).
+    if let Some(new_role) = requested_role {
+        state
+            .db
+            .set_user_primary_role(user_id, &new_role)
+            .map_err(ApiError::from)?;
+    }
+
     // Broadcast toolguard state if active status changed (affects tool access)
     if update_data.is_active.is_some() {
         crate::api::toolguard::broadcast_toolguard_state(&state).await;
@@ -248,8 +275,12 @@ async fn update_user(
         }
     }
 
+    let role = state
+        .db
+        .user_primary_role(updated_user.id)
+        .map_err(ApiError::from)?;
     Ok(Json(ApiResponse::success_with_message(
-        UserResponse::from(updated_user),
+        UserResponse::from_user(updated_user, role),
         "User updated successfully".to_string(),
     )))
 }
@@ -295,7 +326,6 @@ async fn change_own_password(
         password_hash: Some(password_hash),
         full_name: None,
         is_active: None,
-        role: None,
         profile: None,
         meta: None,
         updated_at: Some(Utc::now().naive_utc()),
@@ -338,6 +368,10 @@ async fn delete_user(
         .find_user_by_id(user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let victim_role = state
+        .db
+        .user_primary_role(victim.id)
+        .map_err(ApiError::from)?;
 
     // Audited BEFORE the delete, and with the subject in `event_data` rather
     // than in `user_id`. Two reasons, and both were found by running this:
@@ -363,7 +397,7 @@ async fn delete_user(
                 "deleted_user_id": victim.id,
                 "deleted_username": victim.username,
                 "deleted_email": victim.email,
-                "deleted_role": victim.role,
+                "deleted_role": victim_role,
                 "action": "User deleted by admin",
             }),
             None,
@@ -462,7 +496,6 @@ async fn update_user_theme(
         password_hash: None,
         full_name: None,
         is_active: None,
-        role: None,
         profile: None,
         meta: Some(meta),
         updated_at: Some(Utc::now().naive_utc()),
@@ -473,5 +506,12 @@ async fn update_user_theme(
         .update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
 
-    Ok(Json(ApiResponse::success(UserResponse::from(updated_user))))
+    let role = state
+        .db
+        .user_primary_role(updated_user.id)
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::success(UserResponse::from_user(
+        updated_user,
+        role,
+    ))))
 }

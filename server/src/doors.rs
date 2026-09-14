@@ -107,10 +107,17 @@ impl DoorService {
         let schedules = self.db.list_schedules()?;
         let tz = self.site_tz();
 
+        // Effective tier level per active user, computed once for role-rule
+        // expansion (replaces the per-user rank() read on the dropped column).
+        let user_levels = self
+            .db
+            .effective_levels_for(&active_users.iter().map(|u| u.id).collect::<Vec<_>>())?;
+
         let mut compiled = Vec::with_capacity(doors.len());
         for door in &doors {
             let rules = self.db.list_rules_for_door(door.id)?;
-            let (allow, deny) = self.expand_rules(&rules, &active_users, &schedules, tz);
+            let (allow, deny) =
+                self.expand_rules(&rules, &active_users, &schedules, tz, &user_levels);
             let hold_unlock_until = open_access_hold_until_at(&rules, &schedules, tz, Utc::now());
             compiled.push(CompiledDoor {
                 id: door.id,
@@ -135,6 +142,7 @@ impl DoorService {
         active_users: &[User],
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
+        user_levels: &std::collections::HashMap<Uuid, i16>,
     ) -> (BTreeSet<String>, BTreeSet<String>) {
         let graph = self.db.rbac();
         expand_rules_at(
@@ -145,6 +153,7 @@ impl DoorService {
             &self.profile_field,
             Utc::now(),
             &graph,
+            user_levels,
         )
     }
 
@@ -232,7 +241,7 @@ impl DoorService {
         let user_cards: HashSet<String> = self.cards_for_user(user).into_iter().collect();
         let user_id_str = user.id.to_string();
         let graph = self.db.rbac();
-        let user_level = graph.level_of_name(user.role.as_str());
+        let user_level = Some(self.db.user_effective_level(user.id)?);
 
         for rule in &rules {
             // Schedule-gated rules are silent when their window is closed.
@@ -487,6 +496,7 @@ pub fn expand_rules_at(
     profile_field: &str,
     now: chrono::DateTime<Utc>,
     graph: &crate::rbac::RoleGraph,
+    user_levels: &std::collections::HashMap<Uuid, i16>,
 ) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut allow = BTreeSet::<String>::new();
     let mut deny = BTreeSet::<String>::new();
@@ -555,10 +565,7 @@ pub fn expand_rules_at(
                     }
                 };
                 for u in active_users.iter() {
-                    if graph
-                        .level_of_name(u.role.as_str())
-                        .is_some_and(|ul| ul >= required)
-                    {
+                    if user_levels.get(&u.id).copied().unwrap_or(0) >= required {
                         for c in cards_in_profile(&u.profile, profile_field) {
                             bucket.insert(c);
                         }

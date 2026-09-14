@@ -102,7 +102,7 @@ const USERS: User[] = [
     email: 'ada@example.test',
     full_name: 'Ada Lovelace',
     is_active: true,
-    role: UserRole.Member,
+    role: UserRole.Active,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     profile: {},
@@ -351,11 +351,11 @@ describe('the rule editor', () => {
   })
 
   // Recorded as a decision rather than a defect: `UserRole` has five members
-  // and the role rule offers three. A rule for "Newbie or above" would admit
-  // very nearly everyone, and "Unknown or above" would admit everyone
-  // including the unauthenticated -- so leaving them out is defensible. It is
-  // pinned so that stays a decision.
-  it('offers only the three roles above Newbie', async () => {
+  // and the role rule offers three. A rule for "historical or above" would
+  // admit every lapsed member, and "guest or above" would admit everyone
+  // logged in -- so leaving them out is defensible. It is pinned so that stays
+  // a decision.
+  it('offers only the three roles above guest/historical', async () => {
     const w = await page([door()])
     await openDetail(w)
     const values = w
@@ -363,9 +363,9 @@ describe('the rule editor', () => {
       .findAll('option')
       .map((o) => o.attributes('value'))
 
-    expect(values).toEqual([UserRole.Member, UserRole.Staff, UserRole.Admin])
-    expect(values).not.toContain(UserRole.Newbie)
-    expect(values).not.toContain(UserRole.Unknown)
+    expect(values).toEqual([UserRole.Active, UserRole.Staff, UserRole.Admin])
+    expect(values).not.toContain(UserRole.Guest)
+    expect(values).not.toContain(UserRole.Historical)
   })
 
   // FINDING, pinned, and the one that produces a rule nobody meant. The kind
@@ -395,7 +395,7 @@ describe('the rule editor', () => {
       addedRule(),
       'the value is now reset when the kind changes -- if a watcher was added, ' +
         'delete this test'
-    ).toMatchObject({ kind: 'user', value: 'Member' })
+    ).toMatchObject({ kind: 'user', value: 'active' })
   })
 
   it('sends a chosen user rule correctly once one is picked', async () => {

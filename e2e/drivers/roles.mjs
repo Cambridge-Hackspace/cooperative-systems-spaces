@@ -53,7 +53,7 @@ main(async () => {
   const role = low.user?.role
   ok(
     'roles/probe-is-low-privilege',
-    !!role && role !== 'Admin' && role !== 'Staff',
+    !!role && role !== 'admin' && role !== 'staff',
     `the probe account resolved as role ${role}; a fresh registration must be ` +
       `below Staff for this tier to mean anything`,
   )

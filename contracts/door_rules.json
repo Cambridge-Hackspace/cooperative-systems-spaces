@@ -50,12 +50,12 @@
       "now": "2026-05-28T14:00:00Z",
       "tz": "America/Chicago",
       "users": [
-        { "id": "11111111-1111-4111-8111-111111111111", "role": "newbie", "is_active": true, "cards": ["N1"] },
-        { "id": "22222222-2222-4222-8222-222222222222", "role": "member", "is_active": true, "cards": ["M1"] },
+        { "id": "11111111-1111-4111-8111-111111111111", "role": "guest", "is_active": true, "cards": ["N1"] },
+        { "id": "22222222-2222-4222-8222-222222222222", "role": "active", "is_active": true, "cards": ["M1"] },
         { "id": "33333333-3333-4333-8333-333333333333", "role": "admin",  "is_active": true, "cards": ["AD1"] }
       ],
       "schedules": [],
-      "rules": [{ "kind": "role", "value": "member", "effect": "allow", "schedule_id": null }],
+      "rules": [{ "kind": "role", "value": "active", "effect": "allow", "schedule_id": null }],
       "expect": {
         "server_compiled": { "allow": ["AD1", "M1"], "deny": [] },
         "edge_decisions": [
@@ -70,7 +70,7 @@
       "now": "2026-05-28T14:00:00Z",
       "tz": "America/Chicago",
       "users": [
-        { "id": "22222222-2222-4222-8222-222222222222", "role": "member", "is_active": true, "cards": ["M1", "M2"] }
+        { "id": "22222222-2222-4222-8222-222222222222", "role": "active", "is_active": true, "cards": ["M1", "M2"] }
       ],
       "schedules": [],
       "rules": [
@@ -111,7 +111,7 @@
       "now": "2026-05-28T14:00:00Z",
       "tz": "America/Chicago",
       "users": [
-        { "id": "22222222-2222-4222-8222-222222222222", "role": "member", "is_active": true, "cards": ["M1"] }
+        { "id": "22222222-2222-4222-8222-222222222222", "role": "active", "is_active": true, "cards": ["M1"] }
       ],
       "schedules": [],
       "rules": [{ "kind": "user", "value": "not-a-uuid", "effect": "allow", "schedule_id": null }],
@@ -184,7 +184,7 @@
       "now": "2026-05-28T14:00:00Z",
       "tz": "America/Chicago",
       "users": [
-        { "id": "44444444-4444-4444-8444-444444444444", "role": "member", "is_active": false, "cards": ["X9"] }
+        { "id": "44444444-4444-4444-8444-444444444444", "role": "active", "is_active": false, "cards": ["X9"] }
       ],
       "schedules": [],
       "rules": [{ "kind": "card", "value": "X9", "effect": "allow", "schedule_id": null }],

@@ -130,7 +130,7 @@ beforeEach(() => {
   mocks.getTrainingHistory.mockResolvedValue({ success: true, data: [] })
   mocks.startTrainingSession.mockResolvedValue({ success: true, data: {} })
   mocks.completeTrainingSession.mockResolvedValue({ success: true, data: {} })
-  authState.user = { id: 'u1', role: UserRole.Member }
+  authState.user = { id: 'u1', role: UserRole.Active }
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'debug').mockImplementation(() => {})
@@ -155,7 +155,7 @@ describe('the action buttons, against what the server actually sends', () => {
   // and `user_progress`, no aliases -- which is exactly what they did while the
   // buttons were unreachable. The difference is that they now appear.
   it('offers Start on an available step with no progress yet', async () => {
-    for (const role of [UserRole.Member, UserRole.Staff, UserRole.Admin]) {
+    for (const role of [UserRole.Active, UserRole.Staff, UserRole.Admin]) {
       asRole(role)
       const w = await modal(overview({ steps: [serverStep(1, { is_available: true })] }))
       expect(labels(w), `${role} should be offered Start`).toContain('Start Training')
@@ -357,7 +357,7 @@ describe('what it loads', () => {
 
 describe('who sees the management controls', () => {
   it('shows step management to staff and admins only', async () => {
-    asRole(UserRole.Member)
+    asRole(UserRole.Active)
     expect(labels(await modal())).not.toContain('Add Training Step')
 
     asRole(UserRole.Staff)
@@ -432,7 +432,7 @@ const oneStep = (over: Partial<TrainingStep>) =>
 
 describe('the safety document on a step', () => {
   it('renders a relative URL through the router rather than as a page load', async () => {
-    const w = await modalAs(UserRole.Member, oneStep({ training_materials_url: '/wiki/safety' }))
+    const w = await modalAs(UserRole.Active, oneStep({ training_materials_url: '/wiki/safety' }))
     const link = w.find('[data-test="step-materials"] a')
 
     expect(link.exists()).toBe(true)
@@ -444,7 +444,7 @@ describe('the safety document on a step', () => {
 
   it('renders an external URL as an anchor that cannot reach back', async () => {
     const w = await modalAs(
-      UserRole.Member,
+      UserRole.Active,
       oneStep({ training_materials_url: 'https://example.org/manual.pdf' })
     )
     const link = w.find('[data-test="step-materials"] a')
@@ -463,7 +463,7 @@ describe('the safety document on a step', () => {
     // written -- the API accepts the field directly -- and Vue does not
     // sanitise an href binding. So the render side checks too.
     for (const hostile of ['javascript:alert(1)', 'data:text/html,<script>x</script>']) {
-      const w = await modalAs(UserRole.Member, oneStep({ training_materials_url: hostile }))
+      const w = await modalAs(UserRole.Active, oneStep({ training_materials_url: hostile }))
       expect(
         w.find('[data-test="step-materials"]').exists(),
         `${hostile} was rendered as a link`
@@ -472,24 +472,24 @@ describe('the safety document on a step', () => {
   })
 
   it('renders nothing when the step carries no document', async () => {
-    const w = await modalAs(UserRole.Member, oneStep({}))
+    const w = await modalAs(UserRole.Active, oneStep({}))
     expect(w.find('[data-test="step-materials"]').exists()).toBe(false)
   })
 })
 
 describe('confirming you have read the documentation', () => {
   it('offers the confirmation only on a self-service step', async () => {
-    const plain = await modalAs(UserRole.Member, oneStep({}))
+    const plain = await modalAs(UserRole.Active, oneStep({}))
     expect(plain.find('[data-test="attest"]').exists()).toBe(false)
 
-    const selfServe = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const selfServe = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
     expect(selfServe.find('[data-test="attest"]').exists()).toBe(true)
   })
 
   it('offers it to a member, who is offered Mark Complete by nothing', async () => {
     // The whole point. `isInstructor` is `canManageTraining`, so a control
     // hung off it is invisible to exactly the people this feature is for.
-    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const w = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
 
     expect(w.find('[data-test="attest"]').exists()).toBe(true)
     expect(labels(w)).not.toContain('Mark Complete')
@@ -498,7 +498,7 @@ describe('confirming you have read the documentation', () => {
   it('withholds Start Training on a self-service step', async () => {
     // Start would create an in-progress row the member cannot then complete by
     // any other route, which is a dead end that looks like a broken button.
-    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const w = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
     expect(labels(w)).not.toContain('Start Training')
   })
 
@@ -512,7 +512,7 @@ describe('confirming you have read the documentation', () => {
   })
 
   it('starts then completes, in that order, for the signed-in user', async () => {
-    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const w = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
     await w.find('[data-test="attest-box"]').trigger('change')
     await flushPromises()
 
@@ -532,7 +532,7 @@ describe('confirming you have read the documentation', () => {
     // The server refuses a self-attestation carrying `assessment_score`. This
     // asserts the client does not send one at all, so that refusal is a
     // backstop rather than something a user can trip.
-    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const w = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
     await w.find('[data-test="attest-box"]').trigger('change')
     await flushPromises()
 
@@ -543,7 +543,7 @@ describe('confirming you have read the documentation', () => {
   })
 
   it('reloads the overview so the tool gate reflects the new state', async () => {
-    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const w = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
     mocks.getToolTrainingOverview.mockClear()
 
     await w.find('[data-test="attest-box"]').trigger('change')
@@ -564,7 +564,7 @@ describe('confirming you have read the documentation', () => {
     })
 
   it('shows a completed confirmation as done and disabled', async () => {
-    const w = await modalAs(UserRole.Member, alreadyConfirmed())
+    const w = await modalAs(UserRole.Active, alreadyConfirmed())
 
     expect(w.find('[data-test="attest-box"]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-test="attest"]').text()).toContain('Confirmed')
@@ -586,12 +586,12 @@ describe('confirming you have read the documentation', () => {
         }),
       ],
     })
-    const withDate = await modalAs(UserRole.Member, dated)
+    const withDate = await modalAs(UserRole.Active, dated)
     expect(withDate.find('[data-test="attest"]').text()).toContain('Mar 4, 2026')
 
     // A row with no completed_at is not a shape the server sends, but it is the
     // shape a defensive render has to survive.
-    const undated = await modalAs(UserRole.Member, alreadyConfirmed())
+    const undated = await modalAs(UserRole.Active, alreadyConfirmed())
     expect(undated.find('[data-test="attest"]').text().trim()).toBe('Confirmed')
   })
 
@@ -601,7 +601,7 @@ describe('confirming you have read the documentation', () => {
     // handler's own guard deleted -- which is exactly what a mutation check
     // caught it doing. Dispatching the DOM event directly gets past the
     // attribute and reaches the handler, which is the thing under test.
-    const w = await modalAs(UserRole.Member, alreadyConfirmed())
+    const w = await modalAs(UserRole.Active, alreadyConfirmed())
 
     w.find('[data-test="attest-box"]').element.dispatchEvent(new Event('change'))
     await flushPromises()
@@ -615,7 +615,7 @@ describe('confirming you have read the documentation', () => {
       success: false,
       error: 'A self-service confirmation cannot carry an assessment score',
     })
-    const w = await modalAs(UserRole.Member, oneStep({ self_attestable: true }))
+    const w = await modalAs(UserRole.Active, oneStep({ self_attestable: true }))
 
     await w.find('[data-test="attest-box"]').trigger('change')
     await flushPromises()
@@ -661,7 +661,7 @@ describe('who the child modals act on', () => {
 
   it('passes the signed-in user to Start Training when mounted the way ToolCard mounts it', async () => {
     // No `user` prop, which is the member's path and the one that threw.
-    const w = await modalAs(UserRole.Member, oneStep({}))
+    const w = await modalAs(UserRole.Active, oneStep({}))
     await press(w, 'Start Training')
 
     const passed = startSubject(w)
@@ -700,7 +700,7 @@ describe('who the child modals act on', () => {
   it('renders no stray markup after the child modals', async () => {
     // There was a second `/>` after CompleteTrainingModal, which the template
     // compiler treats as text -- so the modal body carried a literal "/>".
-    const w = await modalAs(UserRole.Member, oneStep({}))
+    const w = await modalAs(UserRole.Active, oneStep({}))
     expect(w.text()).not.toContain('/>')
   })
 })

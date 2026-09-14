@@ -33,13 +33,12 @@ use uuid::Uuid;
 use css_server::auth::PasswordHashUtil;
 use css_server::database::MIGRATIONS;
 use css_server::models::{
-    CardStatus, LedgerEntryType, NewMembershipLedgerEntry, NewTool, NewToolRateTier,
+    role, CardStatus, LedgerEntryType, NewMembershipLedgerEntry, NewTool, NewToolRateTier,
     NewToolTierAssignment, NewTrainingWaiver, NewUser, NewUserCard, ToolCategory, ToolStatus,
-    UserRole,
 };
 use css_server::schema::{
-    membership_ledger, tool_rate_tiers, tool_tier_assignments, tool_usage_sessions, tools,
-    training_waivers, user_cards, users,
+    membership_ledger, roles, tool_rate_tiers, tool_tier_assignments, tool_usage_sessions, tools,
+    training_waivers, user_cards, user_roles, users,
 };
 
 /// Insert shape for a migrated historical session. `status` is `settled` (a
@@ -69,7 +68,10 @@ struct SUser {
     full_name: String,
     email: String,
     username: String,
-    role: UserRole,
+    /// Primary tier role name from the RBAC taxonomy (guest/historical/active/
+    /// staff/admin). The `users.role` enum is retired; the loader writes the
+    /// user's tier straight into `user_roles`.
+    role: String,
 }
 struct STool {
     tp: String,
@@ -129,14 +131,21 @@ struct Staged {
     sessions: Vec<SSession>,
 }
 
-fn role_of(s: &str) -> UserRole {
+/// Map a staged role string to an RBAC tier name. Accepts both the new taxonomy
+/// (passed through) and the legacy ToolPass/enum names (member->active,
+/// newbie->guest), so the loader is correct whether it reads a pre- or
+/// post-reclassification `staged.sqlite`. Deny-biased: an unrecognised value
+/// becomes `guest`, never a privileged tier.
+fn role_of(s: &str) -> String {
     match s {
-        "admin" => UserRole::Admin,
-        "staff" => UserRole::Staff,
-        "member" => UserRole::Member,
-        "newbie" => UserRole::Newbie,
-        _ => UserRole::Unknown,
+        "admin" => role::ADMIN,
+        "staff" => role::STAFF,
+        "active" | "member" => role::ACTIVE,
+        "historical" => role::HISTORICAL,
+        "guest" | "newbie" => role::GUEST,
+        _ => role::GUEST,
     }
+    .to_string()
 }
 fn card_status_of(s: &str) -> CardStatus {
     match s {
@@ -330,6 +339,27 @@ struct Counts {
     sessions: usize,
 }
 
+/// Assign a user's primary tier by writing straight into `user_roles` (the
+/// `users.role` enum is retired). Idempotent; errors loudly if the tier role is
+/// absent from the seed rather than silently leaving the user unauthorized.
+fn assign_tier_role(
+    conn: &mut PgConnection,
+    role_id: &HashMap<String, Uuid>,
+    uid: Uuid,
+    role_name: &str,
+) -> Result<(), diesel::result::Error> {
+    let rid = *role_id.get(role_name).ok_or_else(|| {
+        diesel::result::Error::QueryBuilderError(
+            format!("tier role {role_name:?} not found in roles table").into(),
+        )
+    })?;
+    diesel::insert_into(user_roles::table)
+        .values((user_roles::user_id.eq(uid), user_roles::role_id.eq(rid)))
+        .on_conflict_do_nothing()
+        .execute(conn)?;
+    Ok(())
+}
+
 /// All Postgres writes, in FK order. Diesel errors only (SQLite is already read).
 fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::Error> {
     let mut c = Counts::default();
@@ -339,12 +369,11 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
     let mig_hash = PasswordHashUtil::hash(&Uuid::new_v4().to_string())
         .map_err(|e| diesel::result::Error::QueryBuilderError(Box::new(e)))?;
     diesel::insert_into(users::table)
-        .values(&NewUser::with_role(
+        .values(&NewUser::new(
             MIGRATION_USERNAME.to_string(),
             MIGRATION_EMAIL.to_string(),
             mig_hash,
             "ToolPass Migration".to_string(),
-            UserRole::Admin,
         ))
         .on_conflict(users::email)
         .do_nothing()
@@ -354,6 +383,18 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
         .select(users::id)
         .first(conn)?;
 
+    // RBAC (#65/#77): authorization resolves through `user_roles` and the
+    // `users.role` enum is retired, so each loaded user's primary tier is
+    // written straight into `user_roles` -- without it a loaded member would be
+    // denied every gated route. These inserts bypass `create_user` (which syncs
+    // this in-process), so do it here. Resolve the tier role ids once.
+    let role_id: HashMap<String, Uuid> = roles::table
+        .select((roles::name, roles::id))
+        .load::<(String, Uuid)>(conn)?
+        .into_iter()
+        .collect();
+    assign_tier_role(conn, &role_id, mig_id, role::ADMIN)?;
+
     // Users — insert-if-absent by email, then resolve id (rebuilds the map on a
     // re-run too). Random password; members set a real one via the reset flow.
     let mut user_id: HashMap<String, Uuid> = HashMap::new();
@@ -361,12 +402,11 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
         let hash = PasswordHashUtil::hash(&Uuid::new_v4().to_string())
             .map_err(|e| diesel::result::Error::QueryBuilderError(Box::new(e)))?;
         let inserted = diesel::insert_into(users::table)
-            .values(&NewUser::with_role(
+            .values(&NewUser::new(
                 u.username.clone(),
                 u.email.clone(),
                 hash,
                 u.full_name.clone(),
-                u.role.clone(),
             ))
             .on_conflict(users::email)
             .do_nothing()
@@ -376,19 +416,9 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
             .filter(users::email.eq(&u.email))
             .select(users::id)
             .first(conn)?;
+        assign_tier_role(conn, &role_id, id, &u.role)?;
         user_id.insert(u.tp.clone(), id);
     }
-
-    // RBAC (#65): authorization resolves through `user_roles`, so every loaded
-    // user needs the assignment matching their primary role -- without it a
-    // loaded member would be denied every gated route. These inserts bypass
-    // `create_user` (which syncs this in-process), so sync it here. Idempotent.
-    diesel::sql_query(
-        "INSERT INTO user_roles (user_id, role_id) \
-         SELECT u.id, r.id FROM users u JOIN roles r ON r.name = u.role::text \
-         ON CONFLICT DO NOTHING",
-    )
-    .execute(conn)?;
 
     // Tool default rate = the "Default Rate" tier's rate, if the tool has one.
     let mut tool_default_rate: HashMap<String, Option<BigDecimal>> = HashMap::new();
@@ -645,11 +675,17 @@ mod tests {
 
     #[test]
     fn role_mapping_covers_the_toolpass_types_and_defaults_safe() {
-        assert_eq!(role_of("member"), UserRole::Member);
-        assert_eq!(role_of("admin"), UserRole::Admin);
-        assert_eq!(role_of("staff"), UserRole::Staff);
+        // Legacy ToolPass/enum names map onto the RBAC taxonomy...
+        assert_eq!(role_of("member"), role::ACTIVE);
+        assert_eq!(role_of("newbie"), role::GUEST);
+        assert_eq!(role_of("admin"), role::ADMIN);
+        assert_eq!(role_of("staff"), role::STAFF);
+        // ...and post-reclassification taxonomy names pass straight through.
+        assert_eq!(role_of("active"), role::ACTIVE);
+        assert_eq!(role_of("historical"), role::HISTORICAL);
+        assert_eq!(role_of("guest"), role::GUEST);
         // An unrecognised role must NOT silently become a privileged one.
-        assert_eq!(role_of("something-else"), UserRole::Unknown);
+        assert_eq!(role_of("something-else"), role::GUEST);
     }
 
     #[test]
@@ -717,7 +753,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let admins = staged
         .users
         .iter()
-        .filter(|u| u.role == UserRole::Admin)
+        .filter(|u| u.role == role::ADMIN)
         .count();
     eprintln!("note: {admins} member(s) map to role=admin (ToolPass Group Admins)");
 

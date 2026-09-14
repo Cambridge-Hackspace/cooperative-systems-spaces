@@ -159,10 +159,10 @@ due_period = "Monthly"
 # Days after the anniversary before the renewal check runs (grace for a payment
 # to land). 1 = "the next day".
 grace_days = 1
-# Role granted while in good standing (must be Member or lower).
-member_role = "Member"
+# Role granted while in good standing (a tier role, at most `active`).
+member_role = "active"
 # Role a member drops to on lapse (must rank below member_role).
-lapsed_role = "Newbie"
+lapsed_role = "historical"
 # Start a fresh membership on return after a lapse (no back-charge for the gap).
 restart_on_lapse = true
 # How many periods a one-time payment buys (amount = due_amount * this).

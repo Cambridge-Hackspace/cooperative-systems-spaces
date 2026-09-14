@@ -36,45 +36,52 @@ use crate::database::{DatabaseError, DatabaseManager};
 use crate::doors::DoorService;
 use crate::models::{
     AuditEventType, LedgerEntryType, NewAuditLog, NewMembershipLedgerEntry, NewMembershipSyncRun,
-    UpdateUser, User, UserRole,
+    User,
 };
 use crate::stripe::StripeClient;
 
 /// The role change (if any) a membership event implies.
 ///
-/// * `current` -- the user's role now.
+/// Ranks are effective RBAC levels (from the `RoleGraph`), not the retired
+/// `users.role` enum: on the dev taxonomy `member_role` is `active` (level 3)
+/// and `lapsed_role` is `historical` (level 2).
+///
+/// * `current_level` -- the user's effective level now.
 /// * `entitled` -- true iff, after this event, the user holds an active,
 ///   dues-covered membership.
-/// * `is_last_admin` -- true iff `current == Admin` and they are the only active
-///   admin.
+/// * `is_last_admin` -- true iff the user is an admin and the only active one.
 ///
-/// Returns the role to write, or `None` for no change. Rules, first match wins:
+/// Returns the role name to write, or `None` for no change. Rules, first match
+/// wins:
 /// 1. entitled and below `member_role` -> grant `member_role`.
 /// 2. not entitled, last admin -> no change (guard).
 /// 3. not entitled, above `lapsed_role` -> revoke to `lapsed_role`.
 /// 4. otherwise -> no change.
 ///
-/// Grants only ever yield `member_role` (validated `<= Member`), so an elevated
-/// role is never restored automatically: a Staff/Admin who lapsed to Newbie and
-/// pays again returns as Member, not their old role.
+/// Grants only ever yield `member_role`, so an elevated role is never restored
+/// automatically: a staff/admin who lapsed to `historical` and pays again
+/// returns as `active`, not their old role.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_role_transition(
-    current: &UserRole,
+    current_level: i16,
     entitled: bool,
     is_last_admin: bool,
-    member_role: &UserRole,
-    lapsed_role: &UserRole,
-) -> Option<UserRole> {
+    member_role: &str,
+    member_level: i16,
+    lapsed_role: &str,
+    lapsed_level: i16,
+) -> Option<String> {
     if entitled {
-        if current.rank() < member_role.rank() {
-            return Some(member_role.clone());
+        if current_level < member_level {
+            return Some(member_role.to_string());
         }
         return None;
     }
-    if *current == UserRole::Admin && is_last_admin {
+    if is_last_admin {
         return None;
     }
-    if current.rank() > lapsed_role.rank() {
-        return Some(lapsed_role.clone());
+    if current_level > lapsed_level {
+        return Some(lapsed_role.to_string());
     }
     None
 }
@@ -172,7 +179,7 @@ impl MembershipService {
         self.config.get_config().membership.currency
     }
 
-    fn roles(&self) -> (UserRole, UserRole) {
+    fn roles(&self) -> (String, String) {
         let c = self.config.get_config();
         (c.membership.member_role, c.membership.lapsed_role)
     }
@@ -261,11 +268,17 @@ impl MembershipService {
     /// Apply the role state machine for one user at a known entitlement.
     fn apply_role(&self, user: &User, entitled: bool) -> Result<(), DatabaseError> {
         let (member_role, lapsed_role) = self.roles();
-        // "Is this user an admin" is now effective admin.access, not the enum
+        // Ranks come from the effective role graph, not the retired enum. The
+        // current role is the user's highest tier; levels resolve the config
+        // role names to the same scale as `user_effective_level`.
+        let graph = self.db.rbac();
+        let member_level = graph.level_of_name(&member_role).unwrap_or(0);
+        let lapsed_level = graph.level_of_name(&lapsed_role).unwrap_or(0);
+        let current_role = self.db.user_primary_role(user.id)?;
+        let current_level = self.db.user_effective_level(user.id)?;
+        // "Is this user an admin" is now effective admin.access, not an enum
         // value (count_active_admins is already permission-based).
-        let user_is_admin = self
-            .db
-            .role_has_permission(user.role.as_str(), "admin.access");
+        let user_is_admin = self.db.user_has_permission(user.id, "admin.access")?;
         let is_last_admin = user_is_admin && self.db.count_active_admins()? <= 1;
 
         if !entitled && user_is_admin && is_last_admin {
@@ -274,29 +287,20 @@ impl MembershipService {
             self.audit(
                 AuditEventType::MembershipLastAdminProtected,
                 Some(user.id),
-                serde_json::json!({ "role": user.role }),
+                serde_json::json!({ "role": current_role }),
             );
         }
 
         if let Some(new_role) = plan_role_transition(
-            &user.role,
+            current_level,
             entitled,
             is_last_admin,
             &member_role,
+            member_level,
             &lapsed_role,
+            lapsed_level,
         ) {
-            let update = UpdateUser {
-                username: None,
-                email: None,
-                password_hash: None,
-                full_name: None,
-                is_active: None,
-                role: Some(new_role.clone()),
-                profile: None,
-                updated_at: Some(Utc::now().naive_utc()),
-                meta: None,
-            };
-            self.db.update_user(user.id, &update)?;
+            self.db.set_user_primary_role(user.id, &new_role)?;
             // A role change moves the user in/out of role-based door allow-lists.
             self.door_service.republish_all();
             let event = if entitled {
@@ -307,7 +311,7 @@ impl MembershipService {
             self.audit(
                 event,
                 Some(user.id),
-                serde_json::json!({ "from": user.role, "to": new_role }),
+                serde_json::json!({ "from": current_role, "to": new_role }),
             );
         }
         Ok(())
@@ -510,66 +514,73 @@ mod tests {
     }
 
     // --- plan_role_transition: the full worked-cases table -------------------
+    //
+    // Levels are the dev taxonomy: guest 1, historical 2, active 3, staff 4,
+    // admin 5. member_role = active (3), lapsed_role = historical (2).
+    const GUEST: i16 = 1;
+    const HISTORICAL: i16 = 2;
+    const ACTIVE: i16 = 3;
+    const STAFF: i16 = 4;
+    const ADMIN: i16 = 5;
 
-    fn plan(current: UserRole, entitled: bool, last_admin: bool) -> Option<UserRole> {
+    fn plan(current_level: i16, entitled: bool, last_admin: bool) -> Option<String> {
         plan_role_transition(
-            &current,
+            current_level,
             entitled,
             last_admin,
-            &UserRole::Member,
-            &UserRole::Newbie,
+            "active",
+            ACTIVE,
+            "historical",
+            HISTORICAL,
         )
     }
 
     #[test]
-    fn entitled_newbie_is_granted_member() {
-        assert_eq!(plan(UserRole::Newbie, true, false), Some(UserRole::Member));
+    fn entitled_guest_is_granted_active() {
+        assert_eq!(plan(GUEST, true, false), Some("active".to_string()));
     }
 
     #[test]
-    fn entitled_member_and_above_are_left_alone() {
-        assert_eq!(plan(UserRole::Member, true, false), None);
-        assert_eq!(plan(UserRole::Staff, true, false), None);
-        assert_eq!(plan(UserRole::Admin, true, false), None);
+    fn entitled_active_and_above_are_left_alone() {
+        assert_eq!(plan(ACTIVE, true, false), None);
+        assert_eq!(plan(STAFF, true, false), None);
+        assert_eq!(plan(ADMIN, true, false), None);
     }
 
     #[test]
-    fn lapsed_member_staff_admin_are_downgraded() {
-        assert_eq!(plan(UserRole::Member, false, false), Some(UserRole::Newbie));
-        // Staff and a non-last Admin are downgraded on lapse too.
-        assert_eq!(plan(UserRole::Staff, false, false), Some(UserRole::Newbie));
-        assert_eq!(plan(UserRole::Admin, false, false), Some(UserRole::Newbie));
+    fn lapsed_active_staff_admin_are_downgraded() {
+        assert_eq!(plan(ACTIVE, false, false), Some("historical".to_string()));
+        // Staff and a non-last admin are downgraded on lapse too.
+        assert_eq!(plan(STAFF, false, false), Some("historical".to_string()));
+        assert_eq!(plan(ADMIN, false, false), Some("historical".to_string()));
     }
 
     #[test]
     fn the_last_admin_is_never_downgraded() {
-        assert_eq!(plan(UserRole::Admin, false, true), None);
+        assert_eq!(plan(ADMIN, false, true), None);
     }
 
     #[test]
-    fn lapsed_newbie_and_unknown_have_nothing_to_strip() {
-        assert_eq!(plan(UserRole::Newbie, false, false), None);
-        assert_eq!(plan(UserRole::Unknown, false, false), None);
-    }
-
-    #[test]
-    fn entitled_unknown_is_granted_member() {
-        assert_eq!(plan(UserRole::Unknown, true, false), Some(UserRole::Member));
+    fn lapsed_historical_and_guest_have_nothing_to_strip() {
+        assert_eq!(plan(HISTORICAL, false, false), None);
+        assert_eq!(plan(GUEST, false, false), None);
     }
 
     #[test]
     fn elevated_roles_are_never_restored_by_a_grant() {
-        // A Staff who lapsed to Newbie and pays again comes back as Member only,
-        // whatever the configured member_role -- a grant never yields Staff.
+        // A staff who lapsed to historical and pays again comes back as active
+        // only, whatever the configured member_role -- a grant never yields staff.
         let granted = plan_role_transition(
-            &UserRole::Newbie,
+            HISTORICAL,
             true,
             false,
-            &UserRole::Member,
-            &UserRole::Newbie,
+            "active",
+            ACTIVE,
+            "historical",
+            HISTORICAL,
         );
-        assert_eq!(granted, Some(UserRole::Member));
-        assert_ne!(granted, Some(UserRole::Staff));
+        assert_eq!(granted, Some("active".to_string()));
+        assert_ne!(granted, Some("staff".to_string()));
     }
 
     // --- advance_period: calendar rollover ----------------------------------

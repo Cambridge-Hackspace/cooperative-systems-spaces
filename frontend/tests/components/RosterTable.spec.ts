@@ -109,7 +109,7 @@ function user(overrides: Partial<User> = {}): User {
     email: 'member@example.invalid',
     full_name: 'A Member',
     is_active: true,
-    role: UserRole.Member,
+    role: UserRole.Active,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     mfa_enrolled_at: null,
@@ -219,7 +219,7 @@ describe('what an admin cannot do to themselves', () => {
 })
 
 describe('what a non-admin sees', () => {
-  it.each([UserRole.Newbie, UserRole.Member, UserRole.Staff])(
+  it.each([UserRole.Guest, UserRole.Active, UserRole.Staff])(
     'offers %s no role, status or MFA control',
     async (role) => {
       const { wrapper } = await mountRoster(role, [user({ id: 'other', mfa_enrolled_at: 'x' })])
@@ -234,16 +234,16 @@ describe('what a non-admin sees', () => {
   it('still shows them the roster itself', async () => {
     // The controls are gated, not the page. A member who can see nothing at all
     // is a different bug from one who can see everything.
-    const { wrapper } = await mountRoster(UserRole.Member, [user(), user({ id: 'b' })])
+    const { wrapper } = await mountRoster(UserRole.Active, [user(), user({ id: 'b' })])
     expect(wrapper.findAll('tbody tr')).toHaveLength(2)
   })
 })
 
 describe('the role vocabulary', () => {
   const EXPECTED: Array<[UserRole, string, string]> = [
-    [UserRole.Unknown, 'Unknown', 'badge-ghost'],
-    [UserRole.Newbie, 'Newbie', 'badge-info'],
-    [UserRole.Member, 'Member', 'badge-success'],
+    [UserRole.Guest, 'Guest', 'badge-ghost'],
+    [UserRole.Historical, 'Historical', 'badge-info'],
+    [UserRole.Active, 'Active', 'badge-success'],
     [UserRole.Staff, 'Staff', 'badge-warning'],
     [UserRole.Admin, 'Admin', 'badge-error'],
   ]
@@ -255,21 +255,22 @@ describe('the role vocabulary', () => {
   })
 
   it.each(EXPECTED)('renders %s as %s with %s', async (role, label, badge) => {
-    const { wrapper } = await mountRoster(UserRole.Member, [user({ id: 'x', role })])
+    const { wrapper } = await mountRoster(UserRole.Active, [user({ id: 'x', role })])
     const cell = wrapper.findAll('tbody td')[2]
     expect(cell.find('.badge').text()).toBe(label)
     expect(cell.find('.badge').classes()).toContain(badge)
   })
 
-  it('offers only the four assignable roles in the editor, never Unknown', async () => {
-    // `Unknown` is what the server produces for a role it does not recognize.
-    // Offering it as a choice would let an admin assign a value that means
-    // "something went wrong".
+  it('offers exactly the five tier roles in the editor, and nothing else', async () => {
+    // Every value in the taxonomy is a real, assignable tier (the old `Unknown`
+    // error sentinel is gone). The editor must offer all five and nothing that
+    // is not a tier -- offering a non-tier would let an admin assign a value the
+    // server would reject.
     const { wrapper } = await mountRoster(UserRole.Admin, [user({ id: 'other' })])
     await wrapper.find('button[title="Edit role"]').trigger('click')
 
     const options = wrapper.findAll('option').map((o) => o.text())
-    expect(options).toEqual(['Newbie', 'Member', 'Staff', 'Admin'])
+    expect(options).toEqual(['Guest', 'Historical', 'Active', 'Staff', 'Admin'])
     expect(options).not.toContain('Unknown')
   })
 })
@@ -281,7 +282,7 @@ describe('initials', () => {
     ['Ada Byron King', 'AK'],
     ['  Padded  Name  ', 'PN'],
   ])('%s becomes %s', async (full_name, expected) => {
-    const { wrapper } = await mountRoster(UserRole.Member, [user({ full_name })])
+    const { wrapper } = await mountRoster(UserRole.Active, [user({ full_name })])
     expect(wrapper.find('.avatar span').text()).toBe(expected)
   })
 })
@@ -360,10 +361,10 @@ describe('status changes', () => {
     // explanation.
     deactivateUser.mockResolvedValue({
       success: true,
-      data: user({ id: 'x', is_active: false, role: UserRole.Newbie }),
+      data: user({ id: 'x', is_active: false, role: UserRole.Historical }),
     })
     const { wrapper } = await mountRoster(UserRole.Admin, [
-      user({ id: 'x', is_active: true, role: UserRole.Member }),
+      user({ id: 'x', is_active: true, role: UserRole.Active }),
     ])
     await wrapper.find('button[title="Deactivate user"]').trigger('click')
     await flushPromises()
@@ -371,7 +372,7 @@ describe('status changes', () => {
     const cells = wrapper.findAll('tbody td')
     expect(cells[3].find('.badge').text()).toBe('Inactive')
     // The role came back changed too, and the row shows what the server said.
-    expect(cells[2].find('.badge').text()).toBe('Newbie')
+    expect(cells[2].find('.badge').text()).toBe('Historical')
   })
 
   it('surfaces a refused status change without destroying the roster', async () => {
@@ -492,12 +493,12 @@ describe('the multi-role editor', () => {
     expect(mocks.unassignUserRole).toHaveBeenCalledWith('other', 'r-staff')
   })
 
-  it('does not open the manage panel on mount, so the role editor still offers exactly four roles', async () => {
-    // Guards the existing "four assignable roles" assertion: the manage panel's
+  it('does not open the manage panel on mount, so the role editor still offers exactly five roles', async () => {
+    // Guards the existing "assignable tier roles" assertion: the manage panel's
     // own <select> must not leak options into the primary role editor.
     const { wrapper } = await mountRoster(UserRole.Admin, [user({ id: 'other' })])
     await wrapper.find('button[title="Edit role"]').trigger('click')
     const options = wrapper.findAll('option').map((o) => o.text())
-    expect(options).toEqual(['Newbie', 'Member', 'Staff', 'Admin'])
+    expect(options).toEqual(['Guest', 'Historical', 'Active', 'Staff', 'Admin'])
   })
 })

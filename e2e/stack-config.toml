@@ -88,8 +88,8 @@ due_period = "Monthly"
 # 0 so the e2e renewal check lapses exactly at a past-dated anniversary, with no
 # extra grace window to reason about in the driver.
 grace_days = 0
-member_role = "Member"
-lapsed_role = "Newbie"
+member_role = "active"
+lapsed_role = "historical"
 restart_on_lapse = true
 one_shot_periods = 1
 currency = "USD"

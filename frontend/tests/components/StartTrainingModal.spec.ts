@@ -52,7 +52,7 @@ function user(id: string, role: UserRole, over: Partial<User> = {}): User {
   }
 }
 
-const TRAINEE = user('trainee', UserRole.Member)
+const TRAINEE = user('trainee', UserRole.Active)
 
 function step(over: Partial<TrainingStep> = {}): TrainingStep {
   return {

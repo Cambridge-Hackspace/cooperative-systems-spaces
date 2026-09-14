@@ -208,43 +208,39 @@ pub struct UserResponse {
     pub email: String,
     pub full_name: String,
     pub is_active: bool,
-    pub role: UserRole,
+    /// The user's primary role name, verbatim as the server sends it. A plain
+    /// `String` rather than a CLI-side enum: under RBAC the server's primary
+    /// role is the highest-level role a user holds, which may be a custom role
+    /// outside the fixed tier ladder, and a fixed enum would fail to
+    /// deserialize it and take the whole `UserResponse` down with it (the exact
+    /// bug the old `UserRole` copy caused when it drifted from the server).
+    pub role: String,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
 
-/// User role enum.
+/// The RBAC tier vocabulary, mirrored from `server/src/models.rs`'s `role`
+/// module. These are the roles the CLI can *set* (promote/demote/`set-role`);
+/// the server may *report* others (custom roles), which is why display and the
+/// `role` field itself are string-typed, not confined to this list.
 ///
-/// This is a fourth independent copy of a vocabulary that also exists in
-/// `server/src/models.rs`, `frontend/src/types/index.ts` and the
-/// `user_role` SQL enum — and it had drifted. It carried
-/// `#[serde(rename_all = "lowercase")]`, while the server's copy has no
-/// `rename_all` at all and therefore emits `"Admin"`. So this type could not
-/// deserialize a role the server sent, which took the whole enclosing
-/// `UserResponse` down with it: every command that lists or shows a user was
-/// broken against its own server.
-///
-/// The lowercase form is not imaginary — it is what `ToSql` writes to
-/// Postgres (`server/src/models.rs:49-58`) — but that is the *storage*
-/// encoding, not the wire encoding, and this type is on the wire.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub enum UserRole {
-    Unknown,
-    Newbie,
-    Member,
-    Staff,
-    Admin,
-}
+/// Duplicated here deliberately: css-server cannot be compiled on this project's
+/// development workstation, so importing the authority is impossible; the
+/// duplication is checked against the server names by `wire_tests` below, and
+/// `frontend/src/types/index.ts` mirrors the same lowercase strings.
+pub mod role {
+    pub const GUEST: &str = "guest";
+    pub const HISTORICAL: &str = "historical";
+    pub const ACTIVE: &str = "active";
+    pub const STAFF: &str = "staff";
+    pub const ADMIN: &str = "admin";
 
-impl std::fmt::Display for UserRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UserRole::Unknown => write!(f, "Unknown"),
-            UserRole::Newbie => write!(f, "Newbie"),
-            UserRole::Member => write!(f, "Member"),
-            UserRole::Staff => write!(f, "Staff"),
-            UserRole::Admin => write!(f, "Admin"),
-        }
+    /// The tier roles, lowest to highest -- the promote/demote ladder.
+    pub const TIERS: [&str; 5] = [GUEST, HISTORICAL, ACTIVE, STAFF, ADMIN];
+
+    /// Whether `name` is one of the settable tier roles.
+    pub fn is_tier(name: &str) -> bool {
+        TIERS.contains(&name)
     }
 }
 
@@ -280,7 +276,7 @@ pub struct UpdateUserRequest {
     pub full_name: Option<String>,
     pub password: Option<String>,
     pub is_active: Option<bool>,
-    pub role: Option<UserRole>,
+    pub role: Option<String>,
 }
 #[cfg(test)]
 mod tests {
@@ -367,8 +363,8 @@ mod tests {
 mod wire_tests {
     use super::*;
 
-    /// The exact JSON the server emits for a role, and the exact JSON it will
-    /// accept back.
+    /// The exact tier-role strings the server emits on the wire, and the exact
+    /// strings it accepts back.
     ///
     /// Written out here rather than imported from the server. That is
     /// deliberate on two counts: css-server cannot be compiled on this
@@ -376,57 +372,42 @@ mod wire_tests {
     /// structure it is checking agrees with itself no matter what either side
     /// says. The duplication *is* the check.
     ///
-    /// The authority is `server/src/models.rs:33-46`, whose `UserRole` derives
-    /// `Serialize`/`Deserialize` with **no** `rename_all`, so serde emits the
-    /// variant names verbatim. `frontend/src/types/index.ts:22-28` mirrors the
-    /// same PascalCase strings, which corroborates it independently.
-    const SERVER_WIRE: &[(&str, UserRole)] = &[
-        ("Unknown", UserRole::Unknown),
-        ("Newbie", UserRole::Newbie),
-        ("Member", UserRole::Member),
-        ("Staff", UserRole::Staff),
-        ("Admin", UserRole::Admin),
-    ];
+    /// The authority is the `role` module in `server/src/models.rs`, whose
+    /// `UserResponse.role` is a `String` carrying the role's `name` verbatim
+    /// (lowercase tier names since the `users.role` enum was retired in #77).
+    /// `frontend/src/types/index.ts` mirrors the same lowercase strings, which
+    /// corroborates it independently.
+    const SERVER_WIRE: [&str; 5] = ["guest", "historical", "active", "staff", "admin"];
 
+    /// The CLI's tier ladder must be exactly the server's tier vocabulary, in
+    /// rank order. A drift here silently breaks promote/demote and `set-role`.
     #[test]
-    fn user_role_deserializes_what_the_server_actually_sends() {
-        for (wire, expected) in SERVER_WIRE {
-            let json = format!("\"{wire}\"");
-            let got: UserRole = serde_json::from_str(&json).unwrap_or_else(|e| {
-                panic!(
-                    "the server sends {json} for this role and the CLI cannot read it: {e}. \
-                     A UserResponse carrying it therefore fails to parse, so every command \
-                     that lists or shows a user is broken against its own server."
-                )
-            });
-            assert_eq!(got, *expected);
-        }
+    fn the_tier_ladder_matches_the_server_vocabulary() {
+        assert_eq!(role::TIERS, SERVER_WIRE);
     }
 
+    /// A `String` role deserializes whatever the server sends -- including a
+    /// custom (non-tier) role -- rather than taking the whole `UserResponse`
+    /// down with it, which is the bug the old fixed enum caused when it drifted.
     #[test]
-    fn user_role_serializes_to_what_the_server_accepts() {
-        for (wire, role) in SERVER_WIRE {
-            assert_eq!(serde_json::to_string(role).unwrap(), format!("\"{wire}\""));
+    fn a_realistic_user_payload_round_trips_including_a_custom_role() {
+        for wire in SERVER_WIRE.iter().chain(std::iter::once(&"quartermaster")) {
+            let payload = format!(
+                r#"{{
+                    "id": "550e8400-e29b-41d4-a716-446655440000",
+                    "username": "ada",
+                    "email": "ada@example.com",
+                    "full_name": "Ada Lovelace",
+                    "is_active": true,
+                    "role": "{wire}",
+                    "created_at": "2026-01-15T12:00:00",
+                    "updated_at": "2026-01-15T12:00:00"
+                }}"#
+            );
+            let user: UserResponse =
+                serde_json::from_str(&payload).expect("server-shaped payload must parse");
+            assert_eq!(user.role, *wire);
+            assert_eq!(user.username, "ada");
         }
-    }
-
-    /// The whole payload, not just the field, because a role that fails to
-    /// parse takes the entire `UserResponse` down with it and that is how this
-    /// would actually be experienced.
-    #[test]
-    fn a_realistic_user_payload_round_trips() {
-        let payload = r#"{
-            "id": "550e8400-e29b-41d4-a716-446655440000",
-            "username": "ada",
-            "email": "ada@example.com",
-            "full_name": "Ada Lovelace",
-            "is_active": true,
-            "role": "Staff",
-            "created_at": "2026-01-15T12:00:00",
-            "updated_at": "2026-01-15T12:00:00"
-        }"#;
-        let user: UserResponse = serde_json::from_str(payload).expect("server-shaped payload");
-        assert_eq!(user.role, UserRole::Staff);
-        assert_eq!(user.username, "ada");
     }
 }

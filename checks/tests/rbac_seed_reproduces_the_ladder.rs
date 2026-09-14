@@ -128,32 +128,206 @@ fn value_rows(stmt: &str) -> Vec<Vec<String>> {
             }
         }
         rows.push(fields);
+        // Continue only if a comma separates the next tuple. Otherwise the
+        // VALUES list has ended -- what follows is the wrapping `)` and an
+        // `AS alias(col, col)` column list, whose `(...)` must NOT be read as a
+        // data row (it would look like a bogus grant/edge to a role named
+        // after the alias column).
+        let mut j = i;
+        while j < n && body[j].is_whitespace() {
+            j += 1;
+        }
+        if j < n && body[j] == ',' {
+            i = j + 1;
+            continue;
+        }
+        break;
     }
     rows
 }
 
-/// Every statement beginning `INSERT INTO <table>` across the concatenated
-/// migration corpus. There can be more than one per table -- e.g. grants are
-/// seeded in one migration and extended in another -- and all of them count.
-/// Splitting on `;` is safe: the RBAC seed's INSERTs contain no inner
-/// semicolons. The table name is matched at a word boundary so `roles` does not
-/// also catch `role_permissions`, `role_inheritance`, or `user_roles`.
-fn statements(sql: &str, insert_into: &str) -> Vec<String> {
-    let needle = format!("insert into {}", insert_into.to_lowercase());
-    sql.split(';')
-        .filter(|stmt| {
-            let lower = stmt.to_lowercase();
-            match lower.find(&needle) {
-                Some(pos) => lower[pos + needle.len()..]
-                    .chars()
-                    .next()
-                    .map(|c| !(c.is_alphanumeric() || c == '_'))
-                    .unwrap_or(true),
-                None => false,
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// True if `needle` (lowercased table clause, e.g. "insert into roles") appears
+/// in `lower` followed by a non-identifier char, so `roles` does not also match
+/// `role_permissions` / `role_inheritance` / `user_roles`.
+fn targets(lower: &str, needle: &str) -> bool {
+    let bytes = lower.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(needle) {
+        let end = from + rel + needle.len();
+        let boundary = end >= bytes.len() || !is_ident_byte(bytes[end]);
+        if boundary {
+            return true;
+        }
+        from = from + rel + needle.len();
+    }
+    false
+}
+
+/// Byte index just past the `=` of the first whole-word `key = ` assignment in
+/// `part` (case-insensitive), or None. Whole-word so `name` does not match
+/// inside `username`/`updated_at` and `level` not inside anything else. Indices
+/// are valid in the original `part` too: migrations are ASCII (the
+/// `migrations_are_portable` oracle enforces it), so `to_lowercase` preserves
+/// every byte offset.
+fn assign_pos(part: &str, key: &str) -> Option<usize> {
+    let lower = part.to_lowercase();
+    let bytes = lower.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = lower[from..].find(key) {
+        let start = from + rel;
+        let end = start + key.len();
+        let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident_byte(bytes[end]);
+        if before_ok && after_ok {
+            let mut j = end;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
             }
-        })
-        .map(|s| s.to_string())
-        .collect()
+            if j < bytes.len() && bytes[j] == b'=' {
+                let mut k = j + 1;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                return Some(k);
+            }
+        }
+        from = end;
+    }
+    None
+}
+
+/// The single-quoted string starting at byte `k` in `part` (with `''` escapes),
+/// or None if `k` is not a quote.
+fn quoted_at(part: &str, k: usize) -> Option<String> {
+    let b = part.as_bytes();
+    if k >= b.len() || b[k] != b'\'' {
+        return None;
+    }
+    let mut i = k + 1;
+    let mut out = String::new();
+    while i < b.len() {
+        if b[i] == b'\'' {
+            if i + 1 < b.len() && b[i + 1] == b'\'' {
+                out.push('\'');
+                i += 2;
+                continue;
+            }
+            return Some(out);
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    None
+}
+
+/// The integer literal starting at byte `k` in `part`, or None.
+fn int_at(part: &str, k: usize) -> Option<i64> {
+    let b = part.as_bytes();
+    let mut i = k;
+    let mut s = String::new();
+    if i < b.len() && (b[i] == b'-' || b[i] == b'+') {
+        s.push(b[i] as char);
+        i += 1;
+    }
+    while i < b.len() && b[i].is_ascii_digit() {
+        s.push(b[i] as char);
+        i += 1;
+    }
+    s.parse().ok()
+}
+
+fn capture_name(part: &str) -> Option<String> {
+    assign_pos(part, "name").and_then(|k| quoted_at(part, k))
+}
+
+fn capture_level(part: &str) -> Option<i64> {
+    assign_pos(part, "level").and_then(|k| int_at(part, k))
+}
+
+/// A tiny, ordered interpreter over the RBAC-relevant migration statements.
+///
+/// It replays INSERT/UPDATE/DELETE against `roles`, `role_permissions` and
+/// `role_inheritance` in document order. A rename (`member` -> `active`), a
+/// relevel, a new role (`historical`), a retired role (`unknown`), or a rebuilt
+/// inheritance chain in a *later* migration is therefore reflected -- exactly
+/// what a text scan of INSERTs alone would miss now that #77 changes the
+/// taxonomy by `UPDATE`, not by re-seeding. Each role carries a stable synthetic
+/// id, so a grant inserted under an old name follows the role through a rename.
+///
+/// This is still independent of `server/src/rbac.rs`: the resolver reads the
+/// final rows from Postgres; this reconstructs those same rows from the
+/// migration *text*. Two encodings of one ladder, asserted to agree.
+#[derive(Default)]
+struct Ladder {
+    next: u64,
+    id_of: HashMap<String, u64>,
+    name_of: HashMap<u64, String>,
+    level: HashMap<u64, i64>,
+    own: HashMap<u64, HashSet<String>>,
+    edges: HashMap<u64, HashSet<u64>>,
+}
+
+impl Ladder {
+    fn insert_role(&mut self, name: &str, level: i64) {
+        let id = self.next;
+        self.next += 1;
+        self.id_of.insert(name.to_string(), id);
+        self.name_of.insert(id, name.to_string());
+        self.level.insert(id, level);
+        self.own.entry(id).or_default();
+    }
+
+    fn update_role(&mut self, target: &str, new_name: Option<&str>, new_level: Option<i64>) {
+        let Some(&id) = self.id_of.get(target) else {
+            return;
+        };
+        if let Some(l) = new_level {
+            self.level.insert(id, l);
+        }
+        if let Some(nn) = new_name {
+            if nn != target {
+                self.id_of.remove(target);
+                self.id_of.insert(nn.to_string(), id);
+                self.name_of.insert(id, nn.to_string());
+            }
+        }
+    }
+
+    fn delete_role(&mut self, name: &str) {
+        let Some(id) = self.id_of.remove(name) else {
+            return;
+        };
+        self.name_of.remove(&id);
+        self.level.remove(&id);
+        self.own.remove(&id);
+        self.edges.remove(&id);
+        for parents in self.edges.values_mut() {
+            parents.remove(&id);
+        }
+    }
+
+    fn grant(&mut self, role: &str, perm: &str) {
+        let id = *self.id_of.get(role).unwrap_or_else(|| {
+            panic!("grant to unknown role {role:?} -- migration order or a rename is off")
+        });
+        self.own.entry(id).or_default().insert(perm.to_string());
+    }
+
+    fn add_edge(&mut self, child: &str, parent: &str) {
+        let c = *self
+            .id_of
+            .get(child)
+            .unwrap_or_else(|| panic!("inheritance child {child:?} not seeded before use"));
+        let p = *self
+            .id_of
+            .get(parent)
+            .unwrap_or_else(|| panic!("inheritance parent {parent:?} not seeded before use"));
+        self.edges.entry(c).or_default().insert(p);
+    }
 }
 
 /// Transitive closure of `roles` over the inheritance edges (inclusive),
@@ -186,7 +360,8 @@ fn effective_perms(
     out
 }
 
-/// Parse the seed into (levels, own-permissions, inheritance-edges).
+/// Replay the migration corpus and return the FINAL ladder as name-keyed
+/// (levels, own-permissions, inheritance-edges) maps.
 fn parse_seed(
     sql: &str,
 ) -> (
@@ -194,47 +369,68 @@ fn parse_seed(
     HashMap<String, HashSet<String>>,
     HashMap<String, Vec<String>>,
 ) {
-    // roles: (name, description, is_system, level)
+    let mut l = Ladder::default();
+
+    for raw in sql.split(';') {
+        let lower = raw.to_lowercase();
+        if targets(&lower, "insert into roles") {
+            for row in value_rows(raw) {
+                assert_eq!(row.len(), 4, "roles seed tuple shape changed: {row:?}");
+                let level: i64 = row[3].trim().parse().unwrap_or_else(|_| {
+                    panic!("role {}'s level is not an integer: {:?}", row[0], row[3])
+                });
+                l.insert_role(row[0].trim(), level);
+            }
+        } else if targets(&lower, "insert into role_permissions") {
+            for row in value_rows(raw) {
+                assert_eq!(
+                    row.len(),
+                    2,
+                    "role_permissions tuple shape changed: {row:?}"
+                );
+                l.grant(row[0].trim(), row[1].trim());
+            }
+        } else if targets(&lower, "insert into role_inheritance") {
+            for row in value_rows(raw) {
+                assert_eq!(
+                    row.len(),
+                    2,
+                    "role_inheritance tuple shape changed: {row:?}"
+                );
+                l.add_edge(row[0].trim(), row[1].trim());
+            }
+        } else if targets(&lower, "update roles") {
+            let (set_part, where_part) = match lower.find(" where ") {
+                Some(w) => (&raw[..w], &raw[w..]),
+                None => (raw, ""),
+            };
+            if let Some(target) = capture_name(where_part) {
+                let new_name = capture_name(set_part);
+                let new_level = capture_level(set_part);
+                l.update_role(&target, new_name.as_deref(), new_level);
+            }
+        } else if targets(&lower, "delete from role_inheritance") {
+            // The taxonomy migration wipes the old chain before rebuilding it.
+            l.edges.clear();
+        } else if targets(&lower, "delete from roles") {
+            if let Some(name) = capture_name(raw) {
+                l.delete_role(&name);
+            }
+        }
+    }
+
     let mut levels = HashMap::new();
-    for stmt in statements(sql, "roles") {
-        for row in value_rows(&stmt) {
-            assert_eq!(row.len(), 4, "roles seed tuple shape changed: {row:?}");
-            let level: i64 = row[3].trim().parse().unwrap_or_else(|_| {
-                panic!("role {}'s level is not an integer: {:?}", row[0], row[3])
-            });
-            levels.insert(row[0].clone(), level);
-        }
-    }
-
-    // role_permissions: JOIN (VALUES ('member','member.access'), ...), possibly
-    // across several migrations.
     let mut own: HashMap<String, HashSet<String>> = HashMap::new();
-    for stmt in statements(sql, "role_permissions") {
-        for row in value_rows(&stmt) {
-            assert_eq!(
-                row.len(),
-                2,
-                "role_permissions seed tuple shape changed: {row:?}"
-            );
-            own.entry(row[0].clone())
-                .or_default()
-                .insert(row[1].clone());
-        }
+    for (name, &id) in &l.id_of {
+        levels.insert(name.clone(), l.level[&id]);
+        own.insert(name.clone(), l.own.get(&id).cloned().unwrap_or_default());
     }
-
-    // role_inheritance: JOIN (VALUES ('admin','staff'), ...) child->parent
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
-    for stmt in statements(sql, "role_inheritance") {
-        for row in value_rows(&stmt) {
-            assert_eq!(
-                row.len(),
-                2,
-                "role_inheritance seed tuple shape changed: {row:?}"
-            );
-            edges
-                .entry(row[0].clone())
-                .or_default()
-                .push(row[1].clone());
+    for (child, parents) in &l.edges {
+        let cname = l.name_of[child].clone();
+        let e = edges.entry(cname).or_default();
+        for p in parents {
+            e.push(l.name_of[p].clone());
         }
     }
 
@@ -242,17 +438,19 @@ fn parse_seed(
 }
 
 #[test]
-fn seed_reproduces_the_legacy_ladder() {
+fn seed_reproduces_the_tier_ladder() {
     let sql = seed_sql();
     let (levels, own, edges) = parse_seed(&sql);
 
-    // Anti-vacuity: the five legacy roles with their ladder levels.
+    // Anti-vacuity: the five tier roles with their #77 ladder levels. `guest`
+    // (1) is the signed-in baseline that replaced `newbie`/`unknown`;
+    // `historical` (2) is a lapsed member; `active` (3) holds member.access.
     let expected_levels: HashMap<&str, i64> = [
-        ("unknown", 0),
-        ("newbie", 1),
-        ("member", 2),
-        ("staff", 3),
-        ("admin", 4),
+        ("guest", 1),
+        ("historical", 2),
+        ("active", 3),
+        ("staff", 4),
+        ("admin", 5),
     ]
     .into_iter()
     .collect();
@@ -260,25 +458,26 @@ fn seed_reproduces_the_legacy_ladder() {
         assert_eq!(
             levels.get(*name).copied(),
             Some(*lvl),
-            "role {name} must be seeded at level {lvl} (got {:?})",
+            "role {name} must end at level {lvl} (got {:?})",
             levels.get(*name)
         );
     }
     assert_eq!(
         levels.len(),
         expected_levels.len(),
-        "unexpected extra/missing seeded roles: {:?}",
+        "unexpected extra/missing seeded roles after all migrations: {:?}",
         levels.keys().collect::<Vec<_>>()
     );
 
-    // The legacy truth table: which roles can reach each *.access permission,
-    // mirroring can_access_member/staff/admin (each tier and everything above).
+    // The tier truth table: which roles reach each *.access permission. The
+    // permission KEYS are unchanged from the legacy ladder (only the role names
+    // moved); member.access is now held by `active` and everything above it.
     let truth: &[(&str, &[&str])] = &[
         ("admin.access", &["admin"]),
         ("staff.access", &["staff", "admin"]),
-        ("member.access", &["member", "staff", "admin"]),
+        ("member.access", &["active", "staff", "admin"]),
     ];
-    let roles = ["unknown", "newbie", "member", "staff", "admin"];
+    let roles = ["guest", "historical", "active", "staff", "admin"];
     for (perm, allowed) in truth {
         let allowed: HashSet<&str> = allowed.iter().copied().collect();
         for role in roles {
@@ -287,7 +486,7 @@ fn seed_reproduces_the_legacy_ladder() {
             assert_eq!(
                 has,
                 should,
-                "effective permissions diverged from the legacy ladder: \
+                "effective permissions diverged from the tier ladder: \
                  role `{role}` {} have `{perm}` but the seed says it {}",
                 if should { "should" } else { "should NOT" },
                 if has { "does" } else { "does not" },
@@ -297,12 +496,12 @@ fn seed_reproduces_the_legacy_ladder() {
 }
 
 /// Phase 2 migrated the in-handler `can_access_staff()` overrides (users,
-/// profiles, trainers, training) onto granular permissions. Those gates
-/// previously admitted staff and admin and nobody else, so the granular grants
-/// must reproduce exactly that: held by `staff` (and `admin` via inheritance),
-/// denied to `member`, `newbie`, and `unknown`. If a future migration widened a
-/// grant -- say, handed `users.manage` to `member` -- a route that still reads
-/// like a staff gate would quietly admit members, and this catches it.
+/// profiles, trainers, training) onto granular permissions. Those gates admit
+/// staff and admin and nobody else, so the granular grants must reproduce
+/// exactly that: held by `staff` (and `admin` via inheritance), denied to
+/// `active`, `historical`, and `guest`. If a future migration widened a grant --
+/// say, handed `users.manage` to `active` -- a route that still reads like a
+/// staff gate would quietly admit members, and this catches it.
 #[test]
 fn granular_gate_permissions_reproduce_the_staff_override() {
     let sql = seed_sql();
@@ -316,7 +515,7 @@ fn granular_gate_permissions_reproduce_the_staff_override() {
         "training.certify",
         "trainers.manage",
     ];
-    let roles = ["unknown", "newbie", "member", "staff", "admin"];
+    let roles = ["guest", "historical", "active", "staff", "admin"];
 
     for perm in staff_gates {
         // Anti-vacuity: the permission has to actually exist as a grant, or the
@@ -343,9 +542,9 @@ fn granular_gate_permissions_reproduce_the_staff_override() {
 }
 
 /// Self-test the oracle: a seed with a BROKEN ladder (drop admin->staff) must
-/// make the truth-table assertion fail. If this "broken" input still passed,
-/// the check above would prove nothing. Modelled on the real defect the oracle
-/// exists to catch: a missing inheritance edge.
+/// make the truth-table recomputation fail. If this "broken" input still
+/// passed, the check above would prove nothing. Modelled on the real defect the
+/// oracle exists to catch: a missing inheritance edge.
 #[test]
 fn the_oracle_catches_a_broken_ladder() {
     let sql = seed_sql();
@@ -356,8 +555,6 @@ fn the_oracle_catches_a_broken_ladder() {
         parents.retain(|p| p != "staff");
     }
 
-    // With the edge gone, admin must NO LONGER reach staff.access -- prove the
-    // recomputation actually reflects the (broken) edges rather than a constant.
     let admin_perms = effective_perms("admin", &own, &edges);
     assert!(
         admin_perms.contains("admin.access"),

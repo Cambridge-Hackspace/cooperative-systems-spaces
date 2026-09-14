@@ -205,7 +205,7 @@ export async function adminAccount(kind) {
     )
   }
   const user = li.json.data.user
-  if (user?.role !== 'Admin') {
+  if (user?.role !== 'admin') {
     throw new Error(`signed in as ${ADMIN_EMAIL} and got role ${user?.role}, not Admin`)
   }
   return { username: user.username, email: ADMIN_EMAIL, token: tokenOf(li), user }

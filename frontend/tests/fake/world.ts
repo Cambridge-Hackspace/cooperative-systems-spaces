@@ -91,7 +91,7 @@ function user(over: Partial<User> = {}): User {
     email: 'member@fake.invalid',
     full_name: 'A Member',
     is_active: true,
-    role: UserRole.Member,
+    role: UserRole.Active,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     mfa_enrolled_at: null,
@@ -140,7 +140,7 @@ export class World {
         id: 'newbie-1',
         username: 'alan',
         email: 'alan@fake.invalid',
-        role: UserRole.Newbie,
+        role: UserRole.Guest,
       }),
       // The only user in the world with a second factor. Without one, the
       // browser tier never takes the challenge branch of `/auth/login` --

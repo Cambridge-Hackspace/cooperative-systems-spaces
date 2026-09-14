@@ -411,8 +411,9 @@ const assignedRoles = ref<AssignedUserRole[]>([])
 
 // Available roles for dropdown
 const availableRoles = computed(() => [
-  { value: UserRoleEnum.Newbie, label: 'Newbie' },
-  { value: UserRoleEnum.Member, label: 'Member' },
+  { value: UserRoleEnum.Guest, label: 'Guest' },
+  { value: UserRoleEnum.Historical, label: 'Historical' },
+  { value: UserRoleEnum.Active, label: 'Active' },
   { value: UserRoleEnum.Staff, label: 'Staff' },
   { value: UserRoleEnum.Admin, label: 'Admin' },
 ])
@@ -665,20 +666,20 @@ const getUserInitials = (user: User): string => {
 
 const getRoleLabel = (role: UserRole): string => {
   const roleMap: Record<UserRole, string> = {
-    [UserRoleEnum.Unknown]: 'Unknown',
-    [UserRoleEnum.Newbie]: 'Newbie',
-    [UserRoleEnum.Member]: 'Member',
+    [UserRoleEnum.Guest]: 'Guest',
+    [UserRoleEnum.Historical]: 'Historical',
+    [UserRoleEnum.Active]: 'Active',
     [UserRoleEnum.Staff]: 'Staff',
     [UserRoleEnum.Admin]: 'Admin',
   }
-  return roleMap[role] || 'Unknown'
+  return roleMap[role] || 'Guest'
 }
 
 const getRoleBadgeClass = (role: UserRole): string => {
   const classMap: Record<UserRole, string> = {
-    [UserRoleEnum.Unknown]: 'badge-ghost',
-    [UserRoleEnum.Newbie]: 'badge-info',
-    [UserRoleEnum.Member]: 'badge-success',
+    [UserRoleEnum.Guest]: 'badge-ghost',
+    [UserRoleEnum.Historical]: 'badge-info',
+    [UserRoleEnum.Active]: 'badge-success',
     [UserRoleEnum.Staff]: 'badge-warning',
     [UserRoleEnum.Admin]: 'badge-error',
   }

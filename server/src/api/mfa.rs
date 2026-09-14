@@ -150,9 +150,13 @@ fn issue_token(state: &AppState, user: &crate::models::User) -> Result<LoginResp
     let config = state.config_manager.get_config();
     let auth = AuthService::new(&state.db, &config.auth.jwt_secret);
     let token = auth.create_token(user).map_err(ApiError::from)?;
+    let primary_role = state
+        .db
+        .user_primary_role(user.id)
+        .map_err(ApiError::from)?;
     Ok(LoginResponse {
         token,
-        user: UserResponse::from(user.clone()),
+        user: UserResponse::from_user(user.clone(), primary_role),
         expires_in: (config.auth.jwt_expiration_hours as i64) * 60 * 60,
         must_enroll_mfa: None,
     })
@@ -174,7 +178,8 @@ async fn status(
     let webauthn_count = webauthn.len();
     let is_staff = state
         .db
-        .role_has_permission(user.0.role.as_str(), "staff.access");
+        .user_has_permission(user.0.id, "staff.access")
+        .map_err(ApiError::from)?;
     let must_enroll = cfg.is_required_for(is_staff) && user.0.mfa_enrolled_at.is_none();
     Ok(Json(ApiResponse::success(MfaStatusResponse {
         enabled: cfg.enabled,
