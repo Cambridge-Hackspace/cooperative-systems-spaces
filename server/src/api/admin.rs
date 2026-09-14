@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     api::{errors::ApiError, responses::ApiResponse},
     auth::AdminUser,
-    models::{AuditLog, UpdateUser, UserRole},
+    models::{AuditLog, UpdateUser},
     AppState,
 };
 
@@ -21,7 +21,7 @@ pub struct RosterUser {
     pub email: String,
     pub full_name: String,
     pub is_active: bool,
-    pub role: UserRole,
+    pub role: String,
     pub created_at: chrono::NaiveDateTime,
     /// `Some(_)` when the user has at least one confirmed MFA method.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +30,7 @@ pub struct RosterUser {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRoleRequest {
-    pub role: UserRole,
+    pub role: String,
 }
 
 pub fn admin_routes() -> Router<AppState> {
@@ -71,10 +71,11 @@ pub fn admin_routes() -> Router<AppState> {
 
 // ---- User <-> role assignment (#65 Phase 3) --------------------------------
 //
-// The multi-role assignment surface. `users.role` stays the denormalized primary
-// role (edited via `PUT /users/{id}/role`); these endpoints add and remove the
-// *additional* roles a user holds. Authorization is the union across all of
-// them, so an assignment takes effect on the user's next request.
+// The multi-role assignment surface. The primary tier role is edited via
+// `PUT /users/{id}/role` (which rewrites the user's tier assignment in
+// `user_roles` -- the `users.role` enum column is retired); these endpoints add
+// and remove the *additional* roles a user holds. Authorization is the union
+// across all of them, so an assignment takes effect on the user's next request.
 
 #[derive(Debug, Deserialize)]
 pub struct AssignRoleRequest {
@@ -253,17 +254,23 @@ async fn get_roster(
 
     let roster_users: Vec<RosterUser> = users
         .into_iter()
-        .map(|user| RosterUser {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            full_name: user.full_name,
-            is_active: user.is_active,
-            role: user.role,
-            created_at: user.created_at,
-            mfa_enrolled_at: user.mfa_enrolled_at,
+        .map(|user| {
+            let role = state
+                .db
+                .user_primary_role(user.id)
+                .map_err(ApiError::from)?;
+            Ok::<_, ApiError>(RosterUser {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                full_name: user.full_name,
+                is_active: user.is_active,
+                role,
+                created_at: user.created_at,
+                mfa_enrolled_at: user.mfa_enrolled_at,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(ApiResponse::success(roster_users)))
 }
@@ -281,35 +288,35 @@ async fn update_user_role(
         .find_user_by_id(user_id)
         .map_err(|e| ApiError::from_db("Failed to check if user exists", e))?;
 
-    let _user = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let target = user.ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
-    // Update the user's role
-    let update_data = UpdateUser {
-        username: None,
-        email: None,
-        password_hash: None,
-        full_name: None,
-        is_active: None,
-        role: Some(payload.role),
-        profile: None,
-        updated_at: Some(chrono::Utc::now().naive_utc()),
-        meta: None,
-    };
-
-    let updated_user = state
+    // The role must be one of the assignable tier roles.
+    if !crate::models::role::is_tier(&payload.role) {
+        return Err(ApiError::BadRequest(format!(
+            "unknown role: {}",
+            payload.role
+        )));
+    }
+    let old_role = state
         .db
-        .update_user(user_id, &update_data)
+        .user_primary_role(user_id)
+        .map_err(ApiError::from)?;
+
+    // Set the tier role in user_roles (the users.role column is retired).
+    state
+        .db
+        .set_user_primary_role(user_id, &payload.role)
         .map_err(|e| ApiError::from_db("Failed to update user role", e))?;
 
     let roster_user = RosterUser {
-        id: updated_user.id,
-        username: updated_user.username.clone(),
-        email: updated_user.email.clone(),
-        full_name: updated_user.full_name,
-        is_active: updated_user.is_active,
-        role: updated_user.role.clone(),
-        created_at: updated_user.created_at,
-        mfa_enrolled_at: updated_user.mfa_enrolled_at,
+        id: target.id,
+        username: target.username.clone(),
+        email: target.email.clone(),
+        full_name: target.full_name.clone(),
+        is_active: target.is_active,
+        role: payload.role.clone(),
+        created_at: target.created_at,
+        mfa_enrolled_at: target.mfa_enrolled_at,
     };
 
     // Log the role change
@@ -317,12 +324,12 @@ async fn update_user_role(
         .audit_logger
         .log_event(
             crate::models::AuditEventType::UserRoleChange,
-            Some(updated_user.id),
+            Some(target.id),
             Some(_admin_user.0.id),
             serde_json::json!({
-                "old_role": "unknown", // We don't have the old role easily accessible
-                "new_role": format!("{:?}", updated_user.role),
-                "username": updated_user.username,
+                "old_role": old_role,
+                "new_role": payload.role,
+                "username": target.username,
                 "action": "User role updated by admin"
             }),
             None,
@@ -362,7 +369,6 @@ async fn activate_user(
         password_hash: None,
         full_name: None,
         is_active: Some(true),
-        role: None,
         profile: None,
         updated_at: Some(chrono::Utc::now().naive_utc()),
         meta: None,
@@ -373,13 +379,17 @@ async fn activate_user(
         .update_user(user_id, &update_data)
         .map_err(|e| ApiError::from_db("Failed to activate user", e))?;
 
+    let role = state
+        .db
+        .user_primary_role(updated_user.id)
+        .map_err(ApiError::from)?;
     let roster_user = RosterUser {
         id: updated_user.id,
         username: updated_user.username.clone(),
         email: updated_user.email.clone(),
         full_name: updated_user.full_name,
         is_active: updated_user.is_active,
-        role: updated_user.role,
+        role,
         created_at: updated_user.created_at,
         mfa_enrolled_at: updated_user.mfa_enrolled_at,
     };
@@ -432,7 +442,6 @@ async fn deactivate_user(
         password_hash: None,
         full_name: None,
         is_active: Some(false),
-        role: None,
         profile: None,
         updated_at: Some(chrono::Utc::now().naive_utc()),
         meta: None,
@@ -443,13 +452,17 @@ async fn deactivate_user(
         .update_user(user_id, &update_data)
         .map_err(|e| ApiError::from_db("Failed to deactivate user", e))?;
 
+    let role = state
+        .db
+        .user_primary_role(updated_user.id)
+        .map_err(ApiError::from)?;
     let roster_user = RosterUser {
         id: updated_user.id,
         username: updated_user.username.clone(),
         email: updated_user.email.clone(),
         full_name: updated_user.full_name,
         is_active: updated_user.is_active,
-        role: updated_user.role,
+        role,
         created_at: updated_user.created_at,
         mfa_enrolled_at: updated_user.mfa_enrolled_at,
     };

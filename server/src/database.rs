@@ -456,7 +456,8 @@ impl DatabaseManager {
     }
 
     /// Assign a role to a user (idempotent). Does not change the graph, so no
-    /// reload. Leaves `users.role` (the denormalized primary) untouched.
+    /// reload. This is an *additional* assignment: it does not touch the user's
+    /// primary tier (see `set_user_primary_role`).
     pub fn assign_user_role(
         &self,
         user_id: uuid::Uuid,
@@ -721,15 +722,108 @@ impl DatabaseManager {
     /// matching assignment would be denied every gated route. Keeps the single
     /// `users.role` and `user_roles` in lockstep (one row, the primary role);
     /// multi-role assignment is layered on later.
-    pub fn create_user(&self, new_user: &NewUser) -> Result<User, DatabaseError> {
+    pub fn create_user(&self, new_user: &NewUser, role: &str) -> Result<User, DatabaseError> {
         let mut conn = self.get_connection()?;
         conn.transaction::<User, diesel::result::Error, _>(|conn| {
             let user = diesel::insert_into(users::table)
                 .values(new_user)
                 .returning(User::as_returning())
                 .get_result::<User>(conn)?;
-            sync_user_roles_to(conn, user.id, user.role.as_str())?;
+            sync_user_roles_to(conn, user.id, role)?;
             Ok(user)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// The user's primary (display) role: the highest-level role they hold, or
+    /// `guest` when they hold none. The `users.role` enum is retired; this is the
+    /// single-role view derived from `user_roles`.
+    pub fn user_primary_role(&self, user_id: uuid::Uuid) -> Result<String, DatabaseError> {
+        use crate::schema::roles;
+        let mut conn = self.get_connection()?;
+        let ids = crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)?;
+        let name: Option<String> = roles::table
+            .filter(roles::id.eq_any(&ids))
+            .order(roles::level.desc())
+            .select(roles::name)
+            .first::<String>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        Ok(name.unwrap_or_else(|| crate::models::role::GUEST.to_string()))
+    }
+
+    /// A user's effective tier level (max over their assigned roles' inheritance
+    /// closures), for "this tier or higher" gates now that `users.role`/`rank()`
+    /// are gone. 0 when the user holds no roles.
+    pub fn user_effective_level(&self, user_id: uuid::Uuid) -> Result<i16, DatabaseError> {
+        let mut conn = self.get_connection()?;
+        let ids = crate::rbac::roles_for_user(&mut conn, user_id).map_err(DatabaseError::Diesel)?;
+        Ok(self.rbac().effective_level(&ids))
+    }
+
+    /// Effective tier levels for many users in one pass (for door allow-list
+    /// expansion, which walks the whole active roster). Users absent from the
+    /// result hold no roles (treat as level 0).
+    pub fn effective_levels_for(
+        &self,
+        user_ids: &[uuid::Uuid],
+    ) -> Result<std::collections::HashMap<uuid::Uuid, i16>, DatabaseError> {
+        use crate::schema::user_roles;
+        let mut conn = self.get_connection()?;
+        let rows: Vec<(uuid::Uuid, uuid::Uuid)> = user_roles::table
+            .filter(user_roles::user_id.eq_any(user_ids))
+            .select((user_roles::user_id, user_roles::role_id))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let mut by_user: std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+            std::collections::HashMap::new();
+        for (uid, rid) in rows {
+            by_user.entry(uid).or_default().push(rid);
+        }
+        let graph = self.rbac();
+        Ok(by_user
+            .into_iter()
+            .map(|(uid, ids)| (uid, graph.effective_level(&ids)))
+            .collect())
+    }
+
+    /// Set a user's single tier role (guest/historical/active/staff/admin),
+    /// preserving any additional non-tier roles they were granted. Replaces the
+    /// legacy `users.role` write.
+    pub fn set_user_primary_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_name: &str,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::{roles, user_roles};
+        let mut conn = self.get_connection()?;
+        conn.transaction::<(), diesel::result::Error, _>(|conn| {
+            let tier_ids: Vec<uuid::Uuid> = roles::table
+                .filter(roles::name.eq_any(crate::models::role::TIERS))
+                .select(roles::id)
+                .load(conn)?;
+            diesel::delete(
+                user_roles::table
+                    .filter(user_roles::user_id.eq(user_id))
+                    .filter(user_roles::role_id.eq_any(&tier_ids)),
+            )
+            .execute(conn)?;
+            if let Some(role_id) = roles::table
+                .filter(roles::name.eq(role_name))
+                .select(roles::id)
+                .first::<uuid::Uuid>(conn)
+                .optional()?
+            {
+                diesel::insert_into(user_roles::table)
+                    .values((
+                        user_roles::user_id.eq(user_id),
+                        user_roles::role_id.eq(role_id),
+                    ))
+                    .on_conflict((user_roles::user_id, user_roles::role_id))
+                    .do_nothing()
+                    .execute(conn)?;
+            }
+            Ok(())
         })
         .map_err(DatabaseError::Diesel)
     }
@@ -989,20 +1083,14 @@ impl DatabaseManager {
             updates.updated_at = Some(chrono::Utc::now().naive_utc());
         }
 
-        // A role change must re-sync `user_roles`, which authorization reads;
-        // do both in one transaction so they cannot drift apart.
-        let role_changed = updates.role.is_some();
-        conn.transaction::<User, diesel::result::Error, _>(|conn| {
-            let updated_user = diesel::update(users::table.filter(users::id.eq(user_id)))
-                .set(&updates)
-                .returning(User::as_returning())
-                .get_result::<User>(conn)?;
-            if role_changed {
-                sync_user_roles_to(conn, updated_user.id, updated_user.role.as_str())?;
-            }
-            Ok(updated_user)
-        })
-        .map_err(DatabaseError::Diesel)
+        // Role is no longer a `users` column; the tier role lives in `user_roles`
+        // and is set via `set_user_primary_role`. This only touches profile/
+        // status/etc. fields.
+        diesel::update(users::table.filter(users::id.eq(user_id)))
+            .set(&updates)
+            .returning(User::as_returning())
+            .get_result::<User>(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 
     /// Update user profile only
@@ -2394,11 +2482,11 @@ impl DatabaseManager {
         // apply, so the web self-report agrees with what the machine will do
         // rather than promising access a member cannot afford.
         if let Some(gate) = metered_gate {
-            let Some(user) = self.find_user_by_id(user_id)? else {
+            let Some(_user) = self.find_user_by_id(user_id)? else {
                 return Ok(false);
             };
             let available = self.available_balance(user_id)?;
-            let is_member = self.role_has_permission(user.role.as_str(), "member.access");
+            let is_member = self.user_has_permission(user_id, "member.access")?;
             // #34: gate on THIS member's resolved rate (their tier, else the tool
             // default), not the tool's default rate.
             let eff = self.resolve_effective_billing(user_id, &tool)?;
@@ -2745,6 +2833,15 @@ impl DatabaseManager {
         let mut authorized_tool_ids_set: std::collections::HashSet<uuid::Uuid> =
             std::collections::HashSet::new();
 
+        // Membership ("member.access") equals effective tier level >= active.
+        // Precomputed once for the whole roster to avoid a per-user query.
+        let member_levels =
+            self.effective_levels_for(&all_users.iter().map(|u| u.id).collect::<Vec<_>>())?;
+        let active_level = self
+            .rbac()
+            .level_of_name(crate::models::role::ACTIVE)
+            .unwrap_or(i16::MAX);
+
         for user in &all_users {
             // The profile field may be either a scalar string (one identifier)
             // or an array of strings (many identifiers per user). Empty/missing
@@ -2794,7 +2891,7 @@ impl DatabaseManager {
                 let available = self
                     .available_balance(user.id)
                     .unwrap_or_else(|_| bigdecimal::BigDecimal::from(0));
-                let is_member = self.role_has_permission(user.role.as_str(), "member.access");
+                let is_member = member_levels.get(&user.id).copied().unwrap_or(0) >= active_level;
                 (g, available, is_member)
             });
             let mut authorized_tool_ids = Vec::new();

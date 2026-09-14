@@ -37,10 +37,6 @@ pub mod sql_types {
     #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "training_status"))]
     pub struct TrainingStatus;
-
-    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "user_role"))]
-    pub struct UserRole;
 }
 
 diesel::table! {
@@ -502,9 +498,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    use diesel::sql_types::*;
-    use super::sql_types::UserRole;
-
     users (id) {
         id -> Uuid,
         username -> Varchar,
@@ -514,7 +507,6 @@ diesel::table! {
         is_active -> Bool,
         created_at -> Timestamp,
         updated_at -> Timestamp,
-        role -> UserRole,
         profile -> Jsonb,
         meta -> Jsonb,
         mfa_enrolled_at -> Nullable<Timestamptz>,

@@ -1,4 +1,3 @@
-use crate::models::UserRole;
 use anyhow::{Context, Result};
 pub use css_lib::MqttConfig;
 use rand::distributions::Alphanumeric;
@@ -267,11 +266,13 @@ pub struct MembershipConfig {
     /// Days after the anniversary before the renewal check runs, so a renewal
     /// payment has time to land ("the next day" = 1).
     pub grace_days: i64,
-    /// Role granted while a membership is in good standing. Validated `<= Member`
-    /// so billing can never grant Staff/Admin.
-    pub member_role: UserRole,
-    /// Role a member drops to on lapse. Validated below `member_role`.
-    pub lapsed_role: UserRole,
+    /// Tier role granted while a membership is in good standing (a name from the
+    /// RBAC taxonomy, e.g. "active"). Validated `<= active` so billing can never
+    /// grant staff/admin.
+    pub member_role: String,
+    /// Tier role a member drops to on lapse (e.g. "historical"). Validated below
+    /// `member_role`.
+    pub lapsed_role: String,
     /// When true, a member who lapses and later pays starts a fresh membership
     /// anchored to the new payment (no back-charge). False re-anchors to the old
     /// cycle (discouraged). Default true.
@@ -295,8 +296,8 @@ impl Default for MembershipConfig {
             due_amount: "0.00".to_string(),
             due_period: MembershipPeriod::Monthly,
             grace_days: 1,
-            member_role: UserRole::Member,
-            lapsed_role: UserRole::Newbie,
+            member_role: crate::models::role::ACTIVE.to_string(),
+            lapsed_role: crate::models::role::HISTORICAL.to_string(),
             restart_on_lapse: true,
             one_shot_periods: 1,
             currency: "USD".to_string(),
@@ -554,7 +555,7 @@ pub struct AuthConfig {
 pub enum MfaEnforcement {
     /// Users may opt in; never blocks unenrolled users.
     OptIn,
-    /// Staff and Admin must enroll. Members/Newbies remain opt-in.
+    /// Staff and admin must enroll. Lower tiers remain opt-in.
     RequiredForStaff,
     /// All users must enroll on next login.
     RequiredForAll,
@@ -1704,13 +1705,31 @@ fn validate_config(config: &AppConfig) -> Result<()> {
                 ));
             }
         }
-        if config.membership.member_role.rank() > UserRole::Member.rank() {
+        let member_rank = crate::models::role::tier_rank(&config.membership.member_role)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "membership.member_role ({:?}) is not a known tier role \
+                     (guest, historical, active, staff, admin).",
+                    config.membership.member_role
+                )
+            })?;
+        let lapsed_rank = crate::models::role::tier_rank(&config.membership.lapsed_role)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "membership.lapsed_role ({:?}) is not a known tier role \
+                     (guest, historical, active, staff, admin).",
+                    config.membership.lapsed_role
+                )
+            })?;
+        let active_rank = crate::models::role::tier_rank(crate::models::role::ACTIVE)
+            .expect("active is a tier role");
+        if member_rank > active_rank {
             return Err(anyhow::anyhow!(
-                "membership.member_role must be Member or lower; billing must never \
-                 grant Staff or Admin."
+                "membership.member_role must be active or lower; billing must never \
+                 grant staff or admin."
             ));
         }
-        if config.membership.lapsed_role.rank() >= config.membership.member_role.rank() {
+        if lapsed_rank >= member_rank {
             return Err(anyhow::anyhow!(
                 "membership.lapsed_role must rank below membership.member_role, so a \
                  lapse is an actual downgrade."
@@ -2483,15 +2502,13 @@ mod tests {
 #[cfg(test)]
 mod mfa_enforcement_tests {
     use super::{AuthMfaConfig, MfaEnforcement};
-    use crate::models::UserRole;
+    use crate::models::role;
 
-    const ALL_ROLES: [UserRole; 5] = [
-        UserRole::Unknown,
-        UserRole::Newbie,
-        UserRole::Member,
-        UserRole::Staff,
-        UserRole::Admin,
-    ];
+    // The tier roles, plus the two that predate a login: an anonymous request
+    // resolves to no role (its staffness is simply false), and a logged-in user
+    // with no assignment sits at `guest`. Both are the "easy to forget" rows the
+    // exhaustive table below exists to pin.
+    const ALL_ROLES: [&str; 5] = role::TIERS;
 
     const ALL_ENFORCEMENTS: [MfaEnforcement; 3] = [
         MfaEnforcement::OptIn,
@@ -2499,24 +2516,11 @@ mod mfa_enforcement_tests {
         MfaEnforcement::RequiredForAll,
     ];
 
-    /// Wildcard-free on purpose: a new `UserRole` variant fails to compile
-    /// here, which forces whoever adds it to decide what MFA policy it carries
-    /// and to add it to `ALL_ROLES` above.
-    fn role_name(role: &UserRole) -> &'static str {
-        match role {
-            UserRole::Unknown => "Unknown",
-            UserRole::Newbie => "Newbie",
-            UserRole::Member => "Member",
-            UserRole::Staff => "Staff",
-            UserRole::Admin => "Admin",
-        }
-    }
-
-    /// Whether a role holds staff-level access, mirroring the RBAC seed
-    /// (member.access/staff.access grants). `is_required_for` now takes this
-    /// bool; the callers compute it from the graph via `role_has_permission`.
-    fn is_staff_of(role: &UserRole) -> bool {
-        matches!(role, UserRole::Staff | UserRole::Admin)
+    /// Whether a tier role holds staff-level access, mirroring the RBAC seed
+    /// (staff.access grants). `is_required_for` now takes this bool; the callers
+    /// compute it from the graph via `user_has_permission`.
+    fn is_staff_of(role: &str) -> bool {
+        matches!(role, "staff" | "admin")
     }
 
     /// Likewise for the enforcement setting.
@@ -2538,10 +2542,10 @@ mod mfa_enforcement_tests {
 
     /// The whole policy, written out rather than derived. A table computed from
     /// `is_required_for` would agree with it however it changed.
-    fn expected(enforcement: MfaEnforcement, role: &UserRole) -> bool {
-        match (enforcement, role_name(role)) {
+    fn expected(enforcement: MfaEnforcement, role: &str) -> bool {
+        match (enforcement, role) {
             (MfaEnforcement::OptIn, _) => false,
-            (MfaEnforcement::RequiredForStaff, "Staff" | "Admin") => true,
+            (MfaEnforcement::RequiredForStaff, "staff" | "admin") => true,
             (MfaEnforcement::RequiredForStaff, _) => false,
             (MfaEnforcement::RequiredForAll, _) => true,
         }
@@ -2550,14 +2554,14 @@ mod mfa_enforcement_tests {
     #[test]
     fn the_enrollment_policy_is_exactly_this_table() {
         for enforcement in ALL_ENFORCEMENTS {
-            for role in &ALL_ROLES {
+            for role in ALL_ROLES {
                 let cfg = config(true, enforcement);
                 assert_eq!(
                     cfg.is_required_for(is_staff_of(role)),
                     expected(enforcement, role),
                     "{} + {} answered the wrong way",
                     enforcement_name(&enforcement),
-                    role_name(role),
+                    role,
                 );
             }
         }
@@ -2570,11 +2574,11 @@ mod mfa_enforcement_tests {
         // every deployment that has not thought about MFA gets.
         assert_eq!(MfaEnforcement::default(), MfaEnforcement::OptIn);
         let cfg = config(true, MfaEnforcement::OptIn);
-        for role in &ALL_ROLES {
+        for role in ALL_ROLES {
             assert!(
                 !cfg.is_required_for(is_staff_of(role)),
                 "OptIn required enrollment of {}",
-                role_name(role)
+                role
             );
         }
     }
@@ -2582,29 +2586,29 @@ mod mfa_enforcement_tests {
     #[test]
     fn required_for_staff_means_staff_and_admin_and_nobody_else() {
         let cfg = config(true, MfaEnforcement::RequiredForStaff);
-        assert!(cfg.is_required_for(is_staff_of(&UserRole::Staff)));
-        assert!(cfg.is_required_for(is_staff_of(&UserRole::Admin)));
-        for role in [UserRole::Unknown, UserRole::Newbie, UserRole::Member] {
+        assert!(cfg.is_required_for(is_staff_of("staff")));
+        assert!(cfg.is_required_for(is_staff_of("admin")));
+        for role in ["guest", "historical", "active"] {
             assert!(
-                !cfg.is_required_for(is_staff_of(&role)),
+                !cfg.is_required_for(is_staff_of(role)),
                 "RequiredForStaff required enrollment of {}",
-                role_name(&role)
+                role
             );
         }
     }
 
     #[test]
     fn required_for_all_includes_the_roles_that_are_easy_to_forget() {
-        // `Unknown` is the defensive default a user gets when their role could
-        // not be read, and `Newbie` is the role a self-registration lands in.
-        // Both are easy to leave out of a "required for all" and neither should
-        // be.
+        // `guest` is the role a self-registration lands in and the fallback for
+        // a logged-in user with no assignment, and `historical` is a lapsed
+        // member. Both are easy to leave out of a "required for all" and neither
+        // should be.
         let cfg = config(true, MfaEnforcement::RequiredForAll);
-        for role in &ALL_ROLES {
+        for role in ALL_ROLES {
             assert!(
                 cfg.is_required_for(is_staff_of(role)),
                 "RequiredForAll exempted {}",
-                role_name(role)
+                role
             );
         }
     }
@@ -2620,12 +2624,12 @@ mod mfa_enforcement_tests {
         // switch-off.
         for enforcement in ALL_ENFORCEMENTS {
             let cfg = config(false, enforcement);
-            for role in &ALL_ROLES {
+            for role in ALL_ROLES {
                 assert!(
                     !cfg.is_required_for(is_staff_of(role)),
                     "MFA is disabled but {} + {} still demanded enrollment",
                     enforcement_name(&enforcement),
-                    role_name(role)
+                    role
                 );
             }
         }
@@ -2647,7 +2651,7 @@ mod mfa_enforcement_tests {
             cfg.recovery_code_count, 10,
             "the count is what a user is handed once and never shown again"
         );
-        for role in &ALL_ROLES {
+        for role in ALL_ROLES {
             assert!(!cfg.is_required_for(is_staff_of(role)));
         }
     }

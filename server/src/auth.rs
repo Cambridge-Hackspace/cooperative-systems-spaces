@@ -13,11 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use uuid::Uuid;
 
-use crate::{
-    database::DatabaseManager,
-    models::{User, UserRole},
-    AppState,
-};
+use crate::{database::DatabaseManager, models::User, AppState};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -26,7 +22,6 @@ pub struct Claims {
     pub iat: usize,  // Issued at
     pub user_id: Uuid,
     pub username: String,
-    pub role: UserRole,
 }
 
 impl Claims {
@@ -42,7 +37,6 @@ impl Claims {
             iat: Utc::now().timestamp() as usize,
             user_id: user.id,
             username: user.username.clone(),
-            role: user.role.clone(),
         };
 
         let token = encode(

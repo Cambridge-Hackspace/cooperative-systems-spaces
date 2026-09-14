@@ -92,11 +92,13 @@ async fn get_membership(
     let cfg = state.config_manager.get_config();
     let u = &user.0;
     let balance = state.db.user_balance(u.id).map_err(ApiError::from)?;
+    let is_member = state
+        .db
+        .user_has_permission(u.id, "member.access")
+        .map_err(ApiError::from)?;
     Ok(Json(ApiResponse::success(MembershipView {
         enrolled: u.membership_next_due_at.is_some(),
-        is_member: state
-            .db
-            .role_has_permission(u.role.as_str(), "member.access"),
+        is_member,
         balance: balance.with_scale(2).to_string(),
         currency: cfg.membership.currency.clone(),
         next_due_at: u.membership_next_due_at,

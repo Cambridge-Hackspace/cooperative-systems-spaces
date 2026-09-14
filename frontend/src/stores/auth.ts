@@ -42,7 +42,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isMember = computed(() => {
     if (!user.value?.role) return false
     const role = String(user.value.role).toLowerCase()
-    return role === 'member' || role === 'staff' || role === 'admin'
+    return role === 'active' || role === 'staff' || role === 'admin'
   })
   /** True when the user's effective permissions include `key`. */
   const hasPermission = (key: string): boolean => permissions.value.includes(key)
@@ -205,11 +205,11 @@ export const useAuthStore = defineStore('auth', () => {
     if (!user.value) return false
 
     const roleHierarchy: Record<string, number> = {
-      unknown: 0,
-      newbie: 1,
-      member: 2,
-      staff: 3,
-      admin: 4,
+      guest: 1,
+      historical: 2,
+      active: 3,
+      staff: 4,
+      admin: 5,
     }
 
     const userRoleString = String(user.value.role).toLowerCase()

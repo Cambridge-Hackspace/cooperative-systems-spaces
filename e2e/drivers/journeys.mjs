@@ -141,7 +141,7 @@ function flushTally() {
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
-const ROLES = ['Newbie', 'Member', 'Staff', 'Admin']
+const ROLES = ['guest', 'historical', 'active', 'staff', 'admin']
 
 let admin = null
 let places = []
@@ -154,7 +154,7 @@ async function createUser() {
   if (res.status < 300 && id) {
     model.users.push({
       id, username, email: `${username}@e2e.invalid`,
-      role: res.json?.data?.user?.role ?? 'Newbie', exists: true, deactivated: false,
+      role: res.json?.data?.user?.role ?? 'guest', exists: true, deactivated: false,
     })
     note('createUser', `${username} -> ${id}`)
   } else {
@@ -291,7 +291,7 @@ async function createInviteAndRegister() {
 async function nemesisWrongCredential() {
   const u = pick(livingUsers())
   if (!u) return
-  const res = await PUT(`/api/users/${u.id}`, { body: { role: 'Admin' } })
+  const res = await PUT(`/api/users/${u.id}`, { body: { role: 'admin' } })
   note('nemesis/no-token', `${u.username} ${res.status}`)
   witness('somebody not signed in', `tried to change ${u.username}'s role`, u.username, res)
   // Asserted, because a missing credential granting a role change is the one
@@ -303,7 +303,7 @@ async function nemesisWrongCredential() {
 async function nemesisDeletedUserAction() {
   const dead = pick(model.users.filter((u) => !u.exists))
   if (!dead) return
-  const res = await PUT(`/api/users/${dead.id}`, { token: admin.token, body: { role: 'Member' } })
+  const res = await PUT(`/api/users/${dead.id}`, { token: admin.token, body: { role: 'active' } })
   note('nemesis/deleted-user', `${dead.username} ${res.status}`)
   witness('an administrator', `acted on ${dead.username}, who had been removed`, dead.username, res)
   tallied('journeys/nemesis/acting-on-a-deleted-user-is-not-a-5xx', res.status < 500,

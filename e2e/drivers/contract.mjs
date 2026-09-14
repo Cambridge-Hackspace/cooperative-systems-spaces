@@ -67,10 +67,10 @@ main(async () => {
   // Accounts, through the shipping path
   // -----------------------------------------------------------------------
   const admin = await account('admin', { email: ADMIN_EMAIL })
-  assertEq('contract/initial-setup-grants-admin', 'Admin', admin.user?.role)
+  assertEq('contract/initial-setup-grants-admin', 'admin', admin.user?.role)
 
   const newbie = await account('newbie')
-  assertEq('contract/new-accounts-are-newbies', 'Newbie', newbie.user?.role)
+  assertEq('contract/new-accounts-are-guests', 'guest', newbie.user?.role)
 
   // A second registration on the setup address must not mint a second admin.
   // `should_grant_admin_role` matches on the address alone, so if the guard
@@ -80,7 +80,7 @@ main(async () => {
   if (impostor.status === 200 || impostor.status === 201) {
     const li = await login(`e2e_impostor_${RUN_TAG}`)
     const role = li.json?.data?.user?.role
-    assertNe('contract/setup-address-is-not-a-standing-admin-grant', 'Admin', role)
+    assertNe('contract/setup-address-is-not-a-standing-admin-grant', 'admin', role)
   } else {
     // Refusing the duplicate address outright is the stronger answer.
     record('contract/setup-address-is-not-a-standing-admin-grant', 'ok',

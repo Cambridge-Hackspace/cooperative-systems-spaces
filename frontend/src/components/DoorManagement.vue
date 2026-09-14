@@ -332,9 +332,9 @@
                 v-model="newRule.value"
                 class="select select-bordered select-sm"
               >
-                <option value="Member">Member</option>
-                <option value="Staff">Staff</option>
-                <option value="Admin">Admin</option>
+                <option value="active">Active</option>
+                <option value="staff">Staff</option>
+                <option value="admin">Admin</option>
               </select>
               <select
                 v-else-if="newRule.kind === 'user'"
@@ -518,7 +518,7 @@ const newRule = ref<{
   schedule_id: string | null
 }>({
   kind: 'role',
-  value: 'Member',
+  value: 'active',
   effect: 'allow',
   schedule_id: null,
 })
@@ -768,7 +768,7 @@ async function addRule() {
   const r = await doorsApi.addRule(detail.value.id, payload)
   if (r.success) {
     notify('Rule added')
-    newRule.value.value = newRule.value.kind === 'role' ? 'Member' : ''
+    newRule.value.value = newRule.value.kind === 'role' ? 'active' : ''
     newRule.value.schedule_id = null
     await openDetail(detail.value)
   } else notify(r.error || 'Failed to add rule', false)

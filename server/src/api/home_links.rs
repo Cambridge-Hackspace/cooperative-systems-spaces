@@ -173,7 +173,7 @@ fn role_level_from_headers(state: &AppState, headers: &HeaderMap) -> Option<i16>
     let cfg = state.config_manager.get_config();
     let svc = AuthService::new(&state.db, &cfg.auth.jwt_secret);
     let user = svc.get_user_from_token(token).ok()?;
-    state.db.rbac().level_of_name(user.role.as_str())
+    state.db.user_effective_level(user.id).ok()
 }
 
 // ---------------------------------------------------------------------------

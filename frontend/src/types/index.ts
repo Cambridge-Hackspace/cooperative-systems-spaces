@@ -20,12 +20,17 @@ export interface PaginatedResponse<T> {
 }
 
 // User types
+// The RBAC tier taxonomy, lowest to highest. Values are the exact role names
+// the server sends on the wire (the `users.role` enum was retired in #77);
+// mirrored from `server/src/models.rs`'s `role` module. `guest` is the
+// logged-in baseline; `historical` is a lapsed member; `active` holds
+// member-level access.
 export enum UserRole {
-  Unknown = 'Unknown',
-  Newbie = 'Newbie',
-  Member = 'Member',
-  Staff = 'Staff',
-  Admin = 'Admin',
+  Guest = 'guest',
+  Historical = 'historical',
+  Active = 'active',
+  Staff = 'staff',
+  Admin = 'admin',
 }
 
 export interface User {

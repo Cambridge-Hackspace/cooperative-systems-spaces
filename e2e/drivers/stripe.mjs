@@ -137,7 +137,7 @@ await main(async () => {
   assertEq('stripe/invoice-paid-accepted', 200, paid.status)
 
   await assertMembership('stripe/paid-member-is-granted', member, {
-    role: 'member',
+    role: 'active',
     enrolled: true,
     balance: 0,
     nonNegative: true,
@@ -149,7 +149,7 @@ await main(async () => {
   const dup = await webhook('invoice.paid', { id: 'in_1', customer: cus, amount_paid: DUES_CENTS })
   assertEq('stripe/duplicate-invoice-accepted', 200, dup.status)
   await assertMembership('stripe/duplicate-invoice-is-idempotent', member, {
-    role: 'member',
+    role: 'active',
     enrolled: true,
     balance: 0, // not +10 (double credit) and not -10 (double dues)
     nonNegative: true,
@@ -165,14 +165,14 @@ await main(async () => {
   // ---- D. a missed renewal lapses the member, non-negative, login intact ----
   // Precondition before the success indicator: they ARE a member now, so the
   // later downgrade is proof the lapse acted, not proof it never took effect.
-  ok('stripe/member-before-lapse', (await roleOf(member.user.id, member.token)) === 'Member')
+  ok('stripe/member-before-lapse', (await roleOf(member.user.id, member.token)) === 'active')
   await setNextDue(member.user.id, PAST, admin.token)
   const lapseRun = await reconcile(admin.token)
   assertEq('stripe/reconcile-accepted', 200, lapseRun.status)
   ok('stripe/reconcile-ok', lapseRun.json?.data?.ok === true, lapseRun.text.slice(0, 200))
 
   await assertMembership('stripe/unpaid-member-lapses', member, {
-    role: 'newbie',
+    role: 'historical',
     enrolled: false,
     balance: 0, // never driven negative
     nonNegative: true,
@@ -186,28 +186,28 @@ await main(async () => {
   assertEq('stripe/cash-accepted', 200, cashRes.status)
   ok('stripe/cash-posted', cashRes.json?.data?.posted === true, cashRes.text.slice(0, 200))
   await assertMembership('stripe/cash-restores-membership', member, {
-    role: 'member',
+    role: 'active',
     enrolled: true,
     balance: 0, // the gap is forgiven: not -10 owed from the lapsed period
     nonNegative: true,
   })
 
   // ---- F. an enrolled Staff who lapses returns as a plain Member ------------
-  const promote = await setRole(member.user.id, 'Staff', admin.token)
+  const promote = await setRole(member.user.id, 'staff', admin.token)
   assertEq('stripe/promote-to-staff-accepted', 200, promote.status)
-  ok('stripe/is-staff-before-lapse', (await roleOf(member.user.id, member.token)) === 'Staff')
+  ok('stripe/is-staff-before-lapse', (await roleOf(member.user.id, member.token)) === 'staff')
 
   await setNextDue(member.user.id, PAST, admin.token)
   await reconcile(admin.token)
-  await assertMembership('stripe/enrolled-staff-lapses-to-newbie', member, {
-    role: 'newbie',
+  await assertMembership('stripe/enrolled-staff-lapses-to-historical', member, {
+    role: 'historical',
     enrolled: false,
     nonNegative: true,
   })
 
   await cash(member.user.id, '10.00', admin.token)
   await assertMembership('stripe/returning-staff-comes-back-as-member', member, {
-    role: 'member', // NOT staff -- elevated roles are never auto-restored
+    role: 'active', // NOT staff -- elevated roles are never auto-restored
     enrolled: true,
     nonNegative: true,
   })
@@ -216,12 +216,12 @@ await main(async () => {
   // Enrol the admin (they keep Admin -- a grant never lowers an elevated role),
   // then lapse them: the guard must refuse the demotion.
   await cash(admin.user.id, '10.00', admin.token)
-  ok('stripe/admin-still-admin-after-enrolling', (await roleOf(admin.user.id, admin.token)) === 'Admin')
+  ok('stripe/admin-still-admin-after-enrolling', (await roleOf(admin.user.id, admin.token)) === 'admin')
   await setNextDue(admin.user.id, PAST, admin.token)
   await reconcile(admin.token)
   ok(
     'stripe/last-admin-is-never-demoted',
-    (await roleOf(admin.user.id, admin.token)) === 'Admin',
+    (await roleOf(admin.user.id, admin.token)) === 'admin',
     'the last admin was downgraded on lapse -- the guard did not fire',
   )
 
@@ -245,7 +245,7 @@ await main(async () => {
   const pollRun = await reconcile(admin.token)
   assertEq('stripe/poll-reconcile-accepted', 200, pollRun.status)
   await assertMembership('stripe/poll-backbone-credits-withheld-payment', member2, {
-    role: 'member',
+    role: 'active',
     enrolled: true,
     balance: 0,
     nonNegative: true,

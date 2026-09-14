@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use css_server::doors::{cards_in_profile, expand_rules_at, open_access_hold_until_at};
-use css_server::models::{DoorAccessRule, Schedule, User, UserRole};
+use css_server::models::{DoorAccessRule, Schedule, User};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -33,28 +33,17 @@ fn uuid(s: &str) -> Uuid {
     Uuid::parse_str(s).unwrap_or_else(|_| panic!("bad uuid in vectors: {s}"))
 }
 
-fn role(s: &str) -> UserRole {
-    match s {
-        "unknown" => UserRole::Unknown,
-        "newbie" => UserRole::Newbie,
-        "member" => UserRole::Member,
-        "staff" => UserRole::Staff,
-        "admin" => UserRole::Admin,
-        other => panic!("unknown role in vectors: {other}"),
-    }
-}
-
 /// The seeded role graph (name -> level), matching the RBAC seed migration, so
 /// door role-rule expansion resolves "this tier or higher" the same way the
 /// server does. Only levels matter here; permissions/inheritance are irrelevant
 /// to `level_of_name`.
 fn seed_graph() -> css_server::rbac::RoleGraph {
     let rows: Vec<(Uuid, String, i16)> = [
-        ("unknown", 0),
-        ("newbie", 1),
-        ("member", 2),
-        ("staff", 3),
-        ("admin", 4),
+        ("guest", 1),
+        ("historical", 2),
+        ("active", 3),
+        ("staff", 4),
+        ("admin", 5),
     ]
     .iter()
     .enumerate()
@@ -81,7 +70,6 @@ fn user_from(v: &Value, profile_field: &str) -> User {
         is_active: v["is_active"].as_bool().expect("is_active"),
         created_at: epoch(),
         updated_at: epoch(),
-        role: role(v["role"].as_str().expect("role")),
         profile: serde_json::json!({ profile_field: cards }),
         meta: Value::Null,
         mfa_enrolled_at: None,
@@ -185,6 +173,24 @@ fn every_case_compiles_to_the_declared_card_sets() {
             .map(schedule_from)
             .collect();
 
+        // Effective tier level per active user, resolved from the vector's role
+        // string against the seed (the User struct no longer carries a role).
+        let graph = seed_graph();
+        let user_levels: std::collections::HashMap<Uuid, i16> = case["users"]
+            .as_array()
+            .expect("users")
+            .iter()
+            .filter(|u| u["is_active"].as_bool().unwrap_or(false))
+            .map(|u| {
+                (
+                    uuid(u["id"].as_str().expect("user id")),
+                    graph
+                        .level_of_name(u["role"].as_str().expect("role"))
+                        .unwrap_or(0),
+                )
+            })
+            .collect();
+
         let (allow, deny) = expand_rules_at(
             &rules,
             &users,
@@ -192,7 +198,8 @@ fn every_case_compiles_to_the_declared_card_sets() {
             tz,
             profile_field,
             now,
-            &seed_graph(),
+            &graph,
+            &user_levels,
         );
         let hold = open_access_hold_until_at(&rules, &schedules, tz, now);
 

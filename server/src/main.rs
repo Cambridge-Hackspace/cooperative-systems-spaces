@@ -552,7 +552,7 @@ async fn test_database_operations(db_manager: &DatabaseManager) -> Result<(), an
     }
 
     // Create test user
-    let created_user = db_manager.create_user(&new_user)?;
+    let created_user = db_manager.create_user(&new_user, css_server::models::role::ACTIVE)?;
     info!("Test user created with ID: {}", created_user.id);
 
     // Test user retrieval

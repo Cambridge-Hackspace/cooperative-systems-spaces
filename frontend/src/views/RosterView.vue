@@ -163,7 +163,7 @@
       </div>
 
       <!-- Role Distribution Stats -->
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <div class="stat bg-base-100 shadow rounded-lg">
           <div class="stat-figure text-info">
             <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -175,9 +175,25 @@
               />
             </svg>
           </div>
-          <div class="stat-title">Newbies</div>
-          <div class="stat-value text-info">{{ roleStats.newbie }}</div>
-          <div class="stat-desc">New members</div>
+          <div class="stat-title">Guests</div>
+          <div class="stat-value text-info">{{ roleStats.guest }}</div>
+          <div class="stat-desc">Logged in, not members</div>
+        </div>
+
+        <div class="stat bg-base-100 shadow rounded-lg">
+          <div class="stat-figure text-neutral">
+            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </div>
+          <div class="stat-title">Historical</div>
+          <div class="stat-value text-neutral">{{ roleStats.historical }}</div>
+          <div class="stat-desc">Lapsed members</div>
         </div>
 
         <div class="stat bg-base-100 shadow rounded-lg">
@@ -191,9 +207,9 @@
               />
             </svg>
           </div>
-          <div class="stat-title">Members</div>
-          <div class="stat-value text-success">{{ roleStats.member }}</div>
-          <div class="stat-desc">Active members</div>
+          <div class="stat-title">Active</div>
+          <div class="stat-value text-success">{{ roleStats.active }}</div>
+          <div class="stat-desc">Current members</div>
         </div>
 
         <div class="stat bg-base-100 shadow rounded-lg">
@@ -251,8 +267,9 @@ const successMessage = ref<string | null>(null)
 const errorMessage = ref<string | null>(null)
 const isRefreshing = ref(false)
 const roleStats = ref({
-  newbie: 0,
-  member: 0,
+  guest: 0,
+  historical: 0,
+  active: 0,
   staff: 0,
   admin: 0,
 })
@@ -318,8 +335,9 @@ const loadRoleStats = async () => {
     if (response.success && response.data) {
       const users = response.data.items
       roleStats.value = {
-        newbie: users.filter((u: User) => u.role === UserRole.Newbie).length,
-        member: users.filter((u: User) => u.role === UserRole.Member).length,
+        guest: users.filter((u: User) => u.role === UserRole.Guest).length,
+        historical: users.filter((u: User) => u.role === UserRole.Historical).length,
+        active: users.filter((u: User) => u.role === UserRole.Active).length,
         staff: users.filter((u: User) => u.role === UserRole.Staff).length,
         admin: users.filter((u: User) => u.role === UserRole.Admin).length,
       }

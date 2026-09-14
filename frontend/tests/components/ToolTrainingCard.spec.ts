@@ -121,7 +121,7 @@ let logSpy: ConsoleSpy
 beforeEach(() => {
   mocks.getToolTrainingOverview.mockReset()
   mocks.getToolTrainingOverview.mockResolvedValue({ success: true, data: overview() })
-  authState.user = { id: 'u1', role: UserRole.Member }
+  authState.user = { id: 'u1', role: UserRole.Active }
   logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -183,7 +183,7 @@ describe('what a member can do', () => {
   // looking at their own training on a tool sees the steps and their progress
   // and has no way to begin.
   it('shows a member no way to start their own training', async () => {
-    asRole(UserRole.Member)
+    asRole(UserRole.Active)
     const w = await card(overview({ steps: [withProgress(1, { is_available: true })] }))
 
     expect(w.find('.steps-list').exists()).toBe(true)
@@ -195,8 +195,8 @@ describe('what a member can do', () => {
     expect(buttonLabels(w)).not.toContain('Start Training')
   })
 
-  it('shows the same to a newbie and to somebody with no role at all', async () => {
-    for (const role of [UserRole.Newbie, UserRole.Unknown]) {
+  it('shows the same to a lapsed member and to a bare guest', async () => {
+    for (const role of [UserRole.Historical, UserRole.Guest]) {
       asRole(role)
       const w = await card()
       expect(w.find('.action-buttons').exists()).toBe(false)
@@ -257,7 +257,7 @@ describe('who may sign a session off', () => {
   })
 
   it('lets no member complete a session, certified or not', async () => {
-    asRole(UserRole.Member)
+    asRole(UserRole.Active)
     const w = await card(
       overview({
         steps: [withProgress(1, { user_progress: progress(TrainingStatus.InProgress) })],
@@ -294,7 +294,7 @@ describe('the steps list', () => {
   })
 
   it('offers a setup prompt, to staff only, when there are no steps', async () => {
-    asRole(UserRole.Member)
+    asRole(UserRole.Active)
     const asMember = await card(overview({ steps: [] }))
     expect(asMember.find('.no-training').exists()).toBe(true)
     expect(asMember.find('.no-training button').exists()).toBe(false)

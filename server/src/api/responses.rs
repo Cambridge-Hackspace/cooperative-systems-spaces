@@ -3,8 +3,6 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::UserRole;
-
 // Standard API response wrapper
 #[derive(Serialize, Deserialize)]
 pub struct ApiResponse<T> {
@@ -116,7 +114,10 @@ pub struct UserResponse {
     pub email: String,
     pub full_name: String,
     pub is_active: bool,
-    pub role: UserRole,
+    /// The user's primary (display) role name -- their highest-level assignment,
+    /// derived from `user_roles` (the `users.role` enum is retired). Callers pass
+    /// it in via `from_user`, since resolving it needs a database read.
+    pub role: String,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub meta: serde_json::Value,
@@ -126,8 +127,10 @@ pub struct UserResponse {
     pub email_verified: bool,
 }
 
-impl From<crate::models::User> for UserResponse {
-    fn from(user: crate::models::User) -> Self {
+impl UserResponse {
+    /// Build from a user plus their resolved primary role (see
+    /// `DatabaseManager::user_primary_role`).
+    pub fn from_user(user: crate::models::User, primary_role: String) -> Self {
         Self {
             id: user.id,
             username: user.username,
@@ -135,7 +138,7 @@ impl From<crate::models::User> for UserResponse {
             full_name: user.full_name,
             is_active: user.is_active,
             email_verified: user.email_verified_at.is_some(),
-            role: user.role,
+            role: primary_role,
             created_at: user.created_at,
             updated_at: user.updated_at,
             meta: user.meta,
@@ -165,7 +168,9 @@ pub struct UpdateUserRequest {
     pub full_name: Option<String>,
     pub password: Option<String>,
     pub is_active: Option<bool>,
-    pub role: Option<UserRole>,
+    /// A tier role name (guest/historical/active/staff/admin) to set as the
+    /// user's primary role; validated by the handler.
+    pub role: Option<String>,
 }
 
 // Pagination parameters

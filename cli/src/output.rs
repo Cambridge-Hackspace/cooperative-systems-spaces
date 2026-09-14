@@ -1,7 +1,7 @@
 use console::style;
 use tabled::{Table, Tabled};
 
-use crate::client::{UserResponse, UserRole};
+use crate::client::{role, UserResponse};
 
 pub fn print_user_info(user: &UserResponse) {
     println!("{}", style("User Information").bold().underlined());
@@ -62,13 +62,16 @@ pub fn print_users_table(users: &[UserResponse]) {
     println!("{}", table);
 }
 
-fn format_role(role: &UserRole) -> String {
-    let colored = match role {
-        UserRole::Unknown => style("Unknown").dim(),
-        UserRole::Newbie => style("Newbie").yellow(),
-        UserRole::Member => style("Member").green(),
-        UserRole::Staff => style("Staff").blue(),
-        UserRole::Admin => style("Admin").red().bold(),
+fn format_role(role_name: &str) -> String {
+    // Known tiers get a colour; a custom role the server may report is shown
+    // plain rather than dropped.
+    let colored = match role_name {
+        role::GUEST => style(role_name).dim(),
+        role::HISTORICAL => style(role_name).yellow(),
+        role::ACTIVE => style(role_name).green(),
+        role::STAFF => style(role_name).blue(),
+        role::ADMIN => style(role_name).red().bold(),
+        _ => style(role_name),
     };
     colored.to_string()
 }
