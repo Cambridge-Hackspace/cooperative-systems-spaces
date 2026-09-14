@@ -92,7 +92,6 @@ pub fn metered_access_ok(
 /// [`ToolBillingService::gate`].
 pub struct MeteredGate {
     pub require_membership: bool,
-    pub member_role_rank: u8,
     /// Prepaid gates on the max session cost; postpaid on `min_balance`.
     pub prepaid: bool,
     pub min_balance: BigDecimal,
@@ -252,7 +251,6 @@ impl ToolBillingService {
         let c = self.config.get_config();
         MeteredGate {
             require_membership: c.tool_billing.require_membership,
-            member_role_rank: c.membership.member_role.rank(),
             prepaid: matches!(c.tool_billing.billing_mode, BillingMode::Prepaid),
             min_balance: self.min_balance(),
             default_max_minutes: c.tool_billing.default_max_session_minutes,
@@ -264,7 +262,8 @@ impl ToolBillingService {
     }
 
     fn is_member(&self, user: &User) -> bool {
-        user.role.rank() >= self.config.get_config().membership.member_role.rank()
+        self.db
+            .role_has_permission(user.role.as_str(), "member.access")
     }
 
     /// What available balance a member needs to start this tool at a resolved

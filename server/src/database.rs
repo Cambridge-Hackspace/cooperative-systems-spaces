@@ -2398,7 +2398,7 @@ impl DatabaseManager {
                 return Ok(false);
             };
             let available = self.available_balance(user_id)?;
-            let is_member = user.role.rank() >= gate.member_role_rank;
+            let is_member = self.role_has_permission(user.role.as_str(), "member.access");
             // #34: gate on THIS member's resolved rate (their tier, else the tool
             // default), not the tool's default rate.
             let eff = self.resolve_effective_billing(user_id, &tool)?;
@@ -2794,7 +2794,7 @@ impl DatabaseManager {
                 let available = self
                     .available_balance(user.id)
                     .unwrap_or_else(|_| bigdecimal::BigDecimal::from(0));
-                let is_member = user.role.rank() >= g.member_role_rank;
+                let is_member = self.role_has_permission(user.role.as_str(), "member.access");
                 (g, available, is_member)
             });
             let mut authorized_tool_ids = Vec::new();

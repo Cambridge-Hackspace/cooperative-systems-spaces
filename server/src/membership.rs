@@ -261,9 +261,14 @@ impl MembershipService {
     /// Apply the role state machine for one user at a known entitlement.
     fn apply_role(&self, user: &User, entitled: bool) -> Result<(), DatabaseError> {
         let (member_role, lapsed_role) = self.roles();
-        let is_last_admin = user.role == UserRole::Admin && self.db.count_active_admins()? <= 1;
+        // "Is this user an admin" is now effective admin.access, not the enum
+        // value (count_active_admins is already permission-based).
+        let user_is_admin = self
+            .db
+            .role_has_permission(user.role.as_str(), "admin.access");
+        let is_last_admin = user_is_admin && self.db.count_active_admins()? <= 1;
 
-        if !entitled && user.role == UserRole::Admin && is_last_admin {
+        if !entitled && user_is_admin && is_last_admin {
             // The guard fired: the demotion is refused. Recorded so the owner
             // sees an admin who owes dues but was protected.
             self.audit(

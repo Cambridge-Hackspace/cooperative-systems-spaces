@@ -44,6 +44,25 @@ fn role(s: &str) -> UserRole {
     }
 }
 
+/// The seeded role graph (name -> level), matching the RBAC seed migration, so
+/// door role-rule expansion resolves "this tier or higher" the same way the
+/// server does. Only levels matter here; permissions/inheritance are irrelevant
+/// to `level_of_name`.
+fn seed_graph() -> css_server::rbac::RoleGraph {
+    let rows: Vec<(Uuid, String, i16)> = [
+        ("unknown", 0),
+        ("newbie", 1),
+        ("member", 2),
+        ("staff", 3),
+        ("admin", 4),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (name, level))| (Uuid::from_u128(i as u128 + 1), name.to_string(), *level))
+    .collect();
+    css_server::rbac::RoleGraph::from_rows(&rows, &[], &[])
+}
+
 fn epoch() -> NaiveDateTime {
     DateTime::from_timestamp(0, 0).expect("epoch").naive_utc()
 }
@@ -166,7 +185,15 @@ fn every_case_compiles_to_the_declared_card_sets() {
             .map(schedule_from)
             .collect();
 
-        let (allow, deny) = expand_rules_at(&rules, &users, &schedules, tz, profile_field, now);
+        let (allow, deny) = expand_rules_at(
+            &rules,
+            &users,
+            &schedules,
+            tz,
+            profile_field,
+            now,
+            &seed_graph(),
+        );
         let hold = open_access_hold_until_at(&rules, &schedules, tz, now);
 
         let want = &case["expect"]["server_compiled"];

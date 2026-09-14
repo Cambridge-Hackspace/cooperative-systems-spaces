@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::config::ConfigManager;
 use crate::database::{DatabaseError, DatabaseManager};
 use crate::devices_transport::DeviceTransport;
-use crate::models::{Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User, UserRole};
+use crate::models::{Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompiledDoor {
@@ -136,6 +136,7 @@ impl DoorService {
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
     ) -> (BTreeSet<String>, BTreeSet<String>) {
+        let graph = self.db.rbac();
         expand_rules_at(
             rules,
             active_users,
@@ -143,6 +144,7 @@ impl DoorService {
             tz,
             &self.profile_field,
             Utc::now(),
+            &graph,
         )
     }
 
@@ -229,6 +231,8 @@ impl DoorService {
         let mut deny = HashSet::<String>::new();
         let user_cards: HashSet<String> = self.cards_for_user(user).into_iter().collect();
         let user_id_str = user.id.to_string();
+        let graph = self.db.rbac();
+        let user_level = graph.level_of_name(user.role.as_str());
 
         for rule in &rules {
             // Schedule-gated rules are silent when their window is closed.
@@ -248,8 +252,8 @@ impl DoorService {
             let matched = match kind {
                 DoorRuleKind::Card => user_cards.contains(&rule.value),
                 DoorRuleKind::User => rule.value == user_id_str,
-                DoorRuleKind::Role => match role_from_str(&rule.value) {
-                    Some(required) => user.role.rank() >= required.rank(),
+                DoorRuleKind::Role => match graph.level_of_name(&rule.value) {
+                    Some(required) => user_level.is_some_and(|ul| ul >= required),
                     None => false,
                 },
                 // Open Access is a door-level held-unlock latch, not a per-user
@@ -396,17 +400,6 @@ fn schedule_is_active_at(
     crate::schedules::matches_at(&intervals, tz, now)
 }
 
-fn role_from_str(s: &str) -> Option<UserRole> {
-    match s.to_ascii_lowercase().as_str() {
-        "unknown" => Some(UserRole::Unknown),
-        "newbie" => Some(UserRole::Newbie),
-        "member" => Some(UserRole::Member),
-        "staff" => Some(UserRole::Staff),
-        "admin" => Some(UserRole::Admin),
-        _ => None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Pure rule expansion
 // ---------------------------------------------------------------------------
@@ -493,6 +486,7 @@ pub fn expand_rules_at(
     tz: chrono_tz::Tz,
     profile_field: &str,
     now: chrono::DateTime<Utc>,
+    graph: &crate::rbac::RoleGraph,
 ) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut allow = BTreeSet::<String>::new();
     let mut deny = BTreeSet::<String>::new();
@@ -553,15 +547,18 @@ pub fn expand_rules_at(
                 }
             }
             DoorRuleKind::Role => {
-                let required = match role_from_str(&rule.value) {
-                    Some(r) => r,
+                let required = match graph.level_of_name(&rule.value) {
+                    Some(l) => l,
                     None => {
                         warn!("Door rule of kind=role has unknown role '{}'", rule.value);
                         continue;
                     }
                 };
                 for u in active_users.iter() {
-                    if u.role.rank() >= required.rank() {
+                    if graph
+                        .level_of_name(u.role.as_str())
+                        .is_some_and(|ul| ul >= required)
+                    {
                         for c in cards_in_profile(&u.profile, profile_field) {
                             bucket.insert(c);
                         }

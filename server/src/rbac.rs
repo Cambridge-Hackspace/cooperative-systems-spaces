@@ -91,6 +91,17 @@ impl RoleGraph {
         self.by_name.get(name).copied()
     }
 
+    /// The tier `level` of the role named `name`, or `None` if unseeded. Used for
+    /// "this tier or higher" comparisons (door rules, home-link audiences) in
+    /// place of the legacy `UserRole::rank()`. For a single-role user this equals
+    /// their `effective_level`; kept name-keyed so callers holding a role name
+    /// (not a user id) need no database round-trip.
+    pub fn level_of_name(&self, name: &str) -> Option<i16> {
+        self.by_name
+            .get(name)
+            .and_then(|id| self.level.get(id).copied())
+    }
+
     /// Effective permissions for a set of roles named by their `roles.name`.
     /// Names that do not resolve are skipped (an unseeded role grants nothing).
     pub fn effective_permissions_by_names(&self, names: &[&str]) -> HashSet<String> {

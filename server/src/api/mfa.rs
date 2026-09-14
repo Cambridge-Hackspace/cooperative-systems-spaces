@@ -172,7 +172,10 @@ async fn status(
     let recovery_remaining = state.db.count_unused_recovery_codes(user.0.id)?;
     let totp_enrolled = totp.as_ref().and_then(|t| t.confirmed_at).is_some();
     let webauthn_count = webauthn.len();
-    let must_enroll = cfg.is_required_for(&user.0.role) && user.0.mfa_enrolled_at.is_none();
+    let is_staff = state
+        .db
+        .role_has_permission(user.0.role.as_str(), "staff.access");
+    let must_enroll = cfg.is_required_for(is_staff) && user.0.mfa_enrolled_at.is_none();
     Ok(Json(ApiResponse::success(MfaStatusResponse {
         enabled: cfg.enabled,
         totp_enrolled,

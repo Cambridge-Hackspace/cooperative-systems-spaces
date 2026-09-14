@@ -607,15 +607,17 @@ impl Default for AuthMfaConfig {
 }
 
 impl AuthMfaConfig {
-    /// True when the given role must enroll under this enforcement setting.
-    pub fn is_required_for(&self, role: &crate::models::UserRole) -> bool {
+    /// True when a user must enroll under this enforcement setting. `is_staff`
+    /// is whether the user holds staff-level access (resolved by the caller via
+    /// the RBAC graph, e.g. `role_has_permission(role, "staff.access")`) --
+    /// replacing the old `matches!(role, Staff | Admin)` on the enum.
+    pub fn is_required_for(&self, is_staff: bool) -> bool {
         if !self.enabled {
             return false;
         }
-        use crate::models::UserRole::*;
         match self.enforcement {
             MfaEnforcement::OptIn => false,
-            MfaEnforcement::RequiredForStaff => matches!(role, Staff | Admin),
+            MfaEnforcement::RequiredForStaff => is_staff,
             MfaEnforcement::RequiredForAll => true,
         }
     }
@@ -2510,6 +2512,13 @@ mod mfa_enforcement_tests {
         }
     }
 
+    /// Whether a role holds staff-level access, mirroring the RBAC seed
+    /// (member.access/staff.access grants). `is_required_for` now takes this
+    /// bool; the callers compute it from the graph via `role_has_permission`.
+    fn is_staff_of(role: &UserRole) -> bool {
+        matches!(role, UserRole::Staff | UserRole::Admin)
+    }
+
     /// Likewise for the enforcement setting.
     fn enforcement_name(e: &MfaEnforcement) -> &'static str {
         match e {
@@ -2544,7 +2553,7 @@ mod mfa_enforcement_tests {
             for role in &ALL_ROLES {
                 let cfg = config(true, enforcement);
                 assert_eq!(
-                    cfg.is_required_for(role),
+                    cfg.is_required_for(is_staff_of(role)),
                     expected(enforcement, role),
                     "{} + {} answered the wrong way",
                     enforcement_name(&enforcement),
@@ -2563,7 +2572,7 @@ mod mfa_enforcement_tests {
         let cfg = config(true, MfaEnforcement::OptIn);
         for role in &ALL_ROLES {
             assert!(
-                !cfg.is_required_for(role),
+                !cfg.is_required_for(is_staff_of(role)),
                 "OptIn required enrollment of {}",
                 role_name(role)
             );
@@ -2573,11 +2582,11 @@ mod mfa_enforcement_tests {
     #[test]
     fn required_for_staff_means_staff_and_admin_and_nobody_else() {
         let cfg = config(true, MfaEnforcement::RequiredForStaff);
-        assert!(cfg.is_required_for(&UserRole::Staff));
-        assert!(cfg.is_required_for(&UserRole::Admin));
+        assert!(cfg.is_required_for(is_staff_of(&UserRole::Staff)));
+        assert!(cfg.is_required_for(is_staff_of(&UserRole::Admin)));
         for role in [UserRole::Unknown, UserRole::Newbie, UserRole::Member] {
             assert!(
-                !cfg.is_required_for(&role),
+                !cfg.is_required_for(is_staff_of(&role)),
                 "RequiredForStaff required enrollment of {}",
                 role_name(&role)
             );
@@ -2593,7 +2602,7 @@ mod mfa_enforcement_tests {
         let cfg = config(true, MfaEnforcement::RequiredForAll);
         for role in &ALL_ROLES {
             assert!(
-                cfg.is_required_for(role),
+                cfg.is_required_for(is_staff_of(role)),
                 "RequiredForAll exempted {}",
                 role_name(role)
             );
@@ -2613,7 +2622,7 @@ mod mfa_enforcement_tests {
             let cfg = config(false, enforcement);
             for role in &ALL_ROLES {
                 assert!(
-                    !cfg.is_required_for(role),
+                    !cfg.is_required_for(is_staff_of(role)),
                     "MFA is disabled but {} + {} still demanded enrollment",
                     enforcement_name(&enforcement),
                     role_name(role)
@@ -2639,7 +2648,7 @@ mod mfa_enforcement_tests {
             "the count is what a user is handed once and never shown again"
         );
         for role in &ALL_ROLES {
-            assert!(!cfg.is_required_for(role));
+            assert!(!cfg.is_required_for(is_staff_of(role)));
         }
     }
 
