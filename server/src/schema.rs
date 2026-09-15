@@ -835,6 +835,37 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    tool_modules (id) {
+        id -> Uuid,
+        tool_id -> Uuid,
+        device_id -> Uuid,
+        role -> Text,
+        name -> Text,
+        params -> Jsonb,
+        on_disconnect -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    tool_interlocks (id) {
+        id -> Uuid,
+        tool_id -> Uuid,
+        kind -> Text,
+        condition -> Text,
+        source_module_id -> Nullable<Uuid>,
+        debounce_ms -> Int4,
+        latch -> Bool,
+        reset -> Text,
+        enforcement -> Text,
+        enabled -> Bool,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(space_device_auth -> space_devices (device_id));
 diesel::joinable!(space_device_auth_requests -> users (created_by));
 diesel::joinable!(tool_events -> tools (tool_id));
@@ -896,6 +927,10 @@ diesel::joinable!(power_outlets -> power_circuits (circuit_id));
 diesel::joinable!(power_outlets -> places (place_id));
 diesel::joinable!(power_receptacles -> power_outlets (outlet_id));
 diesel::joinable!(tools -> power_receptacles (receptacle_id));
+diesel::joinable!(tool_modules -> tools (tool_id));
+diesel::joinable!(tool_modules -> space_devices (device_id));
+diesel::joinable!(tool_interlocks -> tools (tool_id));
+diesel::joinable!(tool_interlocks -> tool_modules (source_module_id));
 diesel::joinable!(tool_power_state -> tools (tool_id));
 diesel::joinable!(tool_rate_tiers -> tools (tool_id));
 diesel::joinable!(tool_tier_assignments -> tools (tool_id));
@@ -956,4 +991,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     tool_power_state,
     tool_rate_tiers,
     tool_tier_assignments,
+    tool_modules,
+    tool_interlocks,
 );

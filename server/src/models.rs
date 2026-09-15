@@ -11,6 +11,7 @@ mod power;
 mod profile_config;
 mod schedules;
 mod tool_billing;
+mod tool_modules;
 mod tool_tiers;
 mod tools;
 // `pub`, not `pub(crate)`: these types appear in the public signatures of
@@ -34,6 +35,7 @@ pub use power::*;
 pub use profile_config::*;
 pub use schedules::*;
 pub use tool_billing::*;
+pub use tool_modules::*;
 pub use tool_tiers::*;
 pub use tools::*;
 pub use training::*;
