@@ -214,6 +214,12 @@ pub async fn register_device(
     let kind = match req.kind.to_lowercase().as_str() {
         "edge" => crate::models::SpaceDeviceKind::Edge,
         "kiosk" => crate::models::SpaceDeviceKind::Kiosk,
+        // Tool access modules (#83). Accepted on the same registration path as an
+        // edge: a module is a device, it just fills a role in a tool's access
+        // chain rather than coordinating one.
+        "card_reader" => crate::models::SpaceDeviceKind::CardReader,
+        "power_controller" => crate::models::SpaceDeviceKind::PowerController,
+        "sensor" => crate::models::SpaceDeviceKind::Sensor,
         _ => return Err(ApiError::BadRequest("Invalid device kind".to_string())),
     };
 
