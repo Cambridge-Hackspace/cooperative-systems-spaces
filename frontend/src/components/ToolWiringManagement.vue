@@ -44,9 +44,9 @@
           </div>
 
           <p v-if="!tool.power_fails_safe" class="text-sm text-base-content/70">
-            No power module bound to this tool reaches a safe state on its own when it loses contact.
-            Cuts still work while the link is up, but treat them as a mitigation rather than an
-            interlock.
+            No power module bound to this tool reaches a safe state on its own when it loses
+            contact. Cuts still work while the link is up, but treat them as a mitigation rather
+            than an interlock.
           </p>
 
           <h3 class="font-semibold mt-4">Modules</h3>
@@ -92,11 +92,9 @@
             <tbody>
               <tr v-for="i in tool.interlocks" :key="i.id">
                 <td>
-                  <span
-                    class="badge"
-                    :class="i.kind === 'trip' ? 'badge-error' : 'badge-info'"
-                    >{{ i.kind === 'trip' ? 'trip' : 'start gate' }}</span
-                  >
+                  <span class="badge" :class="i.kind === 'trip' ? 'badge-error' : 'badge-info'">{{
+                    i.kind === 'trip' ? 'trip' : 'start gate'
+                  }}</span>
                 </td>
                 <td>{{ i.condition }}</td>
                 <td>
