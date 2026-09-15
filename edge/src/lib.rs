@@ -14,6 +14,7 @@ pub mod calendar;
 pub mod config;
 pub mod doors;
 pub mod edge_inbound;
+pub mod modules;
 pub mod mqtt;
 pub mod power;
 pub mod registration;
