@@ -51,6 +51,9 @@ impl BypassService {
             if let Err(e) = self.sweep_once() {
                 error!("Bypass liveness sweep failed: {}", e);
             }
+            if let Err(e) = self.sweep_unbound_devices() {
+                error!("Bypass device isolation sweep failed: {}", e);
+            }
             if let Err(e) = self.check_unauthorized_power() {
                 error!("Bypass unauthorized-power check failed: {}", e);
             }
@@ -114,6 +117,58 @@ impl BypassService {
                     _ => "is reporting again",
                 }
             );
+        }
+        Ok(written)
+    }
+
+    /// The same liveness question, asked of the devices the module sweep cannot
+    /// see: the edge coordinators and kiosks, which are not bound to a tool as a
+    /// reader or a plug and would otherwise be able to go dark unnoticed.
+    ///
+    /// The event is named for edge isolation because that is what it means, but
+    /// note `detected_by`: the server INFERRED this from silence. An isolated
+    /// edge cannot report its own isolation -- saying so requires the network it
+    /// has just lost -- so this arrives late and from the other side, and any
+    /// judgement made on it inherits that delay.
+    pub fn sweep_unbound_devices(&self) -> Result<usize, crate::database::DatabaseError> {
+        let devices = self.db.unbound_devices_with_liveness()?;
+        if devices.is_empty() {
+            return Ok(0);
+        }
+        let recorded = self.db.latest_device_isolation_records()?;
+        let now = Utc::now();
+        let mut written = 0;
+
+        for (device_id, name, last_seen) in devices {
+            let seconds_since_seen = last_seen.map(|t| (now - t).num_seconds());
+            let previously_silent = recorded
+                .get(&device_id.to_string())
+                .map(|s| s == "silent")
+                .unwrap_or(false);
+
+            let transition = classify_liveness(
+                seconds_since_seen,
+                self.config.module_silence_secs,
+                previously_silent,
+            );
+            let state = match transition {
+                LivenessTransition::NoChange => continue,
+                LivenessTransition::WentSilent => "silent",
+                LivenessTransition::Returned => "returned",
+            };
+
+            let data = serde_json::json!({
+                "device_id": device_id,
+                "device_name": name,
+                "state": state,
+                "seconds_since_seen": seconds_since_seen,
+                "threshold_secs": self.config.module_silence_secs,
+                "detected_by": "server_inference",
+                "note": "inferred from silence; an isolated edge cannot report its own isolation, so this is late and one-sided",
+            });
+            self.write(AuditEventType::EdgeIsolationReported, data);
+            written += 1;
+            info!("Bypass: device {} is {}", name, state);
         }
         Ok(written)
     }

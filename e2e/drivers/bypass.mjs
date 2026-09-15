@@ -181,6 +181,44 @@ main(async () => {
   ).length
   assertEq('bypass/unauthorized-power-reported-once-per-episode', beforeP, afterP)
 
+  // --- an edge going dark is noticed too -----------------------------------
+  // The module sweep only walks tool_modules bindings, which leaves the edge
+  // coordinators themselves uncovered -- an edge is not bound to a tool as a
+  // reader or a plug. This device is registered and bound to nothing, so it is
+  // exactly that case.
+  const edgeInvite = await POST('/api/admin/devices/invite', {
+    token: admin.token,
+    body: { expires_in_hours: 1 },
+  })
+  const edgeReg = await POST('/api/devices/register', {
+    body: {
+      device_code: edgeInvite.json?.data?.device_code,
+      name: `dark-edge-${tag}`,
+      kind: 'edge',
+      mac_address: '02:00:00:00:84:02',
+      software_version: '0.0.0-e2e',
+      platform: 'linux',
+    },
+  })
+  const darkEdgeId = edgeReg.json?.data?.device_id ?? edgeReg.json?.device_id
+  ok('bypass/unbound-edge-registered', !!darkEdgeId, `register -> ${edgeReg.status}`)
+
+  await sleep(5000)
+  const isolation = await auditRows(admin.token, 'edge_isolation_reported')
+  const mineE = isolation.filter((r) => r.event_data?.device_id === darkEdgeId)
+  ok(
+    'bypass/unbound-edge-isolation-is-recorded',
+    mineE.length >= 1,
+    `no edge_isolation_reported row for ${darkEdgeId} among ${isolation.length}`
+  )
+  // The name says "reported" but the server inferred it, and the row has to be
+  // honest about which -- an isolated edge cannot report its own isolation.
+  assertEq(
+    'bypass/isolation-says-it-was-inferred',
+    'server_inference',
+    mineE[0]?.event_data?.detected_by
+  )
+
   // Switching the relay off clears the evidence clock, so the tool stops being
   // a finding rather than staying flagged forever.
   await report({ relay_on: false })

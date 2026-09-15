@@ -4961,6 +4961,39 @@ impl DatabaseManager {
             .collect())
     }
 
+    /// The most recently recorded isolation state per unbound device, from the
+    /// audit trail -- the device-keyed twin of
+    /// [`Self::latest_module_liveness_records`], so the unbound sweep is
+    /// transition-based across a restart for the same reason.
+    pub fn latest_device_isolation_records(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, DatabaseError> {
+        use diesel::sql_types::Text;
+
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            device_id: String,
+            #[diesel(sql_type = Text)]
+            state: String,
+        }
+
+        let mut conn = self.get_connection()?;
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT DISTINCT ON (event_data->>'device_id') \
+                    event_data->>'device_id' AS device_id, \
+                    COALESCE(event_data->>'state', 'silent') AS state \
+             FROM audit_logs \
+             WHERE event_type = 'edge_isolation_reported' \
+               AND event_data->>'device_id' IS NOT NULL \
+             ORDER BY event_data->>'device_id', created_at DESC",
+        )
+        .load(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+
+        Ok(rows.into_iter().map(|r| (r.device_id, r.state)).collect())
+    }
+
     /// The latest reading for one tool, if it has ever reported.
     pub fn get_tool_power_state(
         &self,
@@ -5581,6 +5614,34 @@ impl DatabaseManager {
                 tool_modules::name,
                 tool_modules::role,
                 tool_modules::device_id,
+                space_devices::last_seen_at,
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Devices that are NOT bound to any tool as a module, with their liveness.
+    ///
+    /// The module sweep only sees devices in `tool_modules`, which leaves the
+    /// edge coordinators themselves uncovered -- an edge is not bound to a tool
+    /// as a reader or a plug, so a dark edge would have been invisible to a
+    /// sweep that only walked bindings. These are the rest.
+    pub fn unbound_devices_with_liveness(
+        &self,
+    ) -> Result<Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>, DatabaseError>
+    {
+        use crate::schema::{space_devices, tool_modules};
+        let mut conn = self.get_connection()?;
+        let bound: Vec<uuid::Uuid> = tool_modules::table
+            .select(tool_modules::device_id)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        space_devices::table
+            .filter(space_devices::deleted_at.is_null())
+            .filter(diesel::dsl::not(space_devices::id.eq_any(bound)))
+            .select((
+                space_devices::id,
+                space_devices::name,
                 space_devices::last_seen_at,
             ))
             .load(&mut conn)
