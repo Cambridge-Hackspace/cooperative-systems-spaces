@@ -4913,10 +4913,66 @@ impl DatabaseManager {
                 reported_max_voltage.eq(&reading.reported_max_voltage),
                 reported_amperage_limit.eq(&reading.reported_amperage_limit),
                 last_reported_at.eq(&reading.last_reported_at),
+                last_relay_on.eq(&reading.last_relay_on),
+                power_evidence_since.eq(&reading.power_evidence_since),
                 updated_at.eq(chrono::Utc::now()),
             ))
             .returning(crate::models::ToolPowerState::as_returning())
             .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// When each tool was last reported as drawing unauthorized power.
+    ///
+    /// Compared against `power_evidence_since` by the caller so a report is made
+    /// once per EPISODE rather than once per tool ever: when the tool is
+    /// switched off legitimately the evidence clock resets, and a later bypass
+    /// starts a new run that deserves its own row. Reporting once per tool
+    /// forever would mean the second incident is invisible.
+    pub fn latest_unauthorized_power_reports(
+        &self,
+    ) -> Result<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>, DatabaseError>
+    {
+        use diesel::sql_types::{Text, Timestamptz};
+
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            tool_id: String,
+            #[diesel(sql_type = Timestamptz)]
+            reported_at: chrono::DateTime<chrono::Utc>,
+        }
+
+        let mut conn = self.get_connection()?;
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT DISTINCT ON (event_data->>'tool_id') \
+                    event_data->>'tool_id' AS tool_id, created_at AS reported_at \
+             FROM audit_logs \
+             WHERE event_type = 'unauthorized_power_detected' \
+               AND event_data->>'tool_id' IS NOT NULL \
+             ORDER BY event_data->>'tool_id', created_at DESC",
+        )
+        .load(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.tool_id, r.reported_at))
+            .collect())
+    }
+
+    /// The latest reading for one tool, if it has ever reported.
+    pub fn get_tool_power_state(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Option<crate::models::ToolPowerState>, DatabaseError> {
+        use crate::schema::tool_power_state::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_power_state
+            .filter(tool_id.eq(tid))
+            .select(crate::models::ToolPowerState::as_select())
+            .first(&mut conn)
+            .optional()
             .map_err(DatabaseError::Diesel)
     }
 

@@ -468,3 +468,6 @@ liveness_sweep_secs = 30
 # How long a tool must look powered-without-authorization before it is recorded,
 # so a relay still closed just after a legitimate switch-off is not a bypass.
 unauthorized_power_debounce_secs = 5
+# Draw at or above which a tool counts as running, for the second oracle. Above
+# a trickle so a controller's own standby consumption is not read as use.
+unauthorized_power_draw_amps = 0.5

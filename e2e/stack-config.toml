@@ -375,3 +375,4 @@ session_ttl_secs = 14400
 module_silence_secs = 1
 liveness_sweep_secs = 2
 unauthorized_power_debounce_secs = 1
+unauthorized_power_draw_amps = 0.5

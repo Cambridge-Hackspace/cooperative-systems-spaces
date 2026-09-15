@@ -908,6 +908,11 @@ pub struct BypassConfig {
     /// is not logged as a bypass.
     #[serde(default = "default_unauthorized_power_debounce_secs")]
     pub unauthorized_power_debounce_secs: i64,
+    /// Draw at or above which a tool counts as running, for the second oracle.
+    /// Above a trickle so a controller's own standby consumption is not read as
+    /// the machine being used.
+    #[serde(default = "default_unauthorized_power_draw_amps")]
+    pub unauthorized_power_draw_amps: f64,
 }
 
 fn default_module_silence_secs() -> i64 {
@@ -919,6 +924,9 @@ fn default_liveness_sweep_secs() -> u64 {
 fn default_unauthorized_power_debounce_secs() -> i64 {
     5
 }
+fn default_unauthorized_power_draw_amps() -> f64 {
+    0.5
+}
 
 impl Default for BypassConfig {
     fn default() -> Self {
@@ -926,6 +934,7 @@ impl Default for BypassConfig {
             module_silence_secs: default_module_silence_secs(),
             liveness_sweep_secs: default_liveness_sweep_secs(),
             unauthorized_power_debounce_secs: default_unauthorized_power_debounce_secs(),
+            unauthorized_power_draw_amps: default_unauthorized_power_draw_amps(),
         }
     }
 }

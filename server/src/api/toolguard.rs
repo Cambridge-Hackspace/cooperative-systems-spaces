@@ -111,6 +111,13 @@ pub struct PowerReportRequest {
     /// over-current limit (#44). Locks just this tool -- the circuit is fine.
     #[serde(default)]
     pub self_tripped: Option<bool>,
+    /// The module's own view of its output: is the relay closed? (#84)
+    ///
+    /// Absent means "this module does not report relay state", which is not the
+    /// same as `Some(false)`. The detector treats unknown as unknown rather than
+    /// as off, so a plug that cannot answer does not silently disarm it.
+    #[serde(default)]
+    pub relay_on: Option<bool>,
     #[serde(default)]
     pub api_key: Option<String>,
 }
@@ -681,13 +688,43 @@ async fn power_report(
         .await?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
 
+    // #84: is this tool powered right now, by either oracle? The clock only
+    // restarts when an unbroken run of being powered ends, so a tool that has
+    // been on for an hour does not look freshly switched on at every report.
+    let now = chrono::Utc::now();
+    let draw_threshold = state
+        .config_manager
+        .get_config()
+        .bypass
+        .unauthorized_power_draw_amps;
+    let drawing = {
+        use bigdecimal::ToPrimitive;
+        req.draw_now
+            .as_ref()
+            .and_then(|d| d.to_f64())
+            .map(|a| a >= draw_threshold)
+            .unwrap_or(false)
+    };
+    let powered = req.relay_on.unwrap_or(false) || drawing;
+    let previous = state.db.get_tool_power_state(tool.id)?;
+    let power_evidence_since = if powered {
+        previous
+            .as_ref()
+            .and_then(|p| p.power_evidence_since)
+            .or(Some(now))
+    } else {
+        None
+    };
+
     let reading = crate::models::NewToolPowerState {
         tool_id: tool.id,
         last_draw_amps: req.draw_now,
         last_voltage: req.voltage_now,
         reported_max_voltage: req.max_voltage,
         reported_amperage_limit: req.amperage_limit,
-        last_reported_at: chrono::Utc::now(),
+        last_reported_at: now,
+        last_relay_on: req.relay_on,
+        power_evidence_since,
     };
     state.db.upsert_tool_power_state(&reading)?;
 

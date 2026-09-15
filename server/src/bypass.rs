@@ -17,7 +17,9 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use css_lib::bypass::{classify_liveness, LivenessTransition};
+use css_lib::bypass::{
+    classify_liveness, is_unauthorized_power, LivenessTransition, PowerEvidence,
+};
 use tracing::{error, info};
 
 use crate::config::BypassConfig;
@@ -48,6 +50,9 @@ impl BypassService {
             ticker.tick().await;
             if let Err(e) = self.sweep_once() {
                 error!("Bypass liveness sweep failed: {}", e);
+            }
+            if let Err(e) = self.check_unauthorized_power() {
+                error!("Bypass unauthorized-power check failed: {}", e);
             }
         }
     }
@@ -108,6 +113,98 @@ impl BypassService {
                     LivenessTransition::WentSilent => "went silent",
                     _ => "is reporting again",
                 }
+            );
+        }
+        Ok(written)
+    }
+
+    /// Reconcile what the modules report against what the server authorized.
+    ///
+    /// The server's record of "this tool is allowed to be on" is `tools.status`:
+    /// `tool_on` sets it InUse and `tool_off` sets it Idle, for every tool --
+    /// unlike a usage session, which only exists for metered ones. A tool that
+    /// is powered while the server never turned it on is the physical
+    /// side-button case #80 asks about, and the gap the interlock tiers cannot
+    /// reach.
+    ///
+    /// Two independent oracles, recorded separately because they are different
+    /// claims and an insurer will ask which one fired.
+    pub fn check_unauthorized_power(&self) -> Result<usize, crate::database::DatabaseError> {
+        let readings = self.db.list_tool_power_state()?;
+        if readings.is_empty() {
+            return Ok(0);
+        }
+        let already = self.db.latest_unauthorized_power_reports()?;
+        let now = Utc::now();
+        let mut written = 0;
+
+        for reading in readings {
+            let Some(tool) = self.db.get_tool_by_id(reading.tool_id)? else {
+                continue;
+            };
+            let authorized = matches!(tool.status, crate::models::ToolStatus::InUse);
+
+            let drawing = {
+                use bigdecimal::ToPrimitive;
+                reading
+                    .last_draw_amps
+                    .as_ref()
+                    .and_then(|d| d.to_f64())
+                    .map(|a| a >= self.config.unauthorized_power_draw_amps)
+                    .unwrap_or(false)
+            };
+            let evidence = PowerEvidence {
+                relay_reported_on: reading.last_relay_on.unwrap_or(false),
+                draw_observed: drawing,
+            };
+            let seconds_observed = reading
+                .power_evidence_since
+                .map(|t| (now - t).num_seconds())
+                .unwrap_or(0);
+
+            let finding = is_unauthorized_power(
+                evidence,
+                authorized,
+                seconds_observed,
+                self.config.unauthorized_power_debounce_secs,
+            );
+            // Reported already *for this episode*? The evidence clock restarts
+            // whenever the tool stops being powered, so a report that predates
+            // the current run belongs to an earlier incident and does not
+            // suppress this one.
+            let reported = match (
+                already.get(&reading.tool_id.to_string()),
+                reading.power_evidence_since,
+            ) {
+                (Some(reported_at), Some(since)) => *reported_at >= since,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+
+            // Transition, like the liveness sweep: report the onset, not the
+            // continued existence. A tool left energized overnight is one row.
+            if !finding || reported {
+                continue;
+            }
+
+            let data = serde_json::json!({
+                "tool_id": reading.tool_id,
+                "tool_name": tool.name,
+                "evidence": {
+                    "relay_reported_on": evidence.relay_reported_on,
+                    "draw_observed": evidence.draw_observed,
+                    "last_draw_amps": reading.last_draw_amps.as_ref().map(|d| d.to_string()),
+                    "draw_threshold_amps": self.config.unauthorized_power_draw_amps,
+                },
+                "seconds_observed": seconds_observed,
+                "tool_status": format!("{:?}", tool.status),
+                "note": "the server never authorized this tool on; recorded, not acted on -- draw on a circuit is not proof this tool ran",
+            });
+            self.write(AuditEventType::UnauthorizedPowerDetected, data);
+            written += 1;
+            info!(
+                "Bypass: tool {} powered without authorization (relay={}, draw={})",
+                tool.name, evidence.relay_reported_on, evidence.draw_observed
             );
         }
         Ok(written)
