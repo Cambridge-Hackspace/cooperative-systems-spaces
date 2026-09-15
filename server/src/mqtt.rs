@@ -157,6 +157,19 @@ impl MqttService {
                     // what it cannot do is restore subscriptions, so wait for
                     // the link to come back and then re-subscribe ourselves.
                     warn!("MQTT connection lost, waiting for reconnection...");
+                    // #84: the server losing its broker is one of the four
+                    // triggers. It is recorded here rather than only logged,
+                    // because "was the system able to see anything at that
+                    // hour?" is a question asked afterwards, and a warn! line
+                    // in a rotated log is not an answer.
+                    let lost_at = std::time::Instant::now();
+                    self.inbound.audit(
+                        crate::models::AuditEventType::MqttBrokerLost,
+                        serde_json::json!({
+                            "detected_by": "server",
+                            "note": "device reports cannot arrive while this holds; absence of events in this window is not evidence of absence of activity",
+                        }),
+                    );
                     loop {
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         if !self.client.is_connected() {
@@ -165,6 +178,13 @@ impl MqttService {
                         match self.subscribe_all().await {
                             Ok(()) => {
                                 info!("MQTT reconnected, subscriptions restored");
+                                self.inbound.audit(
+                                    crate::models::AuditEventType::MqttBrokerRestored,
+                                    serde_json::json!({
+                                        "detected_by": "server",
+                                        "outage_secs": lost_at.elapsed().as_secs(),
+                                    }),
+                                );
                                 break;
                             }
                             Err(e) => {

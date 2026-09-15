@@ -169,6 +169,15 @@ pub struct ToolPowerState {
     pub locked_out: bool,
     pub lockout_reason: Option<String>,
     pub locked_out_at: Option<DateTime<Utc>>,
+    /// Module-reported relay state (#84). `None` means the module does not
+    /// report it, which is NOT the same as "off" -- treating unknown as off
+    /// would disarm the detector for every plug that cannot answer.
+    pub last_relay_on: Option<bool>,
+    /// When this tool was first seen powered in an unbroken run (relay closed or
+    /// drawing). The debounce clock for unauthorized-power detection; `None`
+    /// when it is not powered. Persisted rather than held in memory so the
+    /// window survives a restart.
+    pub power_evidence_since: Option<DateTime<Utc>>,
 }
 
 /// One reading, inserted-or-updated (`ON CONFLICT (tool_id)`) so the table keeps
@@ -183,4 +192,9 @@ pub struct NewToolPowerState {
     pub reported_max_voltage: Option<BigDecimal>,
     pub reported_amperage_limit: Option<BigDecimal>,
     pub last_reported_at: DateTime<Utc>,
+    /// See [`ToolPowerState::last_relay_on`].
+    pub last_relay_on: Option<bool>,
+    /// See [`ToolPowerState::power_evidence_since`]. The caller computes this
+    /// from the previous row so an unbroken run keeps its original start.
+    pub power_evidence_since: Option<DateTime<Utc>>,
 }

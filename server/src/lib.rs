@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 pub mod api;
 pub mod auth;
+pub mod bypass;
 pub mod calendar;
 pub mod cmi5;
 pub mod config;

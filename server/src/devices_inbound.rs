@@ -51,6 +51,22 @@ impl DeviceInbound {
         }
     }
 
+    /// Record a system-triggered audit event. Exposed so the MQTT service can
+    /// note broker outages without growing its own database handle.
+    pub fn audit(&self, event: AuditEventType, data: serde_json::Value) {
+        let log = NewAuditLog {
+            event_type: event.as_str().to_string(),
+            user_id: None,
+            actor_id: None,
+            event_data: data,
+            ip_address: None,
+            user_agent: None,
+        };
+        if let Err(e) = self.db.create_audit_log(&log) {
+            error!("Failed to write audit log {}: {}", event.as_str(), e);
+        }
+    }
+
     pub async fn handle_heartbeat(&self, device_id: Uuid) {
         let mut conn = match self.db.pool().get() {
             Ok(c) => c,

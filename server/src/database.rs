@@ -4913,10 +4913,99 @@ impl DatabaseManager {
                 reported_max_voltage.eq(&reading.reported_max_voltage),
                 reported_amperage_limit.eq(&reading.reported_amperage_limit),
                 last_reported_at.eq(&reading.last_reported_at),
+                last_relay_on.eq(&reading.last_relay_on),
+                power_evidence_since.eq(&reading.power_evidence_since),
                 updated_at.eq(chrono::Utc::now()),
             ))
             .returning(crate::models::ToolPowerState::as_returning())
             .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// When each tool was last reported as drawing unauthorized power.
+    ///
+    /// Compared against `power_evidence_since` by the caller so a report is made
+    /// once per EPISODE rather than once per tool ever: when the tool is
+    /// switched off legitimately the evidence clock resets, and a later bypass
+    /// starts a new run that deserves its own row. Reporting once per tool
+    /// forever would mean the second incident is invisible.
+    pub fn latest_unauthorized_power_reports(
+        &self,
+    ) -> Result<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>, DatabaseError>
+    {
+        use diesel::sql_types::{Text, Timestamptz};
+
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            tool_id: String,
+            #[diesel(sql_type = Timestamptz)]
+            reported_at: chrono::DateTime<chrono::Utc>,
+        }
+
+        let mut conn = self.get_connection()?;
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT DISTINCT ON (event_data->>'tool_id') \
+                    event_data->>'tool_id' AS tool_id, created_at AS reported_at \
+             FROM audit_logs \
+             WHERE event_type = 'unauthorized_power_detected' \
+               AND event_data->>'tool_id' IS NOT NULL \
+             ORDER BY event_data->>'tool_id', created_at DESC",
+        )
+        .load(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.tool_id, r.reported_at))
+            .collect())
+    }
+
+    /// The most recently recorded isolation state per unbound device, from the
+    /// audit trail -- the device-keyed twin of
+    /// [`Self::latest_module_liveness_records`], so the unbound sweep is
+    /// transition-based across a restart for the same reason.
+    pub fn latest_device_isolation_records(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, DatabaseError> {
+        use diesel::sql_types::Text;
+
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            device_id: String,
+            #[diesel(sql_type = Text)]
+            state: String,
+        }
+
+        let mut conn = self.get_connection()?;
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT DISTINCT ON (event_data->>'device_id') \
+                    event_data->>'device_id' AS device_id, \
+                    COALESCE(event_data->>'state', 'silent') AS state \
+             FROM audit_logs \
+             WHERE event_type = 'edge_isolation_reported' \
+               AND event_data->>'device_id' IS NOT NULL \
+             ORDER BY event_data->>'device_id', created_at DESC",
+        )
+        .load(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+
+        Ok(rows.into_iter().map(|r| (r.device_id, r.state)).collect())
+    }
+
+    /// The latest reading for one tool, if it has ever reported.
+    pub fn get_tool_power_state(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Option<crate::models::ToolPowerState>, DatabaseError> {
+        use crate::schema::tool_power_state::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_power_state
+            .filter(tool_id.eq(tid))
+            .select(crate::models::ToolPowerState::as_select())
+            .first(&mut conn)
+            .optional()
             .map_err(DatabaseError::Diesel)
     }
 
@@ -5494,6 +5583,108 @@ impl DatabaseManager {
             .select((id, external_id))
             .load::<(uuid::Uuid, Option<String>)>(&mut conn)
             .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every device bound to a tool through `tool_modules`, with the module's
+    /// own id/name and when the device last reported.
+    ///
+    /// A device bound in more than one role appears once per binding: the
+    /// liveness question is asked of the binding, so a reader and a plug that
+    /// happen to be the same physical box are still two things to notice.
+    #[allow(clippy::type_complexity)]
+    pub fn bound_modules_with_liveness(
+        &self,
+    ) -> Result<
+        Vec<(
+            uuid::Uuid,
+            String,
+            String,
+            uuid::Uuid,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )>,
+        DatabaseError,
+    > {
+        use crate::schema::{space_devices, tool_modules};
+        let mut conn = self.get_connection()?;
+        tool_modules::table
+            .inner_join(space_devices::table.on(space_devices::id.eq(tool_modules::device_id)))
+            .filter(space_devices::deleted_at.is_null())
+            .select((
+                tool_modules::id,
+                tool_modules::name,
+                tool_modules::role,
+                tool_modules::device_id,
+                space_devices::last_seen_at,
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Devices that are NOT bound to any tool as a module, with their liveness.
+    ///
+    /// The module sweep only sees devices in `tool_modules`, which leaves the
+    /// edge coordinators themselves uncovered -- an edge is not bound to a tool
+    /// as a reader or a plug, so a dark edge would have been invisible to a
+    /// sweep that only walked bindings. These are the rest.
+    pub fn unbound_devices_with_liveness(
+        &self,
+    ) -> Result<Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>, DatabaseError>
+    {
+        use crate::schema::{space_devices, tool_modules};
+        let mut conn = self.get_connection()?;
+        let bound: Vec<uuid::Uuid> = tool_modules::table
+            .select(tool_modules::device_id)
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        space_devices::table
+            .filter(space_devices::deleted_at.is_null())
+            .filter(diesel::dsl::not(space_devices::id.eq_any(bound)))
+            .select((
+                space_devices::id,
+                space_devices::name,
+                space_devices::last_seen_at,
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The most recently *recorded* liveness state per module, read back out of
+    /// the audit trail.
+    ///
+    /// Deriving this from the log rather than from memory is what makes the
+    /// sweep transition-based across a restart: a server that came back up would
+    /// otherwise have no idea it had already reported a module silent, and would
+    /// say so again on its first sweep. The audit log is the record of truth, so
+    /// it is also the right place to ask what has already been said.
+    pub fn latest_module_liveness_records(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, DatabaseError> {
+        use diesel::sql_types::Text;
+
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            module_id: String,
+            #[diesel(sql_type = Text)]
+            event_type: String,
+        }
+
+        let mut conn = self.get_connection()?;
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT DISTINCT ON (event_data->>'module_id') \
+                    event_data->>'module_id' AS module_id, event_type \
+             FROM audit_logs \
+             WHERE event_type IN ('tool_module_silent', 'tool_module_returned') \
+               AND event_data->>'module_id' IS NOT NULL \
+             ORDER BY event_data->>'module_id', created_at DESC",
+        )
+        .load(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.module_id, r.event_type))
+            .collect())
     }
 
     /// The `module/state` snapshot (#83): every tool that has at least one module
