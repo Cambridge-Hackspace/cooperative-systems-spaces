@@ -33,6 +33,18 @@
             Safety Documentation Acknowledged
           </option>
           <option value="revoked_card_presented">Revoked Card Presented</option>
+          <!--
+            Bypass detection (#84). These are offered as filters rather than left
+            in the unfiltered tail with the facility-configuration records,
+            because "show me every bypass event this year" is the question this
+            whole category exists to answer.
+          -->
+          <option value="unauthorized_power_detected">Unauthorized Power Detected</option>
+          <option value="tool_module_silent">Tool Module Went Silent</option>
+          <option value="tool_module_returned">Tool Module Returned</option>
+          <option value="mqtt_broker_lost">MQTT Broker Lost</option>
+          <option value="mqtt_broker_restored">MQTT Broker Restored</option>
+          <option value="edge_isolation_reported">Edge Reported Isolation</option>
         </select>
       </div>
 

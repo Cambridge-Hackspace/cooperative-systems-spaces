@@ -44,6 +44,7 @@ impl Default for MqttConfig {
     }
 }
 
+pub mod bypass;
 pub mod capabilities;
 pub mod wire;
 

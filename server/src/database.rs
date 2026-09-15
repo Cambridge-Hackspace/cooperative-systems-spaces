@@ -5496,6 +5496,80 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Every device bound to a tool through `tool_modules`, with the module's
+    /// own id/name and when the device last reported.
+    ///
+    /// A device bound in more than one role appears once per binding: the
+    /// liveness question is asked of the binding, so a reader and a plug that
+    /// happen to be the same physical box are still two things to notice.
+    #[allow(clippy::type_complexity)]
+    pub fn bound_modules_with_liveness(
+        &self,
+    ) -> Result<
+        Vec<(
+            uuid::Uuid,
+            String,
+            String,
+            uuid::Uuid,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )>,
+        DatabaseError,
+    > {
+        use crate::schema::{space_devices, tool_modules};
+        let mut conn = self.get_connection()?;
+        tool_modules::table
+            .inner_join(space_devices::table.on(space_devices::id.eq(tool_modules::device_id)))
+            .filter(space_devices::deleted_at.is_null())
+            .select((
+                tool_modules::id,
+                tool_modules::name,
+                tool_modules::role,
+                tool_modules::device_id,
+                space_devices::last_seen_at,
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The most recently *recorded* liveness state per module, read back out of
+    /// the audit trail.
+    ///
+    /// Deriving this from the log rather than from memory is what makes the
+    /// sweep transition-based across a restart: a server that came back up would
+    /// otherwise have no idea it had already reported a module silent, and would
+    /// say so again on its first sweep. The audit log is the record of truth, so
+    /// it is also the right place to ask what has already been said.
+    pub fn latest_module_liveness_records(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, DatabaseError> {
+        use diesel::sql_types::Text;
+
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            module_id: String,
+            #[diesel(sql_type = Text)]
+            event_type: String,
+        }
+
+        let mut conn = self.get_connection()?;
+        let rows: Vec<Row> = diesel::sql_query(
+            "SELECT DISTINCT ON (event_data->>'module_id') \
+                    event_data->>'module_id' AS module_id, event_type \
+             FROM audit_logs \
+             WHERE event_type IN ('tool_module_silent', 'tool_module_returned') \
+               AND event_data->>'module_id' IS NOT NULL \
+             ORDER BY event_data->>'module_id', created_at DESC",
+        )
+        .load(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.module_id, r.event_type))
+            .collect())
+    }
+
     /// The `module/state` snapshot (#83): every tool that has at least one module
     /// bound or one interlock defined, with its wiring and rules.
     ///

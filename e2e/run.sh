@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -1035,6 +1035,36 @@ stage_toolmodules() {
 
   collect_server_log
   emit_junit toolmodules "driver=toolmodules.mjs"
+}
+
+# ===========================================================================
+# bypass -- tool bypass detection (#84)
+# ===========================================================================
+# The liveness sweep notices a bound module that is not reporting and records it
+# ONCE. The "once" is the design: nothing prunes audit_logs, so a detector that
+# logged a level rather than a transition would write a row per sweep forever.
+# The driver lets several sweeps run and asserts the count did not move.
+#
+# It asserts nothing about anything actually being bypassed -- a device that has
+# never sent a heartbeat is silent for an innocent reason, and the detector
+# cannot tell that from a module pulled off the wall. That limit is stated in
+# the event itself rather than hidden.
+stage_bypass() {
+  cases_begin bypass
+  stack_paths
+
+  if ! server_ready; then
+    record_case "bypass/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit bypass
+    return 1
+  fi
+  record_case "bypass/stack-is-up" ok
+
+  run_node bypass.mjs >"${OUT}/logs/bypass.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit bypass "driver=bypass.mjs"
 }
 
 # ===========================================================================

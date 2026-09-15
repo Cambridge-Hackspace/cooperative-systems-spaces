@@ -454,3 +454,17 @@ webhook_secret = ""
 # add them: the group owner, moderators, and any service accounts. Without this
 # the first sync would lock the group's own managers out.
 protected_addresses = []
+
+# Bypass detection (#84): how patient the detector is before it records
+# something. Both values are configuration because the right numbers depend on
+# the link -- a marginal wifi bridge wants a longer silence threshold than a
+# wired edge, and noise here lands in a table nothing prunes.
+[bypass]
+# Silence before a bound module is recorded as such. 90s = three missed 30s
+# MQTT keep-alives, so one dropped packet is not an incident.
+module_silence_secs = 90
+# How often the liveness sweep runs.
+liveness_sweep_secs = 30
+# How long a tool must look powered-without-authorization before it is recorded,
+# so a relay still closed just after a legitimate switch-off is not a bypass.
+unauthorized_power_debounce_secs = 5

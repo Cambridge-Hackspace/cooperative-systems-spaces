@@ -268,6 +268,18 @@ async fn main() -> Result<(), anyhow::Error> {
         app_config.door.enabled
     );
 
+    // Bypass detection (#84): sweep bound module liveness and record the
+    // transitions. Cheap and quiet -- it writes only when a module's reported
+    // state differs from what was last recorded, so a healthy space produces no
+    // rows at all.
+    {
+        let svc =
+            css_server::bypass::BypassService::new(db_manager.clone(), app_config.bypass.clone());
+        let interval = app_config.bypass.liveness_sweep_secs;
+        tokio::spawn(svc.run());
+        info!("Bypass liveness sweep started ({}s interval)", interval);
+    }
+
     // Schedule ticker: re-evaluate every rule's schedule each minute and
     // republish any device whose compiled snapshot changed. Quiet during
     // steady state; fires only on window open/close.

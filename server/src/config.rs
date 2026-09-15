@@ -885,6 +885,51 @@ impl PlaceConfig {
     }
 }
 
+/// Bypass detection (#84): how patient the detector is before it records
+/// something.
+///
+/// Both values are configuration rather than constants because the right
+/// numbers depend on the link. A marginal wifi bridge wants a longer silence
+/// threshold than a wired edge, and a plug whose relay settles slowly wants a
+/// longer debounce -- and getting either wrong produces noise in a table nothing
+/// prunes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BypassConfig {
+    /// How long a bound module may go without reporting before that is recorded.
+    /// Default 90s: three missed 30s MQTT keep-alives, so a single dropped
+    /// packet is not an incident.
+    #[serde(default = "default_module_silence_secs")]
+    pub module_silence_secs: i64,
+    /// How often the liveness sweep runs.
+    #[serde(default = "default_liveness_sweep_secs")]
+    pub liveness_sweep_secs: u64,
+    /// How long a tool must look powered-without-authorization before it is
+    /// recorded, so a relay still closed a moment after a legitimate switch-off
+    /// is not logged as a bypass.
+    #[serde(default = "default_unauthorized_power_debounce_secs")]
+    pub unauthorized_power_debounce_secs: i64,
+}
+
+fn default_module_silence_secs() -> i64 {
+    90
+}
+fn default_liveness_sweep_secs() -> u64 {
+    30
+}
+fn default_unauthorized_power_debounce_secs() -> i64 {
+    5
+}
+
+impl Default for BypassConfig {
+    fn default() -> Self {
+        Self {
+            module_silence_secs: default_module_silence_secs(),
+            liveness_sweep_secs: default_liveness_sweep_secs(),
+            unauthorized_power_debounce_secs: default_unauthorized_power_debounce_secs(),
+        }
+    }
+}
+
 /// Physical power topology module (#41): circuits, outlets, receptacles, and a
 /// tool's receptacle assignment. When disabled, the power admin/UI is hidden.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1264,6 +1309,9 @@ pub struct AppConfig {
     /// Physical power topology module (#41)
     #[serde(default)]
     pub power: PowerConfig,
+    /// Bypass detection thresholds (#84)
+    #[serde(default)]
+    pub bypass: BypassConfig,
     /// cmi5 training-module configuration
     #[serde(default)]
     pub cmi5: Cmi5Config,
@@ -1301,6 +1349,7 @@ impl Default for AppConfig {
             door: DoorConfig::default(),
             place: PlaceConfig::default(),
             power: PowerConfig::default(),
+            bypass: BypassConfig::default(),
             cmi5: Cmi5Config::default(),
             groupsio: GroupsioConfig::default(),
             membership: MembershipConfig::default(),
