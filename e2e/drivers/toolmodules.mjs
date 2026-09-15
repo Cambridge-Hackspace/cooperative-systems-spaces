@@ -266,11 +266,11 @@ main(async () => {
 
     // --- the fail-safe gap is reported, not assumed away --------------------
     const snap2 = await GET('/api/admin/tool-modules/state', T)
-    const wiredEntry = (snap2.json?.tools ?? []).find((t) => t.tool_id === wiredToolId)
+    const wiredEntry = (snap2.json?.data?.tools ?? []).find((t) => t.tool_id === wiredToolId)
     assertEq('toolmodules/capable-tool-fails-safe', true, wiredEntry?.power_fails_safe)
     // The first tool's plug declared no capabilities at all, so it is not
     // claimed to fail safe on the strength of nothing.
-    const plainEntry = (snap2.json?.tools ?? []).find((t) => t.tool_id === toolId)
+    const plainEntry = (snap2.json?.data?.tools ?? []).find((t) => t.tool_id === toolId)
     ok('toolmodules/undeclared-plug-is-not-claimed-fail-safe',
       wiredEntry?.power_fails_safe === true && plainEntry !== undefined,
       'both tools should appear in the snapshot with an explicit fail-safe verdict')
@@ -279,7 +279,7 @@ main(async () => {
   // --- the snapshot the edge coordinates from -------------------------------
   const snap = await GET('/api/admin/tool-modules/state', T)
   assertEq('toolmodules/state', 200, snap.status)
-  const entry = (snap.json?.tools ?? []).find((t) => t.tool_id === toolId)
+  const entry = (snap.json?.data?.tools ?? []).find((t) => t.tool_id === toolId)
   ok('toolmodules/state-has-tool', !!entry,
     `wired tool absent from snapshot: ${snap.text.slice(0, 300)}`)
   ok('toolmodules/state-has-trip',

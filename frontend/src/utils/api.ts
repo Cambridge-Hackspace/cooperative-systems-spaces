@@ -456,6 +456,30 @@ export const placesApi = {
 
 // Power topology API (#42): circuits, outlets, receptacles, tool assignment.
 // Guarded so every method resolves to an ApiResponse shape rather than throwing.
+export const toolModulesApi = withErrorGuard({
+  listModules() {
+    return apiClient.get<import('@/types').ToolModule[]>('/admin/tool-modules')
+  },
+  createModule(body: import('@/types').CreateToolModuleRequest) {
+    return apiClient.post<import('@/types').ToolModule>('/admin/tool-modules', body)
+  },
+  removeModule(id: string) {
+    return apiClient.delete<{ deleted: boolean }>(`/admin/tool-modules/${id}`)
+  },
+  state() {
+    return apiClient.get<import('@/types').ToolModuleStateSnapshot>('/admin/tool-modules/state')
+  },
+  listInterlocks() {
+    return apiClient.get<import('@/types').ToolInterlock[]>('/admin/tool-interlocks')
+  },
+  createInterlock(body: import('@/types').CreateToolInterlockRequest) {
+    return apiClient.post<import('@/types').ToolInterlock>('/admin/tool-interlocks', body)
+  },
+  removeInterlock(id: string) {
+    return apiClient.delete<{ deleted: boolean }>(`/admin/tool-interlocks/${id}`)
+  },
+})
+
 export const powerApi = withErrorGuard({
   config() {
     return apiClient.get<import('@/types').PowerConfig>('/admin/power/config')

@@ -184,11 +184,17 @@ async fn delete_module(
 }
 
 /// The snapshot the edge coordinates from, as the admin surface sees it.
+///
+/// Enveloped in `ApiResponse` like the rest of the admin surface. The
+/// device-facing twin in `toolguard` stays bare, because the edge parses the
+/// payload itself and should not have to know about this envelope.
 async fn get_module_state(
     State(state): State<AppState>,
     _admin: AdminUser,
-) -> Result<Json<css_lib::wire::ToolModuleStatePayload>, ApiError> {
-    Ok(Json(state.db.module_state_snapshot()?))
+) -> Result<Json<ApiResponse<css_lib::wire::ToolModuleStatePayload>>, ApiError> {
+    Ok(Json(ApiResponse::success(
+        state.db.module_state_snapshot()?,
+    )))
 }
 
 // ---------------------------------------------------------------------------
