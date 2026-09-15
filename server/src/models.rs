@@ -11,6 +11,7 @@ mod power;
 mod profile_config;
 mod schedules;
 mod tool_billing;
+mod tool_modules;
 mod tool_tiers;
 mod tools;
 // `pub`, not `pub(crate)`: these types appear in the public signatures of
@@ -34,6 +35,7 @@ pub use power::*;
 pub use profile_config::*;
 pub use schedules::*;
 pub use tool_billing::*;
+pub use tool_modules::*;
 pub use tool_tiers::*;
 pub use tools::*;
 pub use training::*;
@@ -326,6 +328,11 @@ pub enum AuditEventType {
     PlaceUpdated,
     PlaceMoved,
     PlaceDeleted,
+    // Tool module bindings + safety interlocks (#83)
+    ToolModuleCreated,
+    ToolModuleDeleted,
+    ToolInterlockCreated,
+    ToolInterlockDeleted,
     // Power topology events (#42)
     PowerCircuitCreated,
     PowerCircuitUpdated,
@@ -534,6 +541,10 @@ impl AuditEventType {
             Self::PlaceUpdated => "place_updated",
             Self::PlaceMoved => "place_moved",
             Self::PlaceDeleted => "place_deleted",
+            Self::ToolModuleCreated => "tool_module_created",
+            Self::ToolModuleDeleted => "tool_module_deleted",
+            Self::ToolInterlockCreated => "tool_interlock_created",
+            Self::ToolInterlockDeleted => "tool_interlock_deleted",
             Self::PowerCircuitCreated => "power_circuit_created",
             Self::PowerCircuitUpdated => "power_circuit_updated",
             Self::PowerCircuitDeleted => "power_circuit_deleted",
@@ -668,6 +679,10 @@ impl AuditEventType {
             PlaceUpdated,
             PlaceMoved,
             PlaceDeleted,
+            ToolModuleCreated,
+            ToolModuleDeleted,
+            ToolInterlockCreated,
+            ToolInterlockDeleted,
             PowerCircuitCreated,
             PowerCircuitUpdated,
             PowerCircuitDeleted,

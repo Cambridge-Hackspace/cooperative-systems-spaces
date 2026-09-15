@@ -154,6 +154,7 @@ async fn main() -> Result<()> {
 
             // Shared power lockout + local fast-trip state (#48).
             let power_state = Arc::new(css_edge::power::PowerState::new());
+            let module_state = Arc::new(css_edge::modules::ModuleState::new());
 
             // Shared door cache + cross-client bridges. `doors_unlock_*` flows
             // remote → local (server-issued unlocks → local relay).
@@ -340,6 +341,7 @@ async fn main() -> Result<()> {
                 toolguard_state: Arc::clone(&toolguard_state),
                 doors_state: Arc::clone(&doors_state),
                 power_state: Arc::clone(&power_state),
+                module_state: Arc::clone(&module_state),
                 doors_unlock_tx: doors_unlock_tx.clone(),
             });
 

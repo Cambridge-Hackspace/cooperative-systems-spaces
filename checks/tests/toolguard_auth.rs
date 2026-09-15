@@ -42,6 +42,9 @@ const EXPECTED: &[(&str, Auth)] = &[
     // (device-authed, like sync) and reports an edge_fast_trip.
     ("power_state", Auth::Required),
     ("power_trip", Auth::Required),
+    // #83 tool module bindings + interlocks: the edge polls the wiring snapshot
+    // it coordinates from, device-authed exactly like power_state.
+    ("module_state", Auth::Required),
 ];
 
 #[derive(PartialEq, Eq, Debug)]

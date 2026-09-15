@@ -93,6 +93,11 @@ const BUDGET: &[(&str, usize)] = &[
     ("profiles.rs", 4),
     ("responses.rs", 0),
     ("schedules.rs", 3),
+    // 0. Every handler propagates with `?`: a missing tool/device on a binding
+    // is a 400 naming the field, an unknown id on a delete is a 404 decided from
+    // the row count, and a bad vocabulary value is a 400 rather than a 500 from
+    // the column CHECK.
+    ("tool_modules.rs", 0),
     // 4: the `service()` helper (as membership.rs) plus three genuine 500s that
     // are not DatabaseErrors -- an unparseable `membership.due_amount` (a config
     // fault, validated at boot) and two upstream Stripe failures wrapping a

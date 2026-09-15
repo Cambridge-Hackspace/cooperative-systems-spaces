@@ -231,6 +231,9 @@ fn guard_of(src: &str, handler: &str) -> String {
         "power_report",
         "power_state",
         "power_trip",
+        // #83: the module bindings + interlock snapshot, authenticated by the
+        // same `authorize_toolguard` call as its power-state sibling.
+        "module_state",
     ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();

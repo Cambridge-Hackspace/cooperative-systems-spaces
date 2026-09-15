@@ -9,12 +9,13 @@
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use css_lib::wire::{kinds, PowerStatePayload};
+use css_lib::wire::{kinds, PowerStatePayload, ToolModuleStatePayload};
 use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::doors::{DoorStateSnapshot, DoorsState, UnlockCommand};
+use crate::modules::ModuleState;
 use crate::mqtt::DoorsUnlockSender;
 use crate::power::PowerState;
 use crate::toolguard::ToolGuardState;
@@ -30,6 +31,7 @@ pub struct EdgeInbound {
     pub toolguard_state: Arc<ToolGuardState>,
     pub doors_state: Arc<DoorsState>,
     pub power_state: Arc<PowerState>,
+    pub module_state: Arc<ModuleState>,
     pub doors_unlock_tx: DoorsUnlockSender,
 }
 
@@ -60,6 +62,19 @@ impl EdgeInbound {
                 }
                 Err(e) => warn!("Failed to parse power/state payload: {}", e),
             },
+            kinds::MODULE_STATE => {
+                match serde_json::from_slice::<ToolModuleStatePayload>(payload) {
+                    Ok(snapshot) => {
+                        let wired = snapshot.tools.len();
+                        self.module_state.apply_state(snapshot);
+                        info!(
+                            "Tool module state updated via inbound transport ({} wired tool(s))",
+                            wired
+                        );
+                    }
+                    Err(e) => warn!("Failed to parse module/state payload: {}", e),
+                }
+            }
             kinds::DOORS_STATE => match serde_json::from_slice::<DoorStateSnapshot>(payload) {
                 Ok(snapshot) => {
                     let count = snapshot.doors.len();

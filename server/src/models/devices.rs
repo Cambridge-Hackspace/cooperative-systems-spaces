@@ -5,7 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use uuid::Uuid;
 
-/// Device kind enum - Edge or Kiosk
+/// Device kind: the coordinator/display roles, plus the tool access modules.
+///
+/// `Edge` is the local coordinator and `Kiosk` a display. `CardReader`,
+/// `PowerController` and `Sensor` are tool access modules (#83) -- separate
+/// physical units bound to a tool through `tool_modules`, rather than
+/// peripherals of whichever edge happens to host them.
 #[derive(
     Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
 )]
@@ -13,6 +18,9 @@ use uuid::Uuid;
 pub enum SpaceDeviceKind {
     Edge,
     Kiosk,
+    CardReader,
+    PowerController,
+    Sensor,
 }
 
 // Implement Diesel traits for SpaceDeviceKind enum
@@ -24,6 +32,9 @@ impl diesel::serialize::ToSql<sql_types::SpaceDeviceKind, diesel::pg::Pg> for Sp
         match self {
             SpaceDeviceKind::Edge => out.write_all(b"edge")?,
             SpaceDeviceKind::Kiosk => out.write_all(b"kiosk")?,
+            SpaceDeviceKind::CardReader => out.write_all(b"card_reader")?,
+            SpaceDeviceKind::PowerController => out.write_all(b"power_controller")?,
+            SpaceDeviceKind::Sensor => out.write_all(b"sensor")?,
         }
         Ok(diesel::serialize::IsNull::No)
     }
@@ -34,6 +45,9 @@ impl diesel::deserialize::FromSql<sql_types::SpaceDeviceKind, diesel::pg::Pg> fo
         match bytes.as_bytes() {
             b"edge" => Ok(SpaceDeviceKind::Edge),
             b"kiosk" => Ok(SpaceDeviceKind::Kiosk),
+            b"card_reader" => Ok(SpaceDeviceKind::CardReader),
+            b"power_controller" => Ok(SpaceDeviceKind::PowerController),
+            b"sensor" => Ok(SpaceDeviceKind::Sensor),
             _ => Err("Unrecognized enum variant".into()),
         }
     }

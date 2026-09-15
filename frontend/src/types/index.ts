@@ -710,3 +710,91 @@ export interface UpdateRoleRequest {
   description?: string
   level?: number
 }
+
+// ── Tool module bindings + safety interlocks (#83) ───────────────────────────
+
+/** A device filling one role in a tool's access chain. */
+export interface ToolModule {
+  id: string
+  tool_id: string
+  device_id: string
+  /** `reader` | `power` | `sensor` */
+  role: string
+  name: string
+  params: Record<string, unknown>
+  /** `fail_off` | `hold_last` | `ignore` */
+  on_disconnect: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateToolModuleRequest {
+  tool_id: string
+  device_id: string
+  role: string
+  name: string
+  params?: Record<string, unknown>
+  on_disconnect?: string
+}
+
+/** A configured interlock: an AND-ed start precondition or an OR-ed trip. */
+export interface ToolInterlock {
+  id: string
+  tool_id: string
+  /** `start_gate` | `trip` */
+  kind: string
+  condition: string
+  source_module_id: string | null
+  debounce_ms: number
+  latch: boolean
+  /** `re_auth` | `operator_ack` | `auto` */
+  reset: string
+  /** `firmware` | `edge` | `server` */
+  enforcement: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateToolInterlockRequest {
+  tool_id: string
+  kind: string
+  condition: string
+  source_module_id?: string | null
+  debounce_ms?: number
+  latch?: boolean
+  reset?: string
+  enforcement?: string
+  enabled?: boolean
+}
+
+/** One tool's wiring as the edge receives it. */
+export interface ToolModuleStateTool {
+  tool_id: string
+  external_id: string | null
+  modules: Array<{
+    id: string
+    device_id: string
+    role: string
+    name: string
+    params: Record<string, unknown>
+    on_disconnect: string
+  }>
+  interlocks: Array<{
+    id: string
+    kind: string
+    condition: string
+    source_module_id: string | null
+    debounce_ms: number
+    latch: boolean
+    reset: string
+    enforcement: string
+  }>
+  /** Whether the modules that switch this tool can reach a safe state unaided. */
+  power_fails_safe: boolean
+}
+
+export interface ToolModuleStateSnapshot {
+  as_of: string
+  tools: ToolModuleStateTool[]
+}

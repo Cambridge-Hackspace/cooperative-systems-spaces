@@ -64,6 +64,14 @@ pub fn admin_routes() -> Router<AppState> {
         .nest("/groupsio", crate::api::groupsio::admin_routes())
         .nest("/membership", crate::api::membership::admin_routes())
         .nest("/tool-billing", crate::api::tool_billing::admin_routes())
+        .nest(
+            "/tool-modules",
+            crate::api::tool_modules::admin_module_routes(),
+        )
+        .nest(
+            "/tool-interlocks",
+            crate::api::tool_modules::admin_interlock_routes(),
+        )
         .nest("/tool-tiers", crate::api::tool_tiers::admin_routes())
         .nest("/schedules", crate::api::schedules::admin_routes())
         .nest("/home-links", crate::api::home_links::admin_routes())

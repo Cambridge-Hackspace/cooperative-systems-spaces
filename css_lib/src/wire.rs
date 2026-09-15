@@ -46,6 +46,78 @@ pub mod kinds {
     /// and the circuit topology + amperage limits the edge needs to aggregate
     /// draw locally and fast-trip.
     pub const POWER_STATE: &str = "power/state";
+    /// Tool module bindings + interlock rules (#83). Carries, per tool, which
+    /// devices fill its reader/power/sensor roles and the configured start-gates
+    /// and trips. Sent as its own snapshot rather than folded into
+    /// `toolguard/state`: that payload is duplicated across five crates (see
+    /// `checks/tests/toolguard_wire_types.rs`), and module wiring changes on a
+    /// different cadence than the authorization list.
+    pub const MODULE_STATE: &str = "module/state";
+}
+
+/// The `module/state` snapshot the server pushes to the edge (#83).
+///
+/// Ids are stringified so this shared type needs no uuid dependency, matching
+/// [`PowerStatePayload`]. The edge matches tool ids the same way it matches the
+/// allow-list (external_id, then UUID string).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolModuleStatePayload {
+    /// When the server built this snapshot (RFC 3339). Advisory only.
+    pub as_of: String,
+    /// Every tool that has at least one module bound or one interlock defined.
+    pub tools: Vec<ToolModuleTool>,
+}
+
+/// One tool's wiring: the modules bound to it and the rules that gate it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolModuleTool {
+    pub tool_id: String,
+    pub external_id: Option<String>,
+    pub modules: Vec<ToolModuleBinding>,
+    pub interlocks: Vec<ToolInterlockRule>,
+    /// Whether every power module bound to this tool reaches a safe state on its
+    /// own when it stops hearing from the coordinator (#83).
+    ///
+    /// False is not an error: a tool switched by an unmodifiable plug that holds
+    /// its last relay state genuinely cannot, and the coordinator's cut is then a
+    /// mitigation rather than an interlock. It is carried here so that gap is
+    /// visible to the edge and the admin screen instead of being assumed away.
+    #[serde(default)]
+    pub power_fails_safe: bool,
+}
+
+/// A device filling one role in a tool's access chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolModuleBinding {
+    pub id: String,
+    pub device_id: String,
+    /// `reader` | `power` | `sensor`.
+    pub role: String,
+    pub name: String,
+    /// Role-specific configuration (gpio pin, receptacle id, sensor input, ...).
+    pub params: serde_json::Value,
+    /// `fail_off` | `hold_last` | `ignore` -- what this module does when its link
+    /// drops. Deny-biased default is `fail_off` for safety-critical power.
+    pub on_disconnect: String,
+}
+
+/// One configured interlock: an AND-ed start precondition or an OR-ed trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInterlockRule {
+    pub id: String,
+    /// `start_gate` | `trip`.
+    pub kind: String,
+    /// One of the enumerated conditions (`door_open`, `estop`, ...).
+    pub condition: String,
+    /// The sensor module supplying the condition, when it comes from one.
+    pub source_module_id: Option<String>,
+    pub debounce_ms: i32,
+    /// A tripped cut stays off until reset. Defaults true server-side.
+    pub latch: bool,
+    /// `re_auth` | `operator_ack` | `auto`.
+    pub reset: String,
+    /// `firmware` | `edge` | `server` -- where the trip actually executes.
+    pub enforcement: String,
 }
 
 /// The `power/state` snapshot the server pushes to the edge (#48). All ids are
