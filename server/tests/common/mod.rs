@@ -93,6 +93,13 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/membership/users/00000000-0000-4000-8000-000000000001/next-due", Guard::Admin), // membership::admin_set_next_due
     R("GET", "/api/admin/tool-billing/status", Guard::Admin), // tool_billing::admin_status
     R("GET", "/api/admin/tool-billing/users/00000000-0000-4000-8000-000000000001/sessions", Guard::Admin), // tool_billing::admin_user_sessions
+    R("GET", "/api/admin/tool-modules", Guard::Admin), // tool_modules::list_modules
+    R("POST", "/api/admin/tool-modules", Guard::Admin), // tool_modules::create_module
+    R("GET", "/api/admin/tool-modules/state", Guard::Admin), // tool_modules::get_module_state
+    R("DELETE", "/api/admin/tool-modules/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_modules::delete_module
+    R("GET", "/api/admin/tool-interlocks", Guard::Admin), // tool_modules::list_interlocks
+    R("POST", "/api/admin/tool-interlocks", Guard::Admin), // tool_modules::create_interlock
+    R("DELETE", "/api/admin/tool-interlocks/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_modules::delete_interlock
     R("DELETE", "/api/admin/tool-tiers/tiers/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_tiers::delete_tier
     R("PATCH", "/api/admin/tool-tiers/tiers/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_tiers::update_tier
     R("GET", "/api/admin/tool-tiers/tools/00000000-0000-4000-8000-000000000001/assignments", Guard::Admin), // tool_tiers::list_assignments
@@ -238,6 +245,7 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/toolguard", Guard::Public), // toolguard::api_status
     R("POST", "/api/toolguard/boot-reset", Guard::InlineAuth), // toolguard::boot_reset
     R("POST", "/api/toolguard/power-report", Guard::InlineAuth), // toolguard::power_report
+    R("GET", "/api/toolguard/module-state", Guard::InlineAuth), // toolguard::module_state
     R("GET", "/api/toolguard/power-state", Guard::InlineAuth), // toolguard::power_state
     R("POST", "/api/toolguard/power-trip", Guard::InlineAuth), // toolguard::power_trip
     R("GET", "/api/toolguard/sync", Guard::InlineAuth), // toolguard::sync

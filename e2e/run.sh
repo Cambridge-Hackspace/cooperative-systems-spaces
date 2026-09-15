@@ -43,8 +43,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
 
 # Stages that exist and are deliberately NOT part of `all` or `default`.
 #
@@ -1003,6 +1003,38 @@ stage_circuits() {
 
   collect_server_log
   emit_junit circuits "driver=circuits.mjs"
+}
+
+# ===========================================================================
+# toolmodules -- tool module bindings and safety interlocks (#83)
+# ===========================================================================
+# The reader, the power controller and the safety sensor are separate devices
+# bound to a tool in a role, and the interlocks that gate or cut it are data.
+# This stage exercises that authoring surface against a real stack: the module
+# device kinds register, the vocabularies are refused at the API rather than by
+# a column CHECK, an interlock cannot cite a sensor belonging to another tool,
+# and the snapshot the edge coordinates from reflects exactly what was authored
+# (a disabled rule is not shipped).
+#
+# It asserts nothing about hardware being switched. The coordinator that acts on
+# this snapshot, and the lease that makes it fail safe, are a later increment;
+# the firmware tier is outside this repository entirely.
+stage_toolmodules() {
+  cases_begin toolmodules
+  stack_paths
+
+  if ! server_ready; then
+    record_case "toolmodules/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit toolmodules
+    return 1
+  fi
+  record_case "toolmodules/stack-is-up" ok
+
+  run_node toolmodules.mjs >"${OUT}/logs/toolmodules.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit toolmodules "driver=toolmodules.mjs"
 }
 
 # ===========================================================================

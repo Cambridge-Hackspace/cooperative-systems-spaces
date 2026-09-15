@@ -5376,6 +5376,198 @@ impl DatabaseManager {
     }
 }
 
+// ── Tool module bindings + interlocks (#83) ───────────────────────────────────
+
+impl DatabaseManager {
+    pub fn list_tool_modules(&self) -> Result<Vec<crate::models::ToolModule>, DatabaseError> {
+        use crate::schema::tool_modules::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_modules
+            .order((tool_id.asc(), role.asc(), name.asc()))
+            .select(crate::models::ToolModule::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_tool_modules_for_tool(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::ToolModule>, DatabaseError> {
+        use crate::schema::tool_modules::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_modules
+            .filter(tool_id.eq(tid))
+            .order((role.asc(), name.asc()))
+            .select(crate::models::ToolModule::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_tool_module(
+        &self,
+        new_module: &crate::models::NewToolModule,
+    ) -> Result<crate::models::ToolModule, DatabaseError> {
+        use crate::schema::tool_modules;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_modules::table)
+            .values(new_module)
+            .returning(crate::models::ToolModule::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Row count, not `()`: the caller answers 404 rather than 200 for an id
+    /// that matched nothing (see `checks/tests/writes_report_what_they_changed.rs`).
+    pub fn delete_tool_module(&self, mid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::tool_modules::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(tool_modules.find(mid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_tool_interlocks(&self) -> Result<Vec<crate::models::ToolInterlock>, DatabaseError> {
+        use crate::schema::tool_interlocks::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_interlocks
+            .order((tool_id.asc(), kind.asc(), condition.asc()))
+            .select(crate::models::ToolInterlock::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn list_tool_interlocks_for_tool(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::ToolInterlock>, DatabaseError> {
+        use crate::schema::tool_interlocks::dsl::*;
+        let mut conn = self.get_connection()?;
+        tool_interlocks
+            .filter(tool_id.eq(tid))
+            .order((kind.asc(), condition.asc()))
+            .select(crate::models::ToolInterlock::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn create_tool_interlock(
+        &self,
+        new_interlock: &crate::models::NewToolInterlock,
+    ) -> Result<crate::models::ToolInterlock, DatabaseError> {
+        use crate::schema::tool_interlocks;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(tool_interlocks::table)
+            .values(new_interlock)
+            .returning(crate::models::ToolInterlock::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Row count; see `delete_tool_module`.
+    pub fn delete_tool_interlock(&self, iid: uuid::Uuid) -> Result<usize, DatabaseError> {
+        use crate::schema::tool_interlocks::dsl::*;
+        let mut conn = self.get_connection()?;
+        diesel::delete(tool_interlocks.find(iid))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Whether a (not soft-deleted) device exists, for validating a binding's
+    /// `device_id` before the insert turns a bad id into a foreign-key 500.
+    pub fn space_device_exists(&self, did: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::space_devices::dsl::*;
+        let mut conn = self.get_connection()?;
+        let found: i64 = space_devices
+            .filter(id.eq(did))
+            .filter(deleted_at.is_null())
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(found > 0)
+    }
+
+    /// Every tool's `external_id`, for stringifying the module-state snapshot.
+    pub fn tool_external_ids(&self) -> Result<Vec<(uuid::Uuid, Option<String>)>, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+        let mut conn = self.get_connection()?;
+        tools
+            .select((id, external_id))
+            .load::<(uuid::Uuid, Option<String>)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The `module/state` snapshot (#83): every tool that has at least one module
+    /// bound or one interlock defined, with its wiring and rules.
+    ///
+    /// Only wired tools appear. A tool with no bindings has nothing for the edge
+    /// to coordinate, and sending an empty entry for every tool in the space
+    /// would make the common case (few wired tools) pay for the rare one.
+    pub fn module_state_snapshot(
+        &self,
+    ) -> Result<css_lib::wire::ToolModuleStatePayload, DatabaseError> {
+        use std::collections::BTreeMap;
+
+        let modules = self.list_tool_modules()?;
+        let interlocks = self.list_tool_interlocks()?;
+        let external: std::collections::HashMap<uuid::Uuid, Option<String>> =
+            self.tool_external_ids()?.into_iter().collect();
+
+        // BTreeMap so the snapshot is ordered and therefore diffable between
+        // builds; an unordered snapshot would churn on every rebuild.
+        let mut by_tool: BTreeMap<uuid::Uuid, css_lib::wire::ToolModuleTool> = BTreeMap::new();
+
+        for m in modules {
+            by_tool
+                .entry(m.tool_id)
+                .or_insert_with(|| css_lib::wire::ToolModuleTool {
+                    tool_id: m.tool_id.to_string(),
+                    external_id: external.get(&m.tool_id).cloned().flatten(),
+                    modules: Vec::new(),
+                    interlocks: Vec::new(),
+                })
+                .modules
+                .push(css_lib::wire::ToolModuleBinding {
+                    id: m.id.to_string(),
+                    device_id: m.device_id.to_string(),
+                    role: m.role,
+                    name: m.name,
+                    params: m.params,
+                    on_disconnect: m.on_disconnect,
+                });
+        }
+
+        // A disabled rule is not enforced, so it is not sent. The edge decides
+        // from what it holds; shipping a rule it must remember not to apply is a
+        // second place for the enabled/disabled decision to be got wrong.
+        for i in interlocks.into_iter().filter(|i| i.enabled) {
+            by_tool
+                .entry(i.tool_id)
+                .or_insert_with(|| css_lib::wire::ToolModuleTool {
+                    tool_id: i.tool_id.to_string(),
+                    external_id: external.get(&i.tool_id).cloned().flatten(),
+                    modules: Vec::new(),
+                    interlocks: Vec::new(),
+                })
+                .interlocks
+                .push(css_lib::wire::ToolInterlockRule {
+                    id: i.id.to_string(),
+                    kind: i.kind,
+                    condition: i.condition,
+                    source_module_id: i.source_module_id.map(|s| s.to_string()),
+                    debounce_ms: i.debounce_ms,
+                    latch: i.latch,
+                    reset: i.reset,
+                    enforcement: i.enforcement,
+                });
+        }
+
+        Ok(css_lib::wire::ToolModuleStatePayload {
+            as_of: chrono::Utc::now().to_rfc3339(),
+            tools: by_tool.into_values().collect(),
+        })
+    }
+}
+
 // ── Power aggregation: the pure arithmetic behind the lockout (#44/#53) ───────
 //
 // These are the safety calculation split out from their DB methods so they can

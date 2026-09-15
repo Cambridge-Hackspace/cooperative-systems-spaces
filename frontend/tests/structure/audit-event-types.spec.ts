@@ -129,7 +129,13 @@ describe('the audit filter against the server enum', () => {
       // and user_role_assigned / _unassigned. These are surfaced on the RBAC
       // admin screen itself; in the general audit filter they join the
       // unfiltered admin-lifecycle set, like the facility/billing records above.
-    ).toBe(101)
+      // 101 -> 105: tool module wiring (#83) added tool_module_created /
+      // _deleted and tool_interlock_created / _deleted. Facility-configuration
+      // records -- who bound a reader to a plug, who authored or removed a
+      // safety interlock -- so they join the unfiltered set alongside the power
+      // topology events. They are still recorded and readable; what they do not
+      // get is a curated filter option.
+    ).toBe(105)
   })
 
   // Named separately because these are the ones that matter in an

@@ -170,6 +170,7 @@ pub fn toolguard_routes() -> Router<AppState> {
         .route("/boot-reset", post(boot_reset))
         .route("/power-report", post(power_report))
         .route("/power-state", get(power_state))
+        .route("/module-state", get(module_state))
         .route("/power-trip", post(power_trip))
 }
 
@@ -780,6 +781,19 @@ async fn power_state(
     Ok(Json(payload))
 }
 
+/// GET /api/toolguard/module-state - the module bindings + interlock snapshot
+/// the edge coordinates from (#83). Authenticated like the other controller
+/// endpoints; the poll fallback for the MQTT `module/state` push.
+async fn module_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PowerStateQuery>,
+) -> Result<Json<css_lib::wire::ToolModuleStatePayload>, ApiError> {
+    authorize_toolguard(&state, &headers, q.api_key.as_deref(), "").await?;
+    let payload = state.db.module_state_snapshot().map_err(ApiError::from)?;
+    Ok(Json(payload))
+}
+
 /// A circuit overload the edge detected locally (#48). Fields optional so an
 /// unauthenticated request is refused 401 before a missing field is a 422.
 #[derive(Debug, Deserialize)]
@@ -870,6 +884,50 @@ pub async fn broadcast_power_state(state: &AppState) {
         ) {
             tracing::warn!(
                 "Failed to publish power-state to device {}: {}",
+                device_id,
+                e
+            );
+        }
+    }
+}
+
+/// Push the `module/state` snapshot (#83) to every approved device, mirroring
+/// [`broadcast_power_state`]. A device that does not yet understand the topic
+/// ignores it, which is what makes adding this safe ahead of the edge-side
+/// coordinator.
+pub async fn broadcast_module_state(state: &AppState) {
+    let Some(mqtt_service) = state.mqtt_service.clone() else {
+        return;
+    };
+    let payload = match state.db.module_state_snapshot() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Failed to build module-state snapshot: {}", e);
+            return;
+        }
+    };
+    let bytes = match serde_json::to_vec(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("Failed to serialize module-state payload: {}", e);
+            return;
+        }
+    };
+    let devices = match state.db.list_approved_devices() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to list devices for module-state broadcast: {}", e);
+            return;
+        }
+    };
+    for device_id in devices {
+        if let Err(e) = mqtt_service.publish_to_device(
+            device_id,
+            css_lib::wire::kinds::MODULE_STATE,
+            bytes.clone(),
+        ) {
+            tracing::warn!(
+                "Failed to publish module-state to device {}: {}",
                 device_id,
                 e
             );
