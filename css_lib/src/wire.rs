@@ -75,6 +75,15 @@ pub struct ToolModuleTool {
     pub external_id: Option<String>,
     pub modules: Vec<ToolModuleBinding>,
     pub interlocks: Vec<ToolInterlockRule>,
+    /// Whether every power module bound to this tool reaches a safe state on its
+    /// own when it stops hearing from the coordinator (#83).
+    ///
+    /// False is not an error: a tool switched by an unmodifiable plug that holds
+    /// its last relay state genuinely cannot, and the coordinator's cut is then a
+    /// mitigation rather than an interlock. It is carried here so that gap is
+    /// visible to the edge and the admin screen instead of being assumed away.
+    #[serde(default)]
+    pub power_fails_safe: bool,
 }
 
 /// A device filling one role in a tool's access chain.

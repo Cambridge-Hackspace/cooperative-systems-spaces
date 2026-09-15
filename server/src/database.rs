@@ -5524,6 +5524,7 @@ impl DatabaseManager {
                     external_id: external.get(&m.tool_id).cloned().flatten(),
                     modules: Vec::new(),
                     interlocks: Vec::new(),
+                    power_fails_safe: false,
                 })
                 .modules
                 .push(css_lib::wire::ToolModuleBinding {
@@ -5547,6 +5548,7 @@ impl DatabaseManager {
                     external_id: external.get(&i.tool_id).cloned().flatten(),
                     modules: Vec::new(),
                     interlocks: Vec::new(),
+                    power_fails_safe: false,
                 })
                 .interlocks
                 .push(css_lib::wire::ToolInterlockRule {
@@ -5561,9 +5563,22 @@ impl DatabaseManager {
                 });
         }
 
+        // Derived once the bindings are in place: whether the modules that
+        // actually switch this tool can reach a safe state unaided.
+        let mut tools: Vec<css_lib::wire::ToolModuleTool> = by_tool.into_values().collect();
+        for t in tools.iter_mut() {
+            let power: Vec<css_lib::capabilities::ModuleCapabilities> = t
+                .modules
+                .iter()
+                .filter(|m| m.role == "power")
+                .map(|m| css_lib::capabilities::ModuleCapabilities::from_params(&m.params))
+                .collect();
+            t.power_fails_safe = css_lib::capabilities::power_can_fail_safe(&power);
+        }
+
         Ok(css_lib::wire::ToolModuleStatePayload {
             as_of: chrono::Utc::now().to_rfc3339(),
-            tools: by_tool.into_values().collect(),
+            tools,
         })
     }
 }

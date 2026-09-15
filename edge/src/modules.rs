@@ -502,6 +502,7 @@ mod tests {
                 external_id: Some("ext-1".to_string()),
                 modules,
                 interlocks,
+                power_fails_safe: true,
             }],
         });
         s
@@ -824,6 +825,7 @@ mod tests {
                 external_id: Some("ext-1".to_string()),
                 modules: vec![binding("m1", "power", "hold_last")],
                 interlocks: vec![rule(KIND_TRIP, "door_open", true, 0)],
+                power_fails_safe: true,
             }],
         });
         assert!(

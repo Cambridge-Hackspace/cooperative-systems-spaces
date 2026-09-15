@@ -229,15 +229,31 @@ async fn create_interlock(
         return Err(ApiError::BadRequest("tool_id does not exist".to_string()));
     }
 
+    let bound = state.db.list_tool_modules_for_tool(req.tool_id)?;
+
     // A rule whose source module belongs to a different tool would read a sensor
     // on the wrong machine -- worth refusing rather than discovering in a
     // workshop.
     if let Some(src) = req.source_module_id {
-        let modules = state.db.list_tool_modules_for_tool(req.tool_id)?;
-        if !modules.iter().any(|m| m.id == src) {
+        if !bound.iter().any(|m| m.id == src) {
             return Err(ApiError::BadRequest(
                 "source_module_id is not a module of this tool".to_string(),
             ));
+        }
+    }
+
+    // The enforcement tier has to be achievable with the hardware actually bound
+    // to this tool. Claiming `firmware` for a trip whose sensor cannot reach the
+    // module that switches the tool produces a rule that silently does not do
+    // what it says -- the worst outcome available for a safety interlock, and
+    // exactly the kind of thing nobody discovers until the day it matters.
+    if enforce == crate::models::enforcement::FIRMWARE {
+        let caps: Vec<css_lib::capabilities::ModuleCapabilities> = bound
+            .iter()
+            .map(|m| css_lib::capabilities::ModuleCapabilities::from_params(&m.params))
+            .collect();
+        if let Err(e) = css_lib::capabilities::firmware_enforcement_achievable(&condition, &caps) {
+            return Err(ApiError::BadRequest(e.reason));
         }
     }
 

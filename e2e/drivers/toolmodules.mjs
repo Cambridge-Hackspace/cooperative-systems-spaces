@@ -105,6 +105,24 @@ main(async () => {
   })
   assertEq('toolmodules/bad-enforcement-is-400', 400, badEnforcement.status)
 
+  // An enforcement tier has to be achievable with the hardware actually bound.
+  // Nothing is bound to this tool yet, so nothing can enforce a door interlock
+  // in firmware, and claiming otherwise must be refused rather than stored as a
+  // rule that silently does not do what it says.
+  const unachievable = await POST('/api/admin/tool-interlocks', {
+    token: admin.token,
+    body: {
+      tool_id: toolId,
+      kind: 'trip',
+      condition: 'door_open',
+      enforcement: 'firmware',
+    },
+  })
+  assertEq('toolmodules/unachievable-firmware-tier-is-400', 400, unachievable.status)
+  ok('toolmodules/refusal-names-the-alternative',
+    String(unachievable.text).includes('edge'),
+    `a refusal that does not name the achievable tier just blocks somebody: ${unachievable.text.slice(0, 200)}`)
+
   // A disabled rule is authored but must not be shipped to the edge.
   const disabled = await POST('/api/admin/tool-interlocks', {
     token: admin.token,
@@ -178,6 +196,84 @@ main(async () => {
       },
     })
     assertEq('toolmodules/foreign-source-module-is-400', 400, crossed.status)
+
+    // --- capabilities decide which enforcement tier is available -------------
+    // A second tool wired to an integrated module: the reed is wired straight to
+    // the thing that switches the tool, so it can cut locally and `firmware` is
+    // genuinely achievable.
+    const wiredTool = await POST('/api/tools', {
+      token: admin.token,
+      body: { name: `Integrated ${tag}`, category: 'laser_cutting', external_id: `tm-int-${tag}` },
+    })
+    const wiredToolId = wiredTool.json?.data?.id
+    const capableInvite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const capableReg = await POST('/api/devices/register', {
+      body: {
+        device_code: capableInvite.json?.data?.device_code,
+        name: `integrated-plug-${tag}`,
+        kind: 'power_controller',
+        mac_address: '02:00:00:00:83:02',
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    const capableDeviceId = capableReg.json?.data?.device_id ?? capableReg.json?.device_id
+    const capableBinding = await POST('/api/admin/tool-modules', {
+      token: admin.token,
+      body: {
+        tool_id: wiredToolId,
+        device_id: capableDeviceId,
+        role: 'power',
+        name: 'integrated plug',
+        params: {
+          capabilities: {
+            local_inputs: ['door_open'],
+            local_inhibit: true,
+            countdown: false,
+            holds_last_on_disconnect: false,
+          },
+        },
+      },
+    })
+    assertEq('toolmodules/capable-binding-created', 201, capableBinding.status)
+
+    const achievable = await POST('/api/admin/tool-interlocks', {
+      token: admin.token,
+      body: {
+        tool_id: wiredToolId,
+        kind: 'trip',
+        condition: 'door_open',
+        enforcement: 'firmware',
+      },
+    })
+    assertEq('toolmodules/achievable-firmware-tier-is-accepted', 201, achievable.status)
+
+    // The same tier for a condition that module cannot sense is still refused --
+    // the check is per condition, not a blanket "this tool has a smart plug".
+    const wrongCondition = await POST('/api/admin/tool-interlocks', {
+      token: admin.token,
+      body: {
+        tool_id: wiredToolId,
+        kind: 'trip',
+        condition: 'flow_ok',
+        enforcement: 'firmware',
+      },
+    })
+    assertEq('toolmodules/firmware-tier-is-per-condition', 400, wrongCondition.status)
+
+    // --- the fail-safe gap is reported, not assumed away --------------------
+    const snap2 = await GET('/api/admin/tool-modules/state', T)
+    const wiredEntry = (snap2.json?.tools ?? []).find((t) => t.tool_id === wiredToolId)
+    assertEq('toolmodules/capable-tool-fails-safe', true, wiredEntry?.power_fails_safe)
+    // The first tool's plug declared no capabilities at all, so it is not
+    // claimed to fail safe on the strength of nothing.
+    const plainEntry = (snap2.json?.tools ?? []).find((t) => t.tool_id === toolId)
+    ok('toolmodules/undeclared-plug-is-not-claimed-fail-safe',
+      wiredEntry?.power_fails_safe === true && plainEntry !== undefined,
+      'both tools should appear in the snapshot with an explicit fail-safe verdict')
   }
 
   // --- the snapshot the edge coordinates from -------------------------------
