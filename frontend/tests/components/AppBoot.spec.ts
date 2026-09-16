@@ -51,7 +51,16 @@ vi.mock('vue-router', async () => {
   return {
     ...actual,
     useRoute: () => ({ name: 'home', path: '/', params: {}, meta: {} }),
-    useRouter: () => ({ push: vi.fn(), replace: vi.fn(), currentRoute: { value: {} } }),
+    // `afterEach` included because App.vue registers its nav-menu dismissal on
+    // it at setup (#82). A real router always has it; a double that omits it
+    // fails the mount itself, which surfaces as every test in this file
+    // breaking for a reason that has nothing to do with booting.
+    useRouter: () => ({
+      push: vi.fn(),
+      replace: vi.fn(),
+      currentRoute: { value: {} },
+      afterEach: vi.fn(),
+    }),
   }
 })
 
