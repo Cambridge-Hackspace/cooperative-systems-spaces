@@ -18,58 +18,27 @@
         <p>No pages available</p>
       </div>
       <div v-else>
-        <div v-for="item in navItems" :key="item.slug" class="nav-item-container">
-          <a
-            :href="`${baseUrl}/${item.slug}`"
-            class="nav-item active:bg-primary hover:bg-secondary"
-            :class="{ active: currentSlug === item.slug }"
-            @click.prevent="$emit('select', item.slug)"
-          >
-            <span class="nav-title">{{ item.title }}</span>
-            <span v-if="item.children && item.children.length > 0" class="nav-arrow">
-              {{ expandedItems.has(item.slug) ? '▼' : '▶' }}
-            </span>
-          </a>
-
-          <!-- Toggle button for items with children -->
-          <button
-            v-if="item.children && item.children.length > 0"
-            class="expand-button"
-            :aria-label="expandedItems.has(item.slug) ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded(item.slug)"
-          ></button>
-
-          <!-- Child items -->
-          <div
-            v-if="item.children && item.children.length > 0 && expandedItems.has(item.slug)"
-            class="nav-children"
-          >
-            <a
-              v-for="child in item.children"
-              :key="child.slug"
-              :href="`${baseUrl}/${child.slug}`"
-              class="nav-item nav-item-child"
-              :class="{ active: currentSlug === child.slug }"
-              @click.prevent="$emit('select', child.slug)"
-            >
-              <span class="nav-title">{{ child.title }}</span>
-            </a>
-          </div>
-        </div>
+        <PageNavItem
+          v-for="item in navItems"
+          :key="keyOf(item)"
+          :item="item"
+          :base-url="baseUrl"
+          :current-slug="currentSlug"
+          :expanded="expandedItems"
+          @select="$emit('select', $event)"
+          @toggle="toggleExpanded"
+        />
       </div>
     </nav>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 
-interface NavItem {
-  title: string
-  slug: string
-  path: string
-  children: NavItem[]
-}
+import PageNavItem from '@/components/PageNavItem.vue'
+import type { NavItem } from '@/types/nav'
+import { ancestorKeys, keyOf } from '@/types/nav'
 
 interface Props {
   type: 'wiki' | 'site'
@@ -111,7 +80,8 @@ async function fetchNavigation() {
     }
 
     const data = await response.json()
-    navItems.value = props.type === 'wiki' ? data.wiki_nav : data.site_nav
+    navItems.value = (props.type === 'wiki' ? data.wiki_nav : data.site_nav) ?? []
+    revealCurrent()
   } catch (err) {
     console.error('Error fetching navigation:', err)
     error.value = err instanceof Error ? err.message : 'Failed to load navigation'
@@ -120,11 +90,30 @@ async function fetchNavigation() {
   }
 }
 
-function toggleExpanded(slug: string) {
-  if (expandedItems.value.has(slug)) {
-    expandedItems.value.delete(slug)
+/**
+ * Open the branch the reader is in, leaving every other branch as they left it.
+ *
+ * Without this the tree collapses on every page load, so a wiki three folders
+ * deep shows the reader four closed headers and no sign of where they are. It
+ * runs on arrival and again whenever the page changes -- a link in the body of
+ * one page can land you in a branch the sidebar has never opened.
+ */
+function revealCurrent() {
+  const keys = ancestorKeys(navItems.value, props.currentSlug)
+  if (keys.length === 0) return
+  for (const key of keys) {
+    expandedItems.value.add(key)
+  }
+  expandedItems.value = new Set(expandedItems.value)
+}
+
+watch(() => props.currentSlug, revealCurrent)
+
+function toggleExpanded(key: string) {
+  if (expandedItems.value.has(key)) {
+    expandedItems.value.delete(key)
   } else {
-    expandedItems.value.add(slug)
+    expandedItems.value.add(key)
   }
   // Trigger reactivity
   expandedItems.value = new Set(expandedItems.value)
