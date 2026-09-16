@@ -2884,6 +2884,7 @@ dependencies = [
 name = "css-checks"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "toml 0.8.23",
  "walkdir",
 ]

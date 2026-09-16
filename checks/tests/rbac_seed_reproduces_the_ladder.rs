@@ -545,6 +545,55 @@ fn granular_gate_permissions_reproduce_the_staff_override() {
 /// make the truth-table recomputation fail. If this "broken" input still
 /// passed, the check above would prove nothing. Modelled on the real defect the
 /// oracle exists to catch: a missing inheritance edge.
+/// The development-instance seed must expect a role this ladder actually
+/// defines.
+///
+/// `e2e/run.sh`'s `devseed` stage signs in as the admin it just created and
+/// asserts the primary role that comes back. It asserted `"Admin"` until the
+/// rbac_taxonomy migration renamed the roles to lowercase, at which point
+/// `reaper test --profile devlive` stopped working -- and stayed broken,
+/// because `devseed` is not in `STAGES_DEFAULT` and the battery therefore never
+/// runs it. The stage is reachable only through a profile a human invokes by
+/// hand, so nothing in CI was ever going to notice.
+///
+/// This is the cheap half of noticing. It does not run the stage; it asserts
+/// that the name the stage is waiting to see is a name the seed can produce,
+/// which is the specific thing that went stale. Scoped to this one comparison
+/// on purpose: role-shaped string literals elsewhere in `e2e/` are guard names
+/// (`Guard::Member` kept its name through #77) and synthetic journey fixtures,
+/// and a check that flagged those would be a check somebody switches off.
+#[test]
+fn the_devseed_stage_expects_a_role_the_seed_defines() {
+    let run_sh = css_checks::read("e2e/run.sh");
+
+    // The comparison devseed makes, as it is written in the script.
+    let marker = "if [[ ${seen_role} == \"";
+    let at = run_sh.find(marker).unwrap_or_else(|| {
+        panic!(
+            "could not find devseed's role comparison in e2e/run.sh. If it was \
+             rewritten, this check has to be rewritten with it rather than left \
+             passing on a string that is no longer there."
+        )
+    });
+    let rest = &run_sh[at + marker.len()..];
+    let expected = &rest[..rest.find('"').expect("unterminated role literal")];
+
+    let (levels, _, _) = parse_seed(&seed_sql());
+    assert!(
+        levels.contains_key(expected),
+        "e2e/run.sh's devseed stage waits for the primary role {expected:?}, \
+         which the RBAC seed does not define. Defined roles: {:?}.\n\n\
+         devlive is the instance firmware developers are told to bring up (see \
+         FIRMWARE.md); a devseed that cannot pass its own admin check is a \
+         development instance nobody can use.",
+        {
+            let mut names: Vec<&String> = levels.keys().collect();
+            names.sort();
+            names
+        }
+    );
+}
+
 #[test]
 fn the_oracle_catches_a_broken_ladder() {
     let sql = seed_sql();

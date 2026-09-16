@@ -43,19 +43,33 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # specific failure this whole exercise exists to prevent.
 #
 # STAGES_ALL grows as tiers land. TESTING.md tracks what each one covers.
-STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,logs,down"
-
-# Stages that exist and are deliberately NOT part of `all` or `default`.
+# devseed is in the battery rather than beside it, and it runs LATE -- after
+# every assertion tier, before `logs` so its own noise is still inspected.
 #
-# `--only ...,devseed` reaches them; `--only all` does not. devseed claims the
-# one address `[initial_setup]` grants admin to, so running it inside the
-# battery would hand drivers/lib.mjs's adminAccount() an address it can neither
-# claim nor sign into -- the contract tier would then fail for a reason that was
-# the fixture's. Opt-in is the whole point, so it cannot live in STAGES_ALL.
-STAGES_EXTRA="devseed"
+# Late because of one line in contract.mjs:
+#
+#     const admin = await account('admin', { email: ADMIN_EMAIL })
+#     assertEq('contract/initial-setup-grants-admin', 'admin', admin.user?.role)
+#
+# `[initial_setup]` grants admin to the *first* registration at one configured
+# address. That is a once-per-database event, and the contract tier exists to
+# assert on it. A fixture that claims the address first does not merely
+# inconvenience the drivers -- it consumes the event, and the tier can never
+# prove the property again. Ordering devseed after contract leaves the one-shot
+# where it belongs; devseed then adopts the admin that already exists rather
+# than competing for it.
+#
+# In the battery at all because a stage nothing runs is a stage that rots. This
+# one asserted the pre-#77 role name `"Admin"` and went on failing for weeks
+# after the taxonomy migration renamed the roles, because `reaper test` never
+# executed it and nobody brought devlive up in the meantime. It costs about two
+# seconds against a nine-minute gate, and in exchange the firmware fixture it
+# seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
+# proved on every commit instead of whenever somebody happens to look.
+STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
-STAGES_VALID="${STAGES_ALL},${STAGES_EXTRA}"
+STAGES_VALID="${STAGES_ALL}"
 
 PROVISION="podman"
 ENGINE=""
@@ -1915,7 +1929,15 @@ stage_devseed() {
   record_case "devseed/stack-is-up" ok
 
   local user="${CSS_DEV_ADMIN_USER:-admin}"
-  local pass="${CSS_DEV_ADMIN_PASS:-password123!}"
+  # The same password drivers/lib.mjs uses, because both register the one
+  # address `[initial_setup]` grants admin to and only the first of them gets to
+  # choose. Duplicated deliberately rather than plumbed through an environment
+  # variable: shell and node share no constant, and a variable one side forgot
+  # to export would surface as a 401 three stages downstream with nothing
+  # pointing back here. `checks/tests/devseed_agrees_with_the_battery_fixtures.rs`
+  # asserts the two literals still match, which is what makes the duplication a
+  # check rather than a liability.
+  local pass="${CSS_DEV_ADMIN_PASS:-e2e-password-1234}"
   local mail
   # The address the config grants admin to. Read from the generated config
   # rather than restated here: two copies of this would drift and the failure
@@ -1939,10 +1961,18 @@ stage_devseed() {
   if [[ ${code} == "201" || ${code} == "200" ]]; then
     record_case "devseed/registered" ok "${user}"
   elif [[ ${code} == "409" ]]; then
-    # Already there from an earlier devseed on the same database. Not a
-    # failure, but the login check below still has to pass or the credentials
-    # this stage advertises are not the credentials that work.
-    record_case "devseed/registered" ok "${user} already existed"
+    # The setup address is already claimed -- by the contract tier, which runs
+    # before this stage and registers it to assert that the FIRST registration
+    # there is granted admin, or by an earlier devseed on the same database.
+    #
+    # Adopt that account rather than compete for it. `[initial_setup]` grants
+    # admin once per database and the contract tier exists to prove it happens;
+    # a fixture that consumed the one-shot would not merely inconvenience the
+    # drivers, it would delete an assertion. Signing in by address rather than
+    # by username is what makes adoption possible: whoever holds the address is
+    # the admin, whatever they happen to be called.
+    user="${mail}"
+    record_case "devseed/registered" ok "adopting the existing admin at ${mail}"
   else
     record_case "devseed/registered" fail "register -> ${code}: $(head -c 300 "${OUT}/devseed-register.json" 2>/dev/null)"
     emit_junit devseed
@@ -1963,12 +1993,22 @@ stage_devseed() {
   fi
   record_case "devseed/login" ok
 
-  if grep -q '"role":"Admin"' "${OUT}/devseed-login.json" \
-    || grep -q '"role": *"Admin"' "${OUT}/devseed-login.json"; then
+  # The role name is read out and compared, rather than grepped for as a
+  # literal. Both are equally strict; only one of them says what went wrong.
+  #
+  # This check asserted `"role":"Admin"` until the rbac_taxonomy migration
+  # renamed the roles to lowercase, at which point devlive stopped working and
+  # nobody found out -- `devseed` is not in STAGES_DEFAULT, so the battery never
+  # runs it. What the stage reported was "setup_admin_email may not match",
+  # which is a true statement about a cause that was not the cause.
+  local seen_role
+  seen_role="$(grep -o '"role":[[:space:]]*"[^"]*"' "${OUT}/devseed-login.json" 2>/dev/null \
+    | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  if [[ ${seen_role} == "admin" ]]; then
     record_case "devseed/is-admin" ok
   else
     record_case "devseed/is-admin" fail \
-      "signed in as ${mail} but the response does not say role Admin; setup_admin_email may not match"
+      "signed in as ${mail} but the primary role is '${seen_role:-<none>}', not 'admin' -- either setup_admin_email does not match, or the role vocabulary moved again (see server/migrations/*_rbac_taxonomy)"
     emit_junit devseed
     return 1
   fi
@@ -2037,10 +2077,142 @@ INVENTORY
     return 1
   fi
 
+  # ── A firmware fixture ───────────────────────────────────────────────────
+  #
+  # The five tools above all require training, which is right for exercising
+  # the member-facing flow and useless for exercising a ToolGuard: every
+  # tool-on against them answers "Training required". This tool has no training
+  # steps and does not require them, so the seeded card actually turns it on --
+  # which is the only reason to seed a card at all.
+  #
+  # The values are fixed rather than generated. A firmware developer types them
+  # into a device config; a fresh random id on every bring-up would mean editing
+  # that file every morning. See FIRMWARE.md.
+  local fw_external_id="dev-tool-01"
+  local fw_tool_key="dev-tool-key"
+  local fw_card="DEVCARD01"
+  local fw_user="devmember"
+  local fw_mail="devmember@example.invalid"
+
+  local fw_tool_id
+  fw_tool_id="$(curl -s -X POST "${base}/api/tools" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"name\":\"Firmware Test Rig\",\"category\":\"other\",\"location\":\"Bench\",\"requires_training\":false,\"external_id\":\"${fw_external_id}\",\"external_api_key\":\"${fw_tool_key}\"}" \
+    | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
+  if [[ -n ${fw_tool_id} ]]; then
+    record_case "devseed/firmware-tool" ok "${fw_external_id}"
+  else
+    record_case "devseed/firmware-tool" fail "could not create the firmware fixture tool"
+    emit_junit devseed
+    return 1
+  fi
+
+  local fw_user_id
+  code="$(curl -s -o "${OUT}/devseed-member.json" -w '%{http_code}' \
+    -X POST "${base}/api/auth/register" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"${fw_user}\",\"email\":\"${fw_mail}\",\"password\":\"${pass}\",\"full_name\":\"Dev Member\"}" || echo 000)"
+  fw_user_id="$(grep -o '"id":"[^"]*"' "${OUT}/devseed-member.json" 2>/dev/null \
+    | head -1 | sed 's/.*:"//; s/"$//')"
+  if [[ ${code} == "201" || ${code} == "200" ]] && [[ -n ${fw_user_id} ]]; then
+    record_case "devseed/firmware-member" ok "${fw_user}"
+  else
+    record_case "devseed/firmware-member" fail \
+      "register ${fw_user} -> ${code}: $(head -c 300 "${OUT}/devseed-member.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
+  code="$(curl -s -o "${OUT}/devseed-card.json" -w '%{http_code}' \
+    -X POST "${base}/api/cards/user/${fw_user_id}" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"code\":\"${fw_card}\"}" || echo 000)"
+  if [[ ${code} == "201" || ${code} == "200" ]]; then
+    record_case "devseed/firmware-card" ok "${fw_card}"
+  else
+    record_case "devseed/firmware-card" fail \
+      "issue card -> ${code}: $(head -c 300 "${OUT}/devseed-card.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
+  # An unclaimed invite, so the registration handshake can be exercised end to
+  # end rather than described. Long-lived because a development instance is
+  # brought up in the morning and used all day.
+  local fw_invite
+  curl -s -o "${OUT}/devseed-invite.json" -X POST "${base}/api/admin/devices/invite" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d '{"expires_in_hours":720}' >/dev/null 2>&1
+  fw_invite="$(grep -o '"device_code":"[^"]*"' "${OUT}/devseed-invite.json" 2>/dev/null \
+    | head -1 | sed 's/.*:"//; s/"$//')"
+  if [[ -n ${fw_invite} ]]; then
+    record_case "devseed/firmware-invite" ok
+  elif grep -q 'require a UTF-8 database' "${OUT}/devseed-invite.json" 2>/dev/null; then
+    # An invite code is eight emoji and this cluster cannot store one. The same
+    # constraint switches off cases in bypass.mjs, toolmodules.mjs and
+    # concurrency.mjs, and it says so there too rather than passing quietly.
+    #
+    # The devlive profile sets CSS_E2E_DB_ENCODING=UTF8 precisely so this does
+    # not happen on the instance firmware developers are told to use; reaching
+    # here means devseed was run against some other cluster.
+    fw_invite=""
+    record_case "devseed/firmware-invite" skip \
+      "this cluster cannot store an eight-emoji invite code; bring the instance up with --profile devlive, or issue an invite from Admin -> Devices"
+  else
+    # The body, not a guess at it. The is-admin check in this same stage spent
+    # a release reporting a cause that was not the cause.
+    record_case "devseed/firmware-invite" fail \
+      "no device_code in the invite response: $(head -c 300 "${OUT}/devseed-invite.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
+  # Proved by using it, not by trusting that the rows went in. A fixture that
+  # exists but cannot turn a tool on is a fixture that costs somebody a morning
+  # of debugging firmware against a platform that was never going to answer.
+  #
+  # This doubles as a live check that the protocol behaves the way FIRMWARE.md
+  # says it does: a denial is a 200 carrying tool_on false, so asserting on the
+  # body rather than the status code is the assertion that means anything.
+  curl -s -o "${OUT}/devseed-toolon.json" \
+    "${base}/api/toolguard/tool-on?card=${fw_card}&tool_id=${fw_external_id}&api_key=${fw_tool_key}" >/dev/null 2>&1
+  if grep -q '"tool_on":true' "${OUT}/devseed-toolon.json" 2>/dev/null; then
+    record_case "devseed/firmware-tool-on-works" ok
+  else
+    record_case "devseed/firmware-tool-on-works" fail \
+      "the seeded card did not turn the seeded tool on: $(head -c 300 "${OUT}/devseed-toolon.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
+  # And put it back, so the instance starts idle rather than with a tool stuck
+  # in use by the seed that was meant to make it usable.
+  curl -s -o "${OUT}/devseed-tooloff.json" \
+    "${base}/api/toolguard/tool-off?card=${fw_card}&tool_id=${fw_external_id}&api_key=${fw_tool_key}" >/dev/null 2>&1
+  if grep -q '"tool_off":true' "${OUT}/devseed-tooloff.json" 2>/dev/null; then
+    record_case "devseed/firmware-tool-off-works" ok
+  else
+    record_case "devseed/firmware-tool-off-works" fail \
+      "the seeded tool did not return to idle: $(head -c 300 "${OUT}/devseed-tooloff.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
   log ""
   log "  dev instance ready:  http://${STACK_HOST}:${SERVER_PORT}"
   log "  sign in:             ${user} / ${pass}"
   log "  seeded:              ${tools_made} tools, ${steps_made} training steps"
+  log ""
+  log "  firmware fixture (see FIRMWARE.md):"
+  log "    tool_id:           ${fw_external_id}"
+  log "    api_key:           ${fw_tool_key}"
+  log "    card:              ${fw_card}"
+  log "    member sign-in:    ${fw_user} / ${pass}"
+  log "    device invite:     ${fw_invite:-<none: this cluster cannot store one>}"
+  log ""
   log "  tear down:           reaper down"
   log ""
 
