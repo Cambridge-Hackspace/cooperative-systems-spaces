@@ -11,6 +11,7 @@ use crate::{
     api::{errors::ApiError, responses::ApiResponse},
     auth::AdminUser,
     models::{AuditLog, UpdateUser},
+    pages::{PageType, PagesService},
     AppState,
 };
 
@@ -529,51 +530,17 @@ async fn get_audit_logs(
 }
 
 /// Refresh wiki pages from repository (admin only)
+///
+/// Deliberately three short critical sections rather than one long one. The
+/// first version of this held `pages_service.write().await` -- a tokio lock, on
+/// the runtime that serves every request -- across a `git pull`, which queued
+/// every reader of `/api/pages/*` behind an administrator pressing a button
+/// (#94). The fetch needs the configuration and a path, not the store.
 async fn refresh_wiki_pages(
     _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
-    // Asked before it is attempted, rather than inferred from the failure.
-    //
-    // "No repository configured" is a state an administrator put the instance
-    // in, not a fault -- so a 500 tells them the server broke about a setting
-    // they can change in the next screen. 409 says what is actually true: the
-    // request conflicts with the current configuration.
-    //
-    // Checked against the config rather than by matching the error's text. The
-    // message is ours today and one refactor away from being somebody else's,
-    // and a status code that depends on a string is a status code that changes
-    // when a message is reworded.
-    if state.config_manager.get_config().pages.wiki_repo.is_none() {
-        return Err(ApiError::Conflict(
-            "No wiki repository is configured; set one before refreshing".to_string(),
-        ));
-    }
-
-    let mut pages_service = state.pages_service.write().await;
-
-    match pages_service.trigger_wiki_update().await {
-        Ok(()) => {
-            let store = pages_service.get_store();
-            Ok(Json(ApiResponse::success_with_message(
-                serde_json::json!({
-                    "wiki_pages_count": store.wiki_pages.len(),
-                    "updated_at": chrono::Utc::now().to_rfc3339(),
-                }),
-                format!(
-                    "Wiki pages refreshed successfully. {} pages loaded.",
-                    store.wiki_pages.len()
-                ),
-            )))
-        }
-        Err(e) => {
-            tracing::error!("Failed to refresh wiki pages: {}", e);
-            Err(ApiError::InternalServerError(format!(
-                "Failed to refresh wiki pages: {}",
-                e
-            )))
-        }
-    }
+    refresh_pages(state, PageType::Wiki).await
 }
 
 /// Refresh site pages from repository (admin only)
@@ -581,6 +548,23 @@ async fn refresh_site_pages(
     _admin_user: AdminUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    refresh_pages(state, PageType::Site).await
+}
+
+/// The body of both refresh handlers.
+///
+/// One function rather than two near-identical ones: the lock discipline here
+/// is the whole point of #94, and two copies of it is two places for the next
+/// edit to reintroduce the bug in only one of them.
+async fn refresh_pages(
+    state: AppState,
+    page_type: PageType,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let kind = match page_type {
+        PageType::Wiki => "wiki",
+        PageType::Site => "site",
+    };
+
     // Asked before it is attempted, rather than inferred from the failure.
     //
     // "No repository configured" is a state an administrator put the instance
@@ -592,37 +576,67 @@ async fn refresh_site_pages(
     // message is ours today and one refactor away from being somebody else's,
     // and a status code that depends on a string is a status code that changes
     // when a message is reworded.
-    if state.config_manager.get_config().pages.site_repo.is_none() {
-        return Err(ApiError::Conflict(
-            "No site repository is configured; set one before refreshing".to_string(),
-        ));
+    let configured = {
+        let config = state.config_manager.get_config();
+        match page_type {
+            PageType::Wiki => config.pages.wiki_repo.is_some(),
+            PageType::Site => config.pages.site_repo.is_some(),
+        }
+    };
+    if !configured {
+        return Err(ApiError::Conflict(format!(
+            "No {kind} repository is configured; set one before refreshing"
+        )));
     }
 
-    let mut pages_service = state.pages_service.write().await;
+    // First critical section: copy what the fetch needs, then let go. Readers
+    // are held up for three clones, not for a network round trip.
+    let inputs = {
+        let pages_service = state.pages_service.read().await;
+        pages_service.refresh_inputs(page_type)
+    };
+    let Some((config, repo_path, gate)) = inputs else {
+        return Err(ApiError::Conflict(format!(
+            "No {kind} repository is configured; set one before refreshing"
+        )));
+    };
 
-    match pages_service.trigger_site_update().await {
-        Ok(()) => {
-            let store = pages_service.get_store();
-            Ok(Json(ApiResponse::success_with_message(
-                serde_json::json!({
-                    "site_pages_count": store.site_pages.len(),
-                    "has_index": store.site_index.is_some(),
-                    "updated_at": chrono::Utc::now().to_rfc3339(),
-                }),
-                format!(
-                    "Site pages refreshed successfully. {} pages loaded.",
-                    store.site_pages.len()
-                ),
-            )))
-        }
-        Err(e) => {
-            tracing::error!("Failed to refresh site pages: {}", e);
-            Err(ApiError::InternalServerError(format!(
-                "Failed to refresh site pages: {}",
-                e
-            )))
-        }
-    }
+    // No lock held here at all. `prepare` takes the sync gate itself, which
+    // serialises this against the background updater and against another
+    // administrator without making anybody's page request wait.
+    let prepared = PagesService::prepare(&config, &repo_path, page_type, &gate)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to refresh {} pages: {}", kind, e);
+            ApiError::InternalServerError(format!("Failed to refresh {kind} pages: {e}"))
+        })?;
+
+    // Second critical section: swap the store. A map move and a vector move.
+    let count = {
+        let mut pages_service = state.pages_service.write().await;
+        pages_service.publish(prepared)
+    };
+
+    // Built rather than `json!`-ed: the count's key varies with the page type,
+    // and `json!` wants a literal there.
+    let mut data = serde_json::Map::new();
+    data.insert(format!("{kind}_pages_count"), serde_json::json!(count));
+    data.insert(
+        "updated_at".to_string(),
+        serde_json::json!(chrono::Utc::now().to_rfc3339()),
+    );
+
+    Ok(Json(ApiResponse::success_with_message(
+        serde_json::Value::Object(data),
+        format!(
+            "{} pages refreshed successfully. {} pages loaded.",
+            match page_type {
+                PageType::Wiki => "Wiki",
+                PageType::Site => "Site",
+            },
+            count
+        ),
+    )))
 }
 
 /// DELETE /api/admin/users/{user_id}/mfa — wipe every MFA artifact for a user.
