@@ -273,6 +273,8 @@ diesel::table! {
         locked_out -> Bool,
         lockout_reason -> Nullable<Text>,
         locked_out_at -> Nullable<Timestamptz>,
+        last_relay_on -> Nullable<Bool>,
+        power_evidence_since -> Nullable<Timestamptz>,
     }
 }
 
