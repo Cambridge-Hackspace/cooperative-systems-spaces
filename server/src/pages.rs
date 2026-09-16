@@ -50,14 +50,15 @@ pub struct PageStore {
     pub site_index: Option<Page>,
 }
 
-/// Navigation item for building menus
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NavItem {
-    pub title: String,
-    pub slug: String,
-    pub path: String,
-    pub children: Vec<NavItem>,
-}
+/// Navigation item for building menus.
+///
+/// The tree itself is built by [`css_lib::nav`], which the server crate cannot
+/// be compiled on every developer machine to test -- and which is why #81, a
+/// navigation that silently discarded three quarters of the wiki, went
+/// unnoticed until an administrator complained that the refresh button did
+/// nothing. This is an alias rather than a parallel struct so the wire shape
+/// and the builder cannot drift apart.
+pub type NavItem = css_lib::nav::NavNode;
 
 pub struct PagesService {
     config: PagesConfig,
@@ -546,53 +547,21 @@ impl PagesService {
     }
 
     /// Static version of build_navigation
+    /// Build the navigation tree for a set of pages.
+    ///
+    /// The tree-shaping lives in [`css_lib::nav::build_navigation`]; this is the
+    /// adapter that hands it the three fields it needs. See that module for what
+    /// the previous implementation got wrong.
     fn build_navigation_static(pages: &HashMap<String, Page>) -> Vec<NavItem> {
-        // First, collect all pages and organize them by their path components
-        let mut root_items: Vec<NavItem> = Vec::new();
-        let mut folder_map: std::collections::HashMap<String, Vec<NavItem>> =
-            std::collections::HashMap::new();
-
-        for page in pages.values() {
-            let slug_parts: Vec<&str> = page.slug.split('/').collect();
-
-            if slug_parts.len() == 1 {
-                // Root level page - add directly to root_items
-                root_items.push(NavItem {
-                    title: page.title.clone(),
-                    slug: page.slug.clone(),
-                    path: page.relative_path.clone(),
-                    children: vec![],
-                });
-            } else {
-                // Nested page - group by parent folder
-                let parent_folder = slug_parts[0].to_string();
-                let child_item = NavItem {
-                    title: page.title.clone(),
-                    slug: page.slug.clone(),
-                    path: page.relative_path.clone(),
-                    children: vec![],
-                };
-
-                folder_map
-                    .entry(parent_folder.clone())
-                    .or_insert_with(Vec::new)
-                    .push(child_item);
-            }
-        }
-
-        // Now attach children to their parent items
-        for item in root_items.iter_mut() {
-            if let Some(children) = folder_map.get(&item.slug) {
-                item.children = children.clone();
-                // Sort children by title
-                item.children.sort_by(|a, b| a.title.cmp(&b.title));
-            }
-        }
-
-        // Sort root items by title
-        root_items.sort_by(|a, b| a.title.cmp(&b.title));
-
-        root_items
+        let sources: Vec<css_lib::nav::NavSource> = pages
+            .values()
+            .map(|page| css_lib::nav::NavSource {
+                title: page.title.clone(),
+                slug: page.slug.clone(),
+                path: page.relative_path.clone(),
+            })
+            .collect();
+        css_lib::nav::build_navigation(&sources)
     }
 
     /// Get the default branch of a git repository
