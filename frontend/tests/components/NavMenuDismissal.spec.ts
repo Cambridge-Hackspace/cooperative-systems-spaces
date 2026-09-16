@@ -144,7 +144,11 @@ describe('nav menu dismissal (#82)', () => {
     await flushPromises()
     const details = openAdminSubmenu()
 
-    const link = document.getElementById('admin-link') as HTMLElement
+    const link = document.getElementById('admin-link')
+    // Not `link?.dispatchEvent` -- if the fixture ever loses this anchor the
+    // click silently never happens, the submenu stays open because nothing
+    // touched it, and the assertion below passes for the wrong reason.
+    if (!link) throw new Error('fixture is missing #admin-link')
     link.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
     expect(details.hasAttribute('open')).toBe(true)
