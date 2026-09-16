@@ -287,7 +287,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
@@ -302,6 +302,53 @@ const configStore = useConfigStore()
 // Local state
 const notifications = ref<Notification[]>([])
 const globalLoading = ref(false)
+
+// ── Nav menus have to close when you are done with them (#82) ───────────────
+//
+// The nav uses two different open/close mechanisms and NEITHER of them closes
+// on its own:
+//
+//   * `<details><summary>` (the Admin submenu) stays open until something
+//     clears its `open` attribute. Clicking a link inside navigates and leaves
+//     the menu hanging over the page you just moved to, and clicking elsewhere
+//     on the page does nothing at all -- `<details>` has no concept of "click
+//     outside".
+//   * daisyUI's `.dropdown` with `tabindex="0"` (the mobile menu and the
+//     avatar menu) is open for as long as focus is inside it. A click on a
+//     `router-link` within it does not reliably move focus out, so it stays up
+//     for the same reason.
+//
+// One helper closes both, called from the three moments a menu should give up:
+// after a navigation, on a click outside it, and on Escape.
+
+/** Close every nav menu, whichever mechanism is holding it open. */
+function closeNavMenus() {
+  document
+    .querySelectorAll<HTMLDetailsElement>('nav details[open]')
+    .forEach((d) => d.removeAttribute('open'))
+
+  // Blur only if focus is actually inside a dropdown; blurring indiscriminately
+  // would steal focus from whatever the user is typing in.
+  const active = document.activeElement
+  if (active instanceof HTMLElement && active.closest('.dropdown')) {
+    active.blur()
+  }
+}
+
+function onDocumentClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Node)) return
+  // A click inside a still-open menu is the user using it; only a click
+  // somewhere else means they are finished with it.
+  const insideOpenMenu =
+    target instanceof Element &&
+    (target.closest('nav details[open]') !== null || target.closest('.dropdown') !== null)
+  if (!insideOpenMenu) closeNavMenus()
+}
+
+function onEscape(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeNavMenus()
+}
 
 // Computed properties
 const canAccessStaff = computed(() => {
@@ -392,6 +439,20 @@ watch(
 onSystemThemeChange(applyTheme)
 
 // Lifecycle
+// A navigation means the menu that triggered it has done its job. Registered
+// here rather than on each link so a menu added later is covered by default.
+router.afterEach(() => closeNavMenus())
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onEscape)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onEscape)
+})
+
 onMounted(async () => {
   globalLoading.value = true
   try {
