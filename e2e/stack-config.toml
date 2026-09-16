@@ -319,6 +319,11 @@ user_profile_field = "user_page_repository"
 user_period = 900
 user_readme = false
 
+# Short on purpose: with no repository configured nothing here ever runs a git
+# command, and a stack that somehow did should fail fast rather than hold a
+# bring-up open for two minutes.
+git_timeout_secs = 20
+
 # Enabled, because the suite tests doors and a door requires two places.
 #
 # PlaceConfig::default() has `enabled = false`, and this file previously had no

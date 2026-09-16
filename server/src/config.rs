@@ -1085,6 +1085,20 @@ pub struct PagesConfig {
     pub user_period: usize,
     /// User README
     pub user_readme: bool,
+
+    /// How long any single git invocation may run before the refresh gives up,
+    /// in seconds.
+    ///
+    /// An unreachable remote must fail a refresh, not hold the pages service
+    /// open until the transport decides to stop trying (#94). Defaulted rather
+    /// than required so an existing configuration keeps parsing; raise it where
+    /// the repository is large or the link is slow.
+    #[serde(default = "default_git_timeout_secs")]
+    pub git_timeout_secs: u64,
+}
+
+fn default_git_timeout_secs() -> u64 {
+    120
 }
 
 impl Default for PagesConfig {
@@ -1105,6 +1119,7 @@ impl Default for PagesConfig {
             user_profile_field: "user_page_repository".to_string(),
             user_period: 900,
             user_readme: true,
+            git_timeout_secs: default_git_timeout_secs(),
         }
     }
 }

@@ -34,7 +34,11 @@ use css_checks::repo_root;
 /// and a regression in another cannot cancel out — which is the failure mode
 /// of every ratchet expressed as a single number.
 const BUDGET: &[(&str, usize)] = &[
-    ("admin.rs", 3),
+    // 3 -> 2 with #94. The wiki and site refresh handlers were two copies of
+    // the same code, each with its own blanket 500 on the git failure; they are
+    // now one `refresh_pages` with one. The copy is gone, so the budget for it
+    // goes too.
+    ("admin.rs", 2),
     // 3 -> 4 with the arrival of password reset. The fourth is
     // `PasswordHashUtil::hash` failing while consuming a reset token, which is
     // not a DatabaseError at all -- an Argon2 failure is genuinely the server's
