@@ -53,6 +53,7 @@ pub mod rbac;
 pub mod recaptcha;
 pub mod schedules;
 pub mod schema;
+pub mod shutdown;
 pub mod stripe;
 pub mod tool_billing;
 
@@ -84,6 +85,10 @@ use crate::webhooks::WebhookDispatcher;
 #[derive(Clone)]
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
+    /// Orderly-shutdown handle (#102). Background loops select on
+    /// `shutdown.cancelled()`; work that must finish is spawned with
+    /// `shutdown.spawn()` so the stop path waits for it.
+    pub shutdown: crate::shutdown::Shutdown,
     pub db: Arc<DatabaseManager>,
     pub audit_logger: AuditLogger,
     pub throttle_service: Arc<RegistrationThrottleService>,
