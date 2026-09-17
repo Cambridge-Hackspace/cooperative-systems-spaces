@@ -182,10 +182,15 @@ async fn main() -> Result<(), anyhow::Error> {
     )));
     info!("Calendar service initialized");
 
+    // Created before anything that spawns, because everything that spawns needs
+    // it: background loops take a cancellation handle, and work that must
+    // finish is tracked so the stop path can wait for it (#102).
+    let shutdown = css_server::shutdown::Shutdown::new();
+
     // Initialize pages service
     info!("Initializing pages service...");
     let pages_service = Arc::new(tokio::sync::RwLock::new(
-        PagesService::new(app_config.pages.clone()).await?,
+        PagesService::new(app_config.pages.clone(), shutdown.clone()).await?,
     ));
     info!("Pages service initialized");
 
@@ -231,7 +236,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize webhook dispatcher and wire it to audit-log creation.
     info!("Initializing webhook dispatcher...");
     let (webhook_dispatcher, webhook_tx) =
-        WebhookDispatcher::start(db_manager.clone(), config_manager.clone());
+        WebhookDispatcher::start(db_manager.clone(), config_manager.clone(), shutdown.clone());
     db_manager.set_webhook_sender(webhook_tx);
     info!("Webhook dispatcher initialized");
 
@@ -276,7 +281,7 @@ async fn main() -> Result<(), anyhow::Error> {
         let svc =
             css_server::bypass::BypassService::new(db_manager.clone(), app_config.bypass.clone());
         let interval = app_config.bypass.liveness_sweep_secs;
-        tokio::spawn(svc.run());
+        tokio::spawn(svc.run(shutdown.clone()));
         info!("Bypass liveness sweep started ({}s interval)", interval);
     }
 
@@ -285,11 +290,15 @@ async fn main() -> Result<(), anyhow::Error> {
     // steady state; fires only on window open/close.
     if app_config.door.enabled {
         let svc = door_service.clone();
+        let daemon_shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = daemon_shutdown.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
                 svc.republish_changed();
             }
         });
@@ -314,17 +323,25 @@ async fn main() -> Result<(), anyhow::Error> {
     let groupsio_sync = if app_config.groupsio.enabled {
         info!("Initializing Groups.io mailing-list sync...");
         let client = GroupsioClient::new(config_manager.clone());
-        let (svc, groupsio_tx) =
-            GroupsIoService::start(db_manager.clone(), config_manager.clone(), client);
+        let (svc, groupsio_tx) = GroupsIoService::start(
+            db_manager.clone(),
+            config_manager.clone(),
+            client,
+            shutdown.clone(),
+        );
         db_manager.set_groupsio_sender(groupsio_tx);
 
         let interval_secs = app_config.groupsio.sync_interval_secs.max(1);
         let recon = svc.clone();
+        let daemon_shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = daemon_shutdown.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
                 let outcome = recon.reconcile_once().await;
                 if !outcome.ok {
                     if let Some(err) = &outcome.error {
@@ -368,11 +385,15 @@ async fn main() -> Result<(), anyhow::Error> {
 
         let interval_secs = app_config.membership.accrual_interval_secs.max(1);
         let cycle = svc.clone();
+        let daemon_shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = daemon_shutdown.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
                 let outcome = cycle.run_cycle().await;
                 if !outcome.ok {
                     if let Some(err) = &outcome.error {
@@ -419,6 +440,7 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let app_state = AppState {
+        shutdown: shutdown.clone(),
         config_manager,
         db: db_manager,
         audit_logger,
@@ -445,11 +467,15 @@ async fn main() -> Result<(), anyhow::Error> {
     // tools to a member's affordable set), which needs the whole state. Hourly.
     if app_config.tool_billing.enabled {
         let sweep_state = app_state.clone();
+        let daemon_shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = daemon_shutdown.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
                 if let Some(svc) = &sweep_state.tool_billing {
                     match svc.sweep_abandoned() {
                         Ok(0) => {}
@@ -535,8 +561,72 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Server starting on {}", app_config.server.bind_address);
     info!("Site URL: {}", app_config.site.site_url);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    info!("Server stopped accepting connections; draining background work");
+    if shutdown.finish().await {
+        info!("Background work drained cleanly");
+    } else {
+        // Named rather than shrugged at: "we stopped cleanly" and "we gave up
+        // waiting and some deliveries were lost" are different events, and a
+        // log that renders them identically is a log that hides the second.
+        warn!(
+            "Background work did not finish within {:?}; some in-flight work was abandoned",
+            css_server::shutdown::DRAIN_DEADLINE
+        );
+    }
     Ok(())
+}
+
+/// Resolve when the process is asked to stop.
+///
+/// Installing this handler is not optional decoration, and not only about
+/// draining connections politely (#102). The container runs this binary
+/// directly as PID 1, and **the kernel does not deliver a signal to PID 1
+/// unless PID 1 has installed a handler for it**. With no handler, SIGTERM was
+/// discarded outright: podman waited out its ten-second stop timeout on every
+/// single stop and then SIGKILLed us. `css-update.timer` checks for a new
+/// `:dev` build every fifteen minutes, so that was the normal deployment path,
+/// not an occasional manual restart.
+///
+/// SIGINT as well, so that Ctrl-C in a terminal takes the same path as a
+/// deployment rather than a different one -- a shutdown route that only
+/// production exercises is a shutdown route nobody has tested.
+///
+/// Resolving this future is only the trigger. What happens next is
+/// [`css_server::shutdown`]: background loops are cancelled between iterations,
+/// and detached work that must finish is waited for, bounded by a deadline.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Failing to install the handler is worth saying out loud: it is the
+            // difference between a clean stop and being killed, and it would
+            // otherwise present as "deploys are slow" months later.
+            Err(e) => {
+                error!(
+                    "Could not install SIGTERM handler, stops will be abrupt: {}",
+                    e
+                );
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = terminate => info!("SIGTERM received"),
+        result = tokio::signal::ctrl_c() => match result {
+            Ok(()) => info!("SIGINT received"),
+            Err(e) => error!("Could not listen for SIGINT: {}", e),
+        },
+    }
 }
 
 /// Test basic database operations

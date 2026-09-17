@@ -62,6 +62,7 @@ impl WebhookDispatcher {
     pub fn start(
         db: Arc<DatabaseManager>,
         config: Arc<ConfigManager>,
+        shutdown: crate::shutdown::Shutdown,
     ) -> (Arc<Self>, mpsc::UnboundedSender<AuditLog>) {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -75,13 +76,44 @@ impl WebhookDispatcher {
         let (tx, mut rx) = mpsc::unbounded_channel::<AuditLog>();
 
         let consumer = dispatcher.clone();
+        let consumer_shutdown = shutdown.clone();
         tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                let d = consumer.clone();
-                // One task per event so a slow endpoint can't block others.
-                tokio::spawn(async move { d.handle_event(event).await });
+            loop {
+                tokio::select! {
+                    maybe = rx.recv() => match maybe {
+                        Some(event) => {
+                            let d = consumer.clone();
+                            // One task per event so a slow endpoint can't block
+                            // others. Tracked, so shutdown waits for a delivery
+                            // that is already in flight (#102).
+                            consumer_shutdown.spawn(async move { d.handle_event(event).await });
+                        }
+                        None => {
+                            debug!("Webhook dispatch channel closed; consumer stopping");
+                            return;
+                        }
+                    },
+                    _ = consumer_shutdown.cancelled() => break,
+                }
             }
-            debug!("Webhook dispatch channel closed; consumer stopping");
+
+            // Cancelled with events still queued. Those are audit events that
+            // were accepted and told they would be delivered, so drain what is
+            // already in hand before stopping -- the deliveries themselves are
+            // tracked and bounded by the drain deadline.
+            //
+            // `try_recv` rather than `recv`: the senders are alive for the
+            // lifetime of the process, so awaiting would block until the
+            // deadline on every shutdown instead of finishing immediately.
+            let mut drained = 0usize;
+            while let Ok(event) = rx.try_recv() {
+                let d = consumer.clone();
+                consumer_shutdown.spawn(async move { d.handle_event(event).await });
+                drained += 1;
+            }
+            if drained > 0 {
+                debug!("Webhook consumer drained {drained} queued event(s) at shutdown");
+            }
         });
 
         (dispatcher, tx)

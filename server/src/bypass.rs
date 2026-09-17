@@ -39,7 +39,7 @@ impl BypassService {
 
     /// Run the sweep forever. Mirrors the doors schedule ticker and the
     /// membership renewal cycle: a periodic pass that writes audit rows.
-    pub async fn run(self) {
+    pub async fn run(self, shutdown: crate::shutdown::Shutdown) {
         let period = std::time::Duration::from_secs(self.config.liveness_sweep_secs.max(1));
         let mut ticker = tokio::time::interval(period);
         // The first tick completes immediately; skipping it avoids reporting
@@ -47,7 +47,14 @@ impl BypassService {
         // chance to check in after a restart.
         ticker.tick().await;
         loop {
-            ticker.tick().await;
+            // Between passes, never during one. A sweep writes audit rows, and
+            // being cut part-way through leaves the detector having noticed
+            // something and not recorded it -- which is the one outcome this
+            // service exists to prevent (#102).
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = ticker.tick() => {}
+            }
             if let Err(e) = self.sweep_once() {
                 error!("Bypass liveness sweep failed: {}", e);
             }
@@ -58,6 +65,7 @@ impl BypassService {
                 error!("Bypass unauthorized-power check failed: {}", e);
             }
         }
+        info!("Bypass liveness sweep stopped");
     }
 
     /// One pass: compare every bound module's last report against the threshold,

@@ -124,19 +124,34 @@ impl GroupsIoService {
         db: Arc<DatabaseManager>,
         config: Arc<ConfigManager>,
         client: GroupsioClient,
+        shutdown: crate::shutdown::Shutdown,
     ) -> (Arc<Self>, mpsc::UnboundedSender<AuditLog>) {
         let svc = Arc::new(Self { db, config, client });
         let (tx, mut rx) = mpsc::unbounded_channel::<AuditLog>();
 
         let consumer = svc.clone();
+        let consumer_shutdown = shutdown.clone();
         tokio::spawn(async move {
             info!("Groups.io sync consumer started");
             // Sequential on purpose: events for one member (subscribe then
             // unsubscribe) must apply in order. Volume is low.
-            while let Some(event) = rx.recv().await {
-                consumer.handle_event(event).await;
+            loop {
+                tokio::select! {
+                    maybe = rx.recv() => match maybe {
+                        Some(event) => consumer.handle_event(event).await,
+                        None => {
+                            debug!("Groups.io event channel closed; consumer stopping");
+                            return;
+                        }
+                    },
+                    // Between events, never during one. Cancelling mid-event
+                    // could leave a member subscribed upstream with nothing
+                    // locally recording it, and the ordering this loop exists
+                    // to preserve is exactly what a partial apply breaks.
+                    _ = consumer_shutdown.cancelled() => break,
+                }
             }
-            debug!("Groups.io event channel closed; consumer stopping");
+            debug!("Groups.io sync consumer stopped");
         });
 
         (svc, tx)

@@ -258,24 +258,25 @@ async fn boot_reset(
             device_id
         );
 
-        let audit_logger = state.audit_logger.clone();
         let details = serde_json::json!({
             "device_id": device_id,
             "tools_reset": count,
             "reason": "boot-reset",
         });
-        tokio::spawn(async move {
-            let _ = audit_logger
-                .log_event(
-                    crate::models::AuditEventType::ToolDeactivated,
-                    None,
-                    None,
-                    details,
-                    None,
-                    None,
-                )
-                .await;
-        });
+        if let Err(e) = state
+            .audit_logger
+            .log_event(
+                crate::models::AuditEventType::ToolDeactivated,
+                None,
+                None,
+                details,
+                None,
+                None,
+            )
+            .await
+        {
+            tracing::error!("Failed to write audit event: {}", e);
+        }
 
         broadcast_toolguard_state(&state).await;
     }
@@ -1256,20 +1257,21 @@ async fn log_revoked_card_presented(
         "card_status": card.status,
         "context": "tool",
     });
-    let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
-    tokio::spawn(async move {
-        let _ = audit_logger
-            .log_event(
-                crate::models::AuditEventType::RevokedCardPresented,
-                Some(user_id),
-                Some(user_id),
-                details,
-                None,
-                None,
-            )
-            .await;
-    });
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::RevokedCardPresented,
+            Some(user_id),
+            Some(user_id),
+            details,
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::error!("Failed to write audit event: {}", e);
+    }
     Ok(())
 }
 
@@ -1301,20 +1303,21 @@ async fn log_tool_access_denied(
         "reason": reason,
         "card_provided": user.is_none(),
     });
-    let audit_logger = state.audit_logger.clone();
     let user_id = user.map(|u| u.id);
-    tokio::spawn(async move {
-        let _ = audit_logger
-            .log_event(
-                crate::models::AuditEventType::ToolAccessDenied,
-                user_id,
-                user_id,
-                details,
-                None,
-                None,
-            )
-            .await;
-    });
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::ToolAccessDenied,
+            user_id,
+            user_id,
+            details,
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::error!("Failed to write audit event: {}", e);
+    }
     Ok(())
 }
 
@@ -1329,20 +1332,21 @@ async fn log_tool_activated(
         "toolguard_id": toolguard_id,
         "action": "activated",
     });
-    let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
-    tokio::spawn(async move {
-        let _ = audit_logger
-            .log_event(
-                crate::models::AuditEventType::ToolActivated,
-                Some(user_id),
-                Some(user_id),
-                details,
-                None,
-                None,
-            )
-            .await;
-    });
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::ToolActivated,
+            Some(user_id),
+            Some(user_id),
+            details,
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::error!("Failed to write audit event: {}", e);
+    }
     Ok(())
 }
 
@@ -1357,20 +1361,21 @@ async fn log_tool_deactivated(
         "toolguard_id": toolguard_id,
         "action": "deactivated",
     });
-    let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
-    tokio::spawn(async move {
-        let _ = audit_logger
-            .log_event(
-                crate::models::AuditEventType::ToolDeactivated,
-                Some(user_id),
-                Some(user_id),
-                details,
-                None,
-                None,
-            )
-            .await;
-    });
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::ToolDeactivated,
+            Some(user_id),
+            Some(user_id),
+            details,
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::error!("Failed to write audit event: {}", e);
+    }
     Ok(())
 }
 
@@ -1389,19 +1394,20 @@ async fn log_tool_usage(
         "temperature": temperature,
         "duration_minutes": seconds / 60.0,
     });
-    let audit_logger = state.audit_logger.clone();
     let user_id = user.id;
-    tokio::spawn(async move {
-        let _ = audit_logger
-            .log_event(
-                crate::models::AuditEventType::ToolUsageLogged,
-                Some(user_id),
-                Some(user_id),
-                details,
-                None,
-                None,
-            )
-            .await;
-    });
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::ToolUsageLogged,
+            Some(user_id),
+            Some(user_id),
+            details,
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::error!("Failed to write audit event: {}", e);
+    }
     Ok(())
 }

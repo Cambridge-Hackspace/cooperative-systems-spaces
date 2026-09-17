@@ -75,17 +75,19 @@ pub async fn app_state() -> AppState {
     let config_manager = Arc::new(ConfigManager::new(config.clone(), None));
     let db = Arc::new(DatabaseManager::disconnected());
 
+    let shutdown = crate::shutdown::Shutdown::new();
     let (webhook_dispatcher, _audit_tx) =
-        WebhookDispatcher::start(db.clone(), config_manager.clone());
+        WebhookDispatcher::start(db.clone(), config_manager.clone(), shutdown.clone());
 
     let device_registry = DeviceChannelRegistry::new();
     let device_transport = Arc::new(DeviceTransport::new(device_registry.clone(), None));
 
-    let pages_service = PagesService::new(config.pages.clone())
+    let pages_service = PagesService::new(config.pages.clone(), shutdown.clone())
         .await
         .expect("PagesService::new with both repos None does no I/O");
 
     AppState {
+        shutdown,
         audit_logger: AuditLogger::new(db.clone()),
         throttle_service: Arc::new(RegistrationThrottleService::new()),
         recaptcha_service: Arc::new(RecaptchaService::new(String::new())),
