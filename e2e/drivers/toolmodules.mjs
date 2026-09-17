@@ -21,7 +21,7 @@
 // all, so it is skipped with that reason rather than reported as a defect in
 // this feature. Everything that does not need a device still runs there.
 
-import { GET, POST, DELETE, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { GET, POST, DELETE, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
 const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
 const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
@@ -196,6 +196,105 @@ main(async () => {
       },
     })
     assertEq('toolmodules/foreign-source-module-is-400', 400, crossed.status)
+
+    // --- /sync is scoped to what the device is bound to (#104) --------------
+    //
+    // It used to return every tool and every member's card value to whoever
+    // asked: `build_sync_payload` took a device id, echoed it into the
+    // response, and scoped nothing. One compromised reader yielded the card
+    // identifier of the entire membership plus the full authorization matrix.
+    //
+    // Two devices, two tools, and a member authorized for exactly one of them.
+    // The assertions are deliberately two-sided: that each device sees its own,
+    // and that neither sees the other's. Over-inclusion is the failure here, and
+    // a test that only checks the expected rows are present passes on a payload
+    // containing everything.
+    const openTool = await POST('/api/tools', {
+      token: admin.token,
+      body: { name: `Sync Open ${tag}`, category: 'other', external_id: `tm-sync-open-${tag}` },
+    })
+    const openToolId = openTool.json?.data?.id
+    // Training-gated, so the member below is NOT authorized for it. That is what
+    // makes the user-level assertion mean something rather than comparing two
+    // lists that happen to be equal.
+    const gatedTool = await POST('/api/tools', {
+      token: admin.token,
+      body: {
+        name: `Sync Gated ${tag}`,
+        category: 'other',
+        external_id: `tm-sync-gated-${tag}`,
+        requires_training: true,
+      },
+    })
+    const gatedToolId = gatedTool.json?.data?.id
+
+    const member = await account(`tm_sync_${tag}`)
+    const cardCode = `TMSYNC-${tag}`
+    const card = await POST(`/api/cards/user/${member.user.id}`, {
+      token: admin.token,
+      body: { code: cardCode },
+    })
+    ok('toolmodules/sync-member-card', card.status < 300, `issue card -> ${card.status}`)
+
+    const syncDevice = async (name, mac, boundToolId) => {
+      const inv = await POST('/api/admin/devices/invite', {
+        token: admin.token,
+        body: { expires_in_hours: 1 },
+      })
+      const r = await POST('/api/devices/register', {
+        body: {
+          device_code: inv.json?.data?.device_code,
+          name: `${name}-${tag}`,
+          kind: 'card_reader',
+          mac_address: mac,
+          software_version: '0.0.0-e2e',
+          platform: 'linux',
+        },
+      })
+      const id = r.json?.data?.device_id ?? r.json?.device_id
+      const token = r.json?.data?.auth_token ?? r.json?.auth_token
+      if (boundToolId) {
+        await POST('/api/admin/tool-modules', {
+          token: admin.token,
+          body: { tool_id: boundToolId, device_id: id, role: 'reader', name: `${name} reader` },
+        })
+      }
+      const sync = await GET('/api/toolguard/sync', { token })
+      const body = sync.json?.data ?? sync.json
+      return {
+        status: sync.status,
+        tools: (body?.tools ?? []).map((t) => t.id),
+        cards: (body?.users ?? []).map((u) => u.profile_field_value),
+      }
+    }
+
+    const openReader = await syncDevice('sync-open', '02:00:00:00:04:01', openToolId)
+    const gatedReader = await syncDevice('sync-gated', '02:00:00:00:04:02', gatedToolId)
+    const unbound = await syncDevice('sync-unbound', '02:00:00:00:04:03', null)
+
+    assertEq('toolmodules/sync-answers', 200, openReader.status)
+
+    ok('toolmodules/sync-has-its-own-tool', openReader.tools.includes(openToolId),
+      `the device bound to the open tool did not receive it: ${JSON.stringify(openReader.tools)}`)
+    ok('toolmodules/sync-omits-another-devices-tool', !openReader.tools.includes(gatedToolId),
+      `a reader bound to one tool received another device's tool: ${JSON.stringify(openReader.tools)}`)
+    ok('toolmodules/sync-omits-in-both-directions', !gatedReader.tools.includes(openToolId),
+      `scoping leaks the other way too: ${JSON.stringify(gatedReader.tools)}`)
+
+    // The card value is the part that matters. A reader bound to a tool this
+    // member cannot use has no business learning their card.
+    ok('toolmodules/sync-has-the-authorized-members-card', openReader.cards.includes(cardCode),
+      `the member authorized for this device's tool is missing: ${JSON.stringify(openReader.cards)}`)
+    ok('toolmodules/sync-withholds-an-unauthorized-members-card',
+      !gatedReader.cards.includes(cardCode),
+      `a device received the card of a member not authorized for anything it serves: ` +
+        JSON.stringify(gatedReader.cards))
+
+    // Deny by default, with no exemption for any device kind: bound to nothing,
+    // it authorizes nobody. The server logs a warning naming the device, because
+    // this and a misconfiguration look identical from the device's side.
+    assertEq('toolmodules/sync-unbound-device-gets-no-tools', 0, unbound.tools.length)
+    assertEq('toolmodules/sync-unbound-device-gets-no-cards', 0, unbound.cards.length)
 
     // --- capabilities decide which enforcement tier is available -------------
     // A second tool wired to an integrated module: the reed is wired straight to
