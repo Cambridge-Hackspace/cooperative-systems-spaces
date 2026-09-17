@@ -8,6 +8,7 @@ name = "kiosk"
 path = "src/main.rs"
 
 [dependencies]
+css_lib = { path = "../css_lib" }
 winit = { version = "0.30", features = ["wayland-dlopen"] }
 bevy = { version = "0.18"}
 #bevy = { version = "0.18", default-features = false, features = [

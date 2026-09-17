@@ -153,6 +153,60 @@ pub struct PowerStateTool {
     pub circuit_id: Option<String>,
 }
 
+/// The **edge ↔ module** vocabulary, on the *local* broker.
+///
+/// [`kinds`] above is the server ↔ device wire: namespaced under
+/// `{namespace}/devices/{device_id}/`, spoken over the internet or the site
+/// link. This module is the other wire entirely -- unnamespaced topics on the
+/// broker the edge runs, spoken by the ToolGuards, card readers and plugs in
+/// the same building. A module's counterparty is the edge, not the server, so
+/// for firmware this is the vocabulary that matters most.
+///
+/// These constants lived as string literals in four crates -- `edge`,
+/// `toolguard-test-ui`, `toolguard-status-ui` and `kiosk` -- each with its own
+/// copy and no way to notice when another changed. That is not a hypothetical:
+/// it is how `toolguard-test-ui` came to be speaking the protocol as it stood
+/// before #83 and #84, with nothing to say so. One vocabulary, one place, and
+/// `checks/tests/the_firmware_protocol_is_documented.rs` holds `FIRMWARE.md` to
+/// it in both directions.
+pub mod local {
+    // ── module → edge (the edge subscribes) ──────────────────────────────
+
+    /// A card was presented at a tool: `{ card, tool_id, api_key? }`.
+    pub const TOOL_ON_REQUEST: &str = "toolguard/request/tool-on";
+    /// The session ended: `{ card, tool_id, api_key? }`.
+    pub const TOOL_OFF_REQUEST: &str = "toolguard/request/tool-off";
+    /// Usage to bill or record: `{ card, tool_id, seconds, temperature?, api_key? }`.
+    pub const TOOL_LOG_REQUEST: &str = "toolguard/request/tool-log";
+    /// A power module's reading: `{ tool_id, draw_now, voltage_now, relay_on?, ... }`.
+    /// Decimal fields are strings; `relay_on` absent means "cannot report",
+    /// which is not the same as `false`.
+    pub const POWER_REQUEST: &str = "toolguard/request/power";
+    /// An RFID scan from a door's hardware bridge: `{ door_id, card_id }`.
+    pub const DOOR_SCAN_REQUEST: &str = "door/request/scan";
+    /// A kiosk asking the edge to re-push its state. No payload.
+    pub const KIOSK_REFRESH_REQUEST: &str = "kiosk/refresh";
+
+    // ── edge → module (the edge publishes) ───────────────────────────────
+
+    /// Answer to [`TOOL_ON_REQUEST`]. Carries the server's `ToolGuardResponse`,
+    /// so the `tool_on: true`-or-nothing rule applies here exactly as it does
+    /// over HTTP: absence of `tool_on` is not permission.
+    pub const TOOL_ON_RESPONSE: &str = "toolguard/response/tool-on";
+    /// Answer to [`TOOL_OFF_REQUEST`].
+    pub const TOOL_OFF_RESPONSE: &str = "toolguard/response/tool-off";
+    /// Answer to [`TOOL_LOG_REQUEST`].
+    pub const TOOL_LOG_RESPONSE: &str = "toolguard/response/tool-log";
+    /// Ack for [`POWER_REQUEST`]: `{ "ok": true }`. An ack, not an instruction
+    /// -- a power module must never read this as permission to stay energized.
+    pub const POWER_RESPONSE: &str = "toolguard/response/power";
+    /// A momentary unlock for a door's relay: `{ door_id, duration_ms }`.
+    pub const DOOR_UNLOCK_RESPONSE: &str = "door/response/unlock";
+    /// The cached allow-list, pushed whenever it changes. The local twin of
+    /// `GET /api/toolguard/sync`.
+    pub const STATE: &str = "toolguard/state";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

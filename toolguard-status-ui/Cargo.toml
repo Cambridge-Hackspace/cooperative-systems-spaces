@@ -8,6 +8,7 @@ name = "toolguard-status-ui"
 path = "src/main.rs"
 
 [dependencies]
+css_lib = { path = "../css_lib" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

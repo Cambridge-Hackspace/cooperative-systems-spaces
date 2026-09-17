@@ -5161,6 +5161,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "chrono",
+ "css_lib",
  "paho-mqtt",
  "serde",
  "serde_json",
@@ -8504,6 +8505,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 name = "toolguard-status-ui"
 version = "0.1.0"
 dependencies = [
+ "css_lib",
  "eframe",
  "egui",
  "paho-mqtt",
@@ -8516,6 +8518,7 @@ dependencies = [
 name = "toolguard-test-ui"
 version = "0.1.0"
 dependencies = [
+ "css_lib",
  "eframe",
  "egui",
  "paho-mqtt",

@@ -78,10 +78,14 @@ struct SyncPayload {
 }
 
 // ── Response topics ───────────────────────────────────────────────────────────
+//
+// From `css_lib::wire::local`, not a private copy. This file held its own set
+// until #83 and #84 added topics it never learned about, and nothing existed to
+// say so -- which is the exact failure the shared vocabulary exists to prevent.
 
-const TOOL_ON_RESP: &str = "toolguard/response/tool-on";
-const TOOL_OFF_RESP: &str = "toolguard/response/tool-off";
-const STATE_TOPIC: &str = "toolguard/state";
+use css_lib::wire::local::{
+    STATE as STATE_TOPIC, TOOL_OFF_RESPONSE as TOOL_OFF_RESP, TOOL_ON_RESPONSE as TOOL_ON_RESP,
+};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -216,7 +220,7 @@ fn tool_payload(card: &str, tool_id: &str, seconds: Option<f32>, api_key: Option
 
 fn publish_tool_on(client: &mqtt::Client, card: &str, tool_id: &str, api_key: Option<&str>) {
     let payload = tool_payload(card, tool_id, None, api_key);
-    let msg = mqtt::Message::new("toolguard/request/tool-on", payload, 1);
+    let msg = mqtt::Message::new(css_lib::wire::local::TOOL_ON_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
         eprintln!("Failed to publish tool-on: {e}");
     }
@@ -230,7 +234,7 @@ fn publish_tool_log(
     api_key: Option<&str>,
 ) {
     let payload = tool_payload(card, tool_id, Some(seconds), api_key);
-    let msg = mqtt::Message::new("toolguard/request/tool-log", payload, 1);
+    let msg = mqtt::Message::new(css_lib::wire::local::TOOL_LOG_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
         eprintln!("Failed to publish tool-log: {e}");
     }
@@ -238,7 +242,7 @@ fn publish_tool_log(
 
 fn publish_tool_off(client: &mqtt::Client, card: &str, tool_id: &str, api_key: Option<&str>) {
     let payload = tool_payload(card, tool_id, None, api_key);
-    let msg = mqtt::Message::new("toolguard/request/tool-off", payload, 1);
+    let msg = mqtt::Message::new(css_lib::wire::local::TOOL_OFF_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
         eprintln!("Failed to publish tool-off: {e}");
     }
