@@ -42,6 +42,7 @@ path = "src/bin/toolpass_load.rs"
 # Workspace dependencies
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

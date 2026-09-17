@@ -48,6 +48,17 @@ pub struct PageStore {
     pub site_nav: Vec<NavItem>,
     /// Site index page content (from site_embed_index config)
     pub site_index: Option<Page>,
+    /// The wiki repository's default branch, as resolved at the last publish.
+    ///
+    /// Lives on the snapshot rather than on the service so that publishing
+    /// cannot leave half of it behind. It used to sit on `PagesService`, which
+    /// meant only the path holding `&mut self` could set it -- so the manual
+    /// refresh updated the branch and the periodic updater silently did not
+    /// (#103). Two code paths doing almost the same thing is the shape that
+    /// produced #81; there is now one snapshot and one way to publish it.
+    pub wiki_default_branch: Option<String>,
+    /// The site repository's default branch. See `wiki_default_branch`.
+    pub site_default_branch: Option<String>,
 }
 
 /// Navigation item for building menus.
@@ -90,8 +101,6 @@ pub struct PagesService {
     store: Arc<RwLock<PageStore>>,
     wiki_repo_path: Option<PathBuf>,
     site_repo_path: Option<PathBuf>,
-    wiki_default_branch: Option<String>,
-    site_default_branch: Option<String>,
     /// Serialises refreshes of one checkout against each other. Not the store's
     /// lock: this one may be held across a network fetch precisely because no
     /// request handler ever waits on it.
@@ -101,7 +110,7 @@ pub struct PagesService {
 
 impl PagesService {
     /// Create a new pages service and start it with initial build and auto-updating
-    pub async fn new(config: PagesConfig) -> Result<Self> {
+    pub async fn new(config: PagesConfig, shutdown: crate::shutdown::Shutdown) -> Result<Self> {
         let wiki_repo_path = config
             .wiki_repo()
             .as_ref()
@@ -116,8 +125,6 @@ impl PagesService {
             store: Arc::new(RwLock::new(PageStore::default())),
             wiki_repo_path,
             site_repo_path,
-            wiki_default_branch: None,
-            site_default_branch: None,
             wiki_sync: Arc::new(tokio::sync::Mutex::new(())),
             site_sync: Arc::new(tokio::sync::Mutex::new(())),
         };
@@ -137,9 +144,13 @@ impl PagesService {
             let period = service.config.wiki_period();
             let gate = Arc::clone(&service.wiki_sync);
 
+            let daemon_shutdown = shutdown.clone();
             tokio::spawn(async move {
                 loop {
-                    sleep(Duration::from_secs(period as u64)).await;
+                    tokio::select! {
+                        _ = daemon_shutdown.cancelled() => break,
+                        _ = sleep(Duration::from_secs(period as u64)) => {}
+                    }
                     info!("Auto-updating wiki pages");
                     if let Err(e) =
                         Self::update_wiki_static(&config, &wiki_repo_path, &store, &gate).await
@@ -157,9 +168,13 @@ impl PagesService {
             let period = service.config.site_period();
             let gate = Arc::clone(&service.site_sync);
 
+            let daemon_shutdown = shutdown.clone();
             tokio::spawn(async move {
                 loop {
-                    sleep(Duration::from_secs(period as u64)).await;
+                    tokio::select! {
+                        _ = daemon_shutdown.cancelled() => break,
+                        _ = sleep(Duration::from_secs(period as u64)) => {}
+                    }
                     info!("Auto-updating site pages");
                     if let Err(e) =
                         Self::update_site_static(&config, &site_repo_path, &store, &gate).await
@@ -206,12 +221,12 @@ impl PagesService {
 
     /// Get the wiki repository default branch
     pub fn get_wiki_default_branch(&self) -> Option<String> {
-        self.wiki_default_branch.clone()
+        self.store.read().unwrap().wiki_default_branch.clone()
     }
 
     /// Get the site repository default branch
     pub fn get_site_default_branch(&self) -> Option<String> {
-        self.site_default_branch.clone()
+        self.store.read().unwrap().site_default_branch.clone()
     }
 
     /// Build all enabled page types
@@ -293,10 +308,6 @@ impl PagesService {
     /// Synchronous and brief: the only part of a refresh that needs exclusive
     /// access to the service, and the only part worth making readers wait for.
     pub fn publish(&mut self, prepared: PreparedPages) -> usize {
-        match prepared.page_type {
-            PageType::Wiki => self.wiki_default_branch = prepared.default_branch.clone(),
-            PageType::Site => self.site_default_branch = prepared.default_branch.clone(),
-        }
         Self::publish_into(&self.store, prepared)
     }
 
@@ -309,11 +320,13 @@ impl PagesService {
             PageType::Wiki => {
                 guard.wiki_pages = prepared.pages;
                 guard.wiki_nav = prepared.nav;
+                guard.wiki_default_branch = prepared.default_branch;
             }
             PageType::Site => {
                 guard.site_pages = prepared.pages;
                 guard.site_nav = prepared.nav;
                 guard.site_index = prepared.site_index;
+                guard.site_default_branch = prepared.default_branch;
             }
         }
         count
@@ -710,6 +723,73 @@ impl PagesService {
 
         // Last resort fallback
         Ok("main".to_string())
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+
+    fn prepared(page_type: PageType, branch: &str) -> PreparedPages {
+        PreparedPages {
+            page_type,
+            pages: HashMap::new(),
+            nav: Vec::new(),
+            site_index: None,
+            default_branch: Some(branch.to_string()),
+        }
+    }
+
+    /// #103: the branch a `prepare` resolved has to survive publication.
+    ///
+    /// It used to be assigned by `publish`, which needs `&mut self` -- so the
+    /// periodic updater, which has only the store, resolved the branch and
+    /// dropped it on the floor. The fix is not "remember to set it in both
+    /// places": it is that there is one place, and this asserts the snapshot
+    /// carries the branch after the only write path runs.
+    #[test]
+    fn publishing_carries_the_default_branch_into_the_snapshot() {
+        let store = Arc::new(RwLock::new(PageStore::default()));
+
+        PagesService::publish_into(&store, prepared(PageType::Wiki, "main"));
+        assert_eq!(
+            Some("main".to_string()),
+            store.read().unwrap().wiki_default_branch
+        );
+
+        PagesService::publish_into(&store, prepared(PageType::Site, "trunk"));
+        assert_eq!(
+            Some("trunk".to_string()),
+            store.read().unwrap().site_default_branch
+        );
+    }
+
+    /// Publishing one repository must not disturb the other's branch. They
+    /// share a snapshot now, which is what makes this worth asserting.
+    #[test]
+    fn publishing_one_repository_leaves_the_other_alone() {
+        let store = Arc::new(RwLock::new(PageStore::default()));
+        PagesService::publish_into(&store, prepared(PageType::Site, "trunk"));
+        PagesService::publish_into(&store, prepared(PageType::Wiki, "main"));
+
+        let guard = store.read().unwrap();
+        assert_eq!(Some("trunk".to_string()), guard.site_default_branch);
+        assert_eq!(Some("main".to_string()), guard.wiki_default_branch);
+    }
+
+    /// A repository whose branch could not be resolved publishes `None` rather
+    /// than keeping a stale value from an earlier build. A branch that no longer
+    /// resolves is not evidence that the old answer is still right.
+    #[test]
+    fn an_unresolved_branch_clears_the_previous_one() {
+        let store = Arc::new(RwLock::new(PageStore::default()));
+        PagesService::publish_into(&store, prepared(PageType::Wiki, "main"));
+
+        let mut later = prepared(PageType::Wiki, "ignored");
+        later.default_branch = None;
+        PagesService::publish_into(&store, later);
+
+        assert_eq!(None, store.read().unwrap().wiki_default_branch);
     }
 }
 
