@@ -90,6 +90,21 @@ integrations locally.
 
 Then point a webhook at `http://127.0.0.1:4398/hook` and hit **Test** in Admin → Webhooks.
 
+## Writing firmware
+
+Building a ToolGuard, a card reader, a power controller or a sensor to talk to a
+CSS instance? [**FIRMWARE.md**](FIRMWARE.md) is the wire contract: authentication,
+the registration handshake, every device-facing endpoint, the MQTT topics, and
+the failure semantics your firmware has to honour. It also tells you how to bring
+up a seeded instance to develop against.
+
+It is checked against the code — an endpoint cannot land undocumented, and the
+document cannot describe an endpoint that no longer exists.
+
+## Testing
+
+[TESTING.md](TESTING.md) describes the test battery and the ethic behind it.
+
 ## LICENSE
 
 **Cooperative Systems**: _Spaces_ is Free Software under the AGPL.

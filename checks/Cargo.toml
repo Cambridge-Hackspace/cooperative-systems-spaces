@@ -28,6 +28,11 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 walkdir = "2.5"
+# For reading e2e/corpus/endpoints.json as data rather than by regex: the
+# firmware-protocol check compares the documented routes against the generated
+# route corpus, and a check that parsed JSON with string matching would be
+# wrong about exactly the edge cases it exists to catch.
+serde_json = { workspace = true }
 # For reading tracked config files as data. Deliberately not `css-server`:
 # this crate stays compilable on a workstation where the server is not.
 toml = { workspace = true }

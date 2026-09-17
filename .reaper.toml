@@ -171,7 +171,10 @@ disk_gb = 96
 #
 # Brings the stack up and leaves it up: `down` is absent from the stage list on
 # purpose, and so is every assertion tier. What you get is Postgres, mosquitto
-# and css-server on the session's own address, plus one admin account.
+# and css-server on the session's own address, an admin account, a small tool
+# inventory with training steps, and a firmware fixture -- a tool that needs no
+# training, a member holding a card, and an unclaimed device invite. FIRMWARE.md
+# documents the last of those and prints the values it seeds.
 #
 #   reaper test --profile devlive     # bring it up, print the URL
 #   reaper renew                      # before the ttl runs out
@@ -198,7 +201,15 @@ disk_gb = 96
 # TOTP and recovery codes are unaffected.
 ttl        = "10h"
 warm_cache = true
-env = { CSS_E2E_STAGES = "preflight,up,devseed", CSS_E2E_BIND = "0.0.0.0" }
+# UTF8, unlike every assertion profile. The default LATIN1 cluster earns its
+# place in the battery -- it is what proves astral text becomes a 4xx rather
+# than a 500 -- but a device invite code is eight emoji, so LATIN1 cannot store
+# one, and a development instance that cannot issue an invite is one no device
+# can register against. Registration is the first thing firmware does (see
+# FIRMWARE.md), so this is the difference between devlive being fit for its
+# stated purpose and not. No assertion tier is affected: the encoding coverage
+# lives in the default battery, which this profile does not run.
+env = { CSS_E2E_STAGES = "preflight,up,devseed", CSS_E2E_BIND = "0.0.0.0", CSS_E2E_DB_ENCODING = "UTF8" }
 
 [profiles.dev]
 ttl        = "4h"
