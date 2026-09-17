@@ -450,12 +450,20 @@ stop_stripe_sink() {
 # The runtime image: the shipping Dockerfile's runtime stage, minus the parts
 # that only matter in production. Built here rather than pulled because there is
 # no published image carrying these binaries, and built from a digest-pinned
-# base so the only unpinned bytes are the two apt packages.
+# base so the only unpinned bytes are the apt packages.
+#
+# `git` is not a production convenience -- it is a runtime dependency of the
+# pages service, which shells out to clone and pull the wiki and site
+# repositories. It was absent here, so a stack could not have served a wiki even
+# if one had been configured, and the pages pipeline had no coverage at all.
+# That is how #81 shipped a navigation that silently discarded sixty of
+# sixty-seven pages. `checks/tests/the_stack_runtime_matches_the_shipping_image.rs`
+# now holds the two package lists to each other.
 build_runtime_image() {
   cat >"${STACK_DIR}/Containerfile" <<EOF
 FROM ${IMG_RUNTIME}
 RUN apt-get update \\
- && apt-get install -y --no-install-recommends libpq5 ca-certificates tzdata \\
+ && apt-get install -y --no-install-recommends libpq5 ca-certificates tzdata git \\
  && rm -rf /var/lib/apt/lists/*
 EOF
   log "building the runtime image"
@@ -499,9 +507,22 @@ write_stack_config() {
   fi
   export STACK_HOST="${host}"
 
+  # A wiki repository the stack can actually serve, built here rather than
+  # cloned from anywhere. The pages pipeline had no end-to-end coverage at all
+  # until now -- #81 shipped a navigation that silently dropped sixty of
+  # sixty-seven pages, and nothing in the battery could have noticed, because
+  # the stack deliberately named no repository.
+  #
+  # Local, so no bring-up touches the network. Inside STACK_DIR, so it is
+  # visible both to a server running as a host binary (external provisioning)
+  # and to one in a container, where STACK_DIR is bind-mounted at /stack.
+  make_wiki_fixture
+
   # Substituted from e2e/stack-config.toml, which is valid TOML on disk and is
   # parsed by server/tests/stack_config_parses.rs before any stack exists.
   sed \
+    -e "s|@WIKI_REPO@|${STACK_DIR}/wiki-fixture|g" \
+    -e "s|@CHECKOUT_DIR@|${STACK_DIR}|g" \
     -e "s|@SERVER_PORT@|${SERVER_PORT}|g" \
     -e "s|@STACK_TZ@|${STACK_TZ}|g" \
     -e "s|@PG_USER@|${PG_USER}|g" \
@@ -538,6 +559,58 @@ write_stack_config() {
 # restart stage now asserts the file's contents are unchanged after a boot,
 # which is the same protection stated deliberately and survives the file being
 # writable for the reasons it has to be.
+# A git repository with markdown nested two deep, which is the shape #81 got
+# wrong: folders with no same-named page at the root had their contents
+# discarded from the navigation entirely.
+#
+# TOOLS/ has no TOOLS.md on purpose. That is the condition under which the old
+# builder dropped everything beneath it, so a fixture without it would pass on
+# the code that shipped the bug.
+make_wiki_fixture() {
+  local repo="${STACK_DIR}/wiki-fixture"
+  rm -rf "${repo}"
+  mkdir -p "${repo}/TOOLS/LASERS"
+
+  printf '# Wiki Index\n\nTop level.\n' >"${repo}/INDEX.md"
+  printf '# Lathe\n\nA lathe.\n' >"${repo}/TOOLS/LATHE.md"
+  printf '# Muse\n\nA laser cutter.\n' >"${repo}/TOOLS/LASERS/MUSE.md"
+  printf '# Lasers\n\nThe laser bay.\n' >"${repo}/TOOLS/LASERS/INDEX.md"
+
+  # git is not guaranteed on the host. reaper's guest has none -- which is why
+  # preflight's artifacts/commit-matches-tree skips there -- while CI's runner
+  # does. The runtime image carries git either way (see build_runtime_image), so
+  # borrow it when the host cannot supply one.
+  #
+  # Branching on "is there a git here" rather than on how the stack was
+  # provisioned, deliberately: two branches describing one world is what
+  # checks/tests/both_driver_paths_pass_the_same_env.rs exists to catch.
+  local -a fixture_git
+  if command -v git >/dev/null 2>&1; then
+    fixture_git=(git -C "${repo}")
+  elif [[ -n ${ENGINE:-} ]]; then
+    fixture_git=("${ENGINE}" run --rm -v "${repo}:${repo}" -w "${repo}" "${IMG_SERVER_LOCAL}" git)
+  else
+    die "no git on this host and no container engine to borrow one from; the wiki fixture cannot be built"
+  fi
+
+  "${fixture_git[@]}" init -q --initial-branch=main
+  "${fixture_git[@]}" config user.email "stack@e2e.invalid"
+  "${fixture_git[@]}" config user.name "Stack Fixture"
+  "${fixture_git[@]}" add -A
+  "${fixture_git[@]}" -c commit.gpgsign=false commit -q -m "wiki fixture"
+
+  # Asserted, not assumed, and this is not a hypothetical precaution: the first
+  # version of this function logged "built wiki fixture (4 pages, nested two
+  # deep)" unconditionally. On a host without git every command above failed,
+  # the line was printed anyway, and the server's clone failed four stages later
+  # naming a path rather than a cause. A helper that reports success it did not
+  # verify is worse than one that does nothing.
+  if [[ ! -e "${repo}/.git/HEAD" ]]; then
+    die "the wiki fixture at ${repo} is not a git repository, so css-server cannot clone it"
+  fi
+  log "built wiki fixture at ${repo} (4 pages, nested two deep)"
+}
+
 start_server() {
   local frontend="${ROOT}/frontend/dist"
   log "starting css-server on ${SERVER_PORT}"
@@ -558,6 +631,12 @@ start_server() {
       -e SSL_CERT_FILE=/stack/smtp-cert.pem \
       -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
       -v "${STACK_DIR}:/stack" \
+      `# Also at its own absolute path, not only at /stack. The generated` \
+      `# config names the wiki fixture and the checkout directory by host` \
+      `# path, and write_stack_config must not branch on provisioning to say` \
+      `# it two ways -- checks/tests/both_driver_paths_pass_the_same_env.rs` \
+      `# exists because two branches describing one world is how they drift.` \
+      -v "${STACK_DIR}:${STACK_DIR}" \
       -v "${frontend}:/frontend:ro" \
       "${IMG_SERVER_LOCAL}" /artifacts/css-server \
       >/dev/null

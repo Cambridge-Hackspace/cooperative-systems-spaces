@@ -111,14 +111,18 @@ pub struct PagesService {
 impl PagesService {
     /// Create a new pages service and start it with initial build and auto-updating
     pub async fn new(config: PagesConfig, shutdown: crate::shutdown::Shutdown) -> Result<Self> {
+        // Under the configured checkout directory rather than a hardcoded
+        // `/tmp`, so two deployments -- or two test stacks -- on one host do not
+        // share a working tree. See `PagesConfig::checkout_dir`.
+        let checkout = PathBuf::from(config.checkout_dir());
         let wiki_repo_path = config
             .wiki_repo()
             .as_ref()
-            .map(|_| PathBuf::from("/tmp/css-wiki-repo"));
+            .map(|_| checkout.join("css-wiki-repo"));
         let site_repo_path = config
             .site_repo()
             .as_ref()
-            .map(|_| PathBuf::from("/tmp/css-site-repo"));
+            .map(|_| checkout.join("css-site-repo"));
 
         let mut service = Self {
             config,
@@ -829,6 +833,12 @@ impl PagesConfig {
 
     pub fn site_readme(&self) -> bool {
         self.site_readme
+    }
+
+    /// Where the repositories are checked out. See the config field's own
+    /// documentation for why this is not a constant.
+    pub fn checkout_dir(&self) -> &str {
+        &self.checkout_dir
     }
 
     /// How long any one git invocation may run before a refresh gives up.

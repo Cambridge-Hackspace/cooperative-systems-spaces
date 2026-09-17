@@ -298,10 +298,21 @@ max_events_display = 10
 lookahead_days = 30
 
 [pages]
-# Null on purpose, and asserted null by the schema stage. PagesService::new
-# git-clones whatever is here into a hardcoded /tmp path at boot; a stack that
-# inherited the tracked config would clone two GitHub repositories on every
-# bring-up and fail closed the moment the network did.
+# A wiki, because the pages pipeline needs exercising: #81 shipped a navigation
+# that silently dropped sixty of sixty-seven pages and no tier could have caught
+# it, because this used to name no repository at all.
+#
+# Not a network repository. `make_wiki_fixture` in e2e/stack.sh builds a real
+# git repo inside STACK_DIR and this is substituted with its path, so bring-up
+# touches nothing remote. checkout_dir is stack-local for the same reason the
+# fixture is: the clone target used to be a hardcoded /tmp path, so two stacks
+# on one host raced over one working tree. server/tests/stack_config_parses.rs
+# asserts both of those properties rather than asserting "no repository", which
+# was the old way of saying the same thing with a bigger hammer.
+wiki_repo = "@WIKI_REPO@"
+checkout_dir = "@CHECKOUT_DIR@"
+# The site repo stays null: one repository is enough to exercise the pipeline,
+# and the null case is itself worth keeping covered.
 # LinkLocation is Navigation | HomePage | Both -- there is no "off". With no
 # repository configured the link has nothing to point at, so the value here is
 # only about where it would appear if one were.

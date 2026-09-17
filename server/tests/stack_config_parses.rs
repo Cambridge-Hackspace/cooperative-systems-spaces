@@ -39,6 +39,11 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@SMTP_PORT@", "2525"),
     ("@GROUPSIO_PORT@", "4390"),
     ("@STRIPE_PORT@", "4391"),
+    // Representative of what `write_stack_config` actually substitutes: both
+    // are derived from STACK_DIR, which is `${OUT}/stack` -- per-run, and the
+    // whole point of `checkout_dir` being configurable at all.
+    ("@WIKI_REPO@", "/var/tmp/css-e2e/out/stack/wiki-fixture"),
+    ("@CHECKOUT_DIR@", "/var/tmp/css-e2e/out/stack"),
 ];
 
 /// The value `substituted()` puts in for one placeholder, by name rather than
@@ -152,24 +157,52 @@ fn the_stack_config_parses_as_an_app_config() {
     );
 }
 
+/// The stack must not reach the network to build its pages, and must not share a
+/// working tree with anything else on the host.
+///
+/// This used to assert that the config named no repository at all, which was a
+/// bigger hammer than the problem: the hazards are the *network* and the
+/// *shared path*, not the existence of a repository. Saying it that way cost
+/// the pages pipeline all of its end-to-end coverage -- #81 shipped a
+/// navigation that silently discarded sixty of sixty-seven pages, and no tier
+/// could have noticed, because no tier had a wiki.
+///
+/// So the claim is narrowed to what it was always about, and the stack now
+/// builds a local fixture repository (`make_wiki_fixture` in e2e/stack.sh) and
+/// checks it out somewhere stack-local.
 #[test]
-fn the_stack_config_never_clones_anybody_s_repositories() {
+fn the_stack_config_never_clones_over_the_network() {
     let config: AppConfig = toml::from_str(&substituted()).expect("parses");
-    // `PagesService::new` git-clones whatever is here into a hardcoded
-    // /tmp/css-{wiki,site}-repo at boot. A stack that inherited the tracked
-    // config would do two network clones on every bring-up and fail closed the
-    // moment the network did -- and two test binaries doing it in parallel
-    // would race over the same /tmp path.
-    assert!(
-        config.pages.wiki_repo.is_none(),
-        "the stack config names a wiki repository: {:?}",
-        config.pages.wiki_repo
+
+    for (which, repo) in [
+        ("wiki", &config.pages.wiki_repo),
+        ("site", &config.pages.site_repo),
+    ] {
+        let Some(repo) = repo else { continue };
+        assert!(
+            !repo.contains("://") && !repo.contains('@'),
+            "the stack config names a remote {which} repository ({repo:?}). \
+             Bring-up would clone it on every run and fail closed the moment \
+             the network did; the fixture is built locally for that reason."
+        );
+        assert!(
+            repo.starts_with('/'),
+            "the {which} repository path {repo:?} is not absolute, so what it \
+             resolves to depends on the server's working directory"
+        );
+    }
+
+    // The clone target used to be a hardcoded /tmp path, which is why two test
+    // binaries could race over one working tree. Stack-local is the fix; /tmp
+    // would reintroduce exactly the collision.
+    assert_ne!(
+        "/tmp", config.pages.checkout_dir,
+        "the stack checks repositories out into the shared /tmp, so two stacks \
+         on one host would fight over the same working tree"
     );
-    assert!(
-        config.pages.site_repo.is_none(),
-        "the stack config names a site repository: {:?}",
-        config.pages.site_repo
-    );
+
+    // Auto-update stays off: the fixture never changes after bring-up, so a
+    // poller would only add a timer that can fire mid-assertion.
     assert!(!config.pages.wiki_auto_enabled && !config.pages.site_auto_enabled);
 }
 

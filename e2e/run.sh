@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -936,6 +936,24 @@ stage_toolbilling() {
 # state (active grants; disabled/released deny AND raise `revoked_card_presented`;
 # unknown denies quietly). A free, no-training tool isolates card resolution from
 # the billing and training gates. Runs against the same stack as toolbilling.
+stage_pages() {
+  cases_begin pages
+  stack_paths
+
+  if ! server_ready; then
+    record_case "pages/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit pages
+    return 1
+  fi
+  record_case "pages/stack-is-up" ok
+
+  run_node pages.mjs >"${OUT}/logs/pages.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit pages "driver=pages.mjs"
+}
+
 stage_cards() {
   cases_begin cards
   stack_paths
