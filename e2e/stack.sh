@@ -362,6 +362,32 @@ mqtt_pub() {
   fi
 }
 
+# Capture everything published on one topic for a bounded number of seconds.
+#
+# Same split as mqtt_pub, for the same reason: under container provisioning the
+# host has no mosquitto client, so the subscribe runs inside the broker's own
+# container.
+#
+# `-W` is what makes this usable as an oracle rather than a hang. The lease
+# stage needs to assert that messages STOPPED arriving, and a subscriber with no
+# deadline cannot express that -- it would block forever on exactly the outcome
+# the test is looking for. mosquitto_sub exits non-zero when the window elapses
+# without `-C` being satisfied, which is the normal case here, so the status is
+# deliberately discarded: emptiness is a result, not an error.
+mqtt_sub() {
+  local topic="$1" secs="$2" out="$3"
+  : >"${out}"
+  if [[ ${PROVISION} == "external" ]]; then
+    command -v mosquitto_sub >/dev/null 2>&1 || return 1
+    mosquitto_sub -h 127.0.0.1 -p "${MQTT_PORT}" -t "${topic}" -W "${secs}" \
+      >"${out}" 2>/dev/null || true
+  else
+    pm exec "${C_MQTT}" mosquitto_sub -h 127.0.0.1 -p "${MQTT_PORT}" \
+      -t "${topic}" -W "${secs}" >"${out}" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # Somewhere for the mailer to deliver.
 #
 # A host process in BOTH provisioning modes, unlike mosquitto, and the asymmetry
@@ -662,6 +688,27 @@ collect_server_log() {
   fi
 }
 
+# The running edge's log, as a file a stage can poll.
+#
+# Under container provisioning nothing reaches ${OUT}/logs/css-edge.log until
+# stop_edge runs `pm logs`, so a stage that waited for the edge to log something
+# would wait out its whole limit and then find the evidence only after giving
+# up. Written to its own file, and rewritten rather than appended: this is
+# polled once a second, and `pm logs` returns the entire log every time.
+collect_edge_log() {
+  if [[ ${PROVISION} == "external" ]]; then
+    cp -f "${OUT}/logs/css-edge.log" "${OUT}/logs/css-edge-live.log" 2>/dev/null || true
+  else
+    pm logs "${C_EDGE}" >"${OUT}/logs/css-edge-live.log" 2>&1 || true
+  fi
+}
+
+edge_logged() {
+  local needle="$1"
+  collect_edge_log
+  grep -q -- "${needle}" "${OUT}/logs/css-edge-live.log" 2>/dev/null
+}
+
 collect_stack_logs() {
   collect_server_log
   if [[ ${PROVISION} != "external" ]]; then
@@ -835,13 +882,20 @@ absorb_driver_cases() {
 # embeds its bundle) and `css-edge-dbg` (debug, which serves the path).
 C_EDGE="css-e2e-edge"
 
+# `start_edge <binary> <frontend-path> [config-basename]`.
+#
+# The config is a parameter rather than a fixed name so two stages can run an
+# edge in one battery without writing over each other's configuration -- the
+# devices stage runs an Unauthenticated one, the lease stage a registered one,
+# and silently sharing a file would make whichever ran second depend on the
+# order they happened to be listed in.
 start_edge() {
-  local binary="$1" frontend="$2"
+  local binary="$1" frontend="$2" config="${3:-edge.config.toml}"
   if [[ ${PROVISION} == "external" ]]; then
     RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       TZ="${STACK_TZ}" \
       "${ROOT}/e2e/artifacts/${binary}" \
-      --config "${STACK_DIR}/edge.config.toml" \
+      --config "${STACK_DIR}/${config}" \
       --frontend-path "${frontend}" \
       >>"${OUT}/logs/css-edge.log" 2>&1 &
     echo $! >"${STACK_DIR}/edge.pid"
@@ -854,7 +908,7 @@ start_edge() {
     -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
     -v "${STACK_DIR}:/stack" \
     "${IMG_SERVER_LOCAL}" "/artifacts/${binary}" \
-    --config /stack/edge.config.toml \
+    --config "/stack/${config}" \
     --frontend-path "/stack/${frontend##*/}" \
     >/dev/null
 }
