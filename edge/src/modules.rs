@@ -80,21 +80,11 @@ pub enum Decision {
 
 /// What the watchdog decided about one power module's lease this pass.
 ///
-/// `grant: false` is not "do nothing" -- it is an instruction to drop the lease,
-/// which a module treats as de-energize. A module that receives nothing at all
-/// must reach the same state on its own once its lease runs out; that redundancy
-/// is the point.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LeaseAction {
-    pub tool_id: String,
-    pub device_id: String,
-    pub grant: bool,
-    /// How long the grant is good for. The module is expected to de-energize on
-    /// its own if it is not renewed within this window.
-    pub ttl_ms: i64,
-    /// Why the lease was refused, for the log and the audit trail.
-    pub reason: Option<String>,
-}
+/// The same struct that goes on the wire, under its coordinator-side name: this
+/// is what `tick` produces and what `toolguard/lease` carries, and there is no
+/// conversion between them because there is nothing to convert. Firmware
+/// deserializes exactly what the watchdog decided.
+pub use css_lib::wire::ToolLeasePayload as LeaseAction;
 
 impl Decision {
     pub fn is_allowed(&self) -> bool {
@@ -185,6 +175,41 @@ impl ModuleState {
     pub fn note_module_seen(&self, module_id: &str, now: DateTime<Utc>) {
         let mut inner = self.inner.write().expect("module lock");
         inner.module_seen.insert(module_id.to_string(), now);
+    }
+
+    /// Mark every binding held by one device as heard from, and say how many.
+    ///
+    /// Liveness is keyed by *binding* id, because `on_disconnect` is a property
+    /// of the binding -- the same plug can be `fail_off` for the laser and
+    /// `hold_last` for the extractor. Firmware cannot know a binding id: it is a
+    /// server-side artifact of an administrator wiring something up, and it
+    /// changes when they rewire it. A device knows its own `device_id` and
+    /// nothing else, so it reports that and this resolves it against the
+    /// current snapshot.
+    ///
+    /// Returns the number of bindings marked, which is zero for a device bound
+    /// to nothing or one whose wiring has not arrived yet. The caller logs that
+    /// rather than discarding it silently: a module reporting faithfully to an
+    /// edge that does not believe it is bound to anything will be refused every
+    /// lease, and the reason is not visible from either end.
+    pub fn note_device_seen(&self, device_id: &str, now: DateTime<Utc>) -> usize {
+        let mut inner = self.inner.write().expect("module lock");
+        let ids: Vec<String> = inner
+            .snapshot
+            .as_ref()
+            .map(|s| {
+                s.tools
+                    .iter()
+                    .flat_map(|t| t.modules.iter())
+                    .filter(|m| m.device_id == device_id)
+                    .map(|m| m.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for id in &ids {
+            inner.module_seen.insert(id.clone(), now);
+        }
+        ids.len()
     }
 
     /// Clear a latched trip. `re_auth` and `operator_ack` both land here; the
@@ -506,6 +531,118 @@ mod tests {
             }],
         });
         s
+    }
+
+    // ── Liveness by device id ────────────────────────────────────────────────
+    //
+    // The bridge between "a module published a power report" and "the interlock
+    // engine believes it is alive". Until this existed `module_seen` was written
+    // by nothing outside these tests, so every `fail_off` binding looked
+    // permanently silent and no lease was ever granted to one.
+
+    #[test]
+    fn a_device_report_marks_every_binding_that_device_holds() {
+        let s = ModuleState::new();
+        let mut a = binding("m-a", ROLE_POWER, ON_DISCONNECT_FAIL_OFF);
+        let mut b = binding("m-b", ROLE_POWER, ON_DISCONNECT_FAIL_OFF);
+        // One physical plug wired to two tools: the same device, two bindings.
+        a.device_id = "plug-1".to_string();
+        b.device_id = "plug-1".to_string();
+        s.apply_state(ToolModuleStatePayload {
+            as_of: t0().to_rfc3339(),
+            tools: vec![
+                ToolModuleTool {
+                    tool_id: "tool-1".to_string(),
+                    external_id: None,
+                    modules: vec![a],
+                    interlocks: vec![],
+                    power_fails_safe: true,
+                },
+                ToolModuleTool {
+                    tool_id: "tool-2".to_string(),
+                    external_id: None,
+                    modules: vec![b],
+                    interlocks: vec![],
+                    power_fails_safe: true,
+                },
+            ],
+        });
+
+        assert_eq!(
+            2,
+            s.note_device_seen("plug-1", t0()),
+            "one report from a device must credit every binding it holds, or the \
+             second tool refuses a plug that is demonstrably alive"
+        );
+        assert!(s.evaluate("tool-1", t0(), timeout()).is_allowed());
+        assert!(s.evaluate("tool-2", t0(), timeout()).is_allowed());
+    }
+
+    #[test]
+    fn a_report_from_an_unbound_device_marks_nothing() {
+        let s = state_with(
+            vec![binding("m-1", ROLE_POWER, ON_DISCONNECT_FAIL_OFF)],
+            vec![],
+        );
+        assert_eq!(
+            0,
+            s.note_device_seen("some-other-plug", t0()),
+            "a device bound to nothing must credit nothing -- returning a count \
+             is what lets the caller say so rather than swallow it"
+        );
+        assert!(
+            !s.evaluate("tool-1", t0(), timeout()).is_allowed(),
+            "and the real module must still be refused"
+        );
+    }
+
+    #[test]
+    fn a_report_before_any_wiring_arrives_marks_nothing() {
+        let s = ModuleState::new();
+        assert_eq!(
+            0,
+            s.note_device_seen("plug-1", t0()),
+            "with no snapshot there are no bindings to resolve against; this \
+             must not panic and must not invent one"
+        );
+    }
+
+    /// The whole point, asserted as a transition rather than a state: the same
+    /// module, the same rules, denied and then allowed, with nothing changing
+    /// but the report.
+    #[test]
+    fn a_fail_off_module_is_refused_until_it_reports_and_allowed_after() {
+        let s = state_with(
+            vec![binding("m-1", ROLE_POWER, ON_DISCONNECT_FAIL_OFF)],
+            vec![],
+        );
+
+        match s.evaluate("tool-1", t0(), timeout()) {
+            Decision::Deny(Denial::ModuleOffline(_)) => {}
+            other => panic!("a module never heard from must be refused, got {other:?}"),
+        }
+
+        s.note_device_seen("dev-m-1", t0());
+        assert!(
+            s.evaluate("tool-1", t0(), timeout()).is_allowed(),
+            "and reporting must be enough to clear it -- otherwise the lease is \
+             refused forever and the coordinator can never energize anything"
+        );
+    }
+
+    #[test]
+    fn liveness_goes_stale_rather_than_lasting_forever() {
+        let s = state_with(
+            vec![binding("m-1", ROLE_POWER, ON_DISCONNECT_FAIL_OFF)],
+            vec![],
+        );
+        s.note_device_seen("dev-m-1", t0());
+
+        let later = t0() + timeout() + Duration::seconds(1);
+        match s.evaluate("tool-1", later, timeout()) {
+            Decision::Deny(Denial::ModuleOffline(_)) => {}
+            other => panic!("a report must expire, not license the module forever, got {other:?}"),
+        }
     }
 
     /// Every module is healthy, so module liveness is never the reason a test

@@ -73,6 +73,33 @@ pub struct Config {
     /// How often (in seconds) to fetch calendar events from the server (default: 300)
     #[serde(default = "default_calendar_sync_interval")]
     pub calendar_sync_interval_secs: u64,
+
+    /// How long a module lease is good for, in milliseconds (default: 3000).
+    ///
+    /// This is the window a power module may stay energized without hearing
+    /// from this coordinator. Shortening it cuts faster on a fault and makes
+    /// the tool more sensitive to an ordinary hiccup; the renewal interval
+    /// below is what buys the slack between those two.
+    #[serde(default = "default_module_lease_ttl_ms")]
+    pub module_lease_ttl_ms: i64,
+
+    /// How often (in milliseconds) to re-evaluate and republish leases
+    /// (default: 1000).
+    ///
+    /// Must be comfortably under `module_lease_ttl_ms` -- at the defaults a
+    /// module tolerates two lost renewals before it de-energizes. Set equal to
+    /// the TTL and a single dropped message cuts a running tool.
+    #[serde(default = "default_module_lease_interval_ms")]
+    pub module_lease_interval_ms: u64,
+
+    /// How long a bound module may be silent before it counts as offline for
+    /// interlock purposes, in milliseconds (default: 5000).
+    ///
+    /// A `fail_off` module gone quiet denies; a `hold_last` one does not. This
+    /// is the local, fast equivalent of the server's `bypass.module_silence_secs`
+    /// -- that one records a finding for a human, this one withholds a lease.
+    #[serde(default = "default_module_offline_ms")]
+    pub module_offline_ms: i64,
 }
 
 fn default_toolguard_sync_interval() -> u64 {
@@ -87,6 +114,18 @@ fn default_calendar_sync_interval() -> u64 {
     300
 }
 
+fn default_module_lease_ttl_ms() -> i64 {
+    3_000
+}
+
+fn default_module_lease_interval_ms() -> u64 {
+    1_000
+}
+
+fn default_module_offline_ms() -> i64 {
+    5_000
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -99,6 +138,9 @@ impl Default for Config {
             toolguard_sync_interval_secs: default_toolguard_sync_interval(),
             calendar_mqtt_topic: default_calendar_mqtt_topic(),
             calendar_sync_interval_secs: default_calendar_sync_interval(),
+            module_lease_ttl_ms: default_module_lease_ttl_ms(),
+            module_lease_interval_ms: default_module_lease_interval_ms(),
+            module_offline_ms: default_module_offline_ms(),
         }
     }
 }

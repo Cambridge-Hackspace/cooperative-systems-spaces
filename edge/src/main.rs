@@ -254,6 +254,50 @@ async fn main() -> Result<()> {
                 });
             }
 
+            // ── Periodic module-state poll (#83): the fallback for the
+            // module/state push, and the only way a restarted edge learns its
+            // wiring at all. ──────────────────────────────────────────────────
+            //
+            // The server broadcasts module/state when an administrator changes a
+            // binding and at no other time, so an edge that starts after the
+            // last such change would otherwise hold no wiring for as long as it
+            // ran -- and with the lease watchdog live, no wiring means no lease,
+            // which means every tool it governs stays dark. Fail-safe, and
+            // useless. `interval` fires its first tick immediately, so the
+            // snapshot arrives at boot rather than one period later.
+            {
+                let modules = Arc::clone(&module_state);
+                let instance_url = remote_instance_url.clone();
+                let auth_token = remote_auth_token.clone();
+                tokio::spawn(async move {
+                    let client = Client::new();
+                    let mut ticker = interval(Duration::from_secs(sync_interval_secs));
+                    loop {
+                        ticker.tick().await;
+                        let url = format!("{}/api/toolguard/module-state", instance_url);
+                        match client.get(&url).bearer_auth(&auth_token).send().await {
+                            Ok(resp) if resp.status().is_success() => {
+                                match resp.json::<css_lib::wire::ToolModuleStatePayload>().await {
+                                    Ok(payload) => {
+                                        let wired = payload.tools.len();
+                                        modules.apply_state(payload);
+                                        info!(
+                                            "Module state synced from remote ({} wired tool(s))",
+                                            wired
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to parse module-state response: {}", e)
+                                    }
+                                }
+                            }
+                            Ok(resp) => warn!("Module-state poll returned HTTP {}", resp.status()),
+                            Err(e) => warn!("Module-state poll request failed: {}", e),
+                        }
+                    }
+                });
+            }
+
             // ── Local MQTT client (if configured) ────────────────────────────
             // state_notify_rx is consumed by the local event loop; if no local MQTT
             // is configured we drop it so the sender's try_send just silently discards.
@@ -271,6 +315,7 @@ async fn main() -> Result<()> {
                     remote_auth_token.clone(),
                     Arc::clone(&doors_state),
                     doors_event_tx.clone(),
+                    Arc::clone(&module_state),
                 )
                 .await
                 {
@@ -322,6 +367,44 @@ async fn main() -> Result<()> {
                                             ds.hold_pulses_at(chrono::Utc::now(), refresh)
                                         {
                                             lc.publish_doors_hold(door_id, duration_ms);
+                                        }
+                                    }
+                                });
+                            }
+
+                            // ── Module lease watchdog (#83) ──────────────────
+                            // The coordinator half of the lease, and the only
+                            // thing that delivers what `ModuleState::tick`
+                            // decides. Until this loop existed the interlock
+                            // engine ran nowhere: rules were cached, evaluated
+                            // by nothing, and no module was ever granted or
+                            // refused anything.
+                            //
+                            // There is no "stop" message and no retry. A module
+                            // de-energizes because renewals stopped arriving,
+                            // never because it was told to -- so this task
+                            // dying, the broker dropping, or the whole edge
+                            // losing power are all the same event as a refusal,
+                            // and none of them can leave a tool energized on a
+                            // promise nobody is still making. That inversion is
+                            // the design; see FIRMWARE.md, "Authorization is a
+                            // lease, not a command".
+                            {
+                                let lc = Arc::clone(&local_client);
+                                let ms = Arc::clone(&module_state);
+                                let ttl =
+                                    chrono::Duration::milliseconds(app_config.module_lease_ttl_ms);
+                                let offline =
+                                    chrono::Duration::milliseconds(app_config.module_offline_ms);
+                                let period = Duration::from_millis(
+                                    app_config.module_lease_interval_ms.max(1),
+                                );
+                                tokio::spawn(async move {
+                                    let mut ticker = interval(period);
+                                    loop {
+                                        ticker.tick().await;
+                                        for action in ms.tick(chrono::Utc::now(), ttl, offline) {
+                                            lc.publish_tool_lease(&action);
                                         }
                                     }
                                 });

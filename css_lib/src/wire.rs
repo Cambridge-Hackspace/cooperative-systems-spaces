@@ -153,6 +153,39 @@ pub struct PowerStateTool {
     pub circuit_id: Option<String>,
 }
 
+/// One lease decision for one power module (#83).
+///
+/// This is the coordinator's half of the mechanism [`local::TOOL_LEASE`]
+/// carries. It is produced by the edge's watchdog and consumed by module
+/// firmware, so it lives here rather than in either of them.
+///
+/// `grant: false` is not "do nothing" -- it is an instruction to drop the lease,
+/// which a module treats as de-energize. A module that receives nothing at all
+/// must reach the same state on its own once its lease runs out; that
+/// redundancy is the point, and it is why this type carries no "stop" variant.
+///
+/// There is deliberately **no issue timestamp**. A module that computed
+/// `issued_at + ttl_ms` against its own clock would hold a lease too long
+/// whenever the two clocks disagreed, and clock skew between a coordinator and
+/// a microcontroller with no RTC is the normal case rather than the exception.
+/// The TTL is measured from the moment the message arrives, by the receiver,
+/// against its own monotonic timer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolLeasePayload {
+    /// The tool this lease governs.
+    pub tool_id: String,
+    /// The power module the lease is addressed to.
+    pub device_id: String,
+    /// Whether the module may be energized for the next `ttl_ms`.
+    pub grant: bool,
+    /// How long the grant is good for, from receipt. The module de-energizes on
+    /// its own if it is not renewed within this window.
+    pub ttl_ms: i64,
+    /// Why the lease was refused. For logs and humans only -- never branch on
+    /// it. The vocabulary is not part of the contract and will change.
+    pub reason: Option<String>,
+}
+
 /// The **edge ↔ module** vocabulary, on the *local* broker.
 ///
 /// [`kinds`] above is the server ↔ device wire: namespaced under
@@ -205,6 +238,15 @@ pub mod local {
     /// The cached allow-list, pushed whenever it changes. The local twin of
     /// `GET /api/toolguard/sync`.
     pub const STATE: &str = "toolguard/state";
+    /// One [`super::ToolLeasePayload`] per message: permission for one power
+    /// module to stay energized for a bounded time. Republished every renewal
+    /// interval for as long as the conditions hold, and simply *not* published
+    /// once they stop.
+    ///
+    /// There is no matching request topic, and that asymmetry is the design.
+    /// A module does not ask for a lease; the coordinator offers one, and the
+    /// offer ceasing is the instruction to stop.
+    pub const TOOL_LEASE: &str = "toolguard/lease";
 }
 
 #[cfg(test)]

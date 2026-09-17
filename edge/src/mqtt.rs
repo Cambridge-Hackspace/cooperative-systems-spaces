@@ -406,6 +406,17 @@ struct LocalToolRequest {
 #[derive(Debug, Deserialize)]
 struct LocalPowerRequest {
     tool_id: String,
+    /// Who is reporting. Optional so older firmware still parses, but a module
+    /// that omits it cannot be credited with being alive -- see
+    /// `ModuleState::note_device_seen`.
+    #[serde(default)]
+    device_id: Option<String>,
+    /// The module's own view of its output. `None` means "cannot report", which
+    /// is NOT the same as `false`: the bypass detector treats unknown as
+    /// unknown, and a plug that claimed `false` when it did not know would
+    /// silently disarm the check that exists to catch a bypassed tool.
+    #[serde(default)]
+    relay_on: Option<bool>,
     #[serde(default)]
     draw_now: Option<f64>,
     #[serde(default)]
@@ -433,6 +444,9 @@ pub struct LocalMqttClient {
     /// Forwards local scan outcomes back to the server as `doors/event`. The
     /// receiver is consumed by a task in `main`.
     doors_event_tx: DoorsEventSender,
+    /// Wiring + interlocks. Written here only to record module liveness; the
+    /// lease watchdog in `main` is what reads it.
+    module_state: Arc<crate::modules::ModuleState>,
 }
 
 impl LocalMqttClient {
@@ -445,6 +459,7 @@ impl LocalMqttClient {
         remote_auth_token: String,
         doors_state: Arc<DoorsState>,
         doors_event_tx: DoorsEventSender,
+        module_state: Arc<crate::modules::ModuleState>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
@@ -489,6 +504,7 @@ impl LocalMqttClient {
                 refresh_notify: Arc::new(tokio::sync::Notify::new()),
                 doors_state,
                 doors_event_tx,
+                module_state,
             },
             rx,
         ))
@@ -629,6 +645,24 @@ impl LocalMqttClient {
         }
     }
 
+    /// Publish one lease decision onto the local broker.
+    ///
+    /// Deliberately **not retained**. A retained lease is re-delivered to any
+    /// module that connects afterwards, which would hand a plug rejoining the
+    /// broker minutes later a grant the coordinator issued before the fault --
+    /// the stale promise the whole mechanism exists to make impossible.
+    ///
+    /// Failures are not retried here. A lease that does not arrive is the same
+    /// event as a lease that was never sent: the module's own watchdog expires
+    /// and it de-energizes. Retrying a missed renewal would only narrow the
+    /// window in which that correct behaviour happens.
+    pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
+        match serde_json::to_value(action) {
+            Ok(v) => self.publish_local(local::TOOL_LEASE, &v),
+            Err(e) => warn!("Failed to serialize tool lease: {}", e),
+        }
+    }
+
     pub async fn handle_refresh_request(&self) {
         debug!("Kiosk refresh request received");
         if let Some(payload) = self.toolguard_state.get_state() {
@@ -723,6 +757,30 @@ impl LocalMqttClient {
             }
         };
 
+        // A power report is this module saying it is alive, and it is the only
+        // thing that says so on the local broker. Without it every binding whose
+        // `on_disconnect` is `fail_off` -- the default, and the right default --
+        // looks permanently silent, so the interlock engine refuses it a lease
+        // forever and the tool never energizes.
+        if let Some(device_id) = req.device_id.as_deref() {
+            let marked = self
+                .module_state
+                .note_device_seen(device_id, chrono::Utc::now());
+            if marked == 0 {
+                warn!(
+                    "Power report from device {} matched no module binding; it \
+                     will be refused a lease until its wiring arrives",
+                    device_id
+                );
+            }
+        } else {
+            debug!(
+                "Power report for {} carries no device_id, so no module can be \
+                 credited as alive by it",
+                req.tool_id
+            );
+        }
+
         if let Some(draw) = req.draw_now {
             self.power_state
                 .record_draw(&req.tool_id, draw, chrono::Utc::now());
@@ -761,6 +819,12 @@ impl LocalMqttClient {
             "max_voltage": req.max_voltage.map(|v| v.to_string()),
             "amperage_limit": req.amperage_limit.map(|v| v.to_string()),
             "self_tripped": req.self_tripped,
+            // Forwarded rather than dropped: #84's relay oracle reads this, and
+            // until now a module reporting over the local broker could never
+            // make it fire at all. Absent stays absent -- serde_json renders
+            // None as null and the server's `Option<bool>` keeps the three-way
+            // distinction the detector depends on.
+            "relay_on": req.relay_on,
             "api_key": req.api_key,
         });
         tokio::spawn(async move {
