@@ -1086,6 +1086,19 @@ pub struct PagesConfig {
     /// User README
     pub user_readme: bool,
 
+    /// Where the wiki and site repositories are checked out.
+    ///
+    /// Configurable because it used to not be: `PagesService::new` cloned into
+    /// a hardcoded `/tmp/css-wiki-repo`, which meant two processes on one host
+    /// raced over the same working tree. That hazard is documented in five
+    /// places across this repository as something to be avoided -- the stack
+    /// config names no repository, `test_support` asserts none is set -- and
+    /// the cost was that the pages pipeline could not be exercised end to end
+    /// at all (#81). A per-deployment directory removes the race instead of
+    /// routing around it.
+    #[serde(default = "default_checkout_dir")]
+    pub checkout_dir: String,
+
     /// How long any single git invocation may run before the refresh gives up,
     /// in seconds.
     ///
@@ -1099,6 +1112,10 @@ pub struct PagesConfig {
 
 fn default_git_timeout_secs() -> u64 {
     120
+}
+
+fn default_checkout_dir() -> String {
+    "/tmp".to_string()
 }
 
 impl Default for PagesConfig {
@@ -1119,6 +1136,7 @@ impl Default for PagesConfig {
             user_profile_field: "user_page_repository".to_string(),
             user_period: 900,
             user_readme: true,
+            checkout_dir: default_checkout_dir(),
             git_timeout_secs: default_git_timeout_secs(),
         }
     }
