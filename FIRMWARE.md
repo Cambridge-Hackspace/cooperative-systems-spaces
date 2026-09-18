@@ -95,6 +95,7 @@ metered tool is a worse outcome than an unusable one.
 | condition | response |
 |---|---|
 | No credential, or a bad one | **401**, `ToolGuardResponse` with `status: "error"` |
+| A credential, but a field is missing | **400** — *after* the credential is checked |
 | A credential, but the request is refused | **200**, see [denials](#denials-are-200-not-4xx) |
 | Server or database fault | **500** |
 
@@ -202,11 +203,16 @@ who is not allowed to use it. **`tool_on: true` is the only thing that means
 
 No authentication. Returns `{"status":"ok"}`. Use it for reachability checks.
 
-### `GET /api/toolguard/tool-on`
+### `POST /api/toolguard/tool-on`
 
-Query: `card`, `tool_id`, optional `api_key`.
+JSON body: `card`, `tool_id`, optional `api_key`.
 
 Authorizes a card against a tool and, if allowed, marks the tool in use.
+
+**A body, not a query string, and that is deliberate.** A card identifies a
+person, and a URL is written down by every proxy, reverse proxy and access log
+it passes through, plus browser history and crash reporters. It is also the
+honest method: this call *changes state*, so it was never a safe `GET`.
 
 Returns `tool_on: true` on success. Denial reasons observed in the field, all
 with `tool_on: false`:
@@ -226,9 +232,9 @@ with `tool_on: false`:
 | `Metered tool requires its own API key` | see [authentication](#authentication) |
 | *(billing-specific text)* | metered tool, funds or holds unavailable |
 
-### `GET /api/toolguard/tool-off`
+### `POST /api/toolguard/tool-off`
 
-Query: `card`, `tool_id`, optional `api_key`.
+JSON body: `card`, `tool_id`, optional `api_key`.
 
 Ends the session and returns the tool to Idle. Returns `tool_off: true`.
 
@@ -236,10 +242,10 @@ Unlike `tool-on`, this endpoint answers `status: "error"` with **no** `tool_off`
 field for an unknown card, a missing tool, or a bad key. Send it anyway on every
 stop — an un-ended session leaves the tool unusable for the next member.
 
-### `GET /api/toolguard/tool-log`
+### `POST /api/toolguard/tool-log`
 
-Query: `card`, `tool_id`, `seconds` (float), optional `temperature` (float),
-optional `api_key`.
+JSON body: `card`, `tool_id`, `seconds` (float), optional `temperature`
+(float), optional `api_key`.
 
 Reports usage. `message` is `Usage logged`. For metered tools this is what gets
 billed; send it before `tool-off`.
@@ -481,15 +487,15 @@ both transports.
            │
    ┌───────┴───────────────────────────────────────────┐
    │  card presented                                    │
-   │     └─ GET /tool-on?card=…&tool_id=…               │
+   │     └─ POST /tool-on  {card, tool_id}              │
    │          ├─ tool_on: true  → energize              │
    │          └─ otherwise      → refuse, show message  │
    │  while running                                     │
    │     ├─ POST /power-report   (periodically)         │
    │     └─ renew the lease      (see below)            │
    │  session ends                                      │
-   │     ├─ GET /tool-log?…&seconds=…                   │
-   │     └─ GET /tool-off?card=…&tool_id=…              │
+   │     ├─ POST /tool-log {…, seconds}                 │
+   │     └─ POST /tool-off {card, tool_id}              │
    └────────────────────────────────────────────────────┘
 ```
 

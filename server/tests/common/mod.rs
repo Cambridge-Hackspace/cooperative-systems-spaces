@@ -249,9 +249,9 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/toolguard/power-state", Guard::InlineAuth), // toolguard::power_state
     R("POST", "/api/toolguard/power-trip", Guard::InlineAuth), // toolguard::power_trip
     R("GET", "/api/toolguard/sync", Guard::InlineAuth), // toolguard::sync
-    R("GET", "/api/toolguard/tool-log", Guard::InlineAuth), // toolguard::tool_log
-    R("GET", "/api/toolguard/tool-off", Guard::InlineAuth), // toolguard::tool_off
-    R("GET", "/api/toolguard/tool-on", Guard::InlineAuth), // toolguard::tool_on
+    R("POST", "/api/toolguard/tool-log", Guard::InlineAuth), // toolguard::tool_log
+    R("POST", "/api/toolguard/tool-off", Guard::InlineAuth), // toolguard::tool_off
+    R("POST", "/api/toolguard/tool-on", Guard::InlineAuth), // toolguard::tool_on
     R("GET", "/api/tools", Guard::Staff), // tools::list_tools
     R("POST", "/api/tools", Guard::Staff), // tools::create_tool
     R("DELETE", "/api/tools/00000000-0000-4000-8000-000000000001", Guard::Staff), // tools::delete_tool

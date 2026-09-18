@@ -103,42 +103,12 @@ const CREDS: &[Cred] = &[
     },
 ];
 
-/// Routes whose handlers take a required `Query<..>`, with a query string that
-/// satisfies it.
-///
-/// Needed because axum runs every `FromRequestParts` extractor before the
-/// handler body, and `Query` is one of them — so a request missing `card` is
-/// rejected with 400 by the query extractor and never reaches the
-/// authentication check inside the handler. Without these, the matrix would be
-/// asserting "a malformed request is refused", which is true and uninteresting,
-/// instead of "an unauthenticated request is refused", which is the claim.
-///
-/// That ordering is itself a finding, pinned by
-/// `toolguard_parses_parameters_before_it_authenticates` below: these three are
-/// the only routes in the API that authenticate in the handler body rather than
-/// through an extractor, and it is the reason they can be probed for valid
-/// parameters by an unauthenticated caller.
-const REQUIRED_QUERY: &[(&str, &str)] = &[
-    ("/api/toolguard/tool-on", "card=x&tool_id=y"),
-    ("/api/toolguard/tool-off", "card=x&tool_id=y"),
-    ("/api/toolguard/tool-log", "card=x&tool_id=y&seconds=1"),
-];
-
-fn with_required_query(path: &str) -> String {
-    match REQUIRED_QUERY.iter().find(|(p, _)| *p == path) {
-        Some((_, q)) => format!("{path}?{q}"),
-        None => path.to_string(),
-    }
-}
-
 async fn state() -> AppState {
     test_support::app_state().await
 }
 
 async fn call(st: &AppState, method: &str, path: &str, auth: Option<&str>) -> StatusCode {
-    let mut b = Request::builder()
-        .method(method)
-        .uri(with_required_query(path));
+    let mut b = Request::builder().method(method).uri(path);
     if let Some(v) = auth {
         b = b.header("authorization", v);
     }
@@ -430,41 +400,61 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
 // gate went live, exactly as they instructed.
 
 #[tokio::test]
-async fn toolguard_parses_parameters_before_it_authenticates() {
-    // A finding, recorded rather than fixed here.
+async fn toolguard_judges_the_credential_before_the_parameters() {
+    // This was a recorded finding until #107, and the inversion is the fix.
     //
     // `tool_on`, `tool_off` and `tool_log` authenticate inside the handler body
-    // (see `authorize_toolguard`), while every other guarded route in the API
-    // uses an extractor. Extractors run first, so on those three the `Query`
-    // extractor rejects a request with missing parameters *before* the
-    // credential is ever examined — an unauthenticated caller gets 400 for a
-    // bad `card` and 401 for a good one, which is a distinction it should not
-    // be able to draw.
+    // rather than through an extractor. Extractors run first, so while these
+    // were `GET` with a required `Query<..>`, a request missing `card` was
+    // rejected with 400 before the credential was ever examined -- and an
+    // unauthenticated caller could therefore tell a well-formed request from a
+    // malformed one, probing for valid parameters without holding anything.
     //
-    // The fix is to move the check into a `FromRequestParts` extractor, which
-    // is a change to how the accepted credentials compose (device token OR API
-    // key) and belongs with that work rather than smuggled in here.
-    // `checks/tests/toolguard_auth.rs` already records the same divergence from
-    // the other direction.
+    // They are now `POST` with every wire field optional, validated *after*
+    // `authorize_toolguard`. So a caller with no credential learns exactly one
+    // thing -- that it has no credential -- whatever it sends.
     let st = state().await;
 
-    let no_params = call(&st, "GET", "/api/toolguard/does-not-take-query", None).await;
     assert_eq!(
-        no_params,
         StatusCode::NOT_FOUND,
-        "sanity: that path is not a route"
+        call(&st, "POST", "/api/toolguard/does-not-exist", None).await,
+        "sanity: that path is not a route, so a 401 below means the route matched"
     );
 
-    // With parameters, the credential is what is judged.
-    let with_params = call(&st, "GET", "/api/toolguard/tool-on", None).await;
-    assert_eq!(with_params, StatusCode::UNAUTHORIZED);
-
-    // Without them, the parameter extractor answers first.
+    // An empty body, which used to be the cheap way to get a 400 out of it.
     let bare = axum::Router::new()
         .nest("/api", api::api_routes())
         .with_state(st.clone())
         .oneshot(
             Request::builder()
+                .method("POST")
+                .uri("/api/toolguard/tool-on")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .expect("well-formed request"),
+        )
+        .await
+        .expect("infallible")
+        .status();
+    assert_eq!(
+        StatusCode::UNAUTHORIZED,
+        bare,
+        "an unauthenticated caller must not be able to distinguish a complete \
+         request from an incomplete one -- that distinction is what let it probe \
+         for valid parameters while holding no credential at all"
+    );
+
+    // No content-type at all, which is how this was caught. Optional fields
+    // were not enough on their own: `Json<..>` rejects a missing content-type
+    // with 415 before the handler runs, so the first version of this fix moved
+    // the probing oracle from the query extractor to the body extractor
+    // instead of removing it. The handlers take `Bytes` for exactly this.
+    let no_content_type = axum::Router::new()
+        .nest("/api", api::api_routes())
+        .with_state(st.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
                 .uri("/api/toolguard/tool-on")
                 .body(Body::empty())
                 .expect("well-formed request"),
@@ -473,9 +463,32 @@ async fn toolguard_parses_parameters_before_it_authenticates() {
         .expect("infallible")
         .status();
     assert_eq!(
-        bare,
-        StatusCode::BAD_REQUEST,
-        "if this is now 401, the check moved into an extractor and this test \
-         should be deleted along with REQUIRED_QUERY"
+        StatusCode::UNAUTHORIZED,
+        no_content_type,
+        "a request with no content-type and no credential must be refused for \
+         the credential. 415 here means a body extractor is running before \
+         authentication again"
+    );
+
+    // And a complete one answers the same, so the 401 above is about the
+    // credential rather than about the body being empty.
+    let complete = axum::Router::new()
+        .nest("/api", api::api_routes())
+        .with_state(st.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/toolguard/tool-on")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"card":"x","tool_id":"y"}"#))
+                .expect("well-formed request"),
+        )
+        .await
+        .expect("infallible")
+        .status();
+    assert_eq!(
+        StatusCode::UNAUTHORIZED,
+        complete,
+        "a complete body with no credential must answer identically to an empty one"
     );
 }

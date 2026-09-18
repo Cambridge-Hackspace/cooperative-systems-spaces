@@ -118,7 +118,6 @@ fn audit(
         actor_id: Some(actor),
         event_data: serde_json::json!({
             "card_id": card.id,
-            "card_code": card.code,
             "card_status": card.status,
             "reason": reason,
         }),

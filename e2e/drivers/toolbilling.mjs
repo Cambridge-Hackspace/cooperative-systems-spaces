@@ -32,9 +32,9 @@ function q(path, params) {
   return `${path}?${new URLSearchParams(params).toString()}`
 }
 const toolOn = (card, tid, key) =>
-  GET(q('/api/toolguard/tool-on', { card, tool_id: tid, api_key: key }))
+  POST('/api/toolguard/tool-on', { body: { card, tool_id: tid, api_key: key } })
 const toolOff = (card, tid, key) =>
-  GET(q('/api/toolguard/tool-off', { card, tool_id: tid, api_key: key }))
+  POST('/api/toolguard/tool-off', { body: { card, tool_id: tid, api_key: key } })
 
 async function createMeteredTool(admin, { externalId, flatFee, maxMin, requiresTraining }) {
   const res = await POST('/api/tools', {

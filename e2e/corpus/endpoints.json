@@ -1125,19 +1125,19 @@
       "params": 0
     },
     {
-      "method": "GET",
+      "method": "POST",
       "template": "/api/toolguard/tool-log",
       "guard": "InlineAuth",
       "params": 0
     },
     {
-      "method": "GET",
+      "method": "POST",
       "template": "/api/toolguard/tool-off",
       "guard": "InlineAuth",
       "params": 0
     },
     {
-      "method": "GET",
+      "method": "POST",
       "template": "/api/toolguard/tool-on",
       "guard": "InlineAuth",
       "params": 0
