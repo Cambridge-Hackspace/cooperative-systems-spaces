@@ -1362,7 +1362,7 @@ async fn resolve_card(
     let profile_field = &config.toolguard.profile_field;
     state
         .db
-        .resolve_card(profile_field, card)
+        .resolve_card(profile_field, card, state.card_cipher.as_deref())
         .map_err(|e| ApiError::InternalServerError(format!("Failed to resolve card: {}", e)))
 }
 

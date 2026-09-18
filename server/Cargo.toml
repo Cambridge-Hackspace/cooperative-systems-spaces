@@ -8,6 +8,10 @@ name = "css-server"
 path = "src/main.rs"
 
 [[bin]]
+name = "css-card-backfill"
+path = "src/bin/card_backfill.rs"
+
+[[bin]]
 name = "css-webhook-recvr"
 path = "src/bin/webhook_recvr.rs"
 

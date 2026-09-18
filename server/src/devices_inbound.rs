@@ -27,13 +27,21 @@ pub struct DeviceInbound {
     /// Snapshot of `toolguard.profile_field` taken at startup; used by the
     /// doors/event handler to resolve a card to a user.
     door_profile_field: String,
+    /// Card keys, resolved once at construction. `None` on a deployment that
+    /// has not started the #108 migration.
+    card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
 }
 
 impl DeviceInbound {
-    pub fn new(db: Arc<DatabaseManager>, door_profile_field: String) -> Self {
+    pub fn new(
+        db: Arc<DatabaseManager>,
+        door_profile_field: String,
+        card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
+    ) -> Self {
         Self {
             db,
             door_profile_field,
+            card_cipher,
         }
     }
 
@@ -214,7 +222,11 @@ impl DeviceInbound {
         let mut revoked_card: Option<(uuid::Uuid, crate::models::UserCard)> = None;
         let user_id = match event.card_id.as_deref() {
             Some(card) if !card.is_empty() => {
-                match self.db.resolve_card(&self.door_profile_field, card) {
+                match self.db.resolve_card(
+                    &self.door_profile_field,
+                    card,
+                    self.card_cipher.as_deref(),
+                ) {
                     Ok(crate::models::CardResolution::Active { user, .. }) => Some(user.id),
                     Ok(crate::models::CardResolution::Revoked { user, card }) => {
                         let uid = user.id;

@@ -579,6 +579,11 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
                 .values(&NewUserCard {
                     user_id: uid,
                     code: card.code.clone(),
+                    // Left unsealed: this loader has no key, and sealing is the
+                    // backfill's job. Run `css-cli cards backfill` after a load.
+                    code_encrypted: None,
+                    code_nonce: None,
+                    code_bidx: None,
                     status: Some(card.status.clone()),
                 })
                 .execute(conn)?;

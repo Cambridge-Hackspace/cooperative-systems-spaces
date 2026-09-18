@@ -84,6 +84,15 @@ const SEPARATE_BINARIES: &[&str] = &[
     // `stripe` stage, which asserts the ledger balance and role rather than what
     // the client claimed to send.
     "bin/stripe_sink.rs",
+    // The operator-run card sealing backfill (#108). It composes no HTTP routes
+    // at all -- it opens a database connection, seals the plaintext codes the
+    // migration could not, and verifies each one re-opens to what it was
+    // derived from. It exists as a separate binary rather than a migration
+    // because sealing needs the deployment key, and a key reachable from SQL
+    // would be a key in the migration file and in the Postgres log. Covered by
+    // the `cards` stage, which runs it against the stack and asserts on what it
+    // reports rather than on it exiting zero.
+    "bin/card_backfill.rs",
     // The one-shot ToolPass -> CSS data loader (#38). It composes no HTTP routes
     // at all -- it reads a staging SQLite and writes rows through Diesel -- but
     // lives under bin/, so this list is what says it is deliberate. It is not an

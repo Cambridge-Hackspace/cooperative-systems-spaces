@@ -9,3 +9,13 @@ edition = "2024"
 # which is exactly the noise that hides a real warning once `-D warnings` is on.
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+
+# Card encryption at rest (#108). XChaCha20-Poly1305 rather than AES-GCM: pure
+# Rust with no C toolchain, which matters because this workspace cross-compiles
+# to arm64 for the Oracle box, and a 192-bit nonce is wide enough that random
+# nonces need no counter bookkeeping to stay collision-safe.
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
