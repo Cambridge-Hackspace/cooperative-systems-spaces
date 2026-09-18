@@ -45,7 +45,7 @@ fn default_client_id() -> String {
     "kiosk".to_string()
 }
 fn default_toolguard_topic() -> String {
-    "toolguard/state".to_string()
+    css_lib::wire::local::STATE.to_string()
 }
 
 impl Default for KioskConfig {

@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 const CONFIG_PATH: &str = "toolguard-status-ui.toml";
-const STATE_TOPIC: &str = "toolguard/state";
+use css_lib::wire::local::STATE as STATE_TOPIC;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

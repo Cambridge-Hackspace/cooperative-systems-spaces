@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -1438,6 +1438,120 @@ stage_health() {
   fi
 
   emit_junit health
+}
+
+# ===========================================================================
+# lease -- the module lease coordinator (#83)
+# ===========================================================================
+# The only tier that can see whether the interlock engine is connected to
+# anything. Its decisions were unit-tested to death and delivered nowhere: every
+# caller of `tick()` was a test, so the engine evaluated nothing in production
+# and no lease was ever issued. A unit suite cannot notice that it is the sole
+# caller, and the more thorough it is the more reassuring the silence.
+#
+# So this runs a registered edge against the real broker and watches three
+# windows: refusals arrive for a module that has never reported, grants arrive
+# once it has, and nothing arrives at all once the edge is stopped. The third is
+# the design -- permission lapses by silence, not by a message -- and it is
+# asserted last, after the first has proven leases were flowing, so an empty
+# window means withdrawal rather than "this never worked".
+#
+# This is the first stage to run an *authenticated* edge. The devices stage runs
+# an Unauthenticated one on purpose, which starts a web server and nothing else.
+stage_lease() {
+  cases_begin lease
+  stack_paths
+
+  if ! server_ready; then
+    record_case "lease/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit lease
+    return 1
+  fi
+  record_case "lease/stack-is-up" ok
+
+  if tcp_open "${MQTT_PORT}"; then
+    record_case "lease/broker-is-up" ok
+  else
+    record_case "lease/broker-is-up" fail "nothing is listening on ${MQTT_PORT}"
+    emit_junit lease
+    return 1
+  fi
+
+  run_node lease.mjs setup "${MQTT_PORT}" >"${OUT}/logs/lease-setup.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  # A cluster that cannot store an emoji invite code cannot register a device,
+  # so there is nothing to bind and nothing to coordinate. The driver records
+  # the skip; the rest of the stage has no subject.
+  if [[ -f "${STACK_DIR}/lease-skipped" ]]; then
+    collect_server_log
+    emit_junit lease "skipped=encoding"
+    return 0
+  fi
+
+  local edge_port=8080
+  if tcp_open "${edge_port}"; then
+    record_case "lease/port-is-free" fail \
+      "something is already listening on ${edge_port}; css-edge hardcodes it"
+    emit_junit lease
+    return 1
+  fi
+  record_case "lease/port-is-free" ok
+
+  local fixture="${STACK_DIR}/lease-edge-frontend"
+  mkdir -p "${fixture}"
+  printf '<!doctype html><title>lease</title>\n' >"${fixture}/index.html"
+
+  if ! start_edge css-edge "${fixture}" edge-lease.config.toml; then
+    record_case "lease/edge-starts" fail "could not start css-edge"
+    emit_junit lease
+    return 1
+  fi
+
+  if wait_for "css-edge to sync its wiring" 60 edge_logged "Module state synced from remote"; then
+    record_case "lease/edge-fetched-its-wiring" ok
+  else
+    # Worth its own case rather than letting the windows fail obscurely: with no
+    # wiring the coordinator has nothing to evaluate, so every window would be
+    # empty and read as "the watchdog is broken".
+    record_case "lease/edge-fetched-its-wiring" fail \
+      "css-edge never logged a module-state sync; it has no wiring, so there is nothing to coordinate"
+    stop_edge
+    collect_server_log
+    emit_junit lease
+    return 1
+  fi
+
+  # Written as plain files by the setup driver rather than parsed out of its
+  # JSON here: a shell JSON reader is a dependency and a bug surface, and these
+  # are two opaque strings.
+  local dev tool
+  dev="$(cat "${STACK_DIR}/lease-device-id")"
+  tool="$(cat "${STACK_DIR}/lease-tool-id")"
+
+  # Window 1: the module has reported nothing, so the lease must be refused.
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1.txt"
+
+  # One power report, naming the device. This is the liveness ingest: without
+  # it a fail_off binding looks permanently silent and is refused forever.
+  mqtt_pub "toolguard/request/power" \
+    "{\"tool_id\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.0}" || true
+
+  # Window 2: same coordinator, same rules, and the answer has to change.
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2.txt"
+
+  stop_edge
+
+  # Window 3: the absence, with time allowed to pass. Opened after the edge is
+  # gone and run for longer than the 3000ms TTL, so a module obeying the last
+  # lease would already have cut by the time this window closes.
+  mqtt_sub "toolguard/lease" 5 "${STACK_DIR}/lease-window-3.txt"
+
+  run_node lease.mjs assert >"${OUT}/logs/lease.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit lease "driver=lease.mjs"
 }
 
 # ===========================================================================

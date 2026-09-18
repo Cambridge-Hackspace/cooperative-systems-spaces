@@ -153,6 +153,102 @@ pub struct PowerStateTool {
     pub circuit_id: Option<String>,
 }
 
+/// One lease decision for one power module (#83).
+///
+/// This is the coordinator's half of the mechanism [`local::TOOL_LEASE`]
+/// carries. It is produced by the edge's watchdog and consumed by module
+/// firmware, so it lives here rather than in either of them.
+///
+/// `grant: false` is not "do nothing" -- it is an instruction to drop the lease,
+/// which a module treats as de-energize. A module that receives nothing at all
+/// must reach the same state on its own once its lease runs out; that
+/// redundancy is the point, and it is why this type carries no "stop" variant.
+///
+/// There is deliberately **no issue timestamp**. A module that computed
+/// `issued_at + ttl_ms` against its own clock would hold a lease too long
+/// whenever the two clocks disagreed, and clock skew between a coordinator and
+/// a microcontroller with no RTC is the normal case rather than the exception.
+/// The TTL is measured from the moment the message arrives, by the receiver,
+/// against its own monotonic timer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolLeasePayload {
+    /// The tool this lease governs.
+    pub tool_id: String,
+    /// The power module the lease is addressed to.
+    pub device_id: String,
+    /// Whether the module may be energized for the next `ttl_ms`.
+    pub grant: bool,
+    /// How long the grant is good for, from receipt. The module de-energizes on
+    /// its own if it is not renewed within this window.
+    pub ttl_ms: i64,
+    /// Why the lease was refused. For logs and humans only -- never branch on
+    /// it. The vocabulary is not part of the contract and will change.
+    pub reason: Option<String>,
+}
+
+/// The **edge ↔ module** vocabulary, on the *local* broker.
+///
+/// [`kinds`] above is the server ↔ device wire: namespaced under
+/// `{namespace}/devices/{device_id}/`, spoken over the internet or the site
+/// link. This module is the other wire entirely -- unnamespaced topics on the
+/// broker the edge runs, spoken by the ToolGuards, card readers and plugs in
+/// the same building. A module's counterparty is the edge, not the server, so
+/// for firmware this is the vocabulary that matters most.
+///
+/// These constants lived as string literals in four crates -- `edge`,
+/// `toolguard-test-ui`, `toolguard-status-ui` and `kiosk` -- each with its own
+/// copy and no way to notice when another changed. That is not a hypothetical:
+/// it is how `toolguard-test-ui` came to be speaking the protocol as it stood
+/// before #83 and #84, with nothing to say so. One vocabulary, one place, and
+/// `checks/tests/the_firmware_protocol_is_documented.rs` holds `FIRMWARE.md` to
+/// it in both directions.
+pub mod local {
+    // ── module → edge (the edge subscribes) ──────────────────────────────
+
+    /// A card was presented at a tool: `{ card, tool_id, api_key? }`.
+    pub const TOOL_ON_REQUEST: &str = "toolguard/request/tool-on";
+    /// The session ended: `{ card, tool_id, api_key? }`.
+    pub const TOOL_OFF_REQUEST: &str = "toolguard/request/tool-off";
+    /// Usage to bill or record: `{ card, tool_id, seconds, temperature?, api_key? }`.
+    pub const TOOL_LOG_REQUEST: &str = "toolguard/request/tool-log";
+    /// A power module's reading: `{ tool_id, draw_now, voltage_now, relay_on?, ... }`.
+    /// Decimal fields are strings; `relay_on` absent means "cannot report",
+    /// which is not the same as `false`.
+    pub const POWER_REQUEST: &str = "toolguard/request/power";
+    /// An RFID scan from a door's hardware bridge: `{ door_id, card_id }`.
+    pub const DOOR_SCAN_REQUEST: &str = "door/request/scan";
+    /// A kiosk asking the edge to re-push its state. No payload.
+    pub const KIOSK_REFRESH_REQUEST: &str = "kiosk/refresh";
+
+    // ── edge → module (the edge publishes) ───────────────────────────────
+
+    /// Answer to [`TOOL_ON_REQUEST`]. Carries the server's `ToolGuardResponse`,
+    /// so the `tool_on: true`-or-nothing rule applies here exactly as it does
+    /// over HTTP: absence of `tool_on` is not permission.
+    pub const TOOL_ON_RESPONSE: &str = "toolguard/response/tool-on";
+    /// Answer to [`TOOL_OFF_REQUEST`].
+    pub const TOOL_OFF_RESPONSE: &str = "toolguard/response/tool-off";
+    /// Answer to [`TOOL_LOG_REQUEST`].
+    pub const TOOL_LOG_RESPONSE: &str = "toolguard/response/tool-log";
+    /// Ack for [`POWER_REQUEST`]: `{ "ok": true }`. An ack, not an instruction
+    /// -- a power module must never read this as permission to stay energized.
+    pub const POWER_RESPONSE: &str = "toolguard/response/power";
+    /// A momentary unlock for a door's relay: `{ door_id, duration_ms }`.
+    pub const DOOR_UNLOCK_RESPONSE: &str = "door/response/unlock";
+    /// The cached allow-list, pushed whenever it changes. The local twin of
+    /// `GET /api/toolguard/sync`.
+    pub const STATE: &str = "toolguard/state";
+    /// One [`super::ToolLeasePayload`] per message: permission for one power
+    /// module to stay energized for a bounded time. Republished every renewal
+    /// interval for as long as the conditions hold, and simply *not* published
+    /// once they stop.
+    ///
+    /// There is no matching request topic, and that asymmetry is the design.
+    /// A module does not ask for a lease; the coordinator offers one, and the
+    /// offer ceasing is the instruction to stop.
+    pub const TOOL_LEASE: &str = "toolguard/lease";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

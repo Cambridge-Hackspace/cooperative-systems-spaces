@@ -7,6 +7,8 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
+use css_lib::wire::local;
+
 use crate::config::{Config, MqttConfig};
 use crate::doors::{
     self, Decision, DoorsEvent, DoorsState, LocalScanRequest, LocalUnlockResponse, UnlockCommand,
@@ -377,20 +379,10 @@ pub async fn run_mqtt_event_loop(
 }
 
 // ── Local MQTT client ─────────────────────────────────────────────────────────
-
-/// Local MQTT request topics the edge subscribes to
-const LOCAL_TOOL_ON_REQ: &str = "toolguard/request/tool-on";
-const LOCAL_TOOL_OFF_REQ: &str = "toolguard/request/tool-off";
-const LOCAL_TOOL_LOG_REQ: &str = "toolguard/request/tool-log";
-/// Firmware power reading (#48) — `{ tool_id, draw_now, voltage_now, ... }`.
-const LOCAL_TOOL_POWER_REQ: &str = "toolguard/request/power";
-/// Ack for a power report.
-const LOCAL_TOOL_POWER_RESP: &str = "toolguard/response/power";
-const LOCAL_KIOSK_REFRESH: &str = "kiosk/refresh";
-/// RFID scan from the local hardware bridge — `{ door_id, card_id }`.
-const LOCAL_DOOR_SCAN_REQ: &str = "door/request/scan";
-/// Unlock response sent back to the local relay controller.
-const LOCAL_DOOR_UNLOCK_RESP: &str = "door/response/unlock";
+//
+// The topic vocabulary lives in `css_lib::wire::local` rather than here: this
+// edge is one of four crates that speak it, and a private copy per crate is how
+// `toolguard-test-ui` came to be a release behind without anything noticing.
 
 /// JSON published by local hardware onto the local broker
 #[derive(Debug, Deserialize)]
@@ -414,6 +406,17 @@ struct LocalToolRequest {
 #[derive(Debug, Deserialize)]
 struct LocalPowerRequest {
     tool_id: String,
+    /// Who is reporting. Optional so older firmware still parses, but a module
+    /// that omits it cannot be credited with being alive -- see
+    /// `ModuleState::note_device_seen`.
+    #[serde(default)]
+    device_id: Option<String>,
+    /// The module's own view of its output. `None` means "cannot report", which
+    /// is NOT the same as `false`: the bypass detector treats unknown as
+    /// unknown, and a plug that claimed `false` when it did not know would
+    /// silently disarm the check that exists to catch a bypassed tool.
+    #[serde(default)]
+    relay_on: Option<bool>,
     #[serde(default)]
     draw_now: Option<f64>,
     #[serde(default)]
@@ -441,6 +444,9 @@ pub struct LocalMqttClient {
     /// Forwards local scan outcomes back to the server as `doors/event`. The
     /// receiver is consumed by a task in `main`.
     doors_event_tx: DoorsEventSender,
+    /// Wiring + interlocks. Written here only to record module liveness; the
+    /// lease watchdog in `main` is what reads it.
+    module_state: Arc<crate::modules::ModuleState>,
 }
 
 impl LocalMqttClient {
@@ -453,6 +459,7 @@ impl LocalMqttClient {
         remote_auth_token: String,
         doors_state: Arc<DoorsState>,
         doors_event_tx: DoorsEventSender,
+        module_state: Arc<crate::modules::ModuleState>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
@@ -497,6 +504,7 @@ impl LocalMqttClient {
                 refresh_notify: Arc::new(tokio::sync::Notify::new()),
                 doors_state,
                 doors_event_tx,
+                module_state,
             },
             rx,
         ))
@@ -504,27 +512,27 @@ impl LocalMqttClient {
 
     pub fn subscribe_to_requests(&self) -> Result<()> {
         self.client
-            .subscribe(LOCAL_TOOL_ON_REQ, 1)
+            .subscribe(local::TOOL_ON_REQUEST, 1)
             .wait()
             .context("Failed to subscribe to tool-on requests")?;
         self.client
-            .subscribe(LOCAL_TOOL_OFF_REQ, 1)
+            .subscribe(local::TOOL_OFF_REQUEST, 1)
             .wait()
             .context("Failed to subscribe to tool-off requests")?;
         self.client
-            .subscribe(LOCAL_TOOL_LOG_REQ, 1)
+            .subscribe(local::TOOL_LOG_REQUEST, 1)
             .wait()
             .context("Failed to subscribe to tool-log requests")?;
         self.client
-            .subscribe(LOCAL_TOOL_POWER_REQ, 1)
+            .subscribe(local::POWER_REQUEST, 1)
             .wait()
             .context("Failed to subscribe to power requests")?;
         self.client
-            .subscribe(LOCAL_KIOSK_REFRESH, 0)
+            .subscribe(local::KIOSK_REFRESH_REQUEST, 0)
             .wait()
             .context("Failed to subscribe to kiosk refresh topic")?;
         self.client
-            .subscribe(LOCAL_DOOR_SCAN_REQ, 1)
+            .subscribe(local::DOOR_SCAN_REQUEST, 1)
             .wait()
             .context("Failed to subscribe to door scan requests")?;
         info!("Subscribed to local toolguard + door request topics");
@@ -532,17 +540,17 @@ impl LocalMqttClient {
     }
 
     pub async fn handle_message(&self, topic: &str, payload: &[u8]) {
-        if topic == LOCAL_KIOSK_REFRESH {
+        if topic == local::KIOSK_REFRESH_REQUEST {
             self.handle_refresh_request().await;
             return;
         }
 
-        if topic == LOCAL_DOOR_SCAN_REQ {
+        if topic == local::DOOR_SCAN_REQUEST {
             self.handle_door_scan(payload).await;
             return;
         }
 
-        if topic == LOCAL_TOOL_POWER_REQ {
+        if topic == local::POWER_REQUEST {
             self.handle_power(payload).await;
             return;
         }
@@ -556,9 +564,9 @@ impl LocalMqttClient {
         };
 
         match topic {
-            LOCAL_TOOL_ON_REQ => self.handle_tool_on(req).await,
-            LOCAL_TOOL_OFF_REQ => self.handle_tool_off(req).await,
-            LOCAL_TOOL_LOG_REQ => self.handle_tool_log(req).await,
+            local::TOOL_ON_REQUEST => self.handle_tool_on(req).await,
+            local::TOOL_OFF_REQUEST => self.handle_tool_off(req).await,
+            local::TOOL_LOG_REQUEST => self.handle_tool_log(req).await,
             _ => {}
         }
     }
@@ -588,7 +596,7 @@ impl LocalMqttClient {
             reason: reason.clone(),
         };
         if let Ok(v) = serde_json::to_value(&response) {
-            self.publish_local(LOCAL_DOOR_UNLOCK_RESP, &v);
+            self.publish_local(local::DOOR_UNLOCK_RESPONSE, &v);
         }
 
         // Tell the server what just happened (audit log, webhook, etc.).
@@ -616,7 +624,7 @@ impl LocalMqttClient {
             reason: Some(cmd.reason.clone()),
         };
         if let Ok(v) = serde_json::to_value(&response) {
-            self.publish_local(LOCAL_DOOR_UNLOCK_RESP, &v);
+            self.publish_local(local::DOOR_UNLOCK_RESPONSE, &v);
         }
     }
 
@@ -633,7 +641,25 @@ impl LocalMqttClient {
             reason: Some("open_access".to_string()),
         };
         if let Ok(v) = serde_json::to_value(&response) {
-            self.publish_local(LOCAL_DOOR_UNLOCK_RESP, &v);
+            self.publish_local(local::DOOR_UNLOCK_RESPONSE, &v);
+        }
+    }
+
+    /// Publish one lease decision onto the local broker.
+    ///
+    /// Deliberately **not retained**. A retained lease is re-delivered to any
+    /// module that connects afterwards, which would hand a plug rejoining the
+    /// broker minutes later a grant the coordinator issued before the fault --
+    /// the stale promise the whole mechanism exists to make impossible.
+    ///
+    /// Failures are not retried here. A lease that does not arrive is the same
+    /// event as a lease that was never sent: the module's own watchdog expires
+    /// and it de-energizes. Retrying a missed renewal would only narrow the
+    /// window in which that correct behaviour happens.
+    pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
+        match serde_json::to_value(action) {
+            Ok(v) => self.publish_local(local::TOOL_LEASE, &v),
+            Err(e) => warn!("Failed to serialize tool lease: {}", e),
         }
     }
 
@@ -659,7 +685,7 @@ impl LocalMqttClient {
                 "authorized": false,
                 "reason": "Tool is locked out (power)"
             });
-            self.publish_local("toolguard/response/tool-on", &response_payload);
+            self.publish_local(local::TOOL_ON_RESPONSE, &response_payload);
             return;
         }
 
@@ -670,7 +696,7 @@ impl LocalMqttClient {
             let (authorized, reason) = self.remote_tool_on(&req).await;
             let response_payload =
                 serde_json::json!({ "authorized": authorized, "reason": reason });
-            self.publish_local("toolguard/response/tool-on", &response_payload);
+            self.publish_local(local::TOOL_ON_RESPONSE, &response_payload);
             return;
         }
 
@@ -690,7 +716,7 @@ impl LocalMqttClient {
         };
 
         let response_payload = serde_json::json!({ "authorized": authorized, "reason": reason });
-        self.publish_local("toolguard/response/tool-on", &response_payload);
+        self.publish_local(local::TOOL_ON_RESPONSE, &response_payload);
 
         if authorized {
             // Best-effort forward to the remote server so it records the state change
@@ -731,6 +757,30 @@ impl LocalMqttClient {
             }
         };
 
+        // A power report is this module saying it is alive, and it is the only
+        // thing that says so on the local broker. Without it every binding whose
+        // `on_disconnect` is `fail_off` -- the default, and the right default --
+        // looks permanently silent, so the interlock engine refuses it a lease
+        // forever and the tool never energizes.
+        if let Some(device_id) = req.device_id.as_deref() {
+            let marked = self
+                .module_state
+                .note_device_seen(device_id, chrono::Utc::now());
+            if marked == 0 {
+                warn!(
+                    "Power report from device {} matched no module binding; it \
+                     will be refused a lease until its wiring arrives",
+                    device_id
+                );
+            }
+        } else {
+            debug!(
+                "Power report for {} carries no device_id, so no module can be \
+                 credited as alive by it",
+                req.tool_id
+            );
+        }
+
         if let Some(draw) = req.draw_now {
             self.power_state
                 .record_draw(&req.tool_id, draw, chrono::Utc::now());
@@ -769,6 +819,12 @@ impl LocalMqttClient {
             "max_voltage": req.max_voltage.map(|v| v.to_string()),
             "amperage_limit": req.amperage_limit.map(|v| v.to_string()),
             "self_tripped": req.self_tripped,
+            // Forwarded rather than dropped: #84's relay oracle reads this, and
+            // until now a module reporting over the local broker could never
+            // make it fire at all. Absent stays absent -- serde_json renders
+            // None as null and the server's `Option<bool>` keeps the three-way
+            // distinction the detector depends on.
+            "relay_on": req.relay_on,
             "api_key": req.api_key,
         });
         tokio::spawn(async move {
@@ -777,7 +833,7 @@ impl LocalMqttClient {
             }
         });
 
-        self.publish_local(LOCAL_TOOL_POWER_RESP, &serde_json::json!({ "ok": true }));
+        self.publish_local(local::POWER_RESPONSE, &serde_json::json!({ "ok": true }));
     }
 
     /// Synchronously ask the server to authorize (and hold) a metered activation.
@@ -824,7 +880,7 @@ impl LocalMqttClient {
 
     async fn handle_tool_off(&self, req: LocalToolRequest) {
         let response_payload = serde_json::json!({ "ok": true });
-        self.publish_local("toolguard/response/tool-off", &response_payload);
+        self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
 
         let url = format!("{}/api/toolguard/tool-off", self.remote_instance_url);
         let card = req.card.clone();
@@ -852,7 +908,7 @@ impl LocalMqttClient {
     async fn handle_tool_log(&self, req: LocalToolRequest) {
         let seconds = req.seconds.unwrap_or(0.0);
         let response_payload = serde_json::json!({ "ok": true });
-        self.publish_local("toolguard/response/tool-log", &response_payload);
+        self.publish_local(local::TOOL_LOG_RESPONSE, &response_payload);
 
         let url = format!("{}/api/toolguard/tool-log", self.remote_instance_url);
         let token = self.remote_auth_token.clone();
@@ -888,7 +944,7 @@ impl LocalMqttClient {
     /// Publish the current toolguard state to the local broker so subscribers
     /// (e.g. status kiosks) receive it immediately.
     pub fn publish_state_bytes(&self, bytes: Vec<u8>) {
-        let msg = mqtt::Message::new("toolguard/state", bytes, 1);
+        let msg = mqtt::Message::new(local::STATE, bytes, 1);
         if let Err(e) = self.client.publish(msg).wait() {
             warn!("Failed to publish toolguard state to local broker: {}", e);
         }

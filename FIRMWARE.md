@@ -348,8 +348,18 @@ re-broadcasts. `message` is `Circuit tripped`. A missing `circuit_id` is a 400.
 
 ## MQTT
 
-Topics are namespaced. The namespace comes from `mqtt_config.mqtt_namespace` at
-registration — `cs/spaces` by default. **Do not hard-code it.**
+**There are two brokers, and which one you talk to depends on what you are.**
+
+- The **site broker** carries the server ↔ device wire. Its topics are
+  namespaced: the namespace comes from `mqtt_config.mqtt_namespace` at
+  registration — `cs/spaces` by default. **Do not hard-code it.**
+- The **local broker** carries the edge ↔ module wire, on the LAN, with
+  unnamespaced topics. If you are writing module firmware — a ToolGuard, a card
+  reader, a plug — this is the one you speak, and [the edge is your
+  counterparty](#the-local-broker-edge--module), not the server.
+
+A module does not need credentials for the site broker and generally should not
+have them. It asks the edge; the edge asks the server.
 
 ### Device → server
 
@@ -382,6 +392,67 @@ does exactly this, for a reason worth repeating: with `clean_session(true)` the
 broker discards subscriptions when the link drops, so a client that reconnects
 without re-subscribing is *connected and deaf* — healthy from the outside, and
 silently receiving nothing.
+
+### The local broker: edge ↔ module
+
+The topics a module actually speaks. They are **not** namespaced and carry no
+`device_id` — the local broker is inside one building, and the payloads name the
+tool and the card themselves.
+
+The names come from `css_lib::wire::local`, which is the single definition
+shared by the edge, the kiosk and the test tools. The oracle named at the top of
+this file holds this table and that module to each other, so neither can move
+without the other.
+
+**Module → edge** (the edge subscribes):
+
+| topic | payload |
+|---|---|
+| `toolguard/request/tool-on` | `{ "card", "tool_id", "api_key"? }` |
+| `toolguard/request/tool-off` | `{ "card", "tool_id", "api_key"? }` |
+| `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "temperature"?, "api_key"? }` |
+| `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "self_tripped"?, … }` |
+| `door/request/scan` | `{ "door_id", "card_id" }` |
+| `kiosk/refresh` | *(none)* — ask the edge to re-push `toolguard/state` |
+
+**Edge → module** (the edge publishes):
+
+| topic | payload |
+|---|---|
+| `toolguard/response/tool-on` | the server's `ToolGuardResponse` |
+| `toolguard/response/tool-off` | the server's `ToolGuardResponse` |
+| `toolguard/response/tool-log` | the server's `ToolGuardResponse` |
+| `toolguard/response/power` | `{ "ok": true }` — an ack, nothing more |
+| `door/response/unlock` | `{ "door_id", "duration_ms" }` — a momentary unlock |
+| `toolguard/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
+| `toolguard/lease` | permission for one power module to stay energized — see [the lease](#authorization-is-a-lease-not-a-command) |
+
+Three things about this table that cost time if you learn them the hard way:
+
+**The response topics carry the server's envelope unchanged.** Everything in
+[denials are 200, not 4xx](#denials-are-200-not-4xx) applies here too — there is
+no status code on MQTT at all, so `tool_on: true` is the *only* thing that means
+energize. A response arriving is not an answer of yes.
+
+**`toolguard/request/power` is the MQTT twin of `POST /api/toolguard/power-report`,**
+with the same fields and the same rule about `relay_on`: omit it if you cannot
+report relay state, because absent means "cannot report" and `false` means "I
+looked and it is off". The detector needs to tell those apart.
+
+**Send `device_id` on every power report.** It is optional so that older
+firmware keeps parsing, but it is how the coordinator knows you are alive, and
+a module it has not heard from is a module it will not grant a lease to. A plug
+whose binding is `fail_off` — the default, and the right default — and which
+never sends `device_id` is refused permanently, and from the outside that looks
+identical to a tool that is simply switched off. Report it even when you have
+nothing else to say: a power report carrying only `tool_id` and `device_id` is
+a valid heartbeat.
+
+**`toolguard/response/power` is an acknowledgement, not an instruction.** It says
+your report was received. It is not permission to remain energized, and firmware
+that treats a returning ack as a heartbeat of approval has built exactly the
+fail-open design the [lease](#authorization-is-a-lease-not-a-command) exists to
+avoid.
 
 ### WebSocket: `GET /api/devices/ws`
 
@@ -443,6 +514,58 @@ leave a tool energized on a stale promise. A design where the edge must send a
 **What your firmware must do:** run your own watchdog. When renewals stop
 arriving, reach your safe state on your own, without being told. Do not wait for
 a command that, by construction, is not coming.
+
+#### The wire
+
+Leases arrive on the local broker, on `toolguard/lease`, one message per
+module per renewal:
+
+```json
+{
+  "tool_id": "laser-01",
+  "device_id": "…uuid…",
+  "grant": true,
+  "ttl_ms": 3000,
+  "reason": null
+}
+```
+
+Filter on `device_id` — every module on the broker sees every lease. Energize
+only while `grant` is `true`, and only for `ttl_ms` after the message **arrived**.
+
+`grant: false` is an instruction to de-energize now, sent when the coordinator
+can still reach you and has decided you may not run. It is a courtesy, not the
+mechanism: the mechanism is the silence that follows. Firmware that handles
+`grant: false` but has no expiry timer is firmware that stays on forever the
+moment the edge dies, which is the failure this whole design exists to prevent.
+
+`reason` is for logs and humans. Never branch on it; the vocabulary is not part
+of this contract and will change.
+
+**There is no request topic, and no acknowledgement.** You do not ask for a
+lease and you do not confirm one. The coordinator offers, and the offer ceasing
+is the instruction.
+
+#### Timing
+
+The reference coordinator renews **every second** with a **3000 ms** TTL, so a
+module tolerates two lost renewals before it cuts. Both ends are configurable
+(`module_lease_interval_ms`, `module_lease_ttl_ms`) and you must not hard-code
+either — read `ttl_ms` from each message.
+
+**Measure the TTL from your own receipt, on your own monotonic timer.** The
+payload deliberately carries no issue timestamp: a module computing
+`issued_at + ttl_ms` against its own clock holds the lease too long whenever the
+two clocks disagree, and a microcontroller with no RTC disagreeing with a
+coordinator is the normal case, not the exception.
+
+#### What a lease is not
+
+A lease is not authorization. `tool-on` is what authorizes a *person* to use a
+tool; a lease is what permits a *relay* to remain closed, and it is withheld for
+reasons that have nothing to do with who swiped — a door opened, a sensor went
+quiet, the coordinator lost confidence. Both must hold. Neither implies the
+other.
 
 ### `on_disconnect`
 
