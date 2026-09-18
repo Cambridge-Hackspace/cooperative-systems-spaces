@@ -17,6 +17,13 @@
 //! cannot be built at all — which is where the defect would ideally have been
 //! caught. The full route × credential matrix that supersedes it needs a live
 //! router and lands with the server contract tier.
+//!
+//! Those three are `POST` now, and their card travels in a JSON body rather
+//! than a URL (#107) — so the shape quoted above no longer exists. It is kept
+//! as the reason this file was written, not as a description of the current
+//! surface. The check itself has never cared about the method: it matches
+//! `(tool_on)` inside `toolguard_routes()`, so it reads `post(..)` exactly as
+//! it read `get(..)`.
 
 use css_checks::read;
 

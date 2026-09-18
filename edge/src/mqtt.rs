@@ -727,17 +727,14 @@ impl LocalMqttClient {
             let token = self.remote_auth_token.clone();
             let http = self.http_client.clone();
             tokio::spawn(async move {
-                let mut params = vec![("card", card), ("tool_id", tool_id)];
+                // A JSON body, not a query string: the card identifies a
+                // person and a URL is written down by every proxy and access
+                // log it passes through (#107).
+                let mut body = serde_json::json!({ "card": card, "tool_id": tool_id });
                 if let Some(k) = api_key {
-                    params.push(("api_key", k));
+                    body["api_key"] = serde_json::Value::String(k);
                 }
-                if let Err(e) = http
-                    .get(&url)
-                    .bearer_auth(&token)
-                    .query(&params)
-                    .send()
-                    .await
-                {
+                if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                     warn!("Failed to forward tool-on to remote: {}", e);
                 }
             });
@@ -841,15 +838,15 @@ impl LocalMqttClient {
     /// -- fail closed.
     async fn remote_tool_on(&self, req: &LocalToolRequest) -> (bool, String) {
         let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
-        let mut params = vec![("card", req.card.clone()), ("tool_id", req.tool_id.clone())];
+        let mut body = serde_json::json!({ "card": req.card, "tool_id": req.tool_id });
         if let Some(k) = &req.api_key {
-            params.push(("api_key", k.clone()));
+            body["api_key"] = serde_json::Value::String(k.clone());
         }
         match self
             .http_client
-            .get(&url)
+            .post(&url)
             .bearer_auth(&self.remote_auth_token)
-            .query(&params)
+            .json(&body)
             .send()
             .await
         {
@@ -889,17 +886,11 @@ impl LocalMqttClient {
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         tokio::spawn(async move {
-            let mut params = vec![("card", card), ("tool_id", tool_id)];
+            let mut body = serde_json::json!({ "card": card, "tool_id": tool_id });
             if let Some(k) = api_key {
-                params.push(("api_key", k));
+                body["api_key"] = serde_json::Value::String(k);
             }
-            if let Err(e) = http
-                .get(&url)
-                .bearer_auth(&token)
-                .query(&params)
-                .send()
-                .await
-            {
+            if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                 warn!("Failed to forward tool-off to remote: {}", e);
             }
         });
@@ -918,24 +909,18 @@ impl LocalMqttClient {
         let temperature = req.temperature;
         let api_key = req.api_key.clone();
         tokio::spawn(async move {
-            let mut params = vec![
-                ("card", card),
-                ("tool_id", tool_id),
-                ("seconds", seconds.to_string()),
-            ];
+            let mut body = serde_json::json!({
+                "card": card,
+                "tool_id": tool_id,
+                "seconds": seconds,
+            });
             if let Some(t) = temperature {
-                params.push(("temperature", t.to_string()));
+                body["temperature"] = serde_json::json!(t);
             }
             if let Some(k) = api_key {
-                params.push(("api_key", k));
+                body["api_key"] = serde_json::Value::String(k);
             }
-            if let Err(e) = http
-                .get(&url)
-                .bearer_auth(&token)
-                .query(&params)
-                .send()
-                .await
-            {
+            if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                 warn!("Failed to forward tool-log to remote: {}", e);
             }
         });

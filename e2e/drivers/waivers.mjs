@@ -23,7 +23,7 @@ const OPEN = 'WAIVER-OPEN' // requires_training = false
 const CARD = 'WAIVER-CARD'
 
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
-const toolOn = (ext) => GET(q('/api/toolguard/tool-on', { card: CARD, tool_id: ext, api_key: TOOL_KEY }))
+const toolOn = (ext) => POST('/api/toolguard/tool-on', { body: { card: CARD, tool_id: ext, api_key: TOOL_KEY } })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function createTool(admin, externalId, requiresTraining) {

@@ -28,9 +28,9 @@ const EXTERNAL_ID = 'CARDS-TOOL-1'
 
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
 const toolOn = (card) =>
-  GET(q('/api/toolguard/tool-on', { card, tool_id: EXTERNAL_ID, api_key: TOOL_KEY }))
+  POST('/api/toolguard/tool-on', { body: { card, tool_id: EXTERNAL_ID, api_key: TOOL_KEY } })
 const toolOff = (card) =>
-  GET(q('/api/toolguard/tool-off', { card, tool_id: EXTERNAL_ID, api_key: TOOL_KEY }))
+  POST('/api/toolguard/tool-off', { body: { card, tool_id: EXTERNAL_ID, api_key: TOOL_KEY } })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function createFreeTool(admin) {

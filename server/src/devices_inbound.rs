@@ -223,7 +223,10 @@ impl DeviceInbound {
                     }
                     Ok(crate::models::CardResolution::Unknown) => None,
                     Err(e) => {
-                        error!("Failed to resolve door card {}: {}", card, e);
+                        // The code identifies a person and this fires on every failed
+                        // door resolution, so the log says that one happened and
+                        // not who it was (#107).
+                        error!("Failed to resolve a door card: {}", e);
                         None
                     }
                 }
@@ -267,7 +270,7 @@ impl DeviceInbound {
                 actor_id: Some(uid),
                 event_data: serde_json::json!({
                     "door_id": event.door_id,
-                    "card_code": card.code,
+                    "card_id": card.id,
                     "card_status": card.status,
                     "context": "door",
                 }),

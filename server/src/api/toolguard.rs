@@ -1,3 +1,4 @@
+use axum::body::Bytes;
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
@@ -84,8 +85,60 @@ impl ToolGuardResponse {
 pub struct ToolRequest {
     pub card: String,
     pub tool_id: String,
+    pub api_key: Option<String>,
+}
+
+/// What actually arrives on the wire, before anything is known to be present.
+///
+/// Every field is optional and the struct is validated *after* authentication,
+/// which preserves the contract `FIRMWARE.md` states and the 401 matrix
+/// asserts: a request with no credential is **401**, not a 4xx about its body.
+/// A caller holding nothing must learn exactly one thing -- that it holds
+/// nothing -- and must never be able to tell a well-formed request from a
+/// malformed one, because that difference is a probing oracle.
+///
+/// This is why the handlers take `Bytes` rather than `Json<..>`. Optional
+/// fields alone are not enough: `Json` is a whole-request extractor that
+/// rejects a missing or wrong `Content-Type` with **415** before the handler
+/// body runs, which puts the same leak one extractor further down. The e2e
+/// contract matrix caught exactly that. `Bytes` never rejects, so
+/// authentication genuinely runs first.
+///
+/// Same reasoning as [`PowerReportRequest`] and [`PowerTripRequest`].
+#[derive(Debug, Default, Deserialize)]
+pub struct ToolRequestWire {
+    #[serde(default)]
+    pub card: Option<String>,
+    #[serde(default)]
+    pub tool_id: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+impl ToolRequestWire {
+    /// `(api_key, tool_id)` as authentication needs them, before validation.
+    ///
+    /// An absent tool id reads as empty, which resolves to no tool and so
+    /// refuses a tool-specific key -- deny-biased, matching `power_trip`.
+    fn borrowed(&self) -> (Option<&str>, &str) {
+        (
+            self.api_key.as_deref(),
+            self.tool_id.as_deref().unwrap_or(""),
+        )
+    }
+
+    fn validated(self) -> Result<ToolRequest, ApiError> {
+        match (self.card, self.tool_id) {
+            (Some(card), Some(tool_id)) => Ok(ToolRequest {
+                card,
+                tool_id,
+                api_key: self.api_key,
+            }),
+            _ => Err(ApiError::BadRequest(
+                "card and tool_id are required".to_string(),
+            )),
+        }
+    }
 }
 
 /// A power reading from a tool's controller (#43). The tool is named by its
@@ -128,10 +181,52 @@ pub struct ToolLogRequest {
     pub card: String,
     pub tool_id: String,
     pub seconds: f32,
+    pub temperature: Option<f32>,
+    pub api_key: Option<String>,
+}
+
+/// The wire form of [`ToolLogRequest`]; see [`ToolRequestWire`] for why every
+/// field is optional.
+#[derive(Debug, Default, Deserialize)]
+pub struct ToolLogRequestWire {
+    #[serde(default)]
+    pub card: Option<String>,
+    #[serde(default)]
+    pub tool_id: Option<String>,
+    #[serde(default)]
+    pub seconds: Option<f32>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+impl ToolLogRequestWire {
+    /// `(api_key, tool_id)` as authentication needs them, before validation.
+    ///
+    /// An absent tool id reads as empty, which resolves to no tool and so
+    /// refuses a tool-specific key -- deny-biased, matching `power_trip`.
+    fn borrowed(&self) -> (Option<&str>, &str) {
+        (
+            self.api_key.as_deref(),
+            self.tool_id.as_deref().unwrap_or(""),
+        )
+    }
+
+    fn validated(self) -> Result<ToolLogRequest, ApiError> {
+        match (self.card, self.tool_id, self.seconds) {
+            (Some(card), Some(tool_id), Some(seconds)) => Ok(ToolLogRequest {
+                card,
+                tool_id,
+                seconds,
+                temperature: self.temperature,
+                api_key: self.api_key,
+            }),
+            _ => Err(ApiError::BadRequest(
+                "card, tool_id and seconds are required".to_string(),
+            )),
+        }
+    }
 }
 
 // ── Sync payload types (shared between HTTP response and MQTT publish) ──────
@@ -170,9 +265,9 @@ pub struct ToolGuardSyncPayload {
 pub fn toolguard_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(api_status))
-        .route("/tool-on", get(tool_on))
-        .route("/tool-off", get(tool_off))
-        .route("/tool-log", get(tool_log))
+        .route("/tool-on", post(tool_on))
+        .route("/tool-off", post(tool_off))
+        .route("/tool-log", post(tool_log))
         .route("/sync", get(sync))
         .route("/boot-reset", post(boot_reset))
         .route("/power-report", post(power_report))
@@ -287,19 +382,26 @@ async fn boot_reset(
     ))))
 }
 
-/// GET /api/toolguard/tool-on
+/// POST /api/toolguard/tool-on
 async fn tool_on(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(req): Query<ToolRequest>,
+    body: Bytes,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
-    authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
+    let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
+    let (api_key, tool_id) = parsed
+        .as_ref()
+        .map(ToolRequestWire::borrowed)
+        .unwrap_or((None, ""));
+    authorize_toolguard(&state, &headers, api_key, tool_id).await?;
+    let req = parsed
+        .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
+        .validated()?;
 
-    tracing::info!(
-        "Tool on request: card={}, tool_id={}",
-        req.card,
-        req.tool_id
-    );
+    // The card is deliberately absent from this line (#107). It identifies a
+    // person, this log is written on every swipe, and the file is collected as
+    // a CI artifact and readable by anyone who can reach the container host.
+    tracing::info!("Tool on request: tool_id={}", req.tool_id);
 
     let tool_for_key_check = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
     if !validate_api_key(
@@ -315,13 +417,18 @@ async fn tool_on(
         )));
     }
 
-    let user = match resolve_card(&state, &req.card).await? {
+    // The card's id travels with the user; its *code* does not. The id says
+    // which credential was presented -- everything an operator reading the
+    // event needs -- without writing a person's physical identifier into a row
+    // that outlives the session and lands in every backup (#107, #108).
+    let (user, card_id) = match resolve_card(&state, &req.card).await? {
         crate::models::CardResolution::Active { user, card } => {
             // Record the presentation on the card that opened the tool.
+            let card_id = card.as_ref().map(|c| c.id);
             if let Some(c) = card {
                 let _ = state.db.touch_card_last_used(c.id);
             }
-            user
+            (user, card_id)
         }
         crate::models::CardResolution::Revoked { user, card } => {
             // Known credential deliberately not active — deny, but raise the
@@ -448,7 +555,7 @@ async fn tool_on(
         )),
         scan_data: Some(serde_json::json!({
             "toolguard_id": req.tool_id,
-            "card": req.card,
+            "card_id": card_id,
         })),
     };
     state.db.create_tool_event(&event).map_err(|e| {
@@ -463,19 +570,23 @@ async fn tool_on(
     Ok(Json(ToolGuardResponse::tool_authorized()))
 }
 
-/// GET /api/toolguard/tool-off
+/// POST /api/toolguard/tool-off
 async fn tool_off(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(req): Query<ToolRequest>,
+    body: Bytes,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
-    authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
+    let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
+    let (api_key, tool_id) = parsed
+        .as_ref()
+        .map(ToolRequestWire::borrowed)
+        .unwrap_or((None, ""));
+    authorize_toolguard(&state, &headers, api_key, tool_id).await?;
+    let req = parsed
+        .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
+        .validated()?;
 
-    tracing::info!(
-        "Tool off request: card={}, tool_id={}",
-        req.card,
-        req.tool_id
-    );
+    tracing::info!("Tool off request: tool_id={}", req.tool_id);
 
     let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
     if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
@@ -487,9 +598,12 @@ async fn tool_off(
     // card was disabled or released mid-use, so both Active and Revoked resolve
     // to the member here; only a truly unknown code is rejected. (The revoked
     // fraud signal is raised at tool-on, where access is actually granted.)
-    let user = match resolve_card(&state, &req.card).await? {
-        crate::models::CardResolution::Active { user, .. }
-        | crate::models::CardResolution::Revoked { user, .. } => user,
+    let (user, card_id) = match resolve_card(&state, &req.card).await? {
+        crate::models::CardResolution::Active { user, card } => {
+            let card_id = card.as_ref().map(|c| c.id);
+            (user, card_id)
+        }
+        crate::models::CardResolution::Revoked { user, card } => (user, Some(card.id)),
         crate::models::CardResolution::Unknown => {
             return Ok(Json(ToolGuardResponse::error("Unknown card")))
         }
@@ -542,7 +656,7 @@ async fn tool_off(
         )),
         scan_data: Some(serde_json::json!({
             "toolguard_id": req.tool_id,
-            "card": req.card,
+            "card_id": card_id,
         })),
     };
     state.db.create_tool_event(&event).map_err(|e| {
@@ -556,17 +670,24 @@ async fn tool_off(
     Ok(Json(ToolGuardResponse::tool_off_ok()))
 }
 
-/// GET /api/toolguard/tool-log
+/// POST /api/toolguard/tool-log
 async fn tool_log(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(req): Query<ToolLogRequest>,
+    body: Bytes,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
-    authorize_toolguard(&state, &headers, req.api_key.as_deref(), &req.tool_id).await?;
+    let parsed: Option<ToolLogRequestWire> = serde_json::from_slice(&body).ok();
+    let (api_key, tool_id) = parsed
+        .as_ref()
+        .map(ToolLogRequestWire::borrowed)
+        .unwrap_or((None, ""));
+    authorize_toolguard(&state, &headers, api_key, tool_id).await?;
+    let req = parsed
+        .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
+        .validated()?;
 
     tracing::info!(
-        "Tool log request: card={}, tool_id={}, seconds={}, temp={:?}",
-        req.card,
+        "Tool log request: tool_id={}, seconds={}, temp={:?}",
         req.tool_id,
         req.seconds,
         req.temperature
@@ -582,9 +703,12 @@ async fn tool_log(
     // card was disabled or released mid-use, so both Active and Revoked resolve
     // to the member here; only a truly unknown code is rejected. (The revoked
     // fraud signal is raised at tool-on, where access is actually granted.)
-    let user = match resolve_card(&state, &req.card).await? {
-        crate::models::CardResolution::Active { user, .. }
-        | crate::models::CardResolution::Revoked { user, .. } => user,
+    let (user, card_id) = match resolve_card(&state, &req.card).await? {
+        crate::models::CardResolution::Active { user, card } => {
+            let card_id = card.as_ref().map(|c| c.id);
+            (user, card_id)
+        }
+        crate::models::CardResolution::Revoked { user, card } => (user, Some(card.id)),
         crate::models::CardResolution::Unknown => {
             return Ok(Json(ToolGuardResponse::error("Unknown card")))
         }
@@ -642,7 +766,7 @@ async fn tool_log(
         notes: Some(format!("Usage logged: {:.1} minutes", req.seconds / 60.0)),
         scan_data: Some(serde_json::json!({
             "toolguard_id": req.tool_id,
-            "card": req.card,
+            "card_id": card_id,
             "seconds": req.seconds,
             "temperature": req.temperature,
         })),
@@ -1253,7 +1377,7 @@ async fn log_revoked_card_presented(
 ) -> Result<(), ApiError> {
     let details = serde_json::json!({
         "toolguard_id": toolguard_id,
-        "card_code": card.code,
+        "card_id": card.id,
         "card_status": card.status,
         "context": "tool",
     });

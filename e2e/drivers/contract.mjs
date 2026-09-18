@@ -36,13 +36,15 @@ const DEVICE_ROUTES = [
   ['GET', '/api/devices/ws'],
   ['POST', '/api/toolguard/boot-reset'],
   ['GET', '/api/toolguard/sync'],
-  // `seconds` too. `ToolLogRequest` requires it, and Query is a
-  // FromRequestParts extractor -- so without it the request is rejected with
-  // 400 before the handler's authentication check runs, and the row would be
-  // asserting the extractor rather than the credential.
-  ['GET', '/api/toolguard/tool-log?card=AA11&tool_id=t1&seconds=1'],
-  ['GET', '/api/toolguard/tool-off?card=AA11&tool_id=t1'],
-  ['GET', '/api/toolguard/tool-on?card=AA11&tool_id=t1'],
+  // No body, and deliberately so. These are POST now (#107, so the card is
+  // not written into a URL), and `Json` is a whole-request extractor: a
+  // required field would be rejected before the handler authenticated, and
+  // this row would assert the extractor rather than the credential. The wire
+  // structs make every field optional and validate after the credential check
+  // precisely so this stays a test of the credential.
+  ['POST', '/api/toolguard/tool-log'],
+  ['POST', '/api/toolguard/tool-off'],
+  ['POST', '/api/toolguard/tool-on'],
 ]
 
 /**
@@ -167,12 +169,15 @@ main(async () => {
   // before the fix, and it read identically from the outside until you noticed
   // the door had opened.
   for (const [path, extra] of [
-    ['/api/toolguard/tool-on', ''],
-    ['/api/toolguard/tool-off', ''],
-    ['/api/toolguard/tool-log', '&seconds=1'],
+    ['/api/toolguard/tool-on', {}],
+    ['/api/toolguard/tool-off', {}],
+    ['/api/toolguard/tool-log', { seconds: 1 }],
   ]) {
     assertEq(`contract/toolguard/${path} refuses a wrong api_key`, 401,
-      (await GET(`${path}?card=AA11&tool_id=t1${extra}`, { apiKey: 'not-a-real-key' })).status)
+      (await POST(path, {
+        apiKey: 'not-a-real-key',
+        body: { card: 'AA11', tool_id: 't1', ...extra },
+      })).status)
   }
 
   // -----------------------------------------------------------------------

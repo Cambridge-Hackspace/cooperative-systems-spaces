@@ -1928,6 +1928,57 @@ stage_logs() {
   fi
   record_case "logs/server-log-present" ok
 
+  # --- card codes must not be in the log at all (#107) ----------------------
+  #
+  # The claim #107 makes, asserted against the artifact rather than the source.
+  # A source check can say no tracing macro interpolates a card today; only this
+  # can say the file a CI run uploads, and that anyone reaching the container
+  # host can read, does not contain the physical identifiers of the membership.
+  #
+  # Every card the run created is read back from the database, so this covers
+  # whatever the drivers happened to generate rather than a list kept in step by
+  # hand. Cards are not secrets -- a UID is readable by anyone standing nearby,
+  # by design -- but a continuously generated, widely readable record of who was
+  # where is a different thing from the card itself.
+  local codes card_count leaked
+  codes="$(sql_ro "SELECT code FROM user_cards" | sed '/^$/d')"
+  card_count="$(printf '%s\n' "${codes}" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+  if [[ ${card_count} -eq 0 ]]; then
+    # Anti-vacuity, and the reason this is a failure rather than a skip: with no
+    # cards there is nothing to find, and "found nothing" would read exactly
+    # like "leaked nothing". The suite creates cards; none existing means an
+    # earlier stage did not run, so this assertion is judging an empty set.
+    record_case "logs/cards-exist-to-look-for" fail \
+      "no rows in user_cards, so the leak check below would pass over nothing"
+  else
+    record_case "logs/cards-exist-to-look-for" ok
+
+    # A positive control on the mechanism itself. If grep cannot find a string
+    # that is definitely in this file, then finding no card codes means nothing.
+    if grep -q 'Tool on request' "${log}"; then
+      record_case "logs/the-leak-check-can-find-things" ok
+    else
+      record_case "logs/the-leak-check-can-find-things" fail \
+        "the log has no 'Tool on request' line, so no swipe reached the server this run and the check below is vacuous"
+    fi
+
+    leaked=""
+    while IFS= read -r code; do
+      [[ -z ${code} ]] && continue
+      if grep -qF -- "${code}" "${log}"; then
+        leaked="${leaked} ${code}"
+      fi
+    done <<<"${codes}"
+
+    if [[ -z ${leaked} ]]; then
+      record_case "logs/no-card-code-in-the-server-log" ok
+    else
+      record_case "logs/no-card-code-in-the-server-log" fail \
+        "card code(s) written to the server log in plaintext:${leaked}. This file is uploaded as a CI artifact and is readable by anyone who can reach the container host."
+    fi
+  fi
+
   # --- audit writes that failed silently -----------------------------------
   # Named separately from the general ERROR sweep because the consequence is
   # specific: this is the record of who did what, and it is the one thing a
@@ -2310,7 +2361,9 @@ INVENTORY
   # says it does: a denial is a 200 carrying tool_on false, so asserting on the
   # body rather than the status code is the assertion that means anything.
   curl -s -o "${OUT}/devseed-toolon.json" \
-    "${base}/api/toolguard/tool-on?card=${fw_card}&tool_id=${fw_external_id}&api_key=${fw_tool_key}" >/dev/null 2>&1
+    -X POST -H "Content-Type: application/json" \
+    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\",\"api_key\":\"${fw_tool_key}\"}" \
+    "${base}/api/toolguard/tool-on" >/dev/null 2>&1
   if grep -q '"tool_on":true' "${OUT}/devseed-toolon.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-on-works" ok
   else
@@ -2323,7 +2376,9 @@ INVENTORY
   # And put it back, so the instance starts idle rather than with a tool stuck
   # in use by the seed that was meant to make it usable.
   curl -s -o "${OUT}/devseed-tooloff.json" \
-    "${base}/api/toolguard/tool-off?card=${fw_card}&tool_id=${fw_external_id}&api_key=${fw_tool_key}" >/dev/null 2>&1
+    -X POST -H "Content-Type: application/json" \
+    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\",\"api_key\":\"${fw_tool_key}\"}" \
+    "${base}/api/toolguard/tool-off" >/dev/null 2>&1
   if grep -q '"tool_off":true' "${OUT}/devseed-tooloff.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-off-works" ok
   else
