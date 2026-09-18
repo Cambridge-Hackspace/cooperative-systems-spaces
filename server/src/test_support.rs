@@ -87,6 +87,11 @@ pub async fn app_state() -> AppState {
         .expect("PagesService::new with both repos None does no I/O");
 
     AppState {
+        card_cipher: config
+            .cards
+            .cipher()
+            .expect("test card keys parse")
+            .map(Arc::new),
         shutdown,
         audit_logger: AuditLogger::new(db.clone()),
         throttle_service: Arc::new(RegistrationThrottleService::new()),
@@ -110,6 +115,11 @@ pub async fn app_state() -> AppState {
         device_inbound: Arc::new(DeviceInbound::new(
             db.clone(),
             config.toolguard.profile_field.clone(),
+            config
+                .cards
+                .cipher()
+                .expect("test card keys parse")
+                .map(Arc::new),
         )),
         cmi5_service: Arc::new(crate::cmi5::Cmi5Service::new(db.clone(), &config.cmi5)),
         device_transport,

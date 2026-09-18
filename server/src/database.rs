@@ -945,16 +945,49 @@ impl DatabaseManager {
     /// live (active/disabled) card — unique per code — wins over any released
     /// row sharing that code; a released-only code resolves to its most recent
     /// released row so a presentation is still attributable to its old owner.
+    /// Find the card a presented code belongs to.
+    ///
+    /// Selects on the blind index when this deployment has keys, because the
+    /// sealed value is non-deterministic and cannot be matched directly. Rows
+    /// the backfill has not reached yet still carry plaintext and are found the
+    /// old way, so a swipe works throughout the migration rather than only
+    /// after it -- a member turned away at a laser because an operator had not
+    /// finished a backfill is not an acceptable intermediate state.
     pub fn resolve_card(
         &self,
         profile_field: &str,
         code: &str,
+        cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<CardResolution, DatabaseError> {
         let mut conn = self.get_connection()?;
+        let bidx = cipher.map(|c| c.blind_index(code));
 
-        // A live row (active or disabled) is unique per code.
-        let live = user_cards::table
-            .filter(user_cards::code.eq(code))
+        // A named function rather than a closure, so the returned query's
+        // lifetime is tied to the one that went in; and it binds owned values,
+        // so nothing borrows `code` or the index beyond the call.
+        //
+        // With keys configured this matches the blind index OR a row the
+        // backfill has not reached, which still carries plaintext. That second
+        // arm is what keeps swipes working *during* the migration rather than
+        // only after it.
+        fn matches_code<'a>(
+            q: user_cards::BoxedQuery<'a, diesel::pg::Pg>,
+            code: &str,
+            bidx: Option<&[u8]>,
+        ) -> user_cards::BoxedQuery<'a, diesel::pg::Pg> {
+            match bidx {
+                Some(b) => q.filter(
+                    user_cards::code_bidx
+                        .eq(b.to_vec())
+                        .or(user_cards::code_bidx
+                            .is_null()
+                            .and(user_cards::code.eq(code.to_string()))),
+                ),
+                None => q.filter(user_cards::code.eq(code.to_string())),
+            }
+        }
+
+        let live = matches_code(user_cards::table.into_boxed(), code, bidx.as_deref())
             .filter(user_cards::status.ne(CardStatus::Released))
             .select(UserCard::as_select())
             .first::<UserCard>(&mut conn)
@@ -963,8 +996,7 @@ impl DatabaseManager {
 
         let card = match live {
             Some(c) => Some(c),
-            None => user_cards::table
-                .filter(user_cards::code.eq(code))
+            None => matches_code(user_cards::table.into_boxed(), code, bidx.as_deref())
                 .filter(user_cards::status.eq(CardStatus::Released))
                 .order(user_cards::created_at.desc())
                 .select(UserCard::as_select())
@@ -1022,11 +1054,29 @@ impl DatabaseManager {
 
     /// Issue a new active card to a member. Fails with a unique-violation if the
     /// code already belongs to a live (active/disabled) card.
-    pub fn create_card(&self, user_id: uuid::Uuid, code: &str) -> Result<UserCard, DatabaseError> {
+    /// `cipher` is `None` on a deployment that has not been given card keys
+    /// yet; the card is then stored in plaintext exactly as before, which is
+    /// what lets the migration be rolled out without a flag day.
+    pub fn create_card(
+        &self,
+        user_id: uuid::Uuid,
+        code: &str,
+        cipher: Option<&css_lib::card_crypto::CardCipher>,
+    ) -> Result<UserCard, DatabaseError> {
         let mut conn = self.get_connection()?;
+        let sealed = match cipher {
+            Some(c) => Some(
+                c.seal(code)
+                    .map_err(|e| DatabaseError::Other(format!("could not seal card: {e}")))?,
+            ),
+            None => None,
+        };
         let new_card = NewUserCard {
             user_id,
             code: code.to_string(),
+            code_encrypted: sealed.as_ref().map(|s| s.ciphertext.clone()),
+            code_nonce: sealed.as_ref().map(|s| s.nonce.clone()),
+            code_bidx: sealed.as_ref().map(|s| s.blind_index.clone()),
             status: Some(CardStatus::Active),
         };
         diesel::insert_into(user_cards::table)

@@ -363,7 +363,8 @@ report_and_exit
 log "release binaries"
 cargo build --locked --release \
   --bin css-server --bin css-cli --bin css-webhook-recvr --bin css-smtp-sink \
-  --bin css-groupsio-sink --bin css-stripe-sink --bin css-edge
+  --bin css-groupsio-sink --bin css-stripe-sink --bin css-edge \
+  --bin css-card-backfill
 
 # Both edge profiles, on purpose. web_server.rs::create_router has a
 # #[cfg(debug_assertions)] arm that honours --frontend-path and a
@@ -380,6 +381,7 @@ install -m 0755 "${CARGO_TARGET_DIR}/release/css-webhook-recvr" e2e/artifacts/cs
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-smtp-sink" e2e/artifacts/css-smtp-sink
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-groupsio-sink" e2e/artifacts/css-groupsio-sink
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-stripe-sink" e2e/artifacts/css-stripe-sink
+install -m 0755 "${CARGO_TARGET_DIR}/release/css-card-backfill" e2e/artifacts/css-card-backfill
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-edge" e2e/artifacts/css-edge
 install -m 0755 "${CARGO_TARGET_DIR}/debug/css-edge" e2e/artifacts/css-edge-dbg
 

@@ -825,6 +825,50 @@ pub struct ToolGuardConfig {
     pub global_api_key: Option<String>,
 }
 
+/// Card encryption at rest (#108).
+///
+/// Both keys are 32 bytes, hex-encoded, and belong in configuration or the
+/// environment -- **never in the database**, which is the entire point: a dump
+/// without them discloses nothing. Absent keys leave cards in plaintext, which
+/// is the pre-#108 behaviour and what a deployment mid-migration runs on.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CardsConfig {
+    /// Hex-encoded 32-byte key for the sealed card value.
+    #[serde(default)]
+    pub encryption_key: Option<String>,
+    /// Hex-encoded 32-byte key for the deterministic lookup index.
+    ///
+    /// Separate from `encryption_key` so the two *can* be split across custody
+    /// boundaries later. Today they sit in the same file, so the blind index is
+    /// a lookup mechanism rather than an independent defence -- see the note in
+    /// `css_lib::card_crypto`.
+    #[serde(default)]
+    pub index_key: Option<String>,
+}
+
+impl CardsConfig {
+    /// The cipher, or `None` when this deployment has not been given keys yet.
+    ///
+    /// Returns an error only when keys are present and wrong, so a deployment
+    /// that has not started the migration starts normally while one that has
+    /// fat-fingered a key is refused rather than silently writing rows nobody
+    /// can decrypt afterwards.
+    pub fn cipher(&self) -> Result<Option<css_lib::card_crypto::CardCipher>, String> {
+        match (&self.encryption_key, &self.index_key) {
+            (None, None) => Ok(None),
+            (Some(enc), Some(idx)) => css_lib::card_crypto::CardCipher::from_hex(enc, idx)
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            (Some(_), None) => Err("cards.encryption_key is set but cards.index_key is not; \
+                 cards would be sealed and then unfindable"
+                .to_string()),
+            (None, Some(_)) => Err("cards.index_key is set but cards.encryption_key is not; \
+                 there is nothing to unlock"
+                .to_string()),
+        }
+    }
+}
+
 impl Default for ToolGuardConfig {
     fn default() -> Self {
         Self {
@@ -1336,6 +1380,9 @@ pub struct AppConfig {
     pub tools: ToolConfig,
     /// ToolGuard Configuration
     pub toolguard: ToolGuardConfig,
+    /// Card encryption at rest (#108)
+    #[serde(default)]
+    pub cards: CardsConfig,
     /// Calendar configuration
     pub calendar: CalendarConfig,
     /// Pages Configuration
@@ -1385,6 +1432,7 @@ impl Default for AppConfig {
             user: UserConfig::default(),
             tools: ToolConfig::default(),
             toolguard: ToolGuardConfig::default(),
+            cards: CardsConfig::default(),
             calendar: CalendarConfig::default(),
             pages: PagesConfig::default(),
             edge: EdgeConfig::default(),
@@ -1673,6 +1721,15 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     // (it's the code default, and has shipped in tracked config files), so
     // a server signing tokens with it is a full auth bypass, not just an
     // insecure setting to warn about.
+    // Card keys, if present, must actually work. Refusing at startup is the
+    // only cheap moment: a malformed key discovered later means rows already
+    // sealed with something nobody can reproduce, and there is no plaintext to
+    // re-derive them from once the settling period has passed and `code` is
+    // dropped.
+    if let Err(e) = config.cards.cipher() {
+        return Err(anyhow::anyhow!("{e}"));
+    }
+
     if config.auth.jwt_secret == LEGACY_DEFAULT_JWT_SECRET {
         return Err(anyhow::anyhow!(
             "auth.jwt_secret is still set to the default placeholder value. \

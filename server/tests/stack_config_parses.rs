@@ -39,6 +39,19 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@SMTP_PORT@", "2525"),
     ("@GROUPSIO_PORT@", "4390"),
     ("@STRIPE_PORT@", "4391"),
+    // Card encryption keys (#108). The real values live in stack.sh so the
+    // cards stage can hand the same pair to css-card-backfill; what matters
+    // here is that they are 32 bytes of hex, because CardsConfig::cipher()
+    // refuses anything else at startup and a stack that will not boot is a
+    // battery that fails at bring-up rather than in this test.
+    (
+        "@CARDS_ENC_KEY@",
+        "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    ),
+    (
+        "@CARDS_IDX_KEY@",
+        "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+    ),
     // Representative of what `write_stack_config` actually substitutes: both
     // are derived from STACK_DIR, which is `${OUT}/stack` -- per-run, and the
     // whole point of `checkout_dir` being configurable at all.
@@ -63,6 +76,31 @@ fn substituted() -> String {
         out = out.replace(token, value);
     }
     out
+}
+
+/// The stack's card keys must actually build a cipher.
+///
+/// `toml::from_str` is happy with any string, and `CardsConfig::cipher()` is
+/// what the server calls at startup -- so without this the suite could ship a
+/// config that parses here and refuses to boot there, which is a failure at
+/// bring-up with no clue pointing back at this file.
+#[test]
+fn the_stack_card_keys_build_a_cipher() {
+    let config: AppConfig = toml::from_str(&substituted()).expect("parses");
+    let cipher = config
+        .cards
+        .cipher()
+        .expect("stack card keys must be valid")
+        .expect("the stack configures card keys, so this must not be None");
+    let sealed = cipher.seal("STACK-CARD").expect("seals");
+    assert_eq!(
+        "STACK-CARD",
+        cipher
+            .open(&sealed.ciphertext, &sealed.nonce)
+            .expect("opens"),
+        "the configured keys must round-trip a card, or every swipe in the battery \
+         is resolving against something nobody can read back"
+    );
 }
 
 #[test]

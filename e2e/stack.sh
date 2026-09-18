@@ -80,6 +80,14 @@ SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
 SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
 GROUPSIO_PORT="${CSS_E2E_GROUPSIO_PORT:-4390}"
 STRIPE_PORT="${CSS_E2E_STRIPE_PORT:-4391}"
+# Card encryption keys (#108). Fixed rather than generated so a failure
+# reproduces from the logs, and defined here rather than in stack-config.toml so
+# the cards stage can hand the same pair to css-card-backfill -- two copies that
+# could drift would make the verifier report a key mismatch that is really a
+# config bug.
+CARDS_ENC_KEY="a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+CARDS_IDX_KEY="b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+
 PG_USER="css_user"
 PG_PASS="css_pass"
 PG_DB="css"
@@ -551,6 +559,8 @@ write_stack_config() {
     -e "s|@CHECKOUT_DIR@|${STACK_DIR}|g" \
     -e "s|@SERVER_PORT@|${SERVER_PORT}|g" \
     -e "s|@STACK_TZ@|${STACK_TZ}|g" \
+    -e "s|@CARDS_ENC_KEY@|${CARDS_ENC_KEY}|g" \
+    -e "s|@CARDS_IDX_KEY@|${CARDS_IDX_KEY}|g" \
     -e "s|@PG_USER@|${PG_USER}|g" \
     -e "s|@PG_PASS@|${PG_PASS}|g" \
     -e "s|@PG_PORT@|${PG_PORT}|g" \
@@ -714,6 +724,24 @@ collect_stack_logs() {
   if [[ ${PROVISION} != "external" ]]; then
     pm logs "${C_PG}" >"${OUT}/logs/postgres.log" 2>&1 || true
     pm logs "${C_MQTT}" >"${OUT}/logs/mosquitto.log" 2>&1 || true
+  fi
+}
+
+# Run a one-shot binary from e2e/artifacts and echo everything it printed.
+#
+# Same provisioning split as start_edge: on the host it runs directly, under
+# containers it runs in the server image with the artifacts mounted. Output is
+# returned rather than logged, because the caller asserts on what it says --
+# a one-shot that did nothing at all also exits zero.
+run_artifact() {
+  local binary="$1"
+  shift
+  if [[ ${PROVISION} == "external" ]]; then
+    "${ROOT}/e2e/artifacts/${binary}" "$@" 2>&1
+  else
+    pm run --rm --network host \
+      -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
+      "${IMG_SERVER_LOCAL}" "/artifacts/${binary}" "$@" 2>&1
   fi
 }
 

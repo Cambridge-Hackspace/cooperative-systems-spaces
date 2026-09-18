@@ -196,9 +196,19 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Shared transport-agnostic inbound dispatcher and per-device session
     // registry. Created before MQTT so MqttService can take a reference.
+    // Unwrapped rather than defaulted: validate_config already refused to start
+    // on unusable keys, so an error here cannot happen without the config being
+    // swapped underneath us, and silently continuing in plaintext is the one
+    // outcome nobody would notice.
+    let card_cipher = app_config
+        .cards
+        .cipher()
+        .expect("card keys were validated at startup")
+        .map(std::sync::Arc::new);
     let device_inbound = Arc::new(DeviceInbound::new(
         db_manager.clone(),
         app_config.toolguard.profile_field.clone(),
+        card_cipher.clone(),
     ));
     let device_registry = DeviceChannelRegistry::new();
 
@@ -440,6 +450,7 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let app_state = AppState {
+        card_cipher: card_cipher.clone(),
         shutdown: shutdown.clone(),
         config_manager,
         db: db_manager,

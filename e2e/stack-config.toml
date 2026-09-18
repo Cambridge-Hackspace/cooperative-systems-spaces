@@ -286,6 +286,16 @@ profile_field = "card_id"
 # for a metered tool (which must use its own per-tool key).
 global_api_key = "e2e-global-key"
 
+# Card encryption at rest (#108), ON in the suite on purpose.
+#
+# With these unset the server takes the plaintext path, every card assertion
+# passes exactly as it did before, and the sealed path -- the one this change
+# adds -- would never execute in a battery at all. Fixed keys rather than
+# generated ones so a failure reproduces from the logs.
+[cards]
+encryption_key = "@CARDS_ENC_KEY@"
+index_key = "@CARDS_IDX_KEY@"
+
 [calendar]
 enabled = false
 # Not omitted. `calendars` is a Vec with no #[serde(default)], so leaving it

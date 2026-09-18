@@ -371,6 +371,29 @@ label = "Other"
 enabled = true
 profile_field = "card_id"
 
+# Card encryption at rest (#108).
+#
+# Two 32-byte keys, hex-encoded. Generate a pair with `css-card-backfill` or any
+# CSRNG; they belong here or in the environment and NEVER in the database --
+# that separation is the whole point, because a leaked dump without them
+# discloses nothing.
+#
+# Leave both unset (the default) to store card codes in plaintext, which is the
+# pre-#108 behaviour and what a deployment mid-migration runs on. Setting one
+# without the other is refused at startup: sealed-but-unfindable and
+# findable-but-unopenable are both worse than either consistent state.
+#
+# After setting them on an existing deployment, run `css-card-backfill` to seal
+# the rows already there. Cards issued afterwards are sealed on write.
+#
+# This protects the store, not the card: the platform accepts whatever card a
+# member already has, so a UID is readable by anyone standing nearby and is not
+# a secret. Encryption here is about a leaked dump, a restored copy on a laptop,
+# or a support export -- not about who can switch a machine on.
+[cards]
+# encryption_key = "<64 hex characters>"
+# index_key = "<64 hex characters>"
+
 # Calendar Configuration
 # Pulls iCal/ICS feeds onto the home page.
 [calendar]

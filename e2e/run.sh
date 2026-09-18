@@ -968,6 +968,51 @@ stage_cards() {
   run_node cards.mjs >"${OUT}/logs/cards.log" 2>&1 || true
   absorb_driver_cases || true
 
+  # --- the sealing backfill, against the cards the driver just issued (#108) --
+  #
+  # This stack configures [cards] keys, so the API seals on write and every card
+  # above should already be sealed. `--verify` re-opens each one and checks it
+  # against the plaintext still beside it, which is the check that matters: the
+  # plaintext is dropped in a later migration, and a key mismatch has to surface
+  # while the original is still there to re-derive from.
+  #
+  # Asserted on what it *says*, not on its exit status. A verifier that examined
+  # nothing would also exit zero, and "0 sealed, 0 unsealed" would be a silent
+  # pass over an empty set -- the same green-on-nothing failure the log stage
+  # guards against.
+  local backfill
+  backfill="$(run_artifact css-card-backfill --verify \
+    --database-url "postgres://${PG_USER}:${PG_PASS}@127.0.0.1:${PG_PORT}/${PG_DB}" \
+    --encryption-key "${CARDS_ENC_KEY}" \
+    --index-key "${CARDS_IDX_KEY}" || true)"
+  printf '%s\n' "${backfill}" >"${OUT}/logs/card-backfill.log"
+
+  local verified
+  verified="$(printf '%s' "${backfill}" | sed -n 's/^verified \([0-9]*\) sealed.*/\1/p' | head -1)"
+  if [[ -n ${verified} ]] && [[ ${verified} -gt 0 ]]; then
+    record_case "cards/backfill-verified-something" ok
+  else
+    record_case "cards/backfill-verified-something" fail \
+      "the verifier reported no sealed cards, so its clean bill of health covers nothing: ${backfill}"
+  fi
+
+  if printf '%s' "${backfill}" | grep -q 'all sealed cards open to their plaintext and index correctly'; then
+    record_case "cards/sealed-cards-open-to-their-plaintext" ok
+  else
+    record_case "cards/sealed-cards-open-to-their-plaintext" fail \
+      "sealed cards did not verify: ${backfill}"
+  fi
+
+  # Nothing may be left unsealed: the API seals on write, so an unsealed row
+  # means a path that creates cards without a cipher, which is exactly what
+  # would strand rows when `code` is finally dropped.
+  if printf '%s' "${backfill}" | grep -qE 'verified [0-9]+ sealed card\(s\); 0 still unsealed'; then
+    record_case "cards/no-card-was-left-unsealed" ok
+  else
+    record_case "cards/no-card-was-left-unsealed" fail \
+      "some cards are not sealed: ${backfill}"
+  fi
+
   collect_server_log
   emit_junit cards "driver=cards.mjs"
 }

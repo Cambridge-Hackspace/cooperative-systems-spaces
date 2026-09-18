@@ -62,7 +62,9 @@ async fn issue_card(
             "Card code must not be empty".to_string(),
         ));
     }
-    let card = state.db.create_card(user_id, code)?;
+    let card = state
+        .db
+        .create_card(user_id, code, state.card_cipher.as_deref())?;
     audit(&state, AuditEventType::CardIssued, &card, admin.0.id, None);
     Ok(Json(ApiResponse::success(card)))
 }

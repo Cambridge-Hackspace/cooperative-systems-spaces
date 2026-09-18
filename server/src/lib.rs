@@ -90,6 +90,14 @@ pub struct AppState {
     /// `shutdown.spawn()` so the stop path waits for it.
     pub shutdown: crate::shutdown::Shutdown,
     pub db: Arc<DatabaseManager>,
+    /// Card encryption at rest (#108), resolved once at startup.
+    ///
+    /// Held rather than rebuilt per request for two reasons: a swipe should not
+    /// pay a hex decode and a key schedule, and building it per call invents a
+    /// runtime failure mode for something `validate_config` already refused to
+    /// start without. `None` means this deployment has no card keys and stores
+    /// plaintext, which is the pre-migration state.
+    pub card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
     pub audit_logger: AuditLogger,
     pub throttle_service: Arc<RegistrationThrottleService>,
     pub recaptcha_service: Arc<RecaptchaService>,
