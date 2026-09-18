@@ -2768,9 +2768,23 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Build the ToolGuard sync data: a flat tool list and per-user authorized tool ID lists.
+    /// The allow-list for **one device**.
+    ///
+    /// Scoped by `tool_modules` binding (#104). It used to take a device id at
+    /// the API layer, echo it into the response, and return every tool and
+    /// every member's card value to whoever asked -- so one compromised reader
+    /// yielded the card identifier of the entire membership plus the full
+    /// authorization matrix.
+    ///
+    /// Deny by default, with no special case for any device kind: a device
+    /// receives the tools it is bound to and the users authorized for those
+    /// tools, and a device bound to nothing receives nothing. An edge that
+    /// coordinates twenty tools has twenty bindings. That is more rows than
+    /// inferring scope from a place or a device kind, and it is an explicit
+    /// grant an administrator made rather than one the topology implied.
     pub fn get_toolguard_sync_data(
         &self,
+        device_id: uuid::Uuid,
         profile_field: &str,
         metered_gate: Option<&crate::tool_billing::MeteredGate>,
     ) -> Result<
@@ -2791,8 +2805,31 @@ impl DatabaseManager {
             .load::<crate::models::User>(&mut conn)
             .map_err(DatabaseError::Diesel)?;
 
-        // Load all tools
+        // Only the tools this device is bound to. Everything downstream narrows
+        // from here: a user's authorized list is computed against these, and the
+        // top-level tool list is built from those authorizations.
+        let bound: Vec<uuid::Uuid> = {
+            use crate::schema::tool_modules;
+            tool_modules::table
+                .filter(tool_modules::device_id.eq(device_id))
+                .select(tool_modules::tool_id)
+                .distinct()
+                .load(&mut conn)
+                .map_err(DatabaseError::Diesel)?
+        };
+        if bound.is_empty() {
+            // Loud, because the deny-by-default answer and a misconfiguration
+            // look identical from the device's side: an empty allow-list. The
+            // device will refuse every card and report nothing wrong.
+            tracing::warn!(
+                "Device {} has no tool_modules bindings, so its sync payload is \
+                 empty and it will authorize nobody. Bind it to the tools it \
+                 serves.",
+                device_id
+            );
+        }
         let all_tools = tools::table
+            .filter(tools::id.eq_any(&bound))
             .select(crate::models::Tool::as_select())
             .load::<crate::models::Tool>(&mut conn)
             .map_err(DatabaseError::Diesel)?;
@@ -2922,6 +2959,14 @@ impl DatabaseManager {
                     authorized_tool_ids.push(tool.id);
                     authorized_tool_ids_set.insert(tool.id);
                 }
+            }
+
+            // A member authorized for nothing this device serves has no reason to
+            // be in its payload, and their card value is exactly what must not
+            // be there. Dropping them is the difference between scoping the
+            // tools and scoping the exposure.
+            if authorized_tool_ids.is_empty() {
+                continue;
             }
 
             for profile_field_value in identifiers {

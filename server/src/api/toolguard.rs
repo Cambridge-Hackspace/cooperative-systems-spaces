@@ -1027,7 +1027,7 @@ pub async fn build_sync_payload(
     let metered_gate = state.tool_billing.as_ref().map(|svc| svc.gate());
     let (mut users, mut tools) = state
         .db
-        .get_toolguard_sync_data(profile_field, metered_gate.as_ref())
+        .get_toolguard_sync_data(device_id, profile_field, metered_gate.as_ref())
         .map_err(|e| ApiError::InternalServerError(format!("Failed to build sync data: {}", e)))?;
 
     // Apply schedule gating: any tool whose attached schedule is closed
