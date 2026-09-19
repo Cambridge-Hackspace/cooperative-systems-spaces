@@ -55,8 +55,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let idx = arg("--index-key")
         .or_else(|| std::env::var("CSS_CARDS_INDEX_KEY").ok())
         .ok_or("--index-key or CSS_CARDS_INDEX_KEY is required")?;
+    let pepper = arg("--device-pepper")
+        .or_else(|| std::env::var("CSS_CARDS_DEVICE_PEPPER").ok())
+        .ok_or("--device-pepper or CSS_CARDS_DEVICE_PEPPER is required")?;
 
-    let cipher = CardCipher::from_hex(&enc, &idx)?;
+    let cipher = CardCipher::from_hex(&enc, &idx, &pepper)?;
     let mut conn = PgConnection::establish(&database_url)?;
 
     if flag("--verify") {
@@ -90,6 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 user_cards::code_encrypted.eq(Some(s.ciphertext)),
                 user_cards::code_nonce.eq(Some(s.nonce)),
                 user_cards::code_bidx.eq(Some(s.blind_index)),
+                user_cards::code_wire_digest.eq(Some(cipher.wire_digest(code)?)),
             ))
             .execute(&mut conn)?;
         sealed += 1;
@@ -104,19 +108,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Every sealed row must open to the plaintext beside it.
 fn verify(conn: &mut PgConnection, cipher: &CardCipher) -> Result<(), Box<dyn Error>> {
-    let rows: Vec<(
+    type Row = (
         uuid::Uuid,
         String,
         Option<Vec<u8>>,
         Option<Vec<u8>>,
         Option<Vec<u8>>,
-    )> = user_cards::table
+        Option<Vec<u8>>,
+    );
+    let rows: Vec<Row> = user_cards::table
         .select((
             user_cards::id,
             user_cards::code,
             user_cards::code_encrypted,
             user_cards::code_nonce,
             user_cards::code_bidx,
+            user_cards::code_wire_digest,
         ))
         .load(conn)?;
 
@@ -124,16 +131,24 @@ fn verify(conn: &mut PgConnection, cipher: &CardCipher) -> Result<(), Box<dyn Er
     let mut unsealed = 0usize;
     let mut bad: Vec<uuid::Uuid> = Vec::new();
 
-    for (id, code, ct, nonce, bidx) in rows {
-        match (ct, nonce, bidx) {
-            (Some(ct), Some(nonce), Some(bidx)) => {
+    for (id, code, ct, nonce, bidx, wire) in rows {
+        match (ct, nonce, bidx, wire) {
+            (Some(ct), Some(nonce), Some(bidx), Some(wire)) => {
                 checked += 1;
                 let opened = cipher.open(&ct, &nonce).ok();
-                // Both halves: the sealed value must round-trip, AND the index
-                // must match what a swipe of that code would compute. One
-                // without the other is a card that is either unreadable or
-                // unfindable, and they fail for different reasons.
-                if opened.as_deref() != Some(code.as_str()) || bidx != cipher.blind_index(&code) {
+                // Three halves, which fail for three different reasons:
+                // unreadable (the sealed value does not round-trip), unfindable
+                // (the server cannot resolve a swipe to this row), and
+                // unusable-offline (a device holding the digest would not
+                // recognise the card).
+                let wire_ok = cipher
+                    .wire_digest(&code)
+                    .map(|d| d == wire)
+                    .unwrap_or(false);
+                if opened.as_deref() != Some(code.as_str())
+                    || bidx != cipher.blind_index(&code)
+                    || !wire_ok
+                {
                     bad.push(id);
                 }
             }

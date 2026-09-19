@@ -88,6 +88,10 @@ pub struct UserCard {
     pub code_nonce: Option<Vec<u8>>,
     #[serde(skip)]
     pub code_bidx: Option<Vec<u8>>,
+    /// What a device holds for this card (#109). Skipped in serialization for
+    /// the same reason as the rest: this type goes straight into API responses.
+    #[serde(skip)]
+    pub code_wire_digest: Option<Vec<u8>>,
     pub status: CardStatus,
     pub last_used_at: Option<DateTime<Utc>>,
     pub issued_at: DateTime<Utc>,
@@ -111,6 +115,7 @@ pub struct NewUserCard {
     pub code_encrypted: Option<Vec<u8>>,
     pub code_nonce: Option<Vec<u8>>,
     pub code_bidx: Option<Vec<u8>>,
+    pub code_wire_digest: Option<Vec<u8>>,
     pub status: Option<CardStatus>,
 }
 

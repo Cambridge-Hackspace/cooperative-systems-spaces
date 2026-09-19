@@ -19,3 +19,7 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
+# Deliberately slow, for the device-facing digest only (#109). A 4-byte MIFARE
+# UID is 2^32; with a fast hash that is exhaustible in seconds by anyone holding
+# a stolen device, and with argon2id it is a multi-year campaign per deployment.
+argon2 = "0.5.3"

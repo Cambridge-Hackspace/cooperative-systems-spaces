@@ -52,6 +52,10 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
         "@CARDS_IDX_KEY@",
         "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
     ),
+    (
+        "@CARDS_DEVICE_PEPPER@",
+        "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    ),
     // Representative of what `write_stack_config` actually substitutes: both
     // are derived from STACK_DIR, which is `${OUT}/stack` -- per-run, and the
     // whole point of `checkout_dir` being configurable at all.

@@ -1071,12 +1071,23 @@ impl DatabaseManager {
             ),
             None => None,
         };
+        // Computed at issue rather than per sync: the KDF is deliberately slow,
+        // and deriving it for every member on every device poll would cost tens
+        // of seconds of CPU each time.
+        let wire_digest = match cipher {
+            Some(c) => Some(
+                c.wire_digest(code)
+                    .map_err(|e| DatabaseError::Other(format!("could not digest card: {e}")))?,
+            ),
+            None => None,
+        };
         let new_card = NewUserCard {
             user_id,
             code: code.to_string(),
             code_encrypted: sealed.as_ref().map(|s| s.ciphertext.clone()),
             code_nonce: sealed.as_ref().map(|s| s.nonce.clone()),
             code_bidx: sealed.as_ref().map(|s| s.blind_index.clone()),
+            code_wire_digest: wire_digest,
             status: Some(CardStatus::Active),
         };
         diesel::insert_into(user_cards::table)
@@ -2837,6 +2848,7 @@ impl DatabaseManager {
         device_id: uuid::Uuid,
         profile_field: &str,
         metered_gate: Option<&crate::tool_billing::MeteredGate>,
+        cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<
         (
             Vec<crate::api::toolguard::ToolGuardSyncUser>,
@@ -2890,13 +2902,33 @@ impl DatabaseManager {
         // excluded, so a revoked card never reaches an edge allow-list.
         let active_cards = user_cards::table
             .filter(user_cards::status.eq(CardStatus::Active))
-            .select((user_cards::user_id, user_cards::code))
-            .load::<(uuid::Uuid, String)>(&mut conn)
+            .select((
+                user_cards::user_id,
+                user_cards::code,
+                user_cards::code_wire_digest,
+            ))
+            .load::<(uuid::Uuid, String, Option<Vec<u8>>)>(&mut conn)
             .map_err(DatabaseError::Diesel)?;
-        let mut cards_by_user: std::collections::HashMap<uuid::Uuid, Vec<String>> =
+        // What a device will hold, resolved here rather than at the payload.
+        //
+        // The stored digest is preferred and is the only path that survives
+        // `user_cards.code` being dropped; a row the backfill has not reached
+        // is digested on the fly so the migration has no window in which a
+        // member stops working. Falling back to the plaintext *code* is not an
+        // option -- that is the disclosure this change exists to end.
+        let mut cards_by_user: std::collections::HashMap<uuid::Uuid, Vec<Vec<u8>>> =
             std::collections::HashMap::new();
-        for (uid, code) in active_cards {
-            cards_by_user.entry(uid).or_default().push(code);
+        for (uid, code, stored) in active_cards {
+            let digest = match (stored, cipher) {
+                (Some(d), _) => Some(d),
+                (None, Some(c)) => c.wire_digest(&code).ok(),
+                // No keys configured at all: this deployment has not started
+                // the migration, and there is nothing a device could match.
+                (None, None) => None,
+            };
+            if let Some(d) = digest {
+                cards_by_user.entry(uid).or_default().push(d);
+            }
         }
 
         // #34: preload every (user, tool) tier rate once, so the per-tool
@@ -2933,7 +2965,8 @@ impl DatabaseManager {
             // The profile field may be either a scalar string (one identifier)
             // or an array of strings (many identifiers per user). Empty/missing
             // values are skipped.
-            let mut identifiers: Vec<String> = match user.profile.get(profile_field) {
+            let mut identifiers: Vec<Vec<u8>> = Vec::new();
+            let profile_values: Vec<String> = match user.profile.get(profile_field) {
                 Some(v) if v.is_string() => v
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -2951,12 +2984,25 @@ impl DatabaseManager {
                     .unwrap_or_default(),
                 _ => Vec::new(),
             };
+            // Legacy profile-field identifiers have no row to have been
+            // backfilled, so they are digested here. There are few of them once
+            // #33's first-class cards are in use, which is what keeps the slow
+            // KDF off the hot path for the bulk of the membership.
+            if let Some(c) = cipher {
+                for v in &profile_values {
+                    if let Ok(d) = c.wire_digest(v) {
+                        if !identifiers.contains(&d) {
+                            identifiers.push(d);
+                        }
+                    }
+                }
+            }
 
-            // Union in the member's first-class active card codes (deduped).
-            if let Some(codes) = cards_by_user.get(&user.id) {
-                for code in codes {
-                    if !identifiers.contains(code) {
-                        identifiers.push(code.clone());
+            // Union in the member's first-class active cards (deduped).
+            if let Some(digests) = cards_by_user.get(&user.id) {
+                for d in digests {
+                    if !identifiers.contains(d) {
+                        identifiers.push(d.clone());
                     }
                 }
             }
@@ -3019,9 +3065,9 @@ impl DatabaseManager {
                 continue;
             }
 
-            for profile_field_value in identifiers {
+            for digest in identifiers {
                 sync_users.push(ToolGuardSyncUser {
-                    profile_field_value,
+                    profile_field_digest: hex::encode(digest),
                     full_name: user.full_name.clone(),
                     is_active: user.is_active,
                     authorized_tool_ids: authorized_tool_ids.clone(),

@@ -74,6 +74,15 @@ pub struct Config {
     #[serde(default = "default_calendar_sync_interval")]
     pub calendar_sync_interval_secs: u64,
 
+    /// Hex-encoded 32-byte device pepper (#109).
+    ///
+    /// The server sends digests rather than card values, so without this an
+    /// edge cannot match a swipe and authorizes nobody offline. It is the only
+    /// card key a device gets: the encryption and index keys stay on the
+    /// server, and `CardDigester` is what makes that structural.
+    #[serde(default)]
+    pub card_device_pepper: Option<String>,
+
     /// How long a module lease is good for, in milliseconds (default: 3000).
     ///
     /// This is the window a power module may stay energized without hearing
@@ -138,6 +147,7 @@ impl Default for Config {
             toolguard_sync_interval_secs: default_toolguard_sync_interval(),
             calendar_mqtt_topic: default_calendar_mqtt_topic(),
             calendar_sync_interval_secs: default_calendar_sync_interval(),
+            card_device_pepper: None,
             module_lease_ttl_ms: default_module_lease_ttl_ms(),
             module_lease_interval_ms: default_module_lease_interval_ms(),
             module_offline_ms: default_module_offline_ms(),

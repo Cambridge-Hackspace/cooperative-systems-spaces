@@ -584,6 +584,7 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
                     code_encrypted: None,
                     code_nonce: None,
                     code_bidx: None,
+                    code_wire_digest: None,
                     status: Some(card.status.clone()),
                 })
                 .execute(conn)?;

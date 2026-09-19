@@ -295,6 +295,7 @@ global_api_key = "e2e-global-key"
 [cards]
 encryption_key = "@CARDS_ENC_KEY@"
 index_key = "@CARDS_IDX_KEY@"
+device_pepper = "@CARDS_DEVICE_PEPPER@"
 
 [calendar]
 enabled = false

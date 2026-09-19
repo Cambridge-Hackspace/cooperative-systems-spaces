@@ -984,7 +984,8 @@ stage_cards() {
   backfill="$(run_artifact css-card-backfill --verify \
     --database-url "postgres://${PG_USER}:${PG_PASS}@127.0.0.1:${PG_PORT}/${PG_DB}" \
     --encryption-key "${CARDS_ENC_KEY}" \
-    --index-key "${CARDS_IDX_KEY}" || true)"
+    --index-key "${CARDS_IDX_KEY}" \
+    --device-pepper "${CARDS_DEVICE_PEPPER}" || true)"
   printf '%s\n' "${backfill}" >"${OUT}/logs/card-backfill.log"
 
   local verified
@@ -1522,7 +1523,7 @@ stage_lease() {
     return 1
   fi
 
-  run_node lease.mjs setup "${MQTT_PORT}" >"${OUT}/logs/lease-setup.log" 2>&1 || true
+  run_node lease.mjs setup "${MQTT_PORT}" "${CARDS_DEVICE_PEPPER}" >"${OUT}/logs/lease-setup.log" 2>&1 || true
   absorb_driver_cases || true
 
   # A cluster that cannot store an emoji invite code cannot register a device,
