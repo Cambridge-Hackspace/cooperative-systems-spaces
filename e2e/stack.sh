@@ -87,6 +87,9 @@ STRIPE_PORT="${CSS_E2E_STRIPE_PORT:-4391}"
 # config bug.
 CARDS_ENC_KEY="a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
 CARDS_IDX_KEY="b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+# Distinct from the index key on purpose: CardCipher refuses them equal, since
+# this one is handed to every device and that one never leaves the server.
+CARDS_DEVICE_PEPPER="c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
 
 PG_USER="css_user"
 PG_PASS="css_pass"
@@ -561,6 +564,7 @@ write_stack_config() {
     -e "s|@STACK_TZ@|${STACK_TZ}|g" \
     -e "s|@CARDS_ENC_KEY@|${CARDS_ENC_KEY}|g" \
     -e "s|@CARDS_IDX_KEY@|${CARDS_IDX_KEY}|g" \
+    -e "s|@CARDS_DEVICE_PEPPER@|${CARDS_DEVICE_PEPPER}|g" \
     -e "s|@PG_USER@|${PG_USER}|g" \
     -e "s|@PG_PASS@|${PG_PASS}|g" \
     -e "s|@PG_PORT@|${PG_PORT}|g" \

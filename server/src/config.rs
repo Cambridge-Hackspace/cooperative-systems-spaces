@@ -844,6 +844,13 @@ pub struct CardsConfig {
     /// `css_lib::card_crypto`.
     #[serde(default)]
     pub index_key: Option<String>,
+    /// Hex-encoded 32-byte pepper for the device-facing digest (#109).
+    ///
+    /// This one is *distributed*: every edge that authorizes offline holds it,
+    /// so it must differ from `index_key`, which must never leave the server.
+    /// Setting them equal is refused at startup.
+    #[serde(default)]
+    pub device_pepper: Option<String>,
 }
 
 impl CardsConfig {
@@ -854,17 +861,21 @@ impl CardsConfig {
     /// fat-fingered a key is refused rather than silently writing rows nobody
     /// can decrypt afterwards.
     pub fn cipher(&self) -> Result<Option<css_lib::card_crypto::CardCipher>, String> {
-        match (&self.encryption_key, &self.index_key) {
-            (None, None) => Ok(None),
-            (Some(enc), Some(idx)) => css_lib::card_crypto::CardCipher::from_hex(enc, idx)
-                .map(Some)
-                .map_err(|e| e.to_string()),
-            (Some(_), None) => Err("cards.encryption_key is set but cards.index_key is not; \
-                 cards would be sealed and then unfindable"
-                .to_string()),
-            (None, Some(_)) => Err("cards.index_key is set but cards.encryption_key is not; \
-                 there is nothing to unlock"
-                .to_string()),
+        match (&self.encryption_key, &self.index_key, &self.device_pepper) {
+            (None, None, None) => Ok(None),
+            (Some(enc), Some(idx), Some(pep)) => {
+                css_lib::card_crypto::CardCipher::from_hex(enc, idx, pep)
+                    .map(Some)
+                    .map_err(|e| e.to_string())
+            }
+            // All or nothing. A partial set is always a mistake and always a
+            // silent one: sealed-but-unfindable, findable-but-unopenable, or
+            // sealed rows whose device digests nobody can produce.
+            _ => Err(
+                "cards.encryption_key, cards.index_key and cards.device_pepper must \
+                 all be set together or all be absent"
+                    .to_string(),
+            ),
         }
     }
 }

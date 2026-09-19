@@ -264,11 +264,30 @@ device:
       "status": "Idle", "requires_online": false }
   ],
   "users": [
-    { "profile_field_value": "04A2B3C4", "full_name": "A Member",
+    { "profile_field_digest": "9f86d081…64 hex chars…", "full_name": "A Member",
       "is_active": true, "authorized_tool_ids": ["…uuid…"] }
   ]
 }
 ```
+
+**`profile_field_digest` is not the card.** It is
+`argon2id(device_pepper, card)`, hex-encoded (#109). To match a swipe, hash the
+card you just read with the same pepper and compare against this list — do not
+expect to find the card value here, because it is deliberately not sent.
+
+The pepper is configured on the device (`card_device_pepper` on an edge) and is
+the **only** card key a device is given: the keys that decrypt cards at rest and
+that index them server-side never leave the server. One argon2id invocation per
+swipe is the cost; a plug taken off a wall yielding no member's card identifier
+is what it buys.
+
+Hash the card **exactly as read** — no trimming, no case folding. The server
+digests the stored value byte-for-byte, so any normalisation on your side
+produces a digest that matches nothing and a member who is simply refused.
+
+If you have no pepper you cannot match anything, and the correct behaviour is
+to refuse every card rather than fall back to comparing raw values. The
+reference edge does exactly that.
 
 Cache this. It is what lets a device keep working when the server is
 unreachable — **except** where `requires_online` is `true`. A metered tool under

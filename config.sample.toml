@@ -393,6 +393,9 @@ profile_field = "card_id"
 [cards]
 # encryption_key = "<64 hex characters>"
 # index_key = "<64 hex characters>"
+# Handed to every edge that authorizes offline (#109), so it must differ from
+# index_key -- which never leaves the server. Setting them equal is refused.
+# device_pepper = "<64 hex characters>"
 
 # Calendar Configuration
 # Pulls iCal/ICS feeds onto the home page.

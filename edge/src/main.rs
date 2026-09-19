@@ -149,7 +149,29 @@ async fn main() -> Result<()> {
             );
 
             // Shared toolguard state — notify_rx fires on every state change
-            let (toolguard_state_inner, state_notify_rx) = ToolGuardState::new_with_notify();
+            // The only card key an edge gets (#109). Refused loudly rather than
+            // defaulted: an edge silently running without it authorizes nobody
+            // offline, which presents as a reader that has simply stopped
+            // working.
+            let card_digester = match app_config.card_device_pepper.as_deref() {
+                Some(p) => match css_lib::card_crypto::CardDigester::from_hex(p) {
+                    Ok(d) => Some(Arc::new(d)),
+                    Err(e) => {
+                        error!("card_device_pepper is unusable: {e}");
+                        return Err(anyhow::anyhow!("card_device_pepper is unusable: {e}"));
+                    }
+                },
+                None => {
+                    warn!(
+                        "No card_device_pepper configured: this edge cannot hash a swipe, so \
+                         offline authorization will refuse every card."
+                    );
+                    None
+                }
+            };
+
+            let (toolguard_state_inner, state_notify_rx) =
+                ToolGuardState::new_with_notify(card_digester.clone());
             let toolguard_state = Arc::new(toolguard_state_inner);
 
             // Shared power lockout + local fast-trip state (#48).

@@ -34,7 +34,8 @@ pub struct SyncTool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncUser {
-    pub profile_field_value: String,
+    /// Hex `argon2id(device_pepper, card)` (#109), not the card itself.
+    pub profile_field_digest: String,
     pub full_name: String,
     pub is_active: bool,
     pub authorized_tool_ids: Vec<Uuid>,
@@ -67,20 +68,36 @@ pub struct ToolGuardState {
     notify_tx: Option<std::sync::mpsc::SyncSender<SyncPayload>>,
     /// Broadcast channel for WebSocket clients — sends serialized JSON on every state change.
     ws_tx: broadcast::Sender<String>,
+    /// The device pepper (#109), so a swipe can be hashed the same way the
+    /// server hashed the allow-list.
+    ///
+    /// A `CardDigester` and deliberately not a `CardCipher`: an edge has no
+    /// business holding the encryption or index keys, and the type is what
+    /// enforces that rather than a comment asking nicely. `None` on an edge
+    /// with no pepper configured, which then authorizes nobody offline.
+    card_digester: Option<Arc<css_lib::card_crypto::CardDigester>>,
 }
 
 impl ToolGuardState {
     pub fn new() -> Self {
+        Self::with_digester(None)
+    }
+
+    /// The cache, with the pepper it needs to hash a swipe (#109).
+    pub fn with_digester(card_digester: Option<Arc<css_lib::card_crypto::CardDigester>>) -> Self {
         let (ws_tx, _) = broadcast::channel(16);
         Self {
             inner: Arc::new(RwLock::new(None)),
             notify_tx: None,
             ws_tx,
+            card_digester,
         }
     }
 
     /// Create a state cache that sends a copy of each new payload to the returned receiver.
-    pub fn new_with_notify() -> (Self, std::sync::mpsc::Receiver<SyncPayload>) {
+    pub fn new_with_notify(
+        card_digester: Option<Arc<css_lib::card_crypto::CardDigester>>,
+    ) -> (Self, std::sync::mpsc::Receiver<SyncPayload>) {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let (ws_tx, _) = broadcast::channel(16);
         (
@@ -88,6 +105,7 @@ impl ToolGuardState {
                 inner: Arc::new(RwLock::new(None)),
                 notify_tx: Some(tx),
                 ws_tx,
+                card_digester,
             },
             rx,
         )
@@ -130,7 +148,10 @@ impl ToolGuardState {
 
     /// Check whether a card holder is authorized to activate a tool.
     ///
-    /// `card_value`  – the scanned card value (matched against `profile_field_value`)
+    /// `card_value`  – the scanned card, hashed here and matched against
+    ///                 `profile_field_digest`. The cached allow-list holds
+    ///                 digests rather than card identifiers (#109), so a plug
+    ///                 taken off a wall yields no member's card.
     /// `tool_id_str` – the hardware tool identifier (matched against `external_id` first,
     ///                 then the UUID `id` as a string fallback)
     pub fn check_access(&self, card_value: &str, tool_id_str: &str) -> AccessResult {
@@ -143,10 +164,23 @@ impl ToolGuardState {
             }
         };
 
+        // No pepper means this edge cannot hash a swipe, so it cannot match
+        // anything. Deny rather than fall back to comparing raw values: a
+        // fallback would silently restore the behaviour this replaced, and it
+        // would do so exactly when the configuration is wrong.
+        let digester = match self.card_digester.as_ref() {
+            Some(c) => c,
+            None => return AccessResult::UnknownCard,
+        };
+        let presented = match digester.wire_digest(card_value) {
+            Ok(d) => hex::encode(d),
+            Err(_) => return AccessResult::UnknownCard,
+        };
+
         let user = match state
             .users
             .iter()
-            .find(|u| u.profile_field_value == card_value)
+            .find(|u| u.profile_field_digest == presented)
         {
             Some(u) => u,
             None => return AccessResult::UnknownCard,
@@ -208,16 +242,29 @@ mod tests {
             requires_online: false,
         }
     }
+    /// The pepper these tests share. Any 32 bytes; what matters is that the
+    /// fixture and the state hash with the same one, exactly as a deployment's
+    /// server and edge do.
+    const PEP: &str = "0404040404040404040404040404040404040404040404040404040404040404";
+
+    fn digester() -> Arc<css_lib::card_crypto::CardDigester> {
+        Arc::new(css_lib::card_crypto::CardDigester::from_hex(PEP).expect("test pepper parses"))
+    }
+
+    /// A member as the *server* would send them: the digest of their card, not
+    /// the card. Building the fixture the same way the server builds the
+    /// payload is what keeps these tests about matching rather than about a
+    /// string this file made up.
     fn user(card: &str, active: bool, authorized: Vec<Uuid>) -> SyncUser {
         SyncUser {
-            profile_field_value: card.to_string(),
+            profile_field_digest: hex::encode(digester().wire_digest(card).expect("digests")),
             full_name: "N".to_string(),
             is_active: active,
             authorized_tool_ids: authorized,
         }
     }
     fn state_with(tools: Vec<SyncTool>, users: Vec<SyncUser>) -> ToolGuardState {
-        let s = ToolGuardState::new();
+        let s = ToolGuardState::with_digester(Some(digester()));
         s.apply_sync(SyncPayload {
             device_id: Uuid::from_u128(0xD),
             profile_field: "card".to_string(),
@@ -227,12 +274,56 @@ mod tests {
         s
     }
 
+    /// An edge with no pepper cannot hash a swipe, so it must refuse rather
+    /// than compare raw values. Falling back would silently restore exactly the
+    /// behaviour #109 removed, and it would do so precisely when somebody had
+    /// misconfigured the device -- the worst moment to be lenient.
+    #[test]
+    fn an_edge_without_a_pepper_authorizes_nobody() {
+        let tid = Uuid::from_u128(1);
+        let s = ToolGuardState::with_digester(None);
+        s.apply_sync(SyncPayload {
+            device_id: Uuid::from_u128(0xD),
+            profile_field: "card".to_string(),
+            tools: vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            users: vec![user("card-1", true, vec![tid])],
+        });
+        assert_eq!(
+            AccessResult::UnknownCard,
+            s.check_access("card-1", "t-ext"),
+            "without a pepper an edge must deny, not compare the raw card"
+        );
+    }
+
+    /// And the digest must not be mistaken for the card. A payload carrying
+    /// digests must not authorize somebody who presents the digest itself --
+    /// which is what a stolen device's cache would hand an attacker.
+    #[test]
+    fn presenting_the_digest_instead_of_the_card_is_refused() {
+        let tid = Uuid::from_u128(1);
+        let s = state_with(
+            vec![tool(tid, "t-ext", ToolStatus::Idle)],
+            vec![user("card-1", true, vec![tid])],
+        );
+        let digest = hex::encode(digester().wire_digest("card-1").expect("digests"));
+        assert_eq!(
+            AccessResult::Authorized,
+            s.check_access("card-1", "t-ext"),
+            "precondition: the real card works"
+        );
+        assert_eq!(
+            AccessResult::UnknownCard,
+            s.check_access(&digest, "t-ext"),
+            "the digest is not a credential; replaying it must not open the tool"
+        );
+    }
+
     #[test]
     fn cold_start_denies_to_be_safe() {
         // No sync payload loaded yet: deny rather than energize. This is the
         // fail-secure property, and it is the negative control that keeps the
         // "authorized" case below from being vacuous.
-        let s = ToolGuardState::new();
+        let s = ToolGuardState::with_digester(Some(digester()));
         assert_eq!(s.check_access("card-1", "t-ext"), AccessResult::UnknownCard);
     }
 

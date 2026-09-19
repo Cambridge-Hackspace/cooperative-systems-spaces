@@ -36,6 +36,7 @@ rust-embed = "8.0"
 include_dir = "0.7.4"
 
 css_lib = {path = "../css_lib"}
+hex = "0.4"
 
 # WebSocket transport (alternative to MQTT)
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }

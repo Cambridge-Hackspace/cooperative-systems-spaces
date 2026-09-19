@@ -491,6 +491,7 @@ diesel::table! {
         code_encrypted -> Nullable<Bytea>,
         code_nonce -> Nullable<Bytea>,
         code_bidx -> Nullable<Bytea>,
+        code_wire_digest -> Nullable<Bytea>,
         status -> CardStatus,
         last_used_at -> Nullable<Timestamptz>,
         issued_at -> Timestamptz,

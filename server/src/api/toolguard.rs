@@ -247,7 +247,15 @@ pub struct ToolGuardSyncTool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolGuardSyncUser {
-    pub profile_field_value: String,
+    /// Hex `argon2id(cards.device_pepper, card)` (#109) -- **not** the card.
+    ///
+    /// A device authorizes offline, so it holds whatever the comparison needs;
+    /// it used to hold the card identifier itself, in a file on a plug screwed
+    /// to a wall. It now holds this, and hashes the swipe the same way.
+    ///
+    /// Empty when the deployment has configured no card keys, which is the
+    /// pre-migration state and means no device can authorize offline.
+    pub profile_field_digest: String,
     pub full_name: String,
     pub is_active: bool,
     pub authorized_tool_ids: Vec<Uuid>,
@@ -1151,7 +1159,12 @@ pub async fn build_sync_payload(
     let metered_gate = state.tool_billing.as_ref().map(|svc| svc.gate());
     let (mut users, mut tools) = state
         .db
-        .get_toolguard_sync_data(device_id, profile_field, metered_gate.as_ref())
+        .get_toolguard_sync_data(
+            device_id,
+            profile_field,
+            metered_gate.as_ref(),
+            state.card_cipher.as_deref(),
+        )
         .map_err(|e| ApiError::InternalServerError(format!("Failed to build sync data: {}", e)))?;
 
     // Apply schedule gating: any tool whose attached schedule is closed

@@ -46,6 +46,7 @@ const SKIPPED = path.join(STACK_DIR, 'lease-skipped')
 
 const phase = process.argv[2]
 const mqttPort = process.argv[3] ?? '1883'
+const devicePepper = process.argv[4] ?? ''
 
 /** Every JSON object mosquitto_sub captured, one per line, bad lines dropped. */
 function captured(name) {
@@ -168,6 +169,11 @@ remote_transport = "websocket"
 toolguard_sync_interval_secs = 5
 calendar_mqtt_topic = "cs/spaces/calendar/events"
 calendar_sync_interval_secs = 300
+
+# The only card key a device gets (#109). Without it this edge refuses every
+# card offline, which would make the lease stage's tool-on path fail for a
+# reason that has nothing to do with leases.
+card_device_pepper = "${devicePepper}"
 
 # Renew twice per TTL so a single lost message cannot cut a running tool, and
 # keep both well under the stage's observation windows.

@@ -264,7 +264,7 @@ main(async () => {
       return {
         status: sync.status,
         tools: (body?.tools ?? []).map((t) => t.id),
-        cards: (body?.users ?? []).map((u) => u.profile_field_value),
+        cards: (body?.users ?? []).map((u) => u.profile_field_digest),
       }
     }
 
@@ -281,14 +281,37 @@ main(async () => {
     ok('toolmodules/sync-omits-in-both-directions', !gatedReader.tools.includes(openToolId),
       `scoping leaks the other way too: ${JSON.stringify(gatedReader.tools)}`)
 
-    // The card value is the part that matters. A reader bound to a tool this
-    // member cannot use has no business learning their card.
-    ok('toolmodules/sync-has-the-authorized-members-card', openReader.cards.includes(cardCode),
+    // The member entry is the part that matters. A reader bound to a tool this
+    // member cannot use has no business holding anything that identifies them.
+    //
+    // Asserted on presence and absence of the *entry* rather than of the card
+    // value, because since #109 the payload carries a digest and this driver
+    // cannot recompute it -- deriving it needs argon2 and the deployment
+    // pepper, neither of which a test driver has, and deliberately so.
+    ok('toolmodules/sync-has-the-authorized-members-card', openReader.cards.length >= 1,
       `the member authorized for this device's tool is missing: ${JSON.stringify(openReader.cards)}`)
     ok('toolmodules/sync-withholds-an-unauthorized-members-card',
-      !gatedReader.cards.includes(cardCode),
-      `a device received the card of a member not authorized for anything it serves: ` +
+      gatedReader.cards.length === 0,
+      `a device received an identifier for a member not authorized for anything it serves: ` +
         JSON.stringify(gatedReader.cards))
+
+    // --- and it is a digest, not the card (#109) ---------------------------
+    //
+    // The absence asserted explicitly, against the code the fixture issued. A
+    // check that only confirms a digest is present would pass just as happily
+    // on a payload carrying both.
+    const everyIdentifier = [...openReader.cards, ...gatedReader.cards, ...unbound.cards]
+    ok('toolmodules/sync-carries-no-plaintext-card',
+      !everyIdentifier.includes(cardCode),
+      `the sync payload still contains a member's actual card code. A device holds this ` +
+        `on disk, so a plug taken off a wall would yield it: ${JSON.stringify(everyIdentifier)}`)
+    // And it is not merely absent because the payload is empty -- the entry
+    // exists, it is just opaque. Without this the assertion above passes on a
+    // server that sends no members at all.
+    ok('toolmodules/sync-identifier-is-opaque',
+      openReader.cards.length >= 1 &&
+        openReader.cards.every((d) => /^[0-9a-f]{64}$/.test(d)),
+      `expected a 32-byte hex digest per member, got: ${JSON.stringify(openReader.cards)}`)
 
     // Deny by default, with no exemption for any device kind: bound to nothing,
     // it authorizes nobody. The server logs a warning naming the device, because

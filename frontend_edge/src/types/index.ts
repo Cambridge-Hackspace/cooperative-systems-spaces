@@ -38,7 +38,8 @@ export interface SyncTool {
 }
 
 export interface SyncUser {
-  profile_field_value: string
+  /** Hex argon2id(device_pepper, card) (#109) -- not the card itself. */
+  profile_field_digest: string
   full_name: string
   is_active: boolean
   authorized_tool_ids: string[]
