@@ -2837,6 +2837,10 @@ impl DatabaseManager {
         device_id: uuid::Uuid,
         profile_field: &str,
         metered_gate: Option<&crate::tool_billing::MeteredGate>,
+        // Still needed after #108: legacy profile-field identifiers have no card
+        // row with a stored wire digest, so they are digested on the fly below.
+        // First-class cards use their stored digest and need no cipher here.
+        cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<
         (
             Vec<crate::api::toolguard::ToolGuardSyncUser>,
