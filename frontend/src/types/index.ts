@@ -75,7 +75,13 @@ export enum CardStatus {
 export interface Card {
   id: string
   user_id: string
-  code: string
+  /**
+   * A masked hint of the code -- an ellipsis and the last few characters (#108).
+   * The full plaintext is sealed at rest and decrypted only on the server; it
+   * never reaches the client. Enough to tell a member's cards apart, and it is
+   * NOT what you send to issue a card (that request carries the real code).
+   */
+  code_hint: string
   status: CardStatus
   last_used_at?: string | null
   issued_at: string

@@ -371,31 +371,30 @@ label = "Other"
 enabled = true
 profile_field = "card_id"
 
-# Card encryption at rest (#108).
+# Card encryption at rest (#108). REQUIRED -- all three keys must be set.
 #
-# Two 32-byte keys, hex-encoded. Generate a pair with `css-card-backfill` or any
-# CSRNG; they belong here or in the environment and NEVER in the database --
-# that separation is the whole point, because a leaked dump without them
-# discloses nothing.
+# Three 32-byte keys, hex-encoded (64 characters each). Generate each with a
+# CSRNG, e.g. `openssl rand -hex 32`. They belong here or in the environment and
+# NEVER in the database -- that separation is the whole point, because a leaked
+# dump without them discloses nothing.
 #
-# Leave both unset (the default) to store card codes in plaintext, which is the
-# pre-#108 behaviour and what a deployment mid-migration runs on. Setting one
-# without the other is refused at startup: sealed-but-unfindable and
-# findable-but-unopenable are both worse than either consistent state.
-#
-# After setting them on an existing deployment, run `css-card-backfill` to seal
-# the rows already there. Cards issued afterwards are sealed on write.
+# The plaintext `user_cards.code` column has been dropped, so there is no
+# fallback: a server started without all three keys refuses to boot rather than
+# silently deny every swipe, and a card cannot be issued or resolved without
+# them. Setting some but not all is refused for the same reason --
+# sealed-but-unfindable and findable-but-unopenable are both worse than a
+# consistent state.
 #
 # This protects the store, not the card: the platform accepts whatever card a
 # member already has, so a UID is readable by anyone standing nearby and is not
 # a secret. Encryption here is about a leaked dump, a restored copy on a laptop,
 # or a support export -- not about who can switch a machine on.
 [cards]
-# encryption_key = "<64 hex characters>"
-# index_key = "<64 hex characters>"
+encryption_key = "<64 hex characters>"
+index_key = "<64 hex characters>"
 # Handed to every edge that authorizes offline (#109), so it must differ from
 # index_key -- which never leaves the server. Setting them equal is refused.
-# device_pepper = "<64 hex characters>"
+device_pepper = "<64 hex characters>"
 
 # Calendar Configuration
 # Pulls iCal/ICS feeds onto the home page.

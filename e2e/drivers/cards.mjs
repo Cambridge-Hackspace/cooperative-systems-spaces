@@ -21,10 +21,24 @@
 // training gates; members are funded (which also enrolls them) so nothing but
 // the card can be the reason a denial happens.
 
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { main, ok, assertEq, GET, POST, account, adminAccount } from './lib.mjs'
 
 const TOOL_KEY = 'e2e-card-tool-key'
 const EXTERNAL_ID = 'CARDS-TOOL-1'
+
+// Every plaintext code this driver issues, written to the shared stack dir so
+// the `logs` stage can grep the server log for it. The plaintext `user_cards.code`
+// column is gone (#108), so the leak check can no longer read the codes back
+// from the database -- but they still transit the server on every swipe, so the
+// check still matters. Ground truth moves from the DB to the driver that
+// actually created the cards, which is what the DB read stood in for anyway.
+const CODES_FILE = process.env.CSS_STACK_DIR
+  ? `${process.env.CSS_STACK_DIR}/issued-card-codes.txt`
+  : null
+function recordIssuedCode(code) {
+  if (CODES_FILE) appendFileSync(CODES_FILE, code + '\n')
+}
 
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
 const toolOn = (card) =>
@@ -61,6 +75,7 @@ async function fund(admin, member, amount) {
 async function issueCard(admin, userId, code) {
   const res = await POST(`/api/cards/user/${userId}`, { token: admin.token, body: { code } })
   assertEq(`cards/issued:${code}`, 200, res.status, res.text.slice(0, 200))
+  recordIssuedCode(code)
   return res.json.data
 }
 async function disableCard(admin, cardId) {
@@ -102,6 +117,9 @@ async function waitRevoked(admin, userId, atLeast, timeoutMs = 4000) {
 }
 
 main(async () => {
+  // Start each run from an empty ledger of issued codes, so a re-run cannot
+  // leave a stale one behind for the logs stage to grep for.
+  if (CODES_FILE) writeFileSync(CODES_FILE, '')
   const admin = await adminAccount('cards')
   const member = await account('cards')
   const other = await account('cardstwo')

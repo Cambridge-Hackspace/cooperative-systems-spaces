@@ -968,50 +968,43 @@ stage_cards() {
   run_node cards.mjs >"${OUT}/logs/cards.log" 2>&1 || true
   absorb_driver_cases || true
 
-  # --- the sealing backfill, against the cards the driver just issued (#108) --
+  # --- every issued card is sealed, and the plaintext column is gone (#108) ----
   #
-  # This stack configures [cards] keys, so the API seals on write and every card
-  # above should already be sealed. `--verify` re-opens each one and checks it
-  # against the plaintext still beside it, which is the check that matters: the
-  # plaintext is dropped in a later migration, and a key mismatch has to surface
-  # while the original is still there to re-derive from.
-  #
-  # Asserted on what it *says*, not on its exit status. A verifier that examined
-  # nothing would also exit zero, and "0 sealed, 0 unsealed" would be a silent
-  # pass over an empty set -- the same green-on-nothing failure the log stage
-  # guards against.
-  local backfill
-  backfill="$(run_artifact css-card-backfill --verify \
-    --database-url "postgres://${PG_USER}:${PG_PASS}@127.0.0.1:${PG_PORT}/${PG_DB}" \
-    --encryption-key "${CARDS_ENC_KEY}" \
-    --index-key "${CARDS_IDX_KEY}" \
-    --device-pepper "${CARDS_DEVICE_PEPPER}" || true)"
-  printf '%s\n' "${backfill}" >"${OUT}/logs/card-backfill.log"
+  # The stack configures [cards] keys, so the API seals on write. With the
+  # plaintext `user_cards.code` column dropped there is no backfill left to run
+  # and nothing to re-derive from -- so the assertions move from "the sealed
+  # value re-opens to its plaintext" (which needed the plaintext beside it) to
+  # "every row the driver just issued carries a blind index, and the column is
+  # actually gone". Both come straight from the schema and the rows via sql_ro;
+  # that a swipe then resolves a sealed card is what cards.mjs already proves.
+  local card_total unsealed plaintext_col
+  card_total="$(sql_ro "SELECT count(*) FROM user_cards" | tr -d ' ')"
+  unsealed="$(sql_ro "SELECT count(*) FROM user_cards WHERE code_bidx IS NULL" | tr -d ' ')"
+  plaintext_col="$(sql_ro "SELECT count(*) FROM information_schema.columns WHERE table_name = 'user_cards' AND column_name = 'code'" | tr -d ' ')"
 
-  local verified
-  verified="$(printf '%s' "${backfill}" | sed -n 's/^verified \([0-9]*\) sealed.*/\1/p' | head -1)"
-  if [[ -n ${verified} ]] && [[ ${verified} -gt 0 ]]; then
-    record_case "cards/backfill-verified-something" ok
+  # Anti-vacuity: the driver issues several cards, so zero means an earlier step
+  # did not run and every assertion below would pass over an empty set.
+  if [[ ${card_total} -gt 0 ]]; then
+    record_case "cards/cards-exist-to-check" ok
   else
-    record_case "cards/backfill-verified-something" fail \
-      "the verifier reported no sealed cards, so its clean bill of health covers nothing: ${backfill}"
+    record_case "cards/cards-exist-to-check" fail \
+      "no rows in user_cards, so the sealing assertions cover nothing"
   fi
 
-  if printf '%s' "${backfill}" | grep -q 'all sealed cards open to their plaintext and index correctly'; then
-    record_case "cards/sealed-cards-open-to-their-plaintext" ok
+  if [[ ${card_total} -gt 0 ]] && [[ ${unsealed} -eq 0 ]]; then
+    record_case "cards/every-card-is-sealed" ok
   else
-    record_case "cards/sealed-cards-open-to-their-plaintext" fail \
-      "sealed cards did not verify: ${backfill}"
+    record_case "cards/every-card-is-sealed" fail \
+      "${unsealed} of ${card_total} card(s) have a NULL blind index; the API must seal on write"
   fi
 
-  # Nothing may be left unsealed: the API seals on write, so an unsealed row
-  # means a path that creates cards without a cipher, which is exactly what
-  # would strand rows when `code` is finally dropped.
-  if printf '%s' "${backfill}" | grep -qE 'verified [0-9]+ sealed card\(s\); 0 still unsealed'; then
-    record_case "cards/no-card-was-left-unsealed" ok
+  # The whole point of #108: the last plaintext copy is gone from the schema, so
+  # it is gone from every future database backup.
+  if [[ ${plaintext_col} -eq 0 ]]; then
+    record_case "cards/plaintext-column-is-dropped" ok
   else
-    record_case "cards/no-card-was-left-unsealed" fail \
-      "some cards are not sealed: ${backfill}"
+    record_case "cards/plaintext-column-is-dropped" fail \
+      "user_cards.code still exists; the #108 drop migration did not run"
   fi
 
   collect_server_log
@@ -1981,13 +1974,17 @@ stage_logs() {
   # can say the file a CI run uploads, and that anyone reaching the container
   # host can read, does not contain the physical identifiers of the membership.
   #
-  # Every card the run created is read back from the database, so this covers
-  # whatever the drivers happened to generate rather than a list kept in step by
-  # hand. Cards are not secrets -- a UID is readable by anyone standing nearby,
-  # by design -- but a continuously generated, widely readable record of who was
+  # Every plaintext code the cards stage issued, as recorded by the driver that
+  # created them (`${STACK_DIR}/issued-card-codes.txt`). It used to be read back
+  # from `user_cards.code`, but that column is gone (#108); the codes still
+  # transit the server on every swipe, so the leak check still matters, and its
+  # ground truth is now the driver rather than the DB the driver wrote to --
+  # still "whatever the drivers happened to generate", not a hand-kept list.
+  # Cards are not secrets -- a UID is readable by anyone standing nearby, by
+  # design -- but a continuously generated, widely readable record of who was
   # where is a different thing from the card itself.
   local codes card_count leaked
-  codes="$(sql_ro "SELECT code FROM user_cards" | sed '/^$/d')"
+  codes="$(sed '/^$/d' "${STACK_DIR}/issued-card-codes.txt" 2>/dev/null)"
   card_count="$(printf '%s\n' "${codes}" | sed '/^$/d' | wc -l | tr -d ' ')"
 
   if [[ ${card_count} -eq 0 ]]; then
@@ -1996,7 +1993,7 @@ stage_logs() {
     # like "leaked nothing". The suite creates cards; none existing means an
     # earlier stage did not run, so this assertion is judging an empty set.
     record_case "logs/cards-exist-to-look-for" fail \
-      "no rows in user_cards, so the leak check below would pass over nothing"
+      "the cards stage recorded no issued codes (${STACK_DIR}/issued-card-codes.txt is empty or missing), so the leak check below would pass over nothing"
   else
     record_case "logs/cards-exist-to-look-for" ok
 

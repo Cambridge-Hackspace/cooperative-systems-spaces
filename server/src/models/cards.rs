@@ -78,7 +78,6 @@ impl diesel::deserialize::FromSql<sql_types::CardStatus, diesel::pg::Pg> for Car
 pub struct UserCard {
     pub id: Uuid,
     pub user_id: Uuid,
-    pub code: String,
     /// Sealed card value (#108). Skipped in serialization: this type is
     /// serialized straight into API responses, and ciphertext in a payload is
     /// noise at best and a decryption oracle to poke at worst.
@@ -108,10 +107,9 @@ pub struct UserCard {
 #[diesel(table_name = user_cards)]
 pub struct NewUserCard {
     pub user_id: Uuid,
-    /// Still written during the migration window. The column is dropped in a
-    /// later migration, once every row is sealed and verified; until then a
-    /// deployment with no keys configured runs on this alone.
-    pub code: String,
+    /// A card is stored sealed only (#108): the plaintext `code` column has been
+    /// dropped, so every insert must carry the encrypted value, nonce, blind
+    /// index and wire digest. Issuing a card therefore requires the cipher.
     pub code_encrypted: Option<Vec<u8>>,
     pub code_nonce: Option<Vec<u8>>,
     pub code_bidx: Option<Vec<u8>>,

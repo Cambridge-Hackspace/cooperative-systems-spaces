@@ -17,7 +17,11 @@
 //! assignments, and the full membership ledger. Usage sessions are a separate
 //! pass (they need a `tool_usage_sessions` idempotency column).
 //!
-//! Usage: `toolpass-load --sqlite <staged.sqlite> --database-url <url> [--dry-run]`
+//! Usage: `toolpass-load --sqlite <staged.sqlite> --database-url <url>
+//!   --encryption-key <hex> --index-key <hex> --device-pepper <hex> [--dry-run]`
+//!   (keys may also come from CSS_LOAD_ENCRYPTION_KEY / CSS_LOAD_INDEX_KEY /
+//!   CSS_LOAD_DEVICE_PEPPER). Cards are sealed at insert (#108); the loader
+//!   still never reads the app config.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -30,6 +34,7 @@ use diesel::prelude::*;
 use diesel_migrations::MigrationHarness;
 use uuid::Uuid;
 
+use css_lib::card_crypto::CardCipher;
 use css_server::auth::PasswordHashUtil;
 use css_server::database::MIGRATIONS;
 use css_server::models::{
@@ -361,7 +366,11 @@ fn assign_tier_role(
 }
 
 /// All Postgres writes, in FK order. Diesel errors only (SQLite is already read).
-fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::Error> {
+fn load(
+    conn: &mut PgConnection,
+    s: &Staged,
+    cipher: &CardCipher,
+) -> Result<Counts, diesel::result::Error> {
     let mut c = Counts::default();
 
     // Migration system user: owns migrated tools and is the actor on waivers /
@@ -562,15 +571,25 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
         c.assignments += 1;
     }
 
-    // Cards — insert-if-absent by (user, code). A code may recur across members
-    // as a released reissue, so key on the pair, not the code alone.
+    // Cards — insert-if-absent by (user, blind index). A code may recur across
+    // members as a released reissue, so key on the pair, not the code alone.
+    // The plaintext column is gone (#108): the loader seals each card at insert
+    // with the operator-supplied keys, so there is nothing left to backfill,
+    // and the blind index is both what we dedupe on and what a swipe resolves
+    // by. A seal failure is mapped onto a Diesel error so the whole load still
+    // rolls back as one transaction.
+    let seal_err = |e: css_lib::card_crypto::CardCryptoError| {
+        diesel::result::Error::QueryBuilderError(Box::new(e))
+    };
     for card in &s.cards {
         let Some(&uid) = user_id.get(&card.user_tp) else {
             continue;
         };
+        let sealed = cipher.seal(&card.code).map_err(seal_err)?;
+        let wire_digest = cipher.wire_digest(&card.code).map_err(seal_err)?;
         let exists: Option<Uuid> = user_cards::table
             .filter(user_cards::user_id.eq(uid))
-            .filter(user_cards::code.eq(&card.code))
+            .filter(user_cards::code_bidx.eq(sealed.blind_index.clone()))
             .select(user_cards::id)
             .first(conn)
             .optional()?;
@@ -578,13 +597,10 @@ fn load(conn: &mut PgConnection, s: &Staged) -> Result<Counts, diesel::result::E
             diesel::insert_into(user_cards::table)
                 .values(&NewUserCard {
                     user_id: uid,
-                    code: card.code.clone(),
-                    // Left unsealed: this loader has no key, and sealing is the
-                    // backfill's job. Run `css-cli cards backfill` after a load.
-                    code_encrypted: None,
-                    code_nonce: None,
-                    code_bidx: None,
-                    code_wire_digest: None,
+                    code_encrypted: Some(sealed.ciphertext.clone()),
+                    code_nonce: Some(sealed.nonce.clone()),
+                    code_bidx: Some(sealed.blind_index.clone()),
+                    code_wire_digest: Some(wire_digest),
                     status: Some(card.status.clone()),
                 })
                 .execute(conn)?;
@@ -741,6 +757,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let db_url = arg("--database-url")
         .or_else(|| std::env::var("CSS_LOAD_DATABASE_URL").ok())
         .ok_or("--database-url <url> (or CSS_LOAD_DATABASE_URL) is required")?;
+    // Cards are stored sealed only (#108), so the loader needs the deployment's
+    // card keys. Passed on the CLI/env exactly like the database URL -- never
+    // read from the app config, keeping this a self-contained operator tool.
+    let enc = arg("--encryption-key")
+        .or_else(|| std::env::var("CSS_LOAD_ENCRYPTION_KEY").ok())
+        .ok_or("--encryption-key <hex> (or CSS_LOAD_ENCRYPTION_KEY) is required")?;
+    let idx = arg("--index-key")
+        .or_else(|| std::env::var("CSS_LOAD_INDEX_KEY").ok())
+        .ok_or("--index-key <hex> (or CSS_LOAD_INDEX_KEY) is required")?;
+    let pep = arg("--device-pepper")
+        .or_else(|| std::env::var("CSS_LOAD_DEVICE_PEPPER").ok())
+        .ok_or("--device-pepper <hex> (or CSS_LOAD_DEVICE_PEPPER) is required")?;
+    let cipher = CardCipher::from_hex(&enc, &idx, &pep)
+        .map_err(|e| format!("card keys are invalid: {e}"))?;
     let dry_run = std::env::args().any(|a| a == "--dry-run");
 
     eprintln!("reading staged SQLite: {sqlite}");
@@ -769,7 +799,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // One transaction; --dry-run rolls back via a sentinel error after counting.
     let outcome = conn.transaction::<Counts, diesel::result::Error, _>(|conn| {
-        let counts = load(conn, &staged)?;
+        let counts = load(conn, &staged, &cipher)?;
         println!(
             "{}counts: {:?}",
             if dry_run { "[dry-run] " } else { "" },

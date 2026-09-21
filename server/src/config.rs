@@ -827,10 +827,13 @@ pub struct ToolGuardConfig {
 
 /// Card encryption at rest (#108).
 ///
-/// Both keys are 32 bytes, hex-encoded, and belong in configuration or the
+/// All three keys are 32 bytes, hex-encoded, and belong in configuration or the
 /// environment -- **never in the database**, which is the entire point: a dump
-/// without them discloses nothing. Absent keys leave cards in plaintext, which
-/// is the pre-#108 behaviour and what a deployment mid-migration runs on.
+/// without them discloses nothing. They are now required: the plaintext
+/// `user_cards.code` column has been dropped, so [`cipher`](Self::cipher) still
+/// tolerates absence for the config-validation paths, but `main` calls
+/// [`require_cipher`](Self::require_cipher) and refuses to start without a full,
+/// valid set -- a keyless server could resolve no card at all.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CardsConfig {
     /// Hex-encoded 32-byte key for the sealed card value.
@@ -877,6 +880,25 @@ impl CardsConfig {
                     .to_string(),
             ),
         }
+    }
+
+    /// The cipher, treating absence as an error rather than "not configured".
+    ///
+    /// [`cipher`](Self::cipher) lets a keyless deployment start, which was
+    /// right while `user_cards.code` still carried the plaintext. That column
+    /// is gone (#108): with no keys a card can be neither sealed at issue nor
+    /// resolved on a swipe, so absence must stop the boot loudly rather than
+    /// pass silently into a server that denies every member. `main` calls this;
+    /// `cipher` stays for the config-validation paths that must tolerate the
+    /// keyless default.
+    pub fn require_cipher(&self) -> Result<css_lib::card_crypto::CardCipher, String> {
+        self.cipher()?.ok_or_else(|| {
+            "card encryption keys are required: cards.encryption_key, \
+             cards.index_key and cards.device_pepper must all be set. The \
+             plaintext user_cards.code column has been removed (#108), so a \
+             card cannot be issued or resolved without them."
+                .to_string()
+        })
     }
 }
 
@@ -2046,6 +2068,54 @@ mod tests {
 
         // Verify we can deserialize it back
         let _: AppConfig = toml::from_str(&toml_str).unwrap();
+    }
+
+    // Well-formed test key triple: 32 bytes of hex each, with the pepper
+    // distinct from the index key (the cipher refuses them equal).
+    const CARDS_ENC: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+    const CARDS_IDX: &str = "0202020202020202020202020202020202020202020202020202020202020202";
+    const CARDS_PEP: &str = "0404040404040404040404040404040404040404040404040404040404040404";
+
+    #[test]
+    fn require_cipher_refuses_absent_keys() {
+        // The default is keyless. `cipher` tolerates that (returns Ok(None));
+        // `require_cipher` must not, because the plaintext column is gone (#108)
+        // and a keyless server would deny every swipe. If this ever returns Ok,
+        // a deployment that forgot its keys boots and silently locks everyone
+        // out instead of failing at bring-up.
+        let cards = CardsConfig::default();
+        assert!(cards.cipher().expect("keyless default parses").is_none());
+        assert!(
+            cards.require_cipher().is_err(),
+            "require_cipher accepted a keyless config; a keyless server cannot \
+             resolve a single card once the plaintext column is dropped"
+        );
+    }
+
+    #[test]
+    fn require_cipher_accepts_a_full_valid_set() {
+        let cards = CardsConfig {
+            encryption_key: Some(CARDS_ENC.to_string()),
+            index_key: Some(CARDS_IDX.to_string()),
+            device_pepper: Some(CARDS_PEP.to_string()),
+        };
+        assert!(
+            cards.require_cipher().is_ok(),
+            "require_cipher rejected a complete, well-formed key set"
+        );
+    }
+
+    #[test]
+    fn require_cipher_still_refuses_a_partial_set() {
+        // A partial set is the one mistake `cipher` already refuses; the
+        // required form must not accidentally soften that into "absent, so
+        // fine". Index key present, the other two absent.
+        let cards = CardsConfig {
+            encryption_key: None,
+            index_key: Some(CARDS_IDX.to_string()),
+            device_pepper: None,
+        };
+        assert!(cards.require_cipher().is_err());
     }
 
     #[test]

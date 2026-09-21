@@ -41,7 +41,7 @@
         </thead>
         <tbody>
           <tr v-for="card in cards" :key="card.id">
-            <td class="font-mono">{{ card.code }}</td>
+            <td class="font-mono">{{ card.code_hint }}</td>
             <td>
               <span class="badge badge-sm" :class="statusClass(card.status)">{{
                 card.status
@@ -128,7 +128,7 @@ async function issue() {
 }
 
 async function disable(card: Card) {
-  const reason = window.prompt(`Disable card ${card.code}? Optional reason:`, '') ?? undefined
+  const reason = window.prompt(`Disable card ${card.code_hint}? Optional reason:`, '') ?? undefined
   await act(
     () => apiClient.post<Card>(`/cards/${card.id}/disable`, { reason }),
     'Failed to disable card'
@@ -136,7 +136,7 @@ async function disable(card: Card) {
 }
 
 async function release(card: Card) {
-  if (!window.confirm(`Release card ${card.code} back to the pool? The member loses access.`))
+  if (!window.confirm(`Release card ${card.code_hint} back to the pool? The member loses access.`))
     return
   await act(() => apiClient.post<Card>(`/cards/${card.id}/release`, {}), 'Failed to release card')
 }

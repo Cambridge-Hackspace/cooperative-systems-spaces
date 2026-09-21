@@ -960,49 +960,37 @@ impl DatabaseManager {
         cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<CardResolution, DatabaseError> {
         let mut conn = self.get_connection()?;
-        let bidx = cipher.map(|c| c.blind_index(code));
 
-        // A named function rather than a closure, so the returned query's
-        // lifetime is tied to the one that went in; and it binds owned values,
-        // so nothing borrows `code` or the index beyond the call.
-        //
-        // With keys configured this matches the blind index OR a row the
-        // backfill has not reached, which still carries plaintext. That second
-        // arm is what keeps swipes working *during* the migration rather than
-        // only after it.
-        fn matches_code<'a>(
-            q: user_cards::BoxedQuery<'a, diesel::pg::Pg>,
-            code: &str,
-            bidx: Option<&[u8]>,
-        ) -> user_cards::BoxedQuery<'a, diesel::pg::Pg> {
-            match bidx {
-                Some(b) => q.filter(
-                    user_cards::code_bidx
-                        .eq(b.to_vec())
-                        .or(user_cards::code_bidx
-                            .is_null()
-                            .and(user_cards::code.eq(code.to_string()))),
-                ),
-                None => q.filter(user_cards::code.eq(code.to_string())),
+        // With the plaintext `code` column dropped (#108) a card row is
+        // reachable only by its blind index, which needs the cipher. A
+        // deployment without keys is refused at startup, so `None` here means
+        // only the legacy profile-field scheme below can still answer -- the
+        // card table cannot be searched at all. Prefer a live (non-released)
+        // row, then fall back to the most recent released one, exactly as
+        // before; the only thing gone is the plaintext-fallback arm.
+        let card = match cipher {
+            Some(c) => {
+                let bidx = c.blind_index(code);
+                let live = user_cards::table
+                    .filter(user_cards::code_bidx.eq(bidx.clone()))
+                    .filter(user_cards::status.ne(CardStatus::Released))
+                    .select(UserCard::as_select())
+                    .first::<UserCard>(&mut conn)
+                    .optional()
+                    .map_err(DatabaseError::Diesel)?;
+                match live {
+                    Some(c) => Some(c),
+                    None => user_cards::table
+                        .filter(user_cards::code_bidx.eq(bidx))
+                        .filter(user_cards::status.eq(CardStatus::Released))
+                        .order(user_cards::created_at.desc())
+                        .select(UserCard::as_select())
+                        .first::<UserCard>(&mut conn)
+                        .optional()
+                        .map_err(DatabaseError::Diesel)?,
+                }
             }
-        }
-
-        let live = matches_code(user_cards::table.into_boxed(), code, bidx.as_deref())
-            .filter(user_cards::status.ne(CardStatus::Released))
-            .select(UserCard::as_select())
-            .first::<UserCard>(&mut conn)
-            .optional()
-            .map_err(DatabaseError::Diesel)?;
-
-        let card = match live {
-            Some(c) => Some(c),
-            None => matches_code(user_cards::table.into_boxed(), code, bidx.as_deref())
-                .filter(user_cards::status.eq(CardStatus::Released))
-                .order(user_cards::created_at.desc())
-                .select(UserCard::as_select())
-                .first::<UserCard>(&mut conn)
-                .optional()
-                .map_err(DatabaseError::Diesel)?,
+            None => None,
         };
 
         if let Some(card) = card {
@@ -1064,30 +1052,31 @@ impl DatabaseManager {
         cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<UserCard, DatabaseError> {
         let mut conn = self.get_connection()?;
-        let sealed = match cipher {
-            Some(c) => Some(
-                c.seal(code)
-                    .map_err(|e| DatabaseError::Other(format!("could not seal card: {e}")))?,
-            ),
-            None => None,
-        };
+        // The plaintext `code` column is gone (#108): a card can be stored only
+        // sealed, which needs the cipher. Startup refuses to run without keys,
+        // so a `None` here cannot happen in a real deployment -- but a caller
+        // that reaches it anyway gets an error, never a row with neither a
+        // plaintext nor a blind index that nothing could ever resolve.
+        let cipher = cipher.ok_or_else(|| {
+            DatabaseError::Other(
+                "card encryption keys are required to issue a card (#108)".to_string(),
+            )
+        })?;
+        let sealed = cipher
+            .seal(code)
+            .map_err(|e| DatabaseError::Other(format!("could not seal card: {e}")))?;
         // Computed at issue rather than per sync: the KDF is deliberately slow,
         // and deriving it for every member on every device poll would cost tens
         // of seconds of CPU each time.
-        let wire_digest = match cipher {
-            Some(c) => Some(
-                c.wire_digest(code)
-                    .map_err(|e| DatabaseError::Other(format!("could not digest card: {e}")))?,
-            ),
-            None => None,
-        };
+        let wire_digest = cipher
+            .wire_digest(code)
+            .map_err(|e| DatabaseError::Other(format!("could not digest card: {e}")))?;
         let new_card = NewUserCard {
             user_id,
-            code: code.to_string(),
-            code_encrypted: sealed.as_ref().map(|s| s.ciphertext.clone()),
-            code_nonce: sealed.as_ref().map(|s| s.nonce.clone()),
-            code_bidx: sealed.as_ref().map(|s| s.blind_index.clone()),
-            code_wire_digest: wire_digest,
+            code_encrypted: Some(sealed.ciphertext.clone()),
+            code_nonce: Some(sealed.nonce.clone()),
+            code_bidx: Some(sealed.blind_index.clone()),
+            code_wire_digest: Some(wire_digest),
             status: Some(CardStatus::Active),
         };
         diesel::insert_into(user_cards::table)
@@ -2848,7 +2837,6 @@ impl DatabaseManager {
         device_id: uuid::Uuid,
         profile_field: &str,
         metered_gate: Option<&crate::tool_billing::MeteredGate>,
-        cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<
         (
             Vec<crate::api::toolguard::ToolGuardSyncUser>,
@@ -2902,31 +2890,21 @@ impl DatabaseManager {
         // excluded, so a revoked card never reaches an edge allow-list.
         let active_cards = user_cards::table
             .filter(user_cards::status.eq(CardStatus::Active))
-            .select((
-                user_cards::user_id,
-                user_cards::code,
-                user_cards::code_wire_digest,
-            ))
-            .load::<(uuid::Uuid, String, Option<Vec<u8>>)>(&mut conn)
+            .select((user_cards::user_id, user_cards::code_wire_digest))
+            .load::<(uuid::Uuid, Option<Vec<u8>>)>(&mut conn)
             .map_err(DatabaseError::Diesel)?;
         // What a device will hold, resolved here rather than at the payload.
         //
-        // The stored digest is preferred and is the only path that survives
-        // `user_cards.code` being dropped; a row the backfill has not reached
-        // is digested on the fly so the migration has no window in which a
-        // member stops working. Falling back to the plaintext *code* is not an
-        // option -- that is the disclosure this change exists to end.
+        // The stored wire digest is the only thing a device matches on, and
+        // with `user_cards.code` dropped (#108) it is the only thing left: a
+        // card is sealed at issue and the drop migration refuses to run while
+        // any row is unsealed, so every active card carries a digest here.
+        // Falling back to the plaintext *code* was the disclosure this change
+        // exists to end, and it is gone.
         let mut cards_by_user: std::collections::HashMap<uuid::Uuid, Vec<Vec<u8>>> =
             std::collections::HashMap::new();
-        for (uid, code, stored) in active_cards {
-            let digest = match (stored, cipher) {
-                (Some(d), _) => Some(d),
-                (None, Some(c)) => c.wire_digest(&code).ok(),
-                // No keys configured at all: this deployment has not started
-                // the migration, and there is nothing a device could match.
-                (None, None) => None,
-            };
-            if let Some(d) = digest {
+        for (uid, stored) in active_cards {
+            if let Some(d) = stored {
                 cards_by_user.entry(uid).or_default().push(d);
             }
         }

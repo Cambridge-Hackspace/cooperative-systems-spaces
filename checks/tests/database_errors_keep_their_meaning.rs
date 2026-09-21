@@ -48,10 +48,16 @@ const BUDGET: &[(&str, usize)] = &[
     // which keeps the classification.
     ("auth.rs", 4),
     ("calendar.rs", 0),
-    // 0. Every handler propagates its database error with `?`, so the
-    // `From<DatabaseError>` conversion keeps the classification -- a duplicate
-    // card code is a 409, a missing card a 404, never a blanket 500.
-    ("cards.rs", 0),
+    // 0 -> 3 with the #108 masked-read response. The list/issue/disable/release
+    // handlers still propagate every DatabaseError with `?`, so a duplicate code
+    // is a 409 and a missing card a 404. The three 500s are genuine server
+    // faults, none a laundered DatabaseError: the cipher being absent (startup
+    // refuses to run without it, so this is an unreachable invariant), a card
+    // row with no sealed value to decrypt (a data-integrity fault now that the
+    // plaintext column is gone), and the ciphertext failing to open (a wrong key
+    // or a corrupted row). Each is the server's own problem and 500 is the
+    // honest answer -- the same kind the auth.rs and cmi5.rs entries account for.
+    ("cards.rs", 3),
     // 0. Every handler propagates its database error with `?`, so a missing
     // waiver is a 404 and a bad insert keeps its classification -- never a 500.
     ("waivers.rs", 0),

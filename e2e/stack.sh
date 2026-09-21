@@ -81,10 +81,10 @@ SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
 GROUPSIO_PORT="${CSS_E2E_GROUPSIO_PORT:-4390}"
 STRIPE_PORT="${CSS_E2E_STRIPE_PORT:-4391}"
 # Card encryption keys (#108). Fixed rather than generated so a failure
-# reproduces from the logs, and defined here rather than in stack-config.toml so
-# the cards stage can hand the same pair to css-card-backfill -- two copies that
-# could drift would make the verifier report a key mismatch that is really a
-# config bug.
+# reproduces from the logs, and defined here rather than only in stack-config.toml
+# so the one set of values can be both substituted into the server's config and
+# handed to the lease driver (which needs the device pepper) -- two copies that
+# could drift would make a swipe fail to resolve for what is really a config bug.
 CARDS_ENC_KEY="a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
 CARDS_IDX_KEY="b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
 # Distinct from the index key on purpose: CardCipher refuses them equal, since
