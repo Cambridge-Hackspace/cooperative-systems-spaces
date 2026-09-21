@@ -65,6 +65,13 @@ COPY --from=backend-builder /app/target/release/css-server /app/server
 # `podman run ... /app/toolpass-load ...` against the stack's Postgres.
 COPY --from=backend-builder /app/target/release/toolpass-load /app/toolpass-load
 
+# One-shot card sealer (#108). Built by the css-server package above but, until
+# now, never copied into the image -- so the sealing step the issue's runbook
+# calls for could not be run on a deployed host. Shipped the same way as
+# toolpass-load, run as `podman run ... /app/card-backfill ...` against the
+# stack's Postgres with the deployment's card keys on the command line.
+COPY --from=backend-builder /app/target/release/css-card-backfill /app/card-backfill
+
 # Copy frontend build
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
