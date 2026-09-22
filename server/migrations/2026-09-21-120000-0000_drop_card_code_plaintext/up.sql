@@ -23,3 +23,15 @@ BEGIN
 END $$;
 
 ALTER TABLE user_cards DROP COLUMN code;
+
+-- Dropping `code` took its partial-unique index `idx_user_cards_code_live` with
+-- it (an index over a dropped column is dropped automatically). That index is
+-- what made "issue a code a live card already holds" a 409. Re-create the same
+-- constraint on the blind index: code_bidx is deterministic, so uniqueness over
+-- it among non-released rows is exactly uniqueness over the plaintext code was.
+-- Released codes are excluded, so a released code can still be reissued. This is
+-- distinct from idx_user_cards_code_bidx (the non-unique resolve-lookup index,
+-- which covers released rows too).
+CREATE UNIQUE INDEX idx_user_cards_code_bidx_live
+    ON user_cards (code_bidx)
+    WHERE status <> 'released';
