@@ -13,7 +13,8 @@ import type { Card } from '@/types'
 const card = (o: Partial<Card> = {}): Card => ({
   id: o.id ?? 'c1',
   user_id: 'u1',
-  code: o.code ?? '2A-9E-7B-92',
+  // Masked hint, as the server returns it (#108) -- never the full code.
+  code_hint: o.code_hint ?? '…7B-92',
   status: o.status ?? CardStatus.Active,
   last_used_at: o.last_used_at ?? null,
   issued_at: '2026-01-01T00:00:00Z',
@@ -31,11 +32,11 @@ beforeEach(() => {
 
 describe('AccessCardManagement', () => {
   it('lists the member’s cards for the given user', async () => {
-    mocks.get.mockResolvedValue({ success: true, data: [card({ code: 'AA-BB-CC' })] })
+    mocks.get.mockResolvedValue({ success: true, data: [card({ code_hint: '…AB-CC' })] })
     const w = mount(AccessCardManagement, { props: { userId: 'u1' } })
     await flushPromises()
     expect(mocks.get).toHaveBeenCalledWith('/cards/user/u1')
-    expect(w.text()).toContain('AA-BB-CC')
+    expect(w.text()).toContain('…AB-CC')
   })
 
   it('issues a card, then reloads the list', async () => {

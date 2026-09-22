@@ -486,8 +486,6 @@ diesel::table! {
     user_cards (id) {
         id -> Uuid,
         user_id -> Uuid,
-        #[max_length = 255]
-        code -> Varchar,
         code_encrypted -> Nullable<Bytea>,
         code_nonce -> Nullable<Bytea>,
         code_bidx -> Nullable<Bytea>,

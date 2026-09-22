@@ -39,11 +39,11 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@SMTP_PORT@", "2525"),
     ("@GROUPSIO_PORT@", "4390"),
     ("@STRIPE_PORT@", "4391"),
-    // Card encryption keys (#108). The real values live in stack.sh so the
-    // cards stage can hand the same pair to css-card-backfill; what matters
-    // here is that they are 32 bytes of hex, because CardsConfig::cipher()
-    // refuses anything else at startup and a stack that will not boot is a
-    // battery that fails at bring-up rather than in this test.
+    // Card encryption keys (#108). The real values live in stack.sh so one set
+    // feeds both the server config and the lease driver; what matters here is
+    // that they are 32 bytes of hex, because CardsConfig::cipher() refuses
+    // anything else at startup and a stack that will not boot is a battery that
+    // fails at bring-up rather than in this test.
     (
         "@CARDS_ENC_KEY@",
         "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",

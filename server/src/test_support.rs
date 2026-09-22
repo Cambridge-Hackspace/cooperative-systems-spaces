@@ -49,6 +49,19 @@ pub fn test_config() -> AppConfig {
     config.pages.wiki_repo = None;
     config.pages.site_repo = None;
 
+    // Card keys are mandatory now that the plaintext `user_cards.code` column is
+    // gone (#108): a card can only be sealed at issue and resolved by blind
+    // index, both of which need the cipher. Fixed, well-formed test values (the
+    // pepper differs from the index key, which the cipher requires) so every
+    // fixture exercises the one real path rather than a keyless mode that no
+    // longer exists.
+    config.cards.encryption_key =
+        Some("0101010101010101010101010101010101010101010101010101010101010101".to_string());
+    config.cards.index_key =
+        Some("0202020202020202020202020202020202020202020202020202020202020202".to_string());
+    config.cards.device_pepper =
+        Some("0404040404040404040404040404040404040404040404040404040404040404".to_string());
+
     assert!(
         config.pages.wiki_repo.is_none() && config.pages.site_repo.is_none(),
         "the pages repos must be None: PagesService::new git-clones them into a \

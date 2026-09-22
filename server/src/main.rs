@@ -200,11 +200,17 @@ async fn main() -> Result<(), anyhow::Error> {
     // on unusable keys, so an error here cannot happen without the config being
     // swapped underneath us, and silently continuing in plaintext is the one
     // outcome nobody would notice.
-    let card_cipher = app_config
-        .cards
-        .cipher()
-        .expect("card keys were validated at startup")
-        .map(std::sync::Arc::new);
+    // Keys are mandatory now that the plaintext `user_cards.code` column is
+    // gone (#108): without a cipher no card can be sealed at issue or resolved
+    // on a swipe, so a keyless server would accept startup and then silently
+    // deny every member. `require_cipher` refuses loudly at the one moment it
+    // is cheap; it also surfaces a malformed key, which `cipher` would too.
+    let card_cipher = Some(std::sync::Arc::new(
+        app_config
+            .cards
+            .require_cipher()
+            .map_err(|e| anyhow::anyhow!(e))?,
+    ));
     let device_inbound = Arc::new(DeviceInbound::new(
         db_manager.clone(),
         app_config.toolguard.profile_field.clone(),
