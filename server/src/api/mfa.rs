@@ -149,7 +149,9 @@ fn audit(state: &AppState, event: AuditEventType, user_id: Uuid, data: serde_jso
 fn issue_token(state: &AppState, user: &crate::models::User) -> Result<LoginResponse, ApiError> {
     let config = state.config_manager.get_config();
     let auth = AuthService::new(&state.db, &config.auth.jwt_secret);
-    let token = auth.create_token(user).map_err(ApiError::from)?;
+    let token = auth
+        .create_token(user, config.auth.jwt_expiration_hours)
+        .map_err(ApiError::from)?;
     let primary_role = state
         .db
         .user_primary_role(user.id)

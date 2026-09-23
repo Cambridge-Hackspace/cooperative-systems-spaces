@@ -280,7 +280,9 @@ async fn login(
         )));
     }
 
-    let token = auth_service.create_token(&user).map_err(ApiError::from)?;
+    let token = auth_service
+        .create_token(&user, config.auth.jwt_expiration_hours)
+        .map_err(ApiError::from)?;
 
     // Flag users whose role requires enrollment under the current policy so
     // the frontend can route them to the enrollment page on first sight.

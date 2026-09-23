@@ -25,9 +25,13 @@ pub struct Claims {
 }
 
 impl Claims {
-    pub fn new(user: &User, jwt_secret: &str) -> Result<String, AuthError> {
+    pub fn new(user: &User, jwt_secret: &str, expiration_hours: u32) -> Result<String, AuthError> {
+        // #120/#10 (M6): the lifetime was hardcoded to 24h while the login
+        // response reported auth.jwt_expiration_hours, so an operator who set 1h
+        // got a token that actually lived 24h. The caller passes the configured
+        // value, read at token-creation time so a config reload is not stale.
         let expiration = Utc::now()
-            .checked_add_signed(Duration::hours(24))
+            .checked_add_signed(Duration::hours(expiration_hours as i64))
             .expect("valid timestamp")
             .timestamp();
 
@@ -201,8 +205,8 @@ impl<'a> AuthService<'a> {
         Ok(user)
     }
 
-    pub fn create_token(&self, user: &User) -> Result<String, AuthError> {
-        Claims::new(user, self.jwt_secret)
+    pub fn create_token(&self, user: &User, expiration_hours: u32) -> Result<String, AuthError> {
+        Claims::new(user, self.jwt_secret, expiration_hours)
     }
 
     pub fn verify_token(&self, token: &str) -> Result<Claims, AuthError> {
@@ -425,6 +429,56 @@ where
             // statement in the LRS handlers, where they answer 403.
             Ok(None) => Err(AuthError::InvalidToken),
             Err(_) => Err(AuthError::InternalError),
+        }
+    }
+}
+
+#[cfg(test)]
+mod token_ttl_tests {
+    use super::*;
+
+    fn sample_user() -> User {
+        User {
+            id: uuid::Uuid::nil(),
+            username: "ttl".to_string(),
+            email: "ttl@example.com".to_string(),
+            password_hash: String::new(),
+            full_name: "TTL User".to_string(),
+            is_active: true,
+            created_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch")
+                .naive_utc(),
+            updated_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch")
+                .naive_utc(),
+            profile: serde_json::Value::Null,
+            meta: serde_json::Value::Null,
+            mfa_enrolled_at: None,
+            email_verified_at: None,
+            mailing_list_opt_out_at: None,
+            membership_next_due_at: None,
+            stripe_customer_id: None,
+            stripe_subscription_id: None,
+            subscription_status: None,
+        }
+    }
+
+    #[test]
+    fn token_lifetime_honours_the_configured_hours() {
+        // #120/#10 (M6): the lifetime was hardcoded to 24h while the response
+        // reported the configured value. A 1-hour token must now actually expire
+        // in ~3600s. Mutation check: restore Duration::hours(24) and this fails
+        // (86400 is nowhere near 3600). The +/-1 tolerance covers the two
+        // separate Utc::now() calls in Claims::new straddling a second boundary.
+        for hours in [1u32, 3, 24] {
+            let token = Claims::new(&sample_user(), "test-secret", hours).expect("mints a token");
+            let claims = Claims::verify_token(&token, "test-secret").expect("verifies");
+            let ttl = claims.exp as i64 - claims.iat as i64;
+            let want = hours as i64 * 3600;
+            assert!(
+                (ttl - want).abs() <= 1,
+                "a {hours}h token lived {ttl}s, expected ~{want}s"
+            );
         }
     }
 }
