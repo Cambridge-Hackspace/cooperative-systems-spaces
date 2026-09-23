@@ -222,4 +222,43 @@ main(async () => {
   if (roleBId) {
     await DELETE(`/api/admin/rbac/roles/${roleBId}`, { token: admin.token })
   }
+
+  // (4) #120/#1: users.manage does not let a manager act on a user at or above
+  //     their own level. A Staff manager is refused (403) modifying an Admin --
+  //     it previously succeeded, letting staff set an admin's password or email
+  //     and then log in as them -- but is NOT blocked from editing a lower-level
+  //     user, so the 403 is the level guard and not a blanket refusal. Without
+  //     the guard the first assertion gets 200.
+  const staffRole = (snapshot.json?.data?.roles ?? []).find((r) => r.name === 'staff')
+  ok('roles/staff-role-exists', !!staffRole, 'no staff role in the RBAC catalog to build a manager with')
+  if (staffRole) {
+    const mgr = await account('mgr_probe')
+    const promote = await POST(`/api/admin/users/${mgr.user.id}/roles`, {
+      token: admin.token,
+      body: { role_id: staffRole.id },
+    })
+    assertEq('roles/promote-manager-to-staff', 200, promote.status, `promote -> ${promote.status}`)
+
+    const onAdmin = await PUT(`/api/users/${admin.user.id}`, {
+      token: mgr.token,
+      body: { full_name: `hijacked ${RUN_TAG}` },
+    })
+    assertEq(
+      'roles/manager-cannot-modify-admin',
+      403,
+      onAdmin.status,
+      `a Staff manager modified an Admin (got ${onAdmin.status}) -- #120/#1 privilege escalation`,
+    )
+
+    const onLower = await PUT(`/api/users/${low.user.id}`, {
+      token: mgr.token,
+      body: { full_name: `managed ${RUN_TAG}` },
+    })
+    ok(
+      'roles/manager-can-modify-lower-user',
+      onLower.status !== 403,
+      `a Staff manager was refused editing a lower-level user (${onLower.status}) -- ` +
+        `the level guard is over-broad`,
+    )
+  }
 })

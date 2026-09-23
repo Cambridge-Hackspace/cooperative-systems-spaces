@@ -174,6 +174,27 @@ async fn update_user(
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
+    // #120/#1: `users.manage` by itself let a manager act on a user at or above
+    // their own level -- set an admin's password or email, deactivate or demote
+    // them, then log in as that admin. A manager may act only on users strictly
+    // below their own effective level. Editing one's own record is permitted by
+    // the ownership check above and is exempt here.
+    if auth_user.0.id != user_id {
+        let caller_level = state
+            .db
+            .user_effective_level(auth_user.0.id)
+            .map_err(ApiError::from)?;
+        let target_level = state
+            .db
+            .user_effective_level(user_id)
+            .map_err(ApiError::from)?;
+        if target_level >= caller_level {
+            return Err(ApiError::Forbidden(
+                "You cannot modify a user at or above your own access level".to_string(),
+            ));
+        }
+    }
+
     // The tier role (if requested) is applied to user_roles after the row
     // update, since it no longer lives on the users table.
     let requested_role = payload.role.clone();
