@@ -84,6 +84,13 @@ pub struct User {
     pub id: Uuid,
     pub username: String,
     pub email: String,
+    /// Argon2 password hash. Skipped in serialization (#120/H9): `User` derives
+    /// `Serialize` and is returned verbatim by the training-roster endpoints
+    /// (`api/training.rs`), which bypass the hash-stripping `UserResponse` DTO
+    /// that `api/users.rs` uses. Skipping the field here closes the leak for
+    /// every serialization path, not just the two known endpoints; it is read
+    /// by field access in the auth path, never out of JSON, so nothing breaks.
+    #[serde(skip_serializing)]
     pub password_hash: String,
     pub full_name: String,
     pub is_active: bool,
@@ -761,5 +768,53 @@ impl AuditEventType {
             UserRoleAssigned,
             UserRoleUnassigned,
         ]
+    }
+}
+
+#[cfg(test)]
+mod user_serialization_tests {
+    use super::*;
+
+    #[test]
+    fn password_hash_is_never_serialized() {
+        // #120/H9. `User` derives `Serialize` and is returned verbatim by the
+        // training-roster endpoints, which bypass the hash-stripping
+        // `UserResponse` DTO. The Argon2 hash must never reach a response body.
+        // Mutation check: delete `#[serde(skip_serializing)]` from the field and
+        // this fails on both the key's presence and the secret substring.
+        let user = User {
+            id: uuid::Uuid::nil(),
+            username: "vector".into(),
+            email: "vector@example.com".into(),
+            password_hash: "$argon2id$SUPER-SECRET-HASH".into(),
+            full_name: "Vector User".into(),
+            is_active: true,
+            created_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch")
+                .naive_utc(),
+            updated_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch")
+                .naive_utc(),
+            profile: serde_json::Value::Null,
+            meta: serde_json::Value::Null,
+            mfa_enrolled_at: None,
+            email_verified_at: None,
+            mailing_list_opt_out_at: None,
+            membership_next_due_at: None,
+            stripe_customer_id: None,
+            stripe_subscription_id: None,
+            subscription_status: None,
+        };
+
+        let value = serde_json::to_value(&user).expect("User serializes");
+        assert!(
+            value.get("password_hash").is_none(),
+            "password_hash must not appear in a serialized User: {value}"
+        );
+        let text = serde_json::to_string(&user).expect("User serializes");
+        assert!(
+            !text.contains("SUPER-SECRET-HASH"),
+            "the password hash leaked into the response body: {text}"
+        );
     }
 }

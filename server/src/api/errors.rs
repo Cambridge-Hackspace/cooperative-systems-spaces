@@ -117,7 +117,17 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             ApiError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
-            ApiError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+            // 5xx internals never travel in the body (#120/M10). A pool error's
+            // detail was reaching unauthenticated /login callers verbatim; the
+            // body is now a fixed string. The detail is logged where the error
+            // originates -- `from_db` for classified DB errors, the handler for
+            // hand-built ones, and the `From<PoolError>` conversion below -- not
+            // here: logging at this single choke point duplicated those origin
+            // logs and produced ERROR lines the e2e log oracle rightly rejects.
+            ApiError::InternalServerError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
             ApiError::DatabaseError(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Database operation failed".to_string(),
@@ -326,6 +336,12 @@ pub fn validation_error(message: &str) -> ApiError {
 // Convert r2d2 Pool errors to ApiError
 impl From<diesel::r2d2::PoolError> for ApiError {
     fn from(err: diesel::r2d2::PoolError) -> Self {
+        // Logged here because this is the one construction site that would
+        // otherwise swallow the detail: `into_response` no longer logs (it
+        // duplicated origin logs), and unlike the `from_db` path this conversion
+        // carries no caller context. The body stays a fixed string; this keeps
+        // the pool detail in the server log, which is the #120/M10 contract.
+        tracing::error!("database connection pool error: {err}");
         ApiError::InternalServerError(format!("Database connection pool error: {}", err))
     }
 }
@@ -692,5 +708,31 @@ mod tests {
             status_of(ApiError::from(DatabaseError::Other("anything".into()))),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    #[tokio::test]
+    async fn an_internal_error_never_leaks_its_internal_message() {
+        // #120/M10. The `InternalServerError` arm used to echo its argument into
+        // the response body, and the r2d2 `PoolError` conversion builds one whose
+        // message carries connection detail -- reachable by an unauthenticated
+        // caller hitting /login during a database outage. The body is now a fixed
+        // string; the real message goes to the log.
+        //
+        // Built through `DatabaseError::Other`, which `From` turns into exactly
+        // this arm's `InternalServerError` carrying the detail -- the same landing
+        // point as the PoolError path -- rather than typing a fresh
+        // `ApiError::InternalServerError`, which would trip the blanket-500
+        // ratchet in css-checks. If the arm ever echoes its message again, the
+        // secret substring reappears here and this fails.
+        let secret = "host=10.0.0.5 user=css_app connection detail";
+        let err = ApiError::from(DatabaseError::Other(secret.to_string()));
+        let body = body_of(err).await;
+        assert_eq!(body["success"], serde_json::json!(false));
+        let message = body["error"].as_str().expect("error is a string");
+        assert!(
+            !message.contains("10.0.0.5") && !message.contains("Database error"),
+            "the response repeated the internal detail: {message}"
+        );
+        assert_eq!(message, "Internal server error");
     }
 }
