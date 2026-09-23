@@ -213,10 +213,32 @@ async fn update_user(
 
     // Hash new password if provided
     if let Some(new_password) = payload.password {
-        if new_password.len() < 8 {
-            return Err(ApiError::BadRequest(
-                "Password must be at least 8 characters long".to_string(),
-            ));
+        // #120/#2: changing your OWN password requires the current one, so a
+        // stolen token cannot silently re-key the account. change_own_password
+        // already enforces this; update_user let a self-edit slip past it. A
+        // manager resetting a subordinate's password is the admin-reset path --
+        // gated by the level check above -- and supplies no current password.
+        if auth_user.0.id == user_id {
+            let current_ok = payload
+                .current_password
+                .as_deref()
+                .map(|c| PasswordHashUtil::verify(c, &existing_user.password_hash).unwrap_or(false))
+                .unwrap_or(false);
+            if !current_ok {
+                return Err(ApiError::BadRequest(
+                    "Current password is incorrect".to_string(),
+                ));
+            }
+        }
+
+        // The minimum length is configured, not hardcoded (#120/#2): the 8 here
+        // ignored auth.password_min_length, so a deployment that raised it still
+        // accepted short passwords through this path.
+        let min_len = state.config_manager.get_config().auth.password_min_length;
+        if new_password.len() < min_len {
+            return Err(ApiError::BadRequest(format!(
+                "Password must be at least {min_len} characters long"
+            )));
         }
 
         let password_hash = PasswordHashUtil::hash(&new_password)

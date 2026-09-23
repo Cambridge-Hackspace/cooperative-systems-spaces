@@ -21,7 +21,7 @@
 
 import {
   GET, PUT, POST, DELETE, req, BASE,
-  account, login, register,
+  account, login, register, PASSWORD,
   assertEq, assertNe, ok, record, main, RUN_TAG, ADMIN_EMAIL,
 } from './lib.mjs'
 
@@ -401,6 +401,45 @@ main(async () => {
   assertNe('contract/cors-preflight-from-an-unlisted-origin-is-not-allowed',
     'https://not-allowed.example',
     denied.headers.get('access-control-allow-origin'))
+
+  // #120/#2: a user changing their OWN password through PUT /api/users/{id}
+  // must supply the current one. update_user is the admin-reset path and skips
+  // that when a manager acts on someone else, but a self-edit used to re-key the
+  // account with only a bearer token -- a stolen token was permanent takeover.
+  // A fresh account is used so the mutation touches nothing else. Without the
+  // fix the first assertion gets 200.
+  const selfEditor = await account('selfpw')
+  const NEWPW = 'brand-new-password-9999'
+  const noCurrent = await PUT(`/api/users/${selfEditor.user.id}`, {
+    token: selfEditor.token,
+    body: { password: NEWPW },
+  })
+  assertEq('contract/self-password-needs-current', 400, noCurrent.status,
+    `self password change with no current_password -> ${noCurrent.status}`)
+
+  const wrongCurrent = await PUT(`/api/users/${selfEditor.user.id}`, {
+    token: selfEditor.token,
+    body: { current_password: 'not-the-password', password: NEWPW },
+  })
+  assertEq('contract/self-password-wrong-current', 400, wrongCurrent.status,
+    `self password change with wrong current_password -> ${wrongCurrent.status}`)
+
+  const rightCurrent = await PUT(`/api/users/${selfEditor.user.id}`, {
+    token: selfEditor.token,
+    body: { current_password: PASSWORD, password: NEWPW },
+  })
+  assertEq('contract/self-password-with-current', 200, rightCurrent.status,
+    `self password change with correct current_password -> ${rightCurrent.status}`)
+
+  // Two oracles that the change took effect: the old password stops working and
+  // the new one starts. Asserting only one would pass a handler that accepted
+  // the request but wrote nothing.
+  const oldLogin = await login(selfEditor.username, PASSWORD)
+  assertEq('contract/old-password-rejected-after-change', 401, oldLogin.status,
+    `old password after change -> ${oldLogin.status}`)
+  const newLogin = await login(selfEditor.username, NEWPW)
+  assertEq('contract/new-password-accepted-after-change', 200, newLogin.status,
+    `new password after change -> ${newLogin.status}`)
 
   // Deleting the accounts this run created, through the shipping path, so a
   // cluster without rollback does not accumulate them across runs.

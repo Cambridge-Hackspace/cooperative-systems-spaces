@@ -167,6 +167,11 @@ pub struct UpdateUserRequest {
     pub email: Option<String>,
     pub full_name: Option<String>,
     pub password: Option<String>,
+    /// The caller's current password. Required only when a user changes their
+    /// OWN password or email through this endpoint (#120/#2), so a stolen token
+    /// cannot silently re-key the account. A manager resetting someone else's
+    /// account is the admin-reset path and supplies none.
+    pub current_password: Option<String>,
     pub is_active: Option<bool>,
     /// A tier role name (guest/historical/active/staff/admin) to set as the
     /// user's primary role; validated by the handler.
