@@ -195,6 +195,29 @@ async fn update_user(
         }
     }
 
+    // #120/#2: a self-service change to a credential -- the account password or
+    // the email address -- requires the current password, so a stolen token
+    // cannot re-key or re-address the account. Checked once here for either
+    // credential (the password and email blocks below no longer re-check). A
+    // manager acting on another user is the admin path, gated by the level check
+    // above, and supplies no current password.
+    let email_changing = payload
+        .email
+        .as_deref()
+        .is_some_and(|e| e != existing_user.email);
+    if auth_user.0.id == user_id && (payload.password.is_some() || email_changing) {
+        let current_ok = payload
+            .current_password
+            .as_deref()
+            .map(|c| PasswordHashUtil::verify(c, &existing_user.password_hash).unwrap_or(false))
+            .unwrap_or(false);
+        if !current_ok {
+            return Err(ApiError::BadRequest(
+                "Current password is incorrect".to_string(),
+            ));
+        }
+    }
+
     // The tier role (if requested) is applied to user_roles after the row
     // update, since it no longer lives on the users table.
     let requested_role = payload.role.clone();
@@ -211,26 +234,9 @@ async fn update_user(
         meta: None, // Meta is system-managed, not user-editable via this endpoint
     };
 
-    // Hash new password if provided
+    // Hash new password if provided. The current-password re-auth for a
+    // self-service change is enforced once, up front, for either credential.
     if let Some(new_password) = payload.password {
-        // #120/#2: changing your OWN password requires the current one, so a
-        // stolen token cannot silently re-key the account. change_own_password
-        // already enforces this; update_user let a self-edit slip past it. A
-        // manager resetting a subordinate's password is the admin-reset path --
-        // gated by the level check above -- and supplies no current password.
-        if auth_user.0.id == user_id {
-            let current_ok = payload
-                .current_password
-                .as_deref()
-                .map(|c| PasswordHashUtil::verify(c, &existing_user.password_hash).unwrap_or(false))
-                .unwrap_or(false);
-            if !current_ok {
-                return Err(ApiError::BadRequest(
-                    "Current password is incorrect".to_string(),
-                ));
-            }
-        }
-
         // The minimum length is configured, not hardcoded (#120/#2): the 8 here
         // ignored auth.password_min_length, so a deployment that raised it still
         // accepted short passwords through this path.
@@ -278,6 +284,18 @@ async fn update_user(
         .db
         .update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
+
+    // #120/#2: a changed address is no longer proven. Clear its verified flag so
+    // require_email_verification re-gates, and send a fresh confirmation to the
+    // NEW address. Applies to an admin-set email too: whoever set it, the new
+    // address has not demonstrated ownership.
+    if email_changing {
+        state
+            .db
+            .clear_email_verified_at(user_id)
+            .map_err(ApiError::from)?;
+        crate::api::auth::issue_verification_mail(&state, &updated_user).await;
+    }
 
     // Apply a requested tier-role change through user_roles (validated above).
     if let Some(new_role) = requested_role {

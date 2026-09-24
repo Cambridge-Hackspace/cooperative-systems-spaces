@@ -663,7 +663,7 @@ async fn password_reset_consume(
 /// mailer switched off does not fail a registration over a message it was
 /// never going to send. Any real failure is audited as `EmailSendFailed`, which
 /// is how an operator finds out, since neither caller may vary its response.
-async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
+pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
     let config = state.config_manager.get_config();
     if !config.email.enabled {
         return;

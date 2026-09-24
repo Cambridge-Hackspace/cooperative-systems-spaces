@@ -1167,6 +1167,22 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    /// Clear a user's email-verified flag (#120/#2).
+    ///
+    /// Called when the address changes so `require_email_verification` re-gates
+    /// and a fresh confirmation is sent to the new address. Separate from
+    /// `update_user` because `UpdateUser` has no way to express "set this
+    /// nullable column back to NULL" without changing the changeset for every
+    /// other caller.
+    pub fn clear_email_verified_at(&self, user_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        let mut conn = self.get_connection()?;
+        diesel::update(users::table.filter(users::id.eq(user_id)))
+            .set(users::email_verified_at.eq(None::<chrono::DateTime<chrono::Utc>>))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
     /// Update user profile only
     pub fn update_user_profile(
         &self,

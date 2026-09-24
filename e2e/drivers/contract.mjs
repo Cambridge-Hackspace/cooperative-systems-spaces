@@ -441,6 +441,25 @@ main(async () => {
   assertEq('contract/new-password-accepted-after-change', 200, newLogin.status,
     `new password after change -> ${newLogin.status}`)
 
+  // #120/#2 (email): a self-service email change also requires the current
+  // password -- a stolen token could otherwise re-address the account and then
+  // password-reset it. Without current_password -> 400; with -> 200. Without the
+  // fix the first is a 200.
+  const emailEditor = await account('selfemail')
+  const movedAddr = `moved.${RUN_TAG}@e2e.invalid`
+  const emailNoPw = await PUT(`/api/users/${emailEditor.user.id}`, {
+    token: emailEditor.token,
+    body: { email: movedAddr },
+  })
+  assertEq('contract/self-email-needs-current', 400, emailNoPw.status,
+    `self email change with no current_password -> ${emailNoPw.status}`)
+  const emailWithPw = await PUT(`/api/users/${emailEditor.user.id}`, {
+    token: emailEditor.token,
+    body: { current_password: PASSWORD, email: movedAddr },
+  })
+  assertEq('contract/self-email-with-current', 200, emailWithPw.status,
+    `self email change with current_password -> ${emailWithPw.status}`)
+
   // #120/#3 + M8: email identity is case-insensitive. An address differing from
   // an existing one only by case must be refused -- before, Alice@x and alice@x
   // registered as two accounts, which (with the case-insensitive setup grant)

@@ -107,6 +107,18 @@ const WRITERS: &[Writer] = &[
                       the count and 404s on zero.",
         ),
     },
+    Writer {
+        name: "clear_email_verified_at",
+        exempt: Some(
+            "Clears the email-verified flag when the address changes (#120/#2). \
+                      Called only after `update_user` has just loaded and updated the \
+                      same row in the same request, so the user is known to exist; the \
+                      UPDATE matches by primary key and affects that one row whatever \
+                      the flag's prior value (clearing an already-null flag is the \
+                      intended idempotent no-op). A zero count is unreachable here, so \
+                      there is no missing-target signal to read.",
+        ),
+    },
     // Every other writer that used to be here has been fixed: each reads the row
     // count and returns `NotFound` when it is zero. The check below -- "no writer
     // matching this pattern is unlisted" -- is what stops a new one appearing.
