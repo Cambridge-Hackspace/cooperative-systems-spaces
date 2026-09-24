@@ -257,9 +257,45 @@ async fn login(
     let config = state.config_manager.get_config();
     let auth_service = AuthService::new(&state.db, &config.auth.jwt_secret);
 
-    let user = auth_service
-        .authenticate_user(&payload.username_or_email, &payload.password)
-        .map_err(ApiError::from)?;
+    // #120/#8 (H6): throttle password spraying. Keyed on the submitted identity
+    // (lowercased, so case cannot dodge it); a short lockout bounds the spray
+    // rate without the victim-lockout DoS a long one would enable. IP-based
+    // limiting waits on trustworthy client-IP resolution (#13) -- the leftmost
+    // X-Forwarded-For is spoofable. Checked before authenticate, recorded on
+    // failure, cleared on success.
+    let throttle_id = format!("login:{}", payload.username_or_email.trim().to_lowercase());
+    if config.auth.login_throttle_enabled {
+        if let Err(remaining) = state.throttle_service.check_attempt(
+            &throttle_id,
+            config.auth.login_throttle_attempts,
+            config.auth.login_throttle_seconds,
+        ) {
+            return Err(ApiError::TooManyRequests(format!(
+                "Too many login attempts. Try again in {remaining} seconds."
+            )));
+        }
+    }
+
+    let user = match auth_service.authenticate_user(&payload.username_or_email, &payload.password) {
+        Ok(user) => {
+            if config.auth.login_throttle_enabled {
+                state
+                    .throttle_service
+                    .record_successful_attempt(&throttle_id);
+            }
+            user
+        }
+        Err(e) => {
+            if config.auth.login_throttle_enabled {
+                state.throttle_service.record_failed_attempt(
+                    &throttle_id,
+                    config.auth.login_throttle_attempts,
+                    config.auth.login_throttle_seconds,
+                );
+            }
+            return Err(ApiError::from(e));
+        }
+    };
 
     // Confirmed address required, if the operator asked for that.
     //

@@ -21,6 +21,13 @@ password_min_length = 8
 session_timeout_minutes = 1440
 # Enable password reset functionality
 password_reset_enabled = true
+# Brute-force throttle for login and MFA verification (#120/#8). After
+# login_throttle_attempts failures for one identity (the submitted username on
+# login, the user id on verify) that identity is locked for login_throttle_seconds.
+# Kept short so it slows spraying without becoming a victim-lockout DoS.
+login_throttle_enabled = true
+login_throttle_attempts = 10
+login_throttle_seconds = 60
 
 # Registration Challenge Configuration
 # Use this to require a passphrase or challenge question for new registrations

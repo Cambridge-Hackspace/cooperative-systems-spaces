@@ -11,7 +11,15 @@ struct ThrottleEntry {
     locked_until: Option<Instant>,
 }
 
-/// In-memory throttling service for registration attempts
+/// In-memory throttling service for registration, login, and MFA-verify attempts.
+///
+/// #120/L3: this state is per-process and in-memory -- counters reset on restart,
+/// and a horizontally-scaled deployment throttles per instance, not globally.
+/// That single-instance assumption is stated here deliberately; a multi-instance
+/// deployment would need a shared store (e.g. Postgres). The mutex is recovered
+/// from poison rather than `unwrap`ped: now that login and MFA verification
+/// depend on it, one panic while a guard was held must not cascade into an
+/// auth-wide outage where every login thereafter panics on the poisoned lock.
 #[derive(Debug)]
 pub struct RegistrationThrottleService {
     attempts: Arc<Mutex<HashMap<String, ThrottleEntry>>>,
@@ -32,7 +40,10 @@ impl RegistrationThrottleService {
         max_attempts: u32,
         lockout_seconds: u32,
     ) -> Result<(), u32> {
-        let mut attempts = self.attempts.lock().unwrap();
+        let mut attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let now = Instant::now();
 
         // Clean up old entries periodically
@@ -82,7 +93,10 @@ impl RegistrationThrottleService {
 
     /// Record a failed registration attempt
     pub fn record_failed_attempt(&self, identifier: &str, max_attempts: u32, lockout_seconds: u32) {
-        let mut attempts = self.attempts.lock().unwrap();
+        let mut attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let now = Instant::now();
 
         let entry = attempts
@@ -114,7 +128,10 @@ impl RegistrationThrottleService {
 
     /// Record a successful registration attempt (clears the throttle entry)
     pub fn record_successful_attempt(&self, identifier: &str) {
-        let mut attempts = self.attempts.lock().unwrap();
+        let mut attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         attempts.remove(identifier);
         debug!(
             "Registration throttle cleared for successful attempt: {}",
@@ -124,7 +141,10 @@ impl RegistrationThrottleService {
 
     /// Get current attempt count for an identifier
     pub fn get_attempt_count(&self, identifier: &str) -> u32 {
-        let attempts = self.attempts.lock().unwrap();
+        let attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         attempts.get(identifier).map_or(0, |entry| entry.attempts)
     }
 
@@ -151,7 +171,10 @@ impl RegistrationThrottleService {
 
     /// Get remaining lockout time for an identifier, if any
     pub fn get_remaining_lockout(&self, identifier: &str) -> Option<u32> {
-        let attempts = self.attempts.lock().unwrap();
+        let attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let now = Instant::now();
 
         if let Some(entry) = attempts.get(identifier) {

@@ -492,6 +492,25 @@ main(async () => {
   assertEq('contract/revoke-old-token-rejected-after', 401, meAfter.status,
     `old token after password change -> ${meAfter.status} (M9 revocation)`)
 
+  // #120/#8 (H6): login is throttled. A burst of failed logins for one identity
+  // is eventually refused with 429 rather than letting password spraying run
+  // unbounded. A throwaway username is used so the short lockout affects nothing
+  // else. Without the throttle every attempt is a 401 and this never trips.
+  // (login_throttle_attempts defaults to 10; the loop allows margin.)
+  const sprayUser = `e2e_spray_${RUN_TAG}`
+  let loginThrottled = false
+  let lastSprayStatus = 0
+  for (let i = 0; i < 15; i++) {
+    const r = await login(sprayUser, 'definitely-the-wrong-password')
+    lastSprayStatus = r.status
+    if (r.status === 429) {
+      loginThrottled = true
+      break
+    }
+  }
+  ok('contract/login-throttled-after-burst', loginThrottled,
+    `a burst of failed logins was never throttled (last status ${lastSprayStatus}) -- #120/#8`)
+
   // Deleting the accounts this run created, through the shipping path, so a
   // cluster without rollback does not accumulate them across runs.
   for (const u of [newbie, admin]) {

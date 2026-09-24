@@ -545,9 +545,32 @@ pub struct AuthConfig {
     pub session_timeout_minutes: u32,
     /// Enable password reset functionality
     pub password_reset_enabled: bool,
+    /// Login / MFA-verify brute-force throttle (#120/#8). After
+    /// `login_throttle_attempts` failures for one identity -- the submitted
+    /// username on login, the user id on verify -- that identity is locked for
+    /// `login_throttle_seconds`. Kept short so it slows password spraying and
+    /// TOTP brute force without being a victim-lockout DoS. serde-default so a
+    /// config written before these keys existed still loads; a bulk-login test
+    /// tier can disable it.
+    #[serde(default = "default_login_throttle_enabled")]
+    pub login_throttle_enabled: bool,
+    #[serde(default = "default_login_throttle_attempts")]
+    pub login_throttle_attempts: u32,
+    #[serde(default = "default_login_throttle_seconds")]
+    pub login_throttle_seconds: u32,
     /// Multi-factor authentication settings
     #[serde(default)]
     pub mfa: AuthMfaConfig,
+}
+
+fn default_login_throttle_enabled() -> bool {
+    true
+}
+fn default_login_throttle_attempts() -> u32 {
+    10
+}
+fn default_login_throttle_seconds() -> u32 {
+    60
 }
 
 /// Who is required to enroll in MFA before they can use the system fully.
@@ -652,6 +675,9 @@ impl Default for AuthConfig {
             password_min_length: 8,
             session_timeout_minutes: 1440, // 24 hours
             password_reset_enabled: true,
+            login_throttle_enabled: default_login_throttle_enabled(),
+            login_throttle_attempts: default_login_throttle_attempts(),
+            login_throttle_seconds: default_login_throttle_seconds(),
             mfa: AuthMfaConfig::default(),
         }
     }

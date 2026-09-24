@@ -481,6 +481,24 @@ async fn verify_login(
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::Unauthorized("User no longer exists".to_string()))?;
 
+    // #120/#8 (H7): throttle TOTP/recovery brute force. take_login already
+    // consumed this challenge, but a fresh one is just another /login+/verify
+    // cycle, so without a per-user limit the guessing is unbounded. Keyed on the
+    // user id; checked before verifying, recorded on failure, cleared on success.
+    let config = state.config_manager.get_config();
+    let throttle_id = format!("mfa:{}", user.id);
+    if config.auth.login_throttle_enabled {
+        if let Err(remaining) = state.throttle_service.check_attempt(
+            &throttle_id,
+            config.auth.login_throttle_attempts,
+            config.auth.login_throttle_seconds,
+        ) {
+            return Err(ApiError::TooManyRequests(format!(
+                "Too many verification attempts. Try again in {remaining} seconds."
+            )));
+        }
+    }
+
     let outcome = match req.method.as_str() {
         methods::TOTP => verify_totp_path(&state, &user, req.code.as_deref()),
         methods::WEBAUTHN => verify_webauthn_path(&state, &user, &challenge, req.response).await,
@@ -490,6 +508,11 @@ async fn verify_login(
 
     match outcome {
         Ok(()) => {
+            if config.auth.login_throttle_enabled {
+                state
+                    .throttle_service
+                    .record_successful_attempt(&throttle_id);
+            }
             audit(
                 &state,
                 AuditEventType::MfaLoginPassed,
@@ -507,6 +530,13 @@ async fn verify_login(
                 .into_response())
         }
         Err(e) => {
+            if config.auth.login_throttle_enabled {
+                state.throttle_service.record_failed_attempt(
+                    &throttle_id,
+                    config.auth.login_throttle_attempts,
+                    config.auth.login_throttle_seconds,
+                );
+            }
             audit(
                 &state,
                 AuditEventType::MfaLoginFailed,
