@@ -217,7 +217,11 @@ impl Cmi5Service {
                 .by_name("cmi5.xml")
                 .map_err(|_| Cmi5Error::NoManifest)?;
             let mut s = String::new();
-            f.read_to_string(&mut s)
+            // #120/#4: bound the manifest read too -- a zip bomb could target
+            // cmi5.xml itself, inflating on read_to_string before extraction. A
+            // truncated manifest simply fails to parse and is rejected.
+            f.take(MAX_MANIFEST_BYTES)
+                .read_to_string(&mut s)
                 .map_err(|e| Cmi5Error::Io(e.to_string()))?;
             s
         };
@@ -238,7 +242,13 @@ impl Cmi5Service {
         // The id names both the row and the content directory.
         let course_id = Uuid::new_v4();
         let dest = self.content_dir.join(course_id.to_string());
-        extract_all(&mut archive, &dest)?;
+        // #120/#4: cap the inflated size at a decompression ratio over the actual
+        // compressed size (with a floor), so a bomb that passed the compressed
+        // check above cannot fill the disk on extraction.
+        let max_inflated = (zip_bytes.len() as u64)
+            .saturating_mul(MAX_DECOMPRESSION_RATIO)
+            .max(MIN_INFLATED_BUDGET);
+        extract_all(&mut archive, &dest, max_inflated)?;
 
         // Persist the tree. On any failure, remove the extracted files so a
         // failed import leaves nothing behind.
@@ -985,8 +995,22 @@ fn statement_score(stmt: &Statement) -> Option<i32> {
 /// traversal, which is the zip-slip guard; the join then stays inside `dest`.
 ///
 /// A free function (not a method) so it can be exercised without a database.
-fn extract_all<R: Read + Seek>(archive: &mut ZipArchive<R>, dest: &Path) -> Result<(), Cmi5Error> {
+/// #120/#4 zip-bomb bounds. Extraction is capped at MAX_DECOMPRESSION_RATIO
+/// times the package's actual compressed size, with MIN_INFLATED_BUDGET as a
+/// floor so a small legitimate package is not starved; the manifest read is
+/// capped at MAX_MANIFEST_BYTES. A conformant cmi5 package is nowhere near these;
+/// a bomb -- kilobytes that inflate to gigabytes -- is.
+const MAX_DECOMPRESSION_RATIO: u64 = 100;
+const MIN_INFLATED_BUDGET: u64 = 10 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 5 * 1024 * 1024;
+
+fn extract_all<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    dest: &Path,
+    max_inflated_bytes: u64,
+) -> Result<(), Cmi5Error> {
     std::fs::create_dir_all(dest).map_err(|e| Cmi5Error::Io(e.to_string()))?;
+    let mut total_inflated: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -1002,7 +1026,21 @@ fn extract_all<R: Read + Seek>(archive: &mut ZipArchive<R>, dest: &Path) -> Resu
             std::fs::create_dir_all(parent).map_err(|e| Cmi5Error::Io(e.to_string()))?;
         }
         let mut out = std::fs::File::create(&out_path).map_err(|e| Cmi5Error::Io(e.to_string()))?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| Cmi5Error::Io(e.to_string()))?;
+        // #120/#4: bound the INFLATED size. The compressed-size check in
+        // import_package cannot stop a zip bomb -- a few KB that decompress to
+        // gigabytes. Copy at most the remaining budget plus one byte, so
+        // crossing the cap is detected and refused rather than filling the disk.
+        let remaining = max_inflated_bytes.saturating_sub(total_inflated);
+        let mut limited = entry.by_ref().take(remaining.saturating_add(1));
+        let written =
+            std::io::copy(&mut limited, &mut out).map_err(|e| Cmi5Error::Io(e.to_string()))?;
+        total_inflated = total_inflated.saturating_add(written);
+        if total_inflated > max_inflated_bytes {
+            return Err(Cmi5Error::TooLarge {
+                size: total_inflated as usize,
+                max: max_inflated_bytes as usize,
+            });
+        }
     }
     Ok(())
 }
@@ -1071,7 +1109,7 @@ mod tests {
         let bytes = zip_with(&[("cmi5.xml", b"<x/>"), ("content/index.html", b"hi")]);
         let dir = std::env::temp_dir().join(format!("cmi5-extract-ok-{}", Uuid::new_v4()));
         let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).expect("open");
-        extract_all(&mut archive, &dir).expect("extract");
+        extract_all(&mut archive, &dir, 10 * 1024 * 1024).expect("extract");
 
         assert_eq!(
             std::fs::read_to_string(dir.join("content/index.html")).unwrap(),
@@ -1090,7 +1128,8 @@ mod tests {
         let _ = std::fs::remove_file(&sibling);
 
         let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).expect("open");
-        let err = extract_all(&mut archive, &dir).expect_err("must reject traversal");
+        let err =
+            extract_all(&mut archive, &dir, 10 * 1024 * 1024).expect_err("must reject traversal");
         assert!(
             matches!(err, Cmi5Error::ZipSlip(_)),
             "expected ZipSlip, got {err:?}"
@@ -1098,6 +1137,23 @@ mod tests {
         assert!(
             !sibling.exists(),
             "the traversal entry escaped the destination to {sibling:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_all_rejects_a_zip_bomb() {
+        // One entry that inflates past the budget must be refused (#120/#4). A
+        // megabyte of zeros compresses to almost nothing, so it sails through the
+        // compressed-size check; extracting it under a tiny budget crosses the
+        // cap. Without the inflated-size guard this returns Ok and writes 1 MiB.
+        let bytes = zip_with(&[("content/big.bin", &vec![0u8; 1024 * 1024])]);
+        let dir = std::env::temp_dir().join(format!("cmi5-extract-bomb-{}", Uuid::new_v4()));
+        let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).expect("open");
+        let err = extract_all(&mut archive, &dir, 4096).expect_err("must reject the bomb");
+        assert!(
+            matches!(err, Cmi5Error::TooLarge { .. }),
+            "expected TooLarge, got {err:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
