@@ -49,3 +49,6 @@
 # stripe.secret_key, webhook_secret and database passwords. TESTING.md recorded
 # the hazard; dev removed it.
 /server/config.toml
+
+# JetBrains IDE files (#120 low: .idea/dataSources.xml was committed)
+.idea/

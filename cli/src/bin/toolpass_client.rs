@@ -237,10 +237,13 @@ async fn main() -> Result<()> {
 /// `validate_api_key` was called from nowhere. Both halves were written; the
 /// wire between them was not. Now that the server honours it, this is what
 /// makes an api-key-authenticated controller work.
-fn with_api_key(url: &str, api_key: Option<&str>) -> String {
+/// Attach the API key as a request header (#120/M5) rather than a URL query
+/// parameter. A key in the query string lands in proxy/access logs and in any
+/// echoed URL; a header does not. (It is also no longer URL-encoded incorrectly.)
+fn with_api_key(req: reqwest::RequestBuilder, api_key: Option<&str>) -> reqwest::RequestBuilder {
     match api_key.filter(|k| !k.is_empty()) {
-        Some(key) => format!("{url}&api_key={key}"),
-        None => url.to_string(),
+        Some(key) => req.header("X-Api-Key", key),
+        None => req,
     }
 }
 
@@ -276,17 +279,13 @@ async fn tool_on(
     println!("   Card: {}", card);
     println!("   Tool ID: {}", tool_id);
 
-    let url = with_api_key(
-        &format!(
-            "{}/api/toolguard/tool-on?card={}&tool_id={}",
-            server, card, tool_id
-        ),
-        api_key,
+    let url = format!(
+        "{}/api/toolguard/tool-on?card={}&tool_id={}",
+        server, card, tool_id
     );
     println!("   URL: {}", url);
 
-    let response = client
-        .get(&url)
+    let response = with_api_key(client.get(&url), api_key)
         .send()
         .await
         .context("Failed to send request")?;
@@ -333,15 +332,11 @@ async fn tool_off(
     println!("   Card: {}", card);
     println!("   Tool ID: {}", tool_id);
 
-    let url = with_api_key(
-        &format!(
-            "{}/api/toolguard/tool-off?card={}&tool_id={}",
-            server, card, tool_id
-        ),
-        api_key,
+    let url = format!(
+        "{}/api/toolguard/tool-off?card={}&tool_id={}",
+        server, card, tool_id
     );
-    let response = client
-        .get(&url)
+    let response = with_api_key(client.get(&url), api_key)
         .send()
         .await
         .context("Failed to send request")?;
@@ -391,10 +386,7 @@ async fn tool_log(
     if let Some(temp) = temperature {
         url.push_str(&format!("&temperature={}", temp));
     }
-    let url = with_api_key(&url, api_key);
-
-    let response = client
-        .get(&url)
+    let response = with_api_key(client.get(&url), api_key)
         .send()
         .await
         .context("Failed to send request")?;

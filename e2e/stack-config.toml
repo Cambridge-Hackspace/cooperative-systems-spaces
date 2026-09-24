@@ -30,7 +30,6 @@ admin_url = "http://127.0.0.1:@SERVER_PORT@/admin"
 timezone = "@STACK_TZ@"
 max_session_age = 1440
 debug = false
-secret_key = "e2e-secret-key-not-a-production-value"
 https = false
 
 # Pointed at css-smtp-sink, and enabled.

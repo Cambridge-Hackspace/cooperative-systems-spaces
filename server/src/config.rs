@@ -82,8 +82,6 @@ pub struct SiteConfig {
     pub max_session_age: i32,
     /// Enable debug mode
     pub debug: bool,
-    /// Secret key for cryptographic signing
-    pub secret_key: String,
     /// Enable HTTPS enforcement
     pub https: bool,
     /// Analytics tracking ID (optional)
@@ -103,7 +101,6 @@ impl Default for SiteConfig {
             timezone: "UTC".to_string(),
             max_session_age: 1440, // 24 hours
             debug: false,
-            secret_key: "change-me-in-production".to_string(),
             https: false,
             analytics_id: None,
             homepage_links: HomepageLinksConfig::default(),
@@ -1672,6 +1669,14 @@ impl AppConfig {
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
+        // #120/M3: config holds the JWT secret, DB password, Stripe and card
+        // encryption/index keys, and MQTT passwords; it must not stay
+        // world-readable (umask leaves a fresh file 0644). Restrict to owner-only.
+        fs::set_permissions(
+            path.as_ref(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .with_context(|| format!("Failed to secure config file: {}", path.as_ref().display()))?;
 
         Ok(())
     }

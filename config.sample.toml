@@ -80,8 +80,6 @@ timezone = "UTC"
 max_session_age = 1440
 # Enable debug mode (shows detailed error messages)
 debug = false
-# Secret key for cryptographic operations (CHANGE THIS IN PRODUCTION!)
-secret_key = "change-me-in-production"
 # Force HTTPS for all connections
 https = false
 # Optional: Google Analytics or similar tracking ID
@@ -250,6 +248,7 @@ host = "postgres"
 port = 5432
 database = "css"
 username = "css_user"
+# Database password -- CHANGE THIS IN PRODUCTION!
 password = "css_pass"
 # Maximum number of concurrent database connections
 max_connections = 10

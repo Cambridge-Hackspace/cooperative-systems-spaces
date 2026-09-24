@@ -68,6 +68,13 @@ impl CliConfig {
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
+        // #120/M3: this file holds the CLI bearer token; it must not stay
+        // world-readable (umask leaves a fresh file 0644). Restrict to owner-only.
+        fs::set_permissions(
+            path.as_ref(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .with_context(|| format!("Failed to secure config file: {}", path.as_ref().display()))?;
 
         Ok(())
     }
@@ -108,9 +115,16 @@ pub async fn handle_config_command(command: ConfigCommand, config: &CliConfig) -
         ConfigCommand::Show => {
             println!("Current configuration:");
             println!("Server URL: {}", config.server_url);
+            // #120/M4: never print the token itself -- `config show` output lands
+            // in shell history, scrollback, and CI logs. Report only whether one
+            // is configured.
             println!(
                 "Auth token: {}",
-                config.auth_token.as_deref().unwrap_or("<not set>")
+                if config.auth_token.is_some() {
+                    "<set (hidden)>"
+                } else {
+                    "<not set>"
+                }
             );
             println!("Output format: {}", config.output_format);
             println!("Timeout: {} seconds", config.timeout_seconds);
