@@ -441,6 +441,19 @@ main(async () => {
   assertEq('contract/new-password-accepted-after-change', 200, newLogin.status,
     `new password after change -> ${newLogin.status}`)
 
+  // #120/#3 + M8: email identity is case-insensitive. An address differing from
+  // an existing one only by case must be refused -- before, Alice@x and alice@x
+  // registered as two accounts, which (with the case-insensitive setup grant)
+  // let a second ADMIN@... also be granted admin. Without the fix the variant
+  // registration is a 200.
+  const caseEmail = `Collide.${RUN_TAG}@e2e.invalid`
+  const firstReg = await register(`collide1_${RUN_TAG}`, caseEmail)
+  ok('contract/case-email-first-registers', firstReg.status === 200 || firstReg.status === 201,
+    `first registration -> ${firstReg.status}`)
+  const variantReg = await register(`collide2_${RUN_TAG}`, caseEmail.toLowerCase())
+  assertEq('contract/case-variant-email-refused', 409, variantReg.status,
+    `a case-variant of an existing email must be refused (got ${variantReg.status})`)
+
   // Deleting the accounts this run created, through the shipping path, so a
   // cluster without rollback does not accumulate them across runs.
   for (const u of [newbie, admin]) {

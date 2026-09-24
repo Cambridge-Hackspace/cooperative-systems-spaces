@@ -894,11 +894,20 @@ impl DatabaseManager {
 
     /// Find a user by email address
     pub fn find_user_by_email(&self, email: &str) -> Result<Option<User>, DatabaseError> {
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Bool, Text};
+
         let mut conn = self.get_connection()?;
 
+        // Case-insensitive (#120/#3 + M8). This was `email = $1`, so a mixed-case
+        // registrant could not be found by the lowercased reset/resend path, and
+        // ADMIN@x resolved as a different account from admin@x. Compared as
+        // `lower(email) = $1` against the lower(email) functional index the
+        // migration adds; the needle is bound (via .bind), never interpolated.
+        let needle = email.trim().to_lowercase();
         let user = users::table
             .select(User::as_select())
-            .filter(users::email.eq(email))
+            .filter(sql::<Bool>("lower(email) = ").bind::<Text, _>(needle))
             .first::<User>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)?;

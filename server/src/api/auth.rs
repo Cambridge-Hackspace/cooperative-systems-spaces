@@ -166,9 +166,20 @@ async fn register(
     let password_hash = PasswordHashUtil::hash(&payload.password)
         .map_err(|_| ApiError::InternalServerError("Failed to hash password".to_string()))?;
 
-    // Check if this should be the first admin user
+    // Check if this should be the first admin user.
+    //
+    // #120/#3: the initial-setup grant is one-shot -- it may mint an admin only
+    // while none exists. setup_enabled defaulted true and was never auto-
+    // disabled, so whoever registered the setup address first became admin; and
+    // because the grant matched case-insensitively while the address was a
+    // case-sensitive unique, a second ADMIN@... could register and also be
+    // granted. Gating on zero existing admins closes both -- once the first
+    // admin exists the grant never fires again. Case-variant duplicate accounts
+    // are separately prevented by the lower(email) uniqueness migration and the
+    // now case-insensitive find_user_by_email.
     let config = state.config_manager.get_config();
-    let should_be_admin = config.should_grant_admin_role(&payload.email);
+    let should_be_admin = config.should_grant_admin_role(&payload.email)
+        && state.db.count_active_admins().map_err(ApiError::from)? == 0;
 
     // New users get the `guest` tier; the setup admin address gets `admin`.
     let assigned_role = if should_be_admin {
