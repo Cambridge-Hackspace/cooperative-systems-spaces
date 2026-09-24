@@ -96,7 +96,15 @@ pub fn build_layer(cfg: &ServerConfig) -> Result<Option<CorsLayer>> {
     let origins = allowed_origins(cfg)?;
     let layer = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods(vec![Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        // #120 (low): PATCH was omitted, so preflight for the PATCH routes
+        // (e.g. /api/admin/webhooks/auth-headers/{id}) failed from a browser.
+        .allow_methods(vec![
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers(vec![header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Ok(Some(layer))

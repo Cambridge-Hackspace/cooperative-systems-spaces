@@ -1705,7 +1705,15 @@ impl ConfigManager {
 
     /// Get the current configuration (read-only)
     pub fn get_config(&self) -> AppConfig {
-        self.config.read().unwrap().clone()
+        // #120 (low): recover a poisoned lock rather than panic. One panic while
+        // the write guard was held would otherwise poison this RwLock, and every
+        // request thereafter -- each auth extractor calls get_config -- would
+        // panic on the lock, an auth-wide outage. (The whole-config clone this
+        // still performs per call is a separate perf item; #120 tracks it.)
+        self.config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Reload configuration from disk
