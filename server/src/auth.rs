@@ -15,6 +15,17 @@ use uuid::Uuid;
 
 use crate::{database::DatabaseManager, models::User, AppState};
 
+/// A fixed, valid Argon2 hash used to equalize the timing of a login for an
+/// unknown user with one for a real user (#120/M11). Built once from the same
+/// hasher, so a not-found verify costs the same KDF work as a real one; the
+/// password is never expected to match it. A malformed constant would make
+/// `verify` return early with a parse error and skip the KDF, which is exactly
+/// the oracle this removes -- a unit test asserts it does real work.
+static DUMMY_PASSWORD_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    PasswordHashUtil::hash("timing-equalization-dummy-not-a-real-password")
+        .expect("hashing a fixed constant cannot fail")
+});
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: String, // Subject (user ID)
@@ -198,18 +209,31 @@ impl<'a> AuthService<'a> {
                     .find_user_by_email(username_or_email)
                     .map_err(|_| AuthError::InternalError)
                     .unwrap_or(None)
-            })
-            .ok_or(AuthError::WrongCredentials)?;
+            });
 
-        if !user.is_active {
-            return Err(AuthError::UserInactive);
+        // #120/M11: a login for a user who does not exist must cost the same as
+        // one for a user who does, and must not reveal account status. Before,
+        // an unknown user returned WrongCredentials with no Argon2 verify (fast),
+        // while a real user paid the full ~hundreds-of-ms verify -- a username
+        // timing oracle -- and an inactive account was rejected *before* the
+        // password check, leaking its existence to an unauthenticated prober. So:
+        // always run one verify (the real hash when found, a fixed dummy of the
+        // same cost when not) and disclose is_active only after a correct password.
+        match user {
+            Some(user) => {
+                if !PasswordHashUtil::verify(password, &user.password_hash)? {
+                    return Err(AuthError::WrongCredentials);
+                }
+                if !user.is_active {
+                    return Err(AuthError::UserInactive);
+                }
+                Ok(user)
+            }
+            None => {
+                let _ = PasswordHashUtil::verify(password, &DUMMY_PASSWORD_HASH);
+                Err(AuthError::WrongCredentials)
+            }
         }
-
-        if !PasswordHashUtil::verify(password, &user.password_hash)? {
-            return Err(AuthError::WrongCredentials);
-        }
-
-        Ok(user)
     }
 
     pub fn create_token(&self, user: &User, expiration_hours: u32) -> Result<String, AuthError> {
@@ -507,5 +531,17 @@ mod token_ttl_tests {
         let token = Claims::new(&user, "test-secret", 1).expect("mints a token");
         let claims = Claims::verify_token(&token, "test-secret").expect("verifies");
         assert_eq!(claims.token_version, 7);
+    }
+
+    #[test]
+    fn the_dummy_hash_makes_the_not_found_path_do_real_work() {
+        // #120/M11: the unknown-user path verifies against DUMMY_PASSWORD_HASH so
+        // its timing matches a real user's. A malformed dummy would make verify
+        // return Err early and skip the KDF -- reopening the timing oracle. This
+        // proves the dummy parses and verify runs the comparison (Ok(false)).
+        assert_eq!(
+            PasswordHashUtil::verify("anything", &DUMMY_PASSWORD_HASH).ok(),
+            Some(false)
+        );
     }
 }
