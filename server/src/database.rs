@@ -3675,14 +3675,21 @@ impl DatabaseManager {
     pub fn mark_recovery_code_used(&self, code_id: uuid::Uuid) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_recovery_codes::dsl::*;
         let mut conn = self.get_connection()?;
-        // The row count is the answer, not a detail to discard.
-        // A recovery code is single-use. Matching zero rows means it was NOT consumed
-        // while the caller went on to treat the login as authenticated, so the
-        // code stays usable.
-        let affected = diesel::update(user_mfa_recovery_codes.filter(id.eq(code_id)))
-            .set(used_at.eq(Some(chrono::Utc::now())))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
+        // #120/H8: compare-and-set, not a bare id match. The `used_at IS NULL`
+        // filter makes consuming a code atomic: two concurrent logins presenting
+        // the same code both list it as unused and both reach here, but only the
+        // first UPDATE matches (affected == 1). The loser matches zero rows and
+        // is rejected, so a single code cannot authenticate twice. Without the
+        // filter both UPDATEs matched by id and both succeeded. The row count is
+        // the answer, not a detail to discard.
+        let affected = diesel::update(
+            user_mfa_recovery_codes
+                .filter(id.eq(code_id))
+                .filter(used_at.is_null()),
+        )
+        .set(used_at.eq(Some(chrono::Utc::now())))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
         if affected == 0 {
             return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
         }

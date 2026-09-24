@@ -598,4 +598,32 @@ main(async () => {
     // delete the pin.
     'unspent recovery codes survive disabling the factor they belonged to',
   )
+
+  // #120/H8: a recovery code is single-use even under concurrency. Two logins
+  // presenting the SAME code at once must not both succeed -- before the
+  // compare-and-set fix, mark_recovery_code_used matched by id alone, so both
+  // UPDATEs "succeeded" and both logins got a token. Fire two verifies at once
+  // and assert exactly one wins; a race that wins once may lose the next, so it
+  // runs a few rounds. Sequential sibling: reusing a spent code is refused.
+  const h8Rounds = Number(process.env.CSS_RACE_ROUNDS ?? 3)
+  for (let round = 0; round < h8Rounds; round++) {
+    const acct = await account(`mfa_h8_r${round}`)
+    const { recoveryCodes } = await enrollTotp(acct.token)
+    const code = recoveryCodes[0]
+    const [tokA, tokB] = await Promise.all([
+      challengeFor(acct.username, 'h8-a'),
+      challengeFor(acct.username, 'h8-b'),
+    ])
+    const [rA, rB] = await Promise.all([
+      verify({ challenge_token: tokA, method: 'recovery', code }),
+      verify({ challenge_token: tokB, method: 'recovery', code }),
+    ])
+    const wins = [rA, rB].filter((r) => r.status === 200).length
+    assertEq(`mfa/h8-recovery-single-use-under-race-r${round}`, 1, wins,
+      `concurrent recovery uses returned ${rA.status} and ${rB.status}; exactly one must win`)
+    const tokC = await challengeFor(acct.username, 'h8-c')
+    const again = await verify({ challenge_token: tokC, method: 'recovery', code })
+    ok(`mfa/h8-spent-code-refused-r${round}`, again.status !== 200,
+      `a spent recovery code was accepted again (${again.status})`)
+  }
 })
