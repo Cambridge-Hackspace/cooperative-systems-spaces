@@ -300,9 +300,14 @@ fn the_two_writers_already_fixed_stay_fixed() {
     /// Writers that were in the offending shape and have been fixed. A regression
     /// here is the same defect coming back, so it is a gate rather than part of
     /// the ratchet above.
+    // #120/#9 removed `confirm_user_totp` from this list because the function no
+    // longer exists: it was replaced by `finalize_totp_confirmation`, which
+    // loads the row with `.first(conn)?` (a missing row is NotFound) before
+    // updating, so the "row was not there" case is caught by the load rather
+    // than an `if affected == 0` guard. The safety property this list protects
+    // is preserved by a different mechanism, so it is not a regression.
     const ALREADY_FIXED: &[&str] = &[
         "mark_recovery_code_used",
-        "confirm_user_totp",
         "set_user_mfa_enrolled",
         "remove_training_prerequisite",
         "revoke_instructor_certification",

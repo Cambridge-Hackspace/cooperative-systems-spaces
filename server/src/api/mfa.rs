@@ -210,7 +210,9 @@ async fn totp_setup(
         return Err(ApiError::Forbidden("TOTP disabled".to_string()));
     }
     let secret = generate_totp_secret_base32();
-    state.db.replace_user_totp_unconfirmed(user.0.id, &secret)?;
+    // #120/#9: hold the new secret as pending if a confirmed factor exists, so
+    // an unconfirmed (or hijacked) setup cannot destroy the working one.
+    state.db.begin_totp_setup(user.0.id, &secret)?;
     let totp = state
         .mfa_service
         .totp(&secret, &user.0.email)
@@ -231,13 +233,21 @@ async fn totp_confirm(
         .db
         .get_user_totp(user.0.id)?
         .ok_or_else(|| ApiError::BadRequest("No TOTP setup in progress".to_string()))?;
+    // #120/#9: confirm against the pending secret when a setup is in progress
+    // over a live factor; otherwise the row's own (unconfirmed) secret. #120/#12:
+    // capture the matched step so the confirmation code cannot be replayed at the
+    // first login.
+    let verify_secret = stored
+        .pending_secret_base32
+        .as_deref()
+        .unwrap_or(&stored.secret_base32);
     if !state
         .mfa_service
-        .verify_totp(&stored.secret_base32, &user.0.email, req.code.trim())
+        .verify_totp(verify_secret, &user.0.email, req.code.trim())
     {
         return Err(ApiError::BadRequest("Invalid code".to_string()));
     }
-    state.db.confirm_user_totp(user.0.id)?;
+    state.db.finalize_totp_confirmation(user.0.id)?;
     state.db.recompute_user_mfa_enrolled(user.0.id)?;
 
     // Generate recovery codes on first enrollment so the user has a fallback.
@@ -579,14 +589,26 @@ fn verify_totp_path(
         .map_err(ApiError::from)?
         .filter(|t| t.confirmed_at.is_some())
         .ok_or_else(|| ApiError::Unauthorized("No confirmed TOTP for user".to_string()))?;
-    if state
+
+    // #120/#12: reject replay. verify_totp_step returns the matched time-step
+    // when a code is valid; a step at or below the last consumed one is the same
+    // code (or an older one still inside the window) being presented again.
+    let step = state
         .mfa_service
-        .verify_totp(&stored.secret_base32, &user.email, code)
-    {
-        Ok(())
-    } else {
-        Err(ApiError::Unauthorized("Invalid TOTP code".to_string()))
+        .verify_totp_step(&stored.secret_base32, &user.email, code)
+        .ok_or_else(|| ApiError::Unauthorized("Invalid TOTP code".to_string()))?;
+    if let Some(last) = stored.last_used_step {
+        if (step as i64) <= last {
+            return Err(ApiError::Unauthorized(
+                "This TOTP code has already been used".to_string(),
+            ));
+        }
     }
+    state
+        .db
+        .update_totp_last_used_step(user.id, step as i64)
+        .map_err(ApiError::from)?;
+    Ok(())
 }
 
 async fn verify_webauthn_path(

@@ -3517,35 +3517,100 @@ impl DatabaseManager {
 
     /// Replace any existing TOTP row for the user with a new unconfirmed one.
     /// Returns the freshly-inserted row.
-    pub fn replace_user_totp_unconfirmed(
+    /// Begin a TOTP setup (#120/#9). If a *confirmed* factor already exists, the
+    /// new secret is stored as `pending_secret_base32`, leaving the working
+    /// secret and its `confirmed_at` untouched -- so an abandoned or hijacked
+    /// setup can no longer destroy a live factor. If there is no confirmed factor
+    /// (first enrollment, or an earlier unconfirmed attempt) the row is written
+    /// with the new secret, unconfirmed, clearing any stale pending/step.
+    pub fn begin_totp_setup(
         &self,
         uid: uuid::Uuid,
         new_secret_base32: &str,
-    ) -> Result<crate::models::UserMfaTotp, DatabaseError> {
+    ) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            diesel::delete(user_mfa_totp.filter(user_id.eq(uid))).execute(conn)?;
-            let new_row = crate::models::NewUserMfaTotp {
-                user_id: uid,
-                secret_base32: new_secret_base32.to_string(),
-            };
-            diesel::insert_into(user_mfa_totp)
-                .values(&new_row)
-                .returning(crate::models::UserMfaTotp::as_returning())
-                .get_result(conn)
+            let existing: Option<crate::models::UserMfaTotp> = user_mfa_totp
+                .filter(user_id.eq(uid))
+                .select(crate::models::UserMfaTotp::as_select())
+                .first(conn)
+                .optional()?;
+            match existing {
+                Some(row) if row.confirmed_at.is_some() => {
+                    diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+                        .set((
+                            pending_secret_base32.eq(Some(new_secret_base32.to_string())),
+                            updated_at.eq(chrono::Utc::now()),
+                        ))
+                        .execute(conn)?;
+                }
+                Some(_) => {
+                    diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+                        .set((
+                            secret_base32.eq(new_secret_base32.to_string()),
+                            pending_secret_base32.eq(None::<String>),
+                            confirmed_at.eq(None::<chrono::DateTime<chrono::Utc>>),
+                            last_used_step.eq(None::<i64>),
+                            updated_at.eq(chrono::Utc::now()),
+                        ))
+                        .execute(conn)?;
+                }
+                None => {
+                    diesel::insert_into(user_mfa_totp)
+                        .values(crate::models::NewUserMfaTotp {
+                            user_id: uid,
+                            secret_base32: new_secret_base32.to_string(),
+                        })
+                        .execute(conn)?;
+                }
+            }
+            Ok(())
         })
         .map_err(DatabaseError::Diesel)
     }
 
-    pub fn confirm_user_totp(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
+    /// Promote a pending TOTP secret (if any) to the live secret and confirm it
+    /// (#120/#9). `last_used_step` resets to NULL: the replay watermark (#120/#12)
+    /// tracks *login* steps, and a freshly confirmed factor has consumed none.
+    pub fn finalize_totp_confirmation(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
-        // The row count is the answer, not a detail to discard.
-        // Enrolment was reported confirmed whether or not a row moved.
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let row: crate::models::UserMfaTotp = user_mfa_totp
+                .filter(user_id.eq(uid))
+                .select(crate::models::UserMfaTotp::as_select())
+                .first(conn)?;
+            let effective = row
+                .pending_secret_base32
+                .clone()
+                .unwrap_or_else(|| row.secret_base32.clone());
+            diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+                .set((
+                    secret_base32.eq(effective),
+                    pending_secret_base32.eq(None::<String>),
+                    confirmed_at.eq(Some(chrono::Utc::now())),
+                    last_used_step.eq(None::<i64>),
+                    updated_at.eq(chrono::Utc::now()),
+                ))
+                .execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Advance the replay watermark after a login TOTP verify (#120/#12). Reads
+    /// the row count so a vanished row is a NotFound, not a silent success.
+    pub fn update_totp_last_used_step(
+        &self,
+        uid: uuid::Uuid,
+        step: i64,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
         let affected = diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
             .set((
-                confirmed_at.eq(Some(chrono::Utc::now())),
+                last_used_step.eq(Some(step)),
                 updated_at.eq(chrono::Utc::now()),
             ))
             .execute(&mut conn)
@@ -3553,7 +3618,6 @@ impl DatabaseManager {
         if affected == 0 {
             return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
         }
-
         Ok(())
     }
 

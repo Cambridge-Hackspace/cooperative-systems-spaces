@@ -639,6 +639,8 @@ diesel::table! {
         confirmed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        pending_secret_base32 -> Nullable<Text>,
+        last_used_step -> Nullable<Int8>,
     }
 }
 

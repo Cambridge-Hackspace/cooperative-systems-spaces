@@ -182,6 +182,32 @@ impl MfaService {
             }
         }
     }
+
+    /// Verify a TOTP code and, on success, return the time-step it matched
+    /// (#120/#12), so the caller can reject a replay. `None` means no code in
+    /// the tolerance window (±skew steps around now) matched -- the same outcome
+    /// `verify_totp` reports as `false`, plus the step when it is a match.
+    pub fn verify_totp_step(&self, secret_base32: &str, account: &str, code: &str) -> Option<u64> {
+        let t = self.totp(secret_base32, account).ok()?;
+        let now = chrono::Utc::now().timestamp();
+        if now < 0 {
+            return None;
+        }
+        let now = now as u64;
+        let period = t.step.max(1);
+        let skew = t.skew as i64;
+        for delta in -skew..=skew {
+            let time = now as i64 + delta * period as i64;
+            if time < 0 {
+                continue;
+            }
+            let time = time as u64;
+            if t.generate(time) == code {
+                return Some(time / period);
+            }
+        }
+        None
+    }
 }
 
 fn prune_expired(map: &mut HashMap<String, StoredChallenge>) {
