@@ -2006,6 +2006,20 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         }
     }
 
+    // #120/M12: the toolguard profile field is interpolated into the card-lookup
+    // SQL (find_user_by_profile_field binds only the value, not the field name),
+    // so it must be a bare identifier. Refused at boot and reload rather than at
+    // the first card scan; the query itself has its own guard as defense in depth.
+    {
+        let f = &config.toolguard.profile_field;
+        if f.is_empty() || !f.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(anyhow::anyhow!(
+                "toolguard.profile_field must be a bare identifier ([A-Za-z0-9_]+); \
+                 it is interpolated into the card-lookup query. Got {f:?}."
+            ));
+        }
+    }
+
     // CORS switched on with nothing to allow. The same failure the email guard
     // above refuses, in a different subsystem: a capability turned on that
     // cannot do anything except mislead. Refused here rather than defaulted to

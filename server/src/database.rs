@@ -947,6 +947,23 @@ impl DatabaseManager {
         use diesel::dsl::sql;
         use diesel::sql_types::{Bool, Text};
 
+        // #120/M12: field_name is interpolated into the SQL below (only the value
+        // is bound), so it must be a bare identifier. It comes from config today
+        // (toolguard.profile_field) and is not remotely writable, but a stray
+        // quote would corrupt the query, and the interpolation becomes an
+        // injection the moment the field is ever admin-editable. Reject anything
+        // that is not ^[A-Za-z0-9_]+$ before it reaches the query. Checked before
+        // acquiring a connection so it holds even against a dead pool.
+        if field_name.is_empty()
+            || !field_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(DatabaseError::Other(format!(
+                "invalid profile field name (must be [A-Za-z0-9_]+): {field_name:?}"
+            )));
+        }
+
         let mut conn = self.get_connection()?;
 
         // Match either a scalar text value (`profile->>'field' = $1`) or a
@@ -6197,5 +6214,45 @@ mod overage_math_tests {
             &HashMap::new(),
         );
         assert_eq!(totals, vec![(c1, bd(0)), (c2, bd(0))]);
+    }
+}
+
+#[cfg(test)]
+mod profile_field_injection_tests {
+    use super::{DatabaseError, DatabaseManager};
+
+    #[test]
+    fn find_user_by_profile_field_rejects_a_non_identifier() {
+        // #120/M12: field_name is interpolated into the SQL, so a value that is
+        // not a bare identifier must be refused before it reaches the query. The
+        // guard runs before get_connection, so the disconnected fixture proves it
+        // without a database: a dead-pool error here would mean the guard let the
+        // value through. Mutation check: delete the guard and these hit the pool
+        // and fail with the wrong error.
+        let db = DatabaseManager::disconnected();
+        for bad in [
+            "",
+            "card'; DROP TABLE users; --",
+            "a b",
+            "profile->x",
+            "id)",
+        ] {
+            let err = db
+                .find_user_by_profile_field(bad, "x")
+                .expect_err("a non-identifier field name must be rejected");
+            assert!(
+                matches!(err, DatabaseError::Other(ref m) if m.contains("invalid profile field name")),
+                "expected the identifier-validation error for {bad:?}, got {err:?}"
+            );
+        }
+
+        // A valid identifier passes the guard and only then reaches the dead pool
+        // -- a DIFFERENT error -- proving the guard does not reject a legitimate
+        // field name.
+        let ok_err = db.find_user_by_profile_field("card_id", "x").unwrap_err();
+        assert!(
+            !matches!(ok_err, DatabaseError::Other(ref m) if m.contains("invalid profile field name")),
+            "a valid identifier was wrongly rejected by the guard: {ok_err:?}"
+        );
     }
 }
