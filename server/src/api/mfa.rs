@@ -124,7 +124,16 @@ pub struct MfaVerifyRequest {
 // ---------------------------------------------------------------------------
 
 fn require_enabled(state: &AppState) -> Result<(), ApiError> {
-    if !state.mfa_service.config().enabled {
+    // #120/#11: read the live, reloadable config -- not mfa_service.config(),
+    // which is frozen at startup. login (api/auth.rs) already gates the
+    // challenge on config_manager's auth.mfa.enabled; when this read used the
+    // startup value the two diverged on reload: turning MFA on issued a
+    // challenge that verify then 403'd (locking out every enrolled user), and
+    // turning it off let login skip MFA while enrollment still claimed it was
+    // on. Both sides now read the same source. (The mfa_service still supplies
+    // the TOTP/WebAuthn machinery, whose rp_id/origin are built at startup and
+    // still need a restart to change -- only the enabled gate hot-reloads.)
+    if !state.config_manager.get_config().auth.mfa.enabled {
         return Err(ApiError::Forbidden(
             "MFA is disabled in server configuration".to_string(),
         ));
@@ -480,6 +489,13 @@ async fn verify_login(
         .find_user_by_id(challenge.user_id)
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::Unauthorized("User no longer exists".to_string()))?;
+
+    // #120/L5: re-check is_active before completing the login. The password step
+    // (authenticate_user) checked it, but an account deactivated between issuing
+    // the challenge and verifying it would otherwise still be handed a token.
+    if !user.is_active {
+        return Err(ApiError::Unauthorized("Account is not active".to_string()));
+    }
 
     // #120/#8 (H7): throttle TOTP/recovery brute force. take_login already
     // consumed this challenge, but a fresh one is just another /login+/verify

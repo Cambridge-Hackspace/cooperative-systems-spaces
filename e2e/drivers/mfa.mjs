@@ -27,7 +27,7 @@
 import { createHmac } from 'node:crypto'
 
 import {
-  GET, POST, DELETE,
+  GET, POST, PUT, DELETE,
   account, adminAccount, login,
   assertEq, ok, record, main,
 } from './lib.mjs'
@@ -598,6 +598,25 @@ main(async () => {
     // delete the pin.
     'unspent recovery codes survive disabling the factor they belonged to',
   )
+
+  // #120/L5: an account deactivated between the password step and MFA verify
+  // must not be handed a token. Enroll, take a challenge, deactivate via admin,
+  // then verify with a VALID code -- the code is valid, so without the is_active
+  // re-check this would be a 200.
+  {
+    const l5 = await account('mfa_l5')
+    const { secret: l5secret } = await enrollTotp(l5.token)
+    const l5tok = await challengeFor(l5.username, 'l5')
+    const l5admin = await adminAccount('mfa_l5_admin')
+    const deact = await PUT(`/api/users/${l5.user.id}`, {
+      token: l5admin.token,
+      body: { is_active: false },
+    })
+    assertEq('mfa/l5-deactivate-setup', 200, deact.status, `deactivate -> ${deact.status}`)
+    const l5res = await verify({ challenge_token: l5tok, method: 'totp', code: totpCode(l5secret) })
+    ok('mfa/l5-deactivated-user-cannot-complete-mfa', l5res.status !== 200,
+      `a deactivated user completed MFA with a valid code (${l5res.status})`)
+  }
 
   // #120/H8: a recovery code is single-use even under concurrency. Two logins
   // presenting the SAME code at once must not both succeed -- before the
