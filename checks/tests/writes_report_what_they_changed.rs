@@ -76,13 +76,14 @@ const WRITERS: &[Writer] = &[
     Writer {
         name: "add_reported_seconds",
         exempt: Some(
-            "Accumulates metered tool usage onto an OPEN session, which the \
-                      method loads and checks first. A zero-row update means the \
-                      session closed between that load and this write (a race); \
-                      the usage simply is not accumulated, and the settle path \
-                      still bounds the charge by wall-clock and the max cap, so a \
-                      miss cannot over-bill -- there is no wrong decision to make \
-                      from the count.",
+            "Accumulates metered tool usage onto an OPEN session in a single \
+                      atomic UPDATE (COALESCE(reported_seconds,0) + $n WHERE \
+                      status='open'); #120/M13 removed the read-modify-write that \
+                      let concurrent reports clobber each other. A zero-row update \
+                      means the session is no longer open, so nothing accumulates, \
+                      and the settle path still bounds the charge by wall-clock and \
+                      the max cap -- there is no wrong decision to make from the \
+                      count.",
         ),
     },
     Writer {

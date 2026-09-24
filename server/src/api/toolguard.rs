@@ -542,12 +542,21 @@ async fn tool_on(
         }
     }
 
-    state
+    // #120/M2: atomic Idle->InUse. If another request won the race between the
+    // status check above and here, deny as already-in-use rather than writing a
+    // duplicate activation and event. (For a metered tool the open-session unique
+    // index already blocked the double; this closes the window for non-metered
+    // tools, which have no session to serialize on.)
+    let activated = state
         .db
-        .update_tool_status(tool.id, &crate::models::ToolStatus::InUse)
-        .map_err(|e| {
-            ApiError::InternalServerError(format!("Failed to update tool status: {}", e))
-        })?;
+        .try_activate_tool(tool.id)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to activate tool: {}", e)))?;
+    if !activated {
+        log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use").await?;
+        return Ok(Json(ToolGuardResponse::tool_denied(
+            "Tool is already in use",
+        )));
+    }
 
     use crate::models::NewToolEvent;
     let event = NewToolEvent {
@@ -744,6 +753,30 @@ async fn tool_log(
                 return Ok(Json(ToolGuardResponse::error(
                     "Metered tool requires its own API key",
                 )));
+            }
+            // #120/M1: a billable usage report must come from the card of the
+            // member who activated the session -- otherwise a found or stray card
+            // could inflate someone else's billed usage. The open session (not the
+            // tool) holds the activator. Note this guards *reporting*, not
+            // stopping: tool-off stays open to any card so anyone can cut power
+            // for safety.
+            if let Some(session) = state
+                .db
+                .open_tool_session_for_tool(tool.id)
+                .map_err(ApiError::from)?
+            {
+                if session.user_id != user.id {
+                    log_tool_access_denied(
+                        &state,
+                        Some(&user),
+                        &req.tool_id,
+                        "Usage report from a card that did not activate this session",
+                    )
+                    .await?;
+                    return Ok(Json(ToolGuardResponse::error(
+                        "This card did not activate the tool",
+                    )));
+                }
             }
             let applied = billing
                 .record_usage(tool.id, req.seconds)

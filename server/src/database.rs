@@ -866,6 +866,29 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Atomically transition a tool from Idle to InUse (#120/M2). Returns true
+    /// iff this call made the transition; false means the row was not Idle -- a
+    /// concurrent activation already won, or the status changed. tool_on checked
+    /// tool.status on a loaded row and then called the unconditional
+    /// update_tool_status, a check-then-act that let two requests both activate;
+    /// this compare-and-set closes that window.
+    pub fn try_activate_tool(&self, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(
+            tools
+                .filter(id.eq(tool_id))
+                .filter(status.eq(crate::models::ToolStatus::Idle)),
+        )
+        .set((
+            status.eq(crate::models::ToolStatus::InUse),
+            updated_at.eq(chrono::Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(affected == 1)
+    }
+
     /// Find user by ID
     pub fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, DatabaseError> {
         let mut conn = self.get_connection()?;
@@ -4314,25 +4337,27 @@ impl DatabaseManager {
         seconds: bigdecimal::BigDecimal,
     ) -> Result<(), DatabaseError> {
         use crate::schema::tool_usage_sessions::dsl::*;
+        use diesel::dsl::sql;
+        use diesel::sql_types::Numeric;
         let mut conn = self.get_connection()?;
-        // COALESCE(reported_seconds, 0) + seconds, in Rust to keep the query simple.
-        let current: Option<Option<bigdecimal::BigDecimal>> = tool_usage_sessions
-            .filter(id.eq(session_id))
-            .filter(status.eq("open"))
-            .select(reported_seconds)
-            .first(&mut conn)
-            .optional()
-            .map_err(DatabaseError::Diesel)?;
-        let Some(existing) = current else {
-            return Ok(()); // not open (or gone) -- nothing to accumulate
-        };
-        let total = existing.unwrap_or_else(|| bigdecimal::BigDecimal::from(0)) + seconds;
+        // #120/M13: accumulate in a single atomic UPDATE
+        // (COALESCE(reported_seconds, 0) + $n) rather than SELECT-add-in-Rust-then-
+        // UPDATE. The read-modify-write let two concurrent device reports on the
+        // same session read the same base and clobber each other, underbilling by
+        // one report -- directly gameable by parallel reporting. A zero-row update
+        // means the session is no longer open, so nothing accumulates (the settle
+        // path bounds the charge by wall-clock and the cap regardless).
         diesel::update(
             tool_usage_sessions
                 .filter(id.eq(session_id))
                 .filter(status.eq("open")),
         )
-        .set(reported_seconds.eq(total))
+        .set(
+            reported_seconds.eq(sql::<diesel::sql_types::Nullable<Numeric>>(
+                "COALESCE(reported_seconds, 0) + ",
+            )
+            .bind::<Numeric, _>(seconds)),
+        )
         .execute(&mut conn)
         .map_err(DatabaseError::Diesel)?;
         Ok(())
