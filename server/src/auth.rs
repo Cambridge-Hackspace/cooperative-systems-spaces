@@ -22,6 +22,12 @@ pub struct Claims {
     pub iat: usize,  // Issued at
     pub user_id: Uuid,
     pub username: String,
+    /// Session-revocation epoch (#120/M9), checked against users.token_version
+    /// on every request. `serde(default)` so a token minted before this field
+    /// existed decodes as 0 and still matches an unbumped account -- no forced
+    /// logout on deploy; only a credential change (which bumps the row) revokes.
+    #[serde(default)]
+    pub token_version: i32,
 }
 
 impl Claims {
@@ -41,6 +47,7 @@ impl Claims {
             iat: Utc::now().timestamp() as usize,
             user_id: user.id,
             username: user.username.clone(),
+            token_version: user.token_version,
         };
 
         let token = encode(
@@ -223,6 +230,13 @@ impl<'a> AuthService<'a> {
 
         if !user.is_active {
             return Err(AuthError::UserInactive);
+        }
+
+        // #120/M9: reject a token minted before the user's current epoch. A
+        // password change bumps users.token_version, so a session issued before
+        // it is refused here even though the JWT signature is still valid.
+        if claims.token_version != user.token_version {
+            return Err(AuthError::InvalidToken);
         }
 
         Ok(user)
@@ -460,6 +474,7 @@ mod token_ttl_tests {
             stripe_customer_id: None,
             stripe_subscription_id: None,
             subscription_status: None,
+            token_version: 0,
         }
     }
 
@@ -480,5 +495,17 @@ mod token_ttl_tests {
                 "a {hours}h token lived {ttl}s, expected ~{want}s"
             );
         }
+    }
+
+    #[test]
+    fn a_token_carries_and_round_trips_the_epoch() {
+        // #120/M9: Claims must carry user.token_version so the extractor can
+        // compare it against the row on every request. Mutation check: drop
+        // token_version from Claims::new and this reads back 0 instead of 7.
+        let mut user = sample_user();
+        user.token_version = 7;
+        let token = Claims::new(&user, "test-secret", 1).expect("mints a token");
+        let claims = Claims::verify_token(&token, "test-secret").expect("verifies");
+        assert_eq!(claims.token_version, 7);
     }
 }

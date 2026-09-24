@@ -86,6 +86,7 @@ fn user_from(v: &Value, profile_field: &str) -> User {
         stripe_customer_id: None,
         stripe_subscription_id: None,
         subscription_status: None,
+        token_version: 0,
     }
 }
 

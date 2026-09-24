@@ -520,6 +520,7 @@ diesel::table! {
         stripe_customer_id -> Nullable<Text>,
         stripe_subscription_id -> Nullable<Text>,
         subscription_status -> Nullable<Text>,
+        token_version -> Int4,
     }
 }
 

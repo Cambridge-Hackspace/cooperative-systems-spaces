@@ -1145,11 +1145,26 @@ impl DatabaseManager {
         // Role is no longer a `users` column; the tier role lives in `user_roles`
         // and is set via `set_user_primary_role`. This only touches profile/
         // status/etc. fields.
-        diesel::update(users::table.filter(users::id.eq(user_id)))
-            .set(&updates)
-            .returning(User::as_returning())
-            .get_result::<User>(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        //
+        // #120/M9: any password change revokes live sessions. Every write that
+        // sets password_hash -- self-service change, admin reset, or a reset
+        // token -- comes through here, so bumping token_version in the same
+        // transaction is the one place that cannot be forgotten. Updates that do
+        // not touch the password leave token_version alone.
+        conn.transaction::<User, diesel::result::Error, _>(|conn| {
+            let user = diesel::update(users::table.filter(users::id.eq(user_id)))
+                .set(&updates)
+                .returning(User::as_returning())
+                .get_result::<User>(conn)?;
+            if updates.password_hash.is_some() {
+                return diesel::update(users::table.filter(users::id.eq(user_id)))
+                    .set(users::token_version.eq(users::token_version + 1))
+                    .returning(User::as_returning())
+                    .get_result::<User>(conn);
+            }
+            Ok(user)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Update user profile only

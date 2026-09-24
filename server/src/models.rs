@@ -138,6 +138,12 @@ pub struct User {
     /// Last-seen Stripe subscription status, kept for display only. The ledger
     /// balance -- not this -- is the entitlement gate.
     pub subscription_status: Option<String>,
+    /// Session-revocation epoch (#120/M9). Every issued JWT carries this value;
+    /// the auth extractor rejects a token whose version does not match, and a
+    /// password change (self-service, admin reset, or reset token) bumps it,
+    /// invalidating every session minted before the change. Last field for the
+    /// positional-Queryable reason the columns above document.
+    pub token_version: i32,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -804,6 +810,7 @@ mod user_serialization_tests {
             stripe_customer_id: None,
             stripe_subscription_id: None,
             subscription_status: None,
+            token_version: 0,
         };
 
         let value = serde_json::to_value(&user).expect("User serializes");

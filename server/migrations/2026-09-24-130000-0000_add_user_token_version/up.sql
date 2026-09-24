@@ -1,0 +1,14 @@
+-- #120/M9: session revocation on credential change.
+--
+-- Tokens are stateless JWTs, so a password reset triggered by a suspected
+-- compromise could not invalidate the attacker's existing token -- it stayed
+-- valid until it expired. This adds a per-user epoch: every issued token carries
+-- the user's token_version, the auth extractor rejects any token whose version
+-- does not match, and a password change (self-service, admin reset, or a reset
+-- token) bumps it -- so every session issued before the change dies at once.
+--
+-- Appended last: `users` is loaded positionally (see the User model), and the
+-- Rust struct adds token_version as its final field to match. DEFAULT 0 so
+-- existing rows -- and pre-deploy tokens, which decode a missing token_version
+-- as 0 via serde default -- continue to match until the next credential change.
+ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;

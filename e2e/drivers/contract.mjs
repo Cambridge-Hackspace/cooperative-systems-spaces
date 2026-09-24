@@ -454,6 +454,25 @@ main(async () => {
   assertEq('contract/case-variant-email-refused', 409, variantReg.status,
     `a case-variant of an existing email must be refused (got ${variantReg.status})`)
 
+  // #120/M9: a password change revokes live sessions. Log in, confirm the token
+  // works, change the password with that same token, then the OLD token must be
+  // refused (401) on a protected endpoint -- token_version was bumped. Without
+  // the epoch the old token stays valid until expiry, so the last assertion 200s.
+  const revUser = await account('revoke')
+  const oldToken = revUser.token
+  const meBefore = await GET('/api/auth/me', { token: oldToken })
+  assertEq('contract/revoke-token-valid-before', 200, meBefore.status,
+    `me before -> ${meBefore.status}`)
+  const revChanged = await PUT(`/api/users/${revUser.user.id}`, {
+    token: oldToken,
+    body: { current_password: PASSWORD, password: 'revoke-newpass-9999' },
+  })
+  assertEq('contract/revoke-password-changed', 200, revChanged.status,
+    `change -> ${revChanged.status}`)
+  const meAfter = await GET('/api/auth/me', { token: oldToken })
+  assertEq('contract/revoke-old-token-rejected-after', 401, meAfter.status,
+    `old token after password change -> ${meAfter.status} (M9 revocation)`)
+
   // Deleting the accounts this run created, through the shipping path, so a
   // cluster without rollback does not accumulate them across runs.
   for (const u of [newbie, admin]) {
