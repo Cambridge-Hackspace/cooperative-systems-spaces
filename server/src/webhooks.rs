@@ -6,6 +6,7 @@
 //! reusable auth headers, POST it with bounded retries, and record every
 //! attempt in `webhook_deliveries`.
 
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +30,12 @@ type HmacSha256 = Hmac<Sha256>;
 const MAX_ATTEMPTS: u32 = 3;
 /// Per-request HTTP timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// AWS IMDSv6 metadata address (mirrors `api::webhooks`). fd00:ec2::254.
+const AWS_IMDS_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x254);
+/// Cap on how much of a receiver's response we read into memory. Only 4096
+/// bytes are ever stored (see `recordable_body`); this bounds the *read* so a
+/// receiver answering with gigabytes cannot exhaust memory before we truncate.
+const MAX_RESPONSE_READ: usize = 64 * 1024;
 
 /// Generate a random per-webhook signing secret.
 pub fn generate_signing_secret() -> String {
@@ -166,10 +173,46 @@ impl WebhookDispatcher {
         // Build the static header set once; reused across attempts.
         let headers = self.build_headers(webhook, event_type, &signature);
 
+        // #120 (#16): resolve the host and screen every address it maps to
+        // *before* sending, refusing anything that resolves to a link-local or
+        // cloud-metadata address. `validate_url` at creation only inspects the
+        // URL literal, so a hostname whose A record is 169.254.169.254 slips
+        // past it; only resolution catches that. On refusal we record one failed
+        // attempt (so the admin sees why) and stop.
+        let (host, resolved) = match resolve_and_screen(&webhook.url).await {
+            Ok(v) => v,
+            Err(reason) => {
+                self.record(NewWebhookDelivery {
+                    webhook_id: webhook.id,
+                    audit_log_id,
+                    event_type: event_type.to_string(),
+                    attempt: 1,
+                    success: false,
+                    status_code: None,
+                    response_body: None,
+                    error: Some(reason.clone()),
+                    request_payload: Some(payload.clone()),
+                });
+                warn!("Webhook '{}' delivery refused: {}", webhook.name, reason);
+                return Err(reason);
+            }
+        };
+
+        // Pin the client to the exact addresses we screened, so reqwest does not
+        // re-resolve at connect time and land on an address we rejected (the
+        // DNS-rebinding gap the literal check cannot close).
+        let client = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .resolve_to_addrs(&host, &resolved)
+            .build()
+            .unwrap_or_else(|e| {
+                warn!("Failed to build pinned webhook client ({e}); using shared client");
+                self.http.clone()
+            });
+
         let mut last_err = String::from("no attempts made");
         for attempt in 1..=MAX_ATTEMPTS {
-            let result = self
-                .http
+            let result = client
                 .post(&webhook.url)
                 .headers(headers.clone())
                 .body(body.clone())
@@ -180,7 +223,7 @@ impl WebhookDispatcher {
                 Ok(resp) => {
                     let status = resp.status();
                     let code = status.as_u16() as i32;
-                    let text = resp.text().await.unwrap_or_default();
+                    let text = read_body_capped(resp).await;
                     let debug = self.config.get_config().site.debug;
                     let body = recordable_body(debug, status.is_success(), &text);
                     if status.is_success() {
@@ -341,6 +384,82 @@ pub fn recordable_body(debug: bool, success: bool, text: &str) -> Option<String>
     Some(truncate(text, 4096))
 }
 
+/// True for an IP a webhook must never reach: link-local (v4 169.254.0.0/16,
+/// v6 fe80::/10) and the cloud-metadata addresses that live there. Mirrors
+/// `api::webhooks::is_link_local`, but over a *resolved* `IpAddr` rather than a
+/// URL literal -- the whole point of #120 (#16). RFC1918 and loopback stay
+/// permitted, deliberately and consistently with the literal check: a hackspace
+/// webhook legitimately addresses a box on its own LAN.
+fn ip_is_forbidden(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            // A v4-mapped address (::ffff:a.b.c.d) is really an IPv4 destination;
+            // screen it as one so ::ffff:169.254.169.254 cannot sneak through.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_link_local();
+            }
+            (v6.segments()[0] & 0xffc0) == 0xfe80 || v6 == AWS_IMDS_V6
+        }
+    }
+}
+
+/// Resolve the webhook host and confirm every address it maps to is permitted,
+/// returning the host and the screened socket addresses to pin the client to.
+/// Returns `Err(reason)` when the host is missing, does not resolve, or resolves
+/// (even in part) to a forbidden address -- refusing to send rather than letting
+/// reqwest re-resolve at connect time.
+async fn resolve_and_screen(url: &str) -> Result<(String, Vec<SocketAddr>), String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "URL has no known port".to_string())?;
+
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| format!("could not resolve {host}: {e}"))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(format!("{host} resolved to no addresses"));
+    }
+    if let Some(bad) = addrs.iter().find(|a| ip_is_forbidden(a.ip())) {
+        return Err(format!(
+            "{host} resolves to a blocked address ({}); refusing delivery",
+            bad.ip()
+        ));
+    }
+    Ok((host, addrs))
+}
+
+/// Read at most [`MAX_RESPONSE_READ`] bytes of a response body. The receiver is
+/// untrusted and so is its `Content-Length`; `resp.text()` would buffer the
+/// whole thing first. We only ever store 4096 bytes, so reading past a small
+/// bound serves nothing and risks memory exhaustion.
+async fn read_body_capped(mut resp: reqwest::Response) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    while buf.len() < MAX_RESPONSE_READ {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let room = MAX_RESPONSE_READ - buf.len();
+                if chunk.len() <= room {
+                    buf.extend_from_slice(&chunk);
+                } else {
+                    buf.extend_from_slice(&chunk[..room]);
+                    break; // hit the cap mid-chunk; stop reading the rest
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
@@ -408,5 +527,64 @@ mod tests {
         let body = "é".repeat(4000);
         let kept = recordable_body(true, false, &body).expect("kept");
         assert!(kept.ends_with("…[truncated]"));
+    }
+
+    // #120 (#16): the SSRF screen over a resolved address.
+    mod ssrf_screen {
+        use super::super::{ip_is_forbidden, resolve_and_screen};
+        use std::net::IpAddr;
+
+        #[test]
+        fn resolved_metadata_and_link_local_addresses_are_refused() {
+            for s in [
+                "169.254.169.254",        // AWS/GCP/Azure IMDS (v4 link-local)
+                "169.254.0.1",            // link-local generally
+                "fe80::1",                // v6 link-local
+                "fd00:ec2::254",          // AWS IMDSv6
+                "::ffff:169.254.169.254", // v4-mapped link-local
+            ] {
+                let ip: IpAddr = s.parse().unwrap();
+                assert!(ip_is_forbidden(ip), "{s} must be refused");
+            }
+        }
+
+        #[test]
+        fn resolved_lan_and_public_addresses_are_allowed() {
+            // Consistent with validate_url's deliberate decision: LAN and
+            // loopback destinations are a legitimate hackspace use case.
+            for s in [
+                "10.0.0.9",
+                "192.168.1.50",
+                "172.16.4.4",
+                "127.0.0.1",
+                "8.8.8.8",
+                "fd12:3456::1",
+            ] {
+                let ip: IpAddr = s.parse().unwrap();
+                assert!(!ip_is_forbidden(ip), "{s} must be allowed");
+            }
+        }
+
+        // A URL whose *literal* host is a metadata address is refused at
+        // resolution -- exercising resolve_and_screen end to end without needing
+        // a controlled DNS server (an IP literal does not hit DNS). It does not,
+        // by itself, prove the DNS-name case; that is covered by the fact that
+        // resolution now runs at all plus the ip_is_forbidden oracle above.
+        #[tokio::test]
+        async fn a_metadata_literal_is_refused_at_resolution() {
+            let err = resolve_and_screen("http://169.254.169.254/latest/meta-data/")
+                .await
+                .expect_err("must refuse a metadata address");
+            assert!(err.contains("blocked"), "unexpected reason: {err}");
+        }
+
+        #[tokio::test]
+        async fn a_lan_literal_resolves_and_screens_clean() {
+            let (host, addrs) = resolve_and_screen("http://10.0.0.9:8080/hook")
+                .await
+                .expect("a LAN address is permitted");
+            assert_eq!(host, "10.0.0.9");
+            assert!(addrs.iter().all(|a| a.ip().to_string() == "10.0.0.9"));
+        }
     }
 }
