@@ -47,6 +47,7 @@ impl Default for MqttConfig {
 pub mod bypass;
 pub mod capabilities;
 pub mod card_crypto;
+pub mod ct;
 pub mod nav;
 pub mod wire;
 

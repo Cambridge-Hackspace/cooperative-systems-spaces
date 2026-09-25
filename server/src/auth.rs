@@ -333,7 +333,9 @@ where
             .strip_prefix("Bearer ")
             .ok_or(AuthError::InvalidToken)?;
 
-        let (device_id, token_value) = app_state
+        // find_device_by_auth_token returns the stored *hash* (#120/#14); keep the
+        // plaintext the device presented as the token here, never the digest.
+        let (device_id, _) = app_state
             .db
             .find_device_by_auth_token(token)
             .map_err(|_| AuthError::InternalError)?
@@ -341,7 +343,7 @@ where
 
         Ok(DeviceAuth {
             device_id,
-            token: token_value,
+            token: token.to_string(),
         })
     }
 }

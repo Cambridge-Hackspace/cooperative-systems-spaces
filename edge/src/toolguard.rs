@@ -180,7 +180,9 @@ impl ToolGuardState {
         let user = match state
             .users
             .iter()
-            .find(|u| u.profile_field_digest == presented)
+            // #120 (#14 / L1): constant-time digest comparison, on principle --
+            // the presented card digest is a credential and `==` short-circuits.
+            .find(|u| css_lib::ct::constant_time_str_eq(&u.profile_field_digest, &presented))
         {
             Some(u) => u,
             None => return AccessResult::UnknownCard,

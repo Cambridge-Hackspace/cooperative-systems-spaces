@@ -411,19 +411,14 @@ async fn tool_on(
     // a CI artifact and readable by anyone who can reach the container host.
     tracing::info!("Tool on request: tool_id={}", req.tool_id);
 
-    let tool_for_key_check = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    if !validate_api_key(
-        &state,
-        req.api_key.as_deref().unwrap_or(""),
-        tool_for_key_check.as_ref(),
-    )
-    .await?
-    {
-        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
-        return Ok(Json(ToolGuardResponse::tool_denied(
-            "Invalid or missing API key",
-        )));
-    }
+    // #120 (#14): authentication already happened in authorize_toolguard above
+    // (a device token bound to this tool, or a valid per-tool/global API key).
+    // The second validate_api_key gate that used to stand here was the dead
+    // double-auth the review flagged -- it demanded an API key even from a device
+    // that had already authenticated by bound Bearer token, so the device path
+    // could never succeed. Metered tools keep their own stricter key check
+    // (metered_key_ok) below.
+    let tool_lookup = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
 
     // The card's id travels with the user; its *code* does not. The id says
     // which credential was presented -- everything an operator reading the
@@ -457,7 +452,7 @@ async fn tool_on(
         return Ok(Json(ToolGuardResponse::tool_denied("User is not active")));
     }
 
-    let tool = match tool_for_key_check {
+    let tool = match tool_lookup {
         Some(t) => t,
         None => {
             log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool not found").await?;
@@ -606,10 +601,9 @@ async fn tool_off(
     tracing::info!("Tool off request: tool_id={}", req.tool_id);
 
     let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
-        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
-        return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
-    }
+    // #120 (#14): authenticated by authorize_toolguard above; the dead
+    // double-auth gate that stood here (an API key required even from an
+    // already-authenticated bound device) is removed. See tool_on.
 
     // Settle/report path: an already-open session must still close even if the
     // card was disabled or released mid-use, so both Active and Revoked resolve
@@ -711,10 +705,9 @@ async fn tool_log(
     );
 
     let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
-        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
-        return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
-    }
+    // #120 (#14): authenticated by authorize_toolguard above; the dead
+    // double-auth gate that stood here (an API key required even from an
+    // already-authenticated bound device) is removed. See tool_on.
 
     // Settle/report path: an already-open session must still close even if the
     // card was disabled or released mid-use, so both Active and Revoked resolve
@@ -1326,13 +1319,23 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
 ///
 /// Two accepted credentials, in cost order:
 ///
-/// 1. A registered device's Bearer token. This is the normal path: the edge
-///    already sends `bearer_auth` on all three of these calls, so it needed no
-///    change to keep working — the server was simply discarding a credential
-///    it was being given.
+/// 1. A registered device's Bearer token (stored hashed since #120/#14). For a
+///    per-tool operation the device must be *bound to that tool* through
+///    `tool_modules` (#104): a reader wired to one tool cannot energise another
+///    with its own token. Device-wide operations (`sync`, `boot_reset`, called
+///    with an empty `toolguard_id`) need only a valid token. The edge already
+///    sends `bearer_auth` on all three per-tool calls.
 /// 2. A per-tool `external_api_key` or the global `toolguard.global_api_key`,
-///    for controllers that authenticate that way instead. Checked second
-///    because it needs a database round-trip to resolve the tool first.
+///    for controllers that authenticate that way instead (constant-time
+///    compared, #14/L1). Checked second because it needs a database round-trip
+///    to resolve the tool first.
+///
+/// This is the single authentication point for these endpoints: the redundant
+/// second `validate_api_key` gate that `tool_on`/`tool_off`/`tool_log` used to
+/// run after calling this — which demanded an API key even from an
+/// already-authenticated bound device, making the device path dead — has been
+/// removed (#14). Metered tools additionally require their own key at report
+/// time via [`metered_key_ok`], a separate billing-integrity check.
 async fn authorize_toolguard(
     state: &AppState,
     headers: &HeaderMap,
@@ -1340,7 +1343,27 @@ async fn authorize_toolguard(
     toolguard_id: &str,
 ) -> Result<(), ApiError> {
     match extract_device_auth(state, headers).await {
-        Ok(_) => return Ok(()),
+        Ok((device_id, _)) => {
+            // #120 (#14): a device token authorizes device-wide operations
+            // (sync, boot-reset -- called with an empty toolguard_id)
+            // unconditionally, but a per-tool operation only for a tool this
+            // device is actually bound to (tool_modules, #104). A reader wired to
+            // one tool therefore cannot energise another with its own valid
+            // token. A non-bound device falls through to the API-key path below.
+            if toolguard_id.is_empty() {
+                return Ok(());
+            }
+            if let Some(tool) = find_tool_by_toolguard_id(state, toolguard_id).await? {
+                // `?` converts a DatabaseError through the classified
+                // From<DatabaseError> impl rather than a bare 500 -- a genuine DB
+                // fault here is ours (500), but the classification stays in the
+                // one place that owns it (api/errors.rs), per the blanket-500
+                // ratchet.
+                if state.db.device_is_bound_to_tool(device_id, tool.id)? {
+                    return Ok(());
+                }
+            }
+        }
         // A database fault must stay a database fault. Folding it into "not
         // authenticated" would report an outage as a credential problem and
         // send whoever is holding a dead tool looking in the wrong place.
@@ -1371,7 +1394,11 @@ async fn authorize_toolguard(
 /// design, an unbillable/forgeable metered tool is refused rather than trusted.
 fn metered_key_ok(api_key: Option<&str>, tool: &crate::models::Tool) -> bool {
     match (api_key, tool.external_api_key.as_deref()) {
-        (Some(provided), Some(tool_key)) => !tool_key.is_empty() && provided == tool_key,
+        (Some(provided), Some(tool_key)) => {
+            // #120 (#14 / L1): constant-time compare so the check does not leak,
+            // through timing, how many leading bytes of a guessed key are right.
+            !tool_key.is_empty() && css_lib::ct::constant_time_str_eq(provided, tool_key)
+        }
         _ => false,
     }
 }
@@ -1385,15 +1412,18 @@ async fn validate_api_key(
     if api_key.is_empty() {
         return Ok(false);
     }
+    // #120 (#14 / L1): constant-time key comparisons (both the per-tool key and
+    // the shared global key), so a timing side-channel cannot recover either.
     if let Some(tool) = tool {
         if let Some(tool_api_key) = &tool.external_api_key {
-            if !tool_api_key.is_empty() && tool_api_key == api_key {
+            if !tool_api_key.is_empty() && css_lib::ct::constant_time_str_eq(tool_api_key, api_key)
+            {
                 return Ok(true);
             }
         }
     }
     if let Some(global_key) = &config.toolguard.global_api_key {
-        if !global_key.is_empty() && global_key == api_key {
+        if !global_key.is_empty() && css_lib::ct::constant_time_str_eq(global_key, api_key) {
             return Ok(true);
         }
     }

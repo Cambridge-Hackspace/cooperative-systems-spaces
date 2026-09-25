@@ -2864,7 +2864,12 @@ impl DatabaseManager {
     // ── ToolGuard ────────────────────────────────────────────────────────────
 
     /// Look up a device by its auth token.
-    /// Returns (device_id, token) if found.
+    /// Returns (device_id, stored_hash) if found.
+    ///
+    /// #120 (#14): the column stores `SHA-256(token)`, not the token itself, so a
+    /// database read (backup, dump, stray SELECT) no longer yields a working
+    /// credential for every device. The presented plaintext is hashed here and
+    /// the lookup is by hash -- still one indexed equality, so no scan.
     pub fn find_device_by_auth_token(
         &self,
         token: &str,
@@ -2873,9 +2878,10 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
+        let token_hash = crate::tokens::hash_token(token);
         let result = space_device_auth::table
             .inner_join(space_devices::table)
-            .filter(space_device_auth::auth_token.eq(token))
+            .filter(space_device_auth::auth_token.eq(token_hash))
             .filter(space_devices::deleted_at.is_null())
             .select((space_device_auth::device_id, space_device_auth::auth_token))
             .first::<(uuid::Uuid, String)>(&mut conn)
@@ -2883,6 +2889,32 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)?;
 
         Ok(result)
+    }
+
+    /// Whether a device is bound to a specific tool through `tool_modules`.
+    ///
+    /// #120 (#14): a device's Bearer token authorizes tool operations only for
+    /// the tools that device is actually wired to. This is the same binding that
+    /// scopes the device's sync payload (#104), applied to actuation so a reader
+    /// for one tool cannot energise another by presenting its own valid token.
+    pub fn device_is_bound_to_tool(
+        &self,
+        device_id: uuid::Uuid,
+        tool_id: uuid::Uuid,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_modules;
+        use diesel::dsl::exists;
+        use diesel::select;
+
+        let mut conn = self.get_connection()?;
+
+        select(exists(
+            tool_modules::table
+                .filter(tool_modules::device_id.eq(device_id))
+                .filter(tool_modules::tool_id.eq(tool_id)),
+        ))
+        .get_result::<bool>(&mut conn)
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Return the IDs of all non-deleted devices (for MQTT broadcast).

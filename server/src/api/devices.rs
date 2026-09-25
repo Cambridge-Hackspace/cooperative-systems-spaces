@@ -277,13 +277,15 @@ pub async fn register_device(
         .values(&new_device)
         .get_result(conn)?;
 
-    // Generate auth token (using UUID for now, could use JWT or other token format)
-    let auth_token = Uuid::new_v4().to_string();
+    // #120 (#14): generate a 256-bit token, store only its SHA-256, and return
+    // the plaintext to the device once here. A database read never yields a
+    // working device credential again. (Was a raw UUID stored in the clear.)
+    let (auth_token, auth_token_hash) = crate::tokens::generate_token();
 
     // Create device auth
     let new_auth = NewSpaceDeviceAuth {
         device_id: device.id,
-        auth_token: auth_token.clone(),
+        auth_token: auth_token_hash,
     };
 
     diesel::insert_into(space_device_auth::table)
@@ -633,8 +635,12 @@ async fn handle_device_ws(
     tracing::info!("WebSocket: device {} connected", device_id);
 
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::unbounded_channel::<WireMessage>();
-    state.device_registry.register(device_id, mpsc_tx);
+    let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::channel::<WireMessage>(
+        crate::devices_transport::DEVICE_CHANNEL_CAPACITY,
+    );
+    // #120 (#15): keep this connection's epoch so teardown only unregisters our
+    // own sender, never a reconnect that has since taken the slot.
+    let epoch = state.device_registry.register(device_id, mpsc_tx);
 
     // Writer task — drains the mpsc and sends pings every 15s.
     let writer_handle = tokio::spawn(async move {
@@ -708,7 +714,7 @@ async fn handle_device_ws(
         }
     }
 
-    state.device_registry.unregister(device_id);
+    state.device_registry.unregister(device_id, epoch);
     writer_handle.abort();
     tracing::info!("WebSocket: device {} disconnected", device_id);
 }
