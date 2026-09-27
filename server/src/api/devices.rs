@@ -338,10 +338,18 @@ pub async fn register_device(
             "Providing MQTT config to device: url={}",
             mqtt.mqtt_instance_url
         );
+        // #120 (#121/CR1): hand the device ITS OWN broker credentials -- its UUID
+        // as the username and its auth token as the password -- never the
+        // server's shared credential. This is what lets the broker enforce
+        // per-device topic ACLs (a device may pub/sub only under its own UUID),
+        // so one compromised controller can no longer drive or impersonate the
+        // whole fleet. The broker must be configured to authenticate these
+        // per-device creds and apply the ACLs (see docs/mqtt-broker-security.md);
+        // the server's own mqtt_username/password never leave the server.
         EdgeMqttConfig {
             mqtt_instance_url: mqtt.mqtt_instance_url,
-            mqtt_username: mqtt.mqtt_username,
-            mqtt_password: mqtt.mqtt_password,
+            mqtt_username: Some(device.id.to_string()),
+            mqtt_password: Some(auth_token.clone()),
             mqtt_namespace: mqtt.mqtt_namespace,
         }
     });
