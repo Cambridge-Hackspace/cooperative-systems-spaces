@@ -593,18 +593,39 @@ async fn add_rule(
     // its window is active), but it *requires* a schedule: an unscheduled
     // open-access rule would hold the door unlocked forever -- defeating access
     // control and leaving no window end to push to the edge as `hold_unlock_until`.
-    let value = if req.kind == DoorRuleKind::OpenAccess {
-        if req.schedule_id.is_none() {
-            return Err(ApiError::BadRequest(
-                "open_access rules require a schedule".to_string(),
-            ));
+    let value = match req.kind {
+        DoorRuleKind::OpenAccess => {
+            if req.schedule_id.is_none() {
+                return Err(ApiError::BadRequest(
+                    "open_access rules require a schedule".to_string(),
+                ));
+            }
+            String::new()
         }
-        String::new()
-    } else {
-        if req.value.trim().is_empty() {
-            return Err(ApiError::BadRequest("value is required".to_string()));
+        DoorRuleKind::Card => {
+            // #120 (#122/H3): store the card's wire-digest, never the plaintext
+            // code. Write-only, like a sealed card (#108): an admin sets a code
+            // and the system keeps only its digest, so the rules table at rest
+            // no longer holds an enumerable card store. Requires the card cipher.
+            let raw = req.value.trim();
+            if raw.is_empty() {
+                return Err(ApiError::BadRequest("value is required".to_string()));
+            }
+            let cipher = state.card_cipher.as_deref().ok_or_else(|| {
+                ApiError::Conflict(
+                    "card rules require card encryption keys to be configured".to_string(),
+                )
+            })?;
+            hex::encode(cipher.wire_digest(raw).map_err(|e| {
+                ApiError::ValidationError(format!("could not process card value: {e}"))
+            })?)
         }
-        req.value
+        _ => {
+            if req.value.trim().is_empty() {
+                return Err(ApiError::BadRequest("value is required".to_string()));
+            }
+            req.value
+        }
     };
     let rule = state.db.insert_door_rule(&NewDoorAccessRule {
         door_id: id,

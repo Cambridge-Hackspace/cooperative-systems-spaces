@@ -17,9 +17,9 @@
 
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use css_server::doors::{cards_in_profile, expand_rules_at, open_access_hold_until_at};
-use css_server::models::{DoorAccessRule, Schedule, User};
+use css_server::models::{DoorAccessRule, Schedule};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -50,44 +50,6 @@ fn seed_graph() -> css_server::rbac::RoleGraph {
     .map(|(i, (name, level))| (Uuid::from_u128(i as u128 + 1), name.to_string(), *level))
     .collect();
     css_server::rbac::RoleGraph::from_rows(&rows, &[], &[])
-}
-
-fn epoch() -> NaiveDateTime {
-    DateTime::from_timestamp(0, 0).expect("epoch").naive_utc()
-}
-
-fn user_from(v: &Value, profile_field: &str) -> User {
-    let cards: Vec<Value> = v["cards"]
-        .as_array()
-        .expect("cards must be an array")
-        .clone();
-    User {
-        id: uuid(v["id"].as_str().expect("user id")),
-        username: "vector".into(),
-        email: "vector@example.com".into(),
-        password_hash: String::new(),
-        full_name: "Vector User".into(),
-        is_active: v["is_active"].as_bool().expect("is_active"),
-        created_at: epoch(),
-        updated_at: epoch(),
-        profile: serde_json::json!({ profile_field: cards }),
-        meta: Value::Null,
-        mfa_enrolled_at: None,
-        // Irrelevant to door access, and stated rather than defaulted: this
-        // fixture builds the struct field by field on purpose, so that a new
-        // column arriving on `users` fails here and somebody has to decide
-        // whether the door rules care about it.
-        email_verified_at: None,
-        // Mailing-list membership has no bearing on door access.
-        mailing_list_opt_out_at: None,
-        // Membership-billing state has no bearing on door access either; stated
-        // explicitly for the same field-by-field reason as above.
-        membership_next_due_at: None,
-        stripe_customer_id: None,
-        stripe_subscription_id: None,
-        subscription_status: None,
-        token_version: 0,
-    }
 }
 
 fn rule_from(v: &Value) -> DoorAccessRule {
@@ -136,7 +98,6 @@ fn opt_dt(v: &Value) -> Option<DateTime<Utc>> {
 #[test]
 fn every_case_compiles_to_the_declared_card_sets() {
     let doc = vectors();
-    let profile_field = doc["profile_field"].as_str().expect("profile_field");
     let cases = doc["cases"].as_array().expect("cases");
 
     let mut failures = Vec::new();
@@ -150,15 +111,30 @@ fn every_case_compiles_to_the_declared_card_sets() {
             .expect("now must be RFC 3339");
         let tz: chrono_tz::Tz = case["tz"].as_str().expect("tz").parse().expect("tz");
 
-        // Only active users reach compilation: `compile_state_for` sources them
-        // from `list_active_users()`. Modelling that here is what makes the
-        // inactive-user case in the vectors mean anything.
-        let users: Vec<User> = case["users"]
+        // #120 (#122/H3+H4): expand_rules_at now consumes per-user card *tokens*
+        // (wire-digests in production) rather than reading profiles. The vectors
+        // carry opaque card tokens, so feed each active user's fixture `cards`
+        // directly -- the routing logic under test is identical. Only active
+        // users reach compilation (compile_state_for sources list_active_users),
+        // which is what makes the inactive-user vector case mean anything.
+        let cards_by_user: std::collections::HashMap<Uuid, Vec<String>> = case["users"]
             .as_array()
             .expect("users")
             .iter()
-            .map(|u| user_from(u, profile_field))
-            .filter(|u| u.is_active)
+            .filter(|u| u["is_active"].as_bool().unwrap_or(false))
+            .map(|u| {
+                let id = uuid(u["id"].as_str().expect("user id"));
+                let cards: Vec<String> = u["cards"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|c| c.as_str())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (id, cards)
+            })
             .collect();
 
         let rules: Vec<DoorAccessRule> = case["rules"]
@@ -194,10 +170,9 @@ fn every_case_compiles_to_the_declared_card_sets() {
 
         let (allow, deny) = expand_rules_at(
             &rules,
-            &users,
+            &cards_by_user,
             &schedules,
             tz,
-            profile_field,
             now,
             &graph,
             &user_levels,

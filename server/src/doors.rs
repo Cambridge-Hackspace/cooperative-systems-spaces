@@ -57,6 +57,9 @@ pub struct DoorService {
     transport: Arc<DeviceTransport>,
     profile_field: String,
     config: Arc<ConfigManager>,
+    /// #120 (#122/H3): digests door card tokens before they leave the server, so
+    /// a stolen edge controller's snapshot yields no plaintext card codes.
+    card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
     /// Last-published snapshot hash per device. Used by the schedule ticker
     /// to skip republish when nothing changed.
     last_snapshot_hash: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, u64>>>,
@@ -68,23 +71,16 @@ impl DoorService {
         transport: Arc<DeviceTransport>,
         profile_field: String,
         config: Arc<ConfigManager>,
+        card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
     ) -> Self {
         Self {
             db,
             transport,
             profile_field,
             config,
+            card_cipher,
             last_snapshot_hash: Arc::new(std::sync::Mutex::new(Default::default())),
         }
-    }
-
-    // ----- card extraction helpers -------------------------------------
-
-    /// Pull all card values out of a user's profile JSONB at the configured
-    /// field. Accepts either a scalar string or an array of strings (matches
-    /// what the new TextArray profile-field shape stores).
-    fn cards_for_user(&self, user: &User) -> Vec<String> {
-        cards_in_profile(&user.profile, &self.profile_field)
     }
 
     // ----- state compilation -------------------------------------------
@@ -113,11 +109,20 @@ impl DoorService {
             .db
             .effective_levels_for(&active_users.iter().map(|u| u.id).collect::<Vec<_>>())?;
 
+        // #120 (#122/H3+H4): per-user card wire-digests (first-class cards unioned
+        // with digested legacy profile values), computed once. The snapshot ships
+        // these digests, never plaintext codes.
+        let cards_by_user = self.db.card_digests_by_user(
+            &active_users,
+            &self.profile_field,
+            self.card_cipher.as_deref(),
+        )?;
+
         let mut compiled = Vec::with_capacity(doors.len());
         for door in &doors {
             let rules = self.db.list_rules_for_door(door.id)?;
             let (allow, deny) =
-                self.expand_rules(&rules, &active_users, &schedules, tz, &user_levels);
+                self.expand_rules(&rules, &cards_by_user, &schedules, tz, &user_levels);
             let hold_unlock_until = open_access_hold_until_at(&rules, &schedules, tz, Utc::now());
             compiled.push(CompiledDoor {
                 id: door.id,
@@ -139,7 +144,7 @@ impl DoorService {
     fn expand_rules(
         &self,
         rules: &[DoorAccessRule],
-        active_users: &[User],
+        cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
         user_levels: &std::collections::HashMap<Uuid, i16>,
@@ -147,10 +152,9 @@ impl DoorService {
         let graph = self.db.rbac();
         expand_rules_at(
             rules,
-            active_users,
+            cards_by_user,
             schedules,
             tz,
-            &self.profile_field,
             Utc::now(),
             &graph,
             user_levels,
@@ -238,7 +242,21 @@ impl DoorService {
         let tz = self.site_tz();
         let mut allow = HashSet::<String>::new();
         let mut deny = HashSet::<String>::new();
-        let user_cards: HashSet<String> = self.cards_for_user(user).into_iter().collect();
+        // #120 (#122/H3+H4): a kind=card rule stores a card wire-digest at rest,
+        // so match it against THIS user's card digests -- first-class cards
+        // unioned with digested legacy profile values, exactly as the compiled
+        // snapshot does.
+        let user_cards: HashSet<String> = self
+            .db
+            .card_digests_by_user(
+                std::slice::from_ref(user),
+                &self.profile_field,
+                self.card_cipher.as_deref(),
+            )?
+            .remove(&user.id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         let user_id_str = user.id.to_string();
         let graph = self.db.rbac();
         let user_level = Some(self.db.user_effective_level(user.id)?);
@@ -513,13 +531,21 @@ pub fn open_access_hold_until_at(
     latest
 }
 
-/// Expand access rules into flat allow/deny card sets, as of `now`.
+/// Expand access rules into flat allow/deny card-token sets, as of `now`.
+///
+/// #120 (#122/H3+H4): the tokens are card *wire-digests*, not plaintext codes.
+/// `cards_by_user` maps a user to the digests that identify them (first-class
+/// cards unioned with digested legacy profile values -- see
+/// `DatabaseManager::card_digests_by_user`), so a `kind=user`/`kind=role` rule
+/// expands to those digests and a `kind=card` rule contributes `rule.value`
+/// (stored as a digest at rest). This function stays pure and free of the
+/// cipher: it routes opaque tokens, which is exactly what the golden vectors in
+/// `contracts/door_rules.json` pin.
 pub fn expand_rules_at(
     rules: &[DoorAccessRule],
-    active_users: &[User],
+    cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
-    profile_field: &str,
     now: chrono::DateTime<Utc>,
     graph: &crate::rbac::RoleGraph,
     user_levels: &std::collections::HashMap<Uuid, i16>,
@@ -574,13 +600,14 @@ pub fn expand_rules_at(
             // inert, so it is correct that this arm ignores the effect bucket.
             DoorRuleKind::OpenAccess => {}
             DoorRuleKind::Card => {
+                // rule.value is a card wire-digest at rest (#122/H3).
                 bucket.insert(rule.value.clone());
             }
             DoorRuleKind::User => {
                 if let Ok(uid) = Uuid::parse_str(&rule.value) {
-                    if let Some(u) = active_users.iter().find(|u| u.id == uid) {
-                        for c in cards_in_profile(&u.profile, profile_field) {
-                            bucket.insert(c);
+                    if let Some(cards) = cards_by_user.get(&uid) {
+                        for c in cards {
+                            bucket.insert(c.clone());
                         }
                     }
                 } else {
@@ -595,10 +622,12 @@ pub fn expand_rules_at(
                         continue;
                     }
                 };
-                for u in active_users.iter() {
-                    if user_levels.get(&u.id).copied().unwrap_or(0) >= required {
-                        for c in cards_in_profile(&u.profile, profile_field) {
-                            bucket.insert(c);
+                // Users with no card are absent from cards_by_user and so add
+                // nothing -- exactly the previous behaviour.
+                for (uid, cards) in cards_by_user {
+                    if user_levels.get(uid).copied().unwrap_or(0) >= required {
+                        for c in cards {
+                            bucket.insert(c.clone());
                         }
                     }
                 }

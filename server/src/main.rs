@@ -211,6 +211,20 @@ async fn main() -> Result<(), anyhow::Error> {
             .require_cipher()
             .map_err(|e| anyhow::anyhow!(e))?,
     ));
+
+    // #120 (#122/H3): digest any legacy plaintext card values in door rules at
+    // rest. Keyed by the device pepper, so it runs here (cipher in hand) rather
+    // than in a SQL migration; idempotent, so a no-op on migrated/fresh installs.
+    // A failure leaves those specific card rules unmatched (fail-closed) and is
+    // retried next boot, so it warns rather than blocking startup.
+    if let Some(cipher) = card_cipher.as_deref() {
+        match db_manager.backfill_door_card_rule_digests(cipher) {
+            Ok(0) => {}
+            Ok(n) => info!("Digested {n} legacy plaintext door card rule value(s) at rest"),
+            Err(e) => warn!("Failed to backfill door card rule digests: {e}"),
+        }
+    }
+
     let device_inbound = Arc::new(DeviceInbound::new(
         db_manager.clone(),
         app_config.toolguard.profile_field.clone(),
@@ -278,6 +292,7 @@ async fn main() -> Result<(), anyhow::Error> {
         device_transport.clone(),
         app_config.toolguard.profile_field.clone(),
         config_manager.clone(),
+        card_cipher.clone(),
     ));
     // Push a fresh state snapshot to every device on startup so an edge
     // restart picks up the current allow-lists.

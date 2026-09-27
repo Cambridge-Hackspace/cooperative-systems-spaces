@@ -582,11 +582,20 @@ impl LocalMqttClient {
             }
         };
 
-        let (granted, duration_ms, reason) =
-            match self.doors_state.decide(req.door_id, &req.card_id) {
-                Decision::Allow { duration_ms } => (true, duration_ms, None),
-                Decision::Deny(why) => (false, 0, Some(why.to_string())),
-            };
+        // #120 (#122/H3): the server ships door allow/deny lists as card
+        // wire-digests, so match on the digest of the swipe, not the raw code.
+        // No digester configured -> empty token -> matches nothing -> deny
+        // (fail-closed, as the tool path does without a pepper). The raw code
+        // still travels upstream below for server-side resolution.
+        let scan_token = self
+            .toolguard_state
+            .wire_digest_hex(&req.card_id)
+            .unwrap_or_default();
+        let (granted, duration_ms, reason) = match self.doors_state.decide(req.door_id, &scan_token)
+        {
+            Decision::Allow { duration_ms } => (true, duration_ms, None),
+            Decision::Deny(why) => (false, 0, Some(why.to_string())),
+        };
 
         // Tell the local relay controller what to do.
         let response = LocalUnlockResponse {

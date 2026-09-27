@@ -4818,6 +4818,99 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Per user in `users`, the hex wire-digests of every card that identifies
+    /// them: their first-class active cards (`user_cards.code_wire_digest`)
+    /// unioned with the digests of any legacy profile-field card values.
+    ///
+    /// #120 (#122/H3+H4): the door pipeline matches on these digests, never on
+    /// plaintext card codes, and first-class cards now count for door access
+    /// (H4) exactly as they already do for tools. Mirrors the tool-sync union in
+    /// `get_toolguard_sync_data`. A user with no cards is simply absent.
+    pub fn card_digests_by_user(
+        &self,
+        users: &[crate::models::User],
+        profile_field: &str,
+        cipher: Option<&css_lib::card_crypto::CardCipher>,
+    ) -> Result<std::collections::HashMap<uuid::Uuid, Vec<String>>, DatabaseError> {
+        use crate::schema::user_cards;
+        let mut conn = self.get_connection()?;
+
+        let ids: Vec<uuid::Uuid> = users.iter().map(|u| u.id).collect();
+        let active_cards = user_cards::table
+            .filter(user_cards::status.eq(crate::models::CardStatus::Active))
+            .filter(user_cards::user_id.eq_any(&ids))
+            .select((user_cards::user_id, user_cards::code_wire_digest))
+            .load::<(uuid::Uuid, Option<Vec<u8>>)>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        let mut by_user: std::collections::HashMap<uuid::Uuid, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut push =
+            |uid: uuid::Uuid,
+             hexd: String,
+             map: &mut std::collections::HashMap<uuid::Uuid, Vec<String>>| {
+                let e = map.entry(uid).or_default();
+                if !e.contains(&hexd) {
+                    e.push(hexd);
+                }
+            };
+        for (uid, stored) in active_cards {
+            if let Some(d) = stored {
+                push(uid, hex::encode(d), &mut by_user);
+            }
+        }
+        // Legacy profile-field card values, digested here (few once first-class
+        // cards are in use, mirroring the tool-sync note).
+        if let Some(c) = cipher {
+            for u in users {
+                for v in crate::doors::cards_in_profile(&u.profile, profile_field) {
+                    if let Ok(d) = c.wire_digest(&v) {
+                        push(u.id, hex::encode(d), &mut by_user);
+                    }
+                }
+            }
+        }
+        Ok(by_user)
+    }
+
+    /// One-time backfill of legacy plaintext `kind='card'` door rule values to
+    /// their wire-digests. #120 (#122/H3): the digest is keyed by the device
+    /// pepper, so this cannot be a plain-SQL migration -- it runs at boot with
+    /// the cipher in hand. Idempotent: a value that is already a 64-char hex
+    /// digest is left alone (a real RFID code is far shorter, so the collision
+    /// risk is negligible), making it a no-op on a migrated or fresh install.
+    /// Returns how many rows were rewritten.
+    pub fn backfill_door_card_rule_digests(
+        &self,
+        cipher: &css_lib::card_crypto::CardCipher,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::door_access_rules::dsl::*;
+        let mut conn = self.get_connection()?;
+        let card_rules: Vec<(uuid::Uuid, String)> = door_access_rules
+            .filter(kind.eq("card"))
+            .select((id, value))
+            .load::<(uuid::Uuid, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        let mut rewritten = 0usize;
+        for (rid, v) in card_rules {
+            if v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue; // already a digest
+            }
+            let digest = hex::encode(
+                cipher
+                    .wire_digest(&v)
+                    .map_err(|e| DatabaseError::Other(format!("digest door card rule: {e}")))?,
+            );
+            diesel::update(door_access_rules.filter(id.eq(rid)))
+                .set(value.eq(digest))
+                .execute(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+            rewritten += 1;
+        }
+        Ok(rewritten)
+    }
+
     /// How many door access rules and tools currently reference this schedule.
     ///
     /// #120 (#122/#7): both FKs are `ON DELETE SET NULL`, so deleting a schedule
