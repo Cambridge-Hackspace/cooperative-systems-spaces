@@ -100,6 +100,16 @@ async fn main() -> Result<()> {
     let config_arc = Arc::new(RwLock::new(app_config.clone()));
     let web_port = 8080;
 
+    // #120 (#123/H1): a per-process pairing token gates the local web endpoints
+    // (register/status/toolguard-state) for any non-loopback client. Printed once
+    // here so an operator who binds the UI to the LAN (web_ui_bind_address) can
+    // still authenticate to it; loopback clients never need it.
+    let pairing_token = Arc::new(uuid::Uuid::new_v4().to_string());
+    info!(
+        "Web UI pairing token (required only for non-localhost access): {}",
+        pairing_token
+    );
+
     if let Some(mqtt) = &app_config.local_mqtt_config {
         info!(
             "Local MQTT enabled - connecting to: {}",
@@ -113,8 +123,8 @@ async fn main() -> Result<()> {
         AuthStatus::Unauthenticated => {
             info!("Edge client is unauthenticated");
             info!(
-                "Web UI available at http://localhost:{} for registration",
-                web_port
+                "Web UI available at http://{}:{} for registration",
+                app_config.web_ui_bind_address, web_port
             );
             info!("Or use: edge register --instance-url <url> --code <code>");
             start_web_server(
@@ -123,14 +133,15 @@ async fn main() -> Result<()> {
                 web_port,
                 Arc::new(ToolGuardState::new()),
                 args.frontend_path,
+                pairing_token.clone(),
             )
             .await?;
         }
         AuthStatus::Pending => {
             info!("Edge client authentication is pending on server, please wait");
             info!(
-                "Web UI available at http://localhost:{} for status",
-                web_port
+                "Web UI available at http://{}:{} for status",
+                app_config.web_ui_bind_address, web_port
             );
             start_web_server(
                 config_arc,
@@ -138,14 +149,15 @@ async fn main() -> Result<()> {
                 web_port,
                 Arc::new(ToolGuardState::new()),
                 args.frontend_path,
+                pairing_token.clone(),
             )
             .await?;
         }
         AuthStatus::Approved => {
             info!("Edge client is authenticated");
             info!(
-                "Web UI available at http://localhost:{} for status",
-                web_port
+                "Web UI available at http://{}:{} for status",
+                app_config.web_ui_bind_address, web_port
             );
 
             // Shared toolguard state — notify_rx fires on every state change
@@ -462,6 +474,7 @@ async fn main() -> Result<()> {
                     web_port,
                     tgs_for_web,
                     frontend_path_for_web,
+                    pairing_token.clone(),
                 )
                 .await
                 {

@@ -109,6 +109,18 @@ pub struct Config {
     /// -- that one records a finding for a human, this one withholds a lease.
     #[serde(default = "default_module_offline_ms")]
     pub module_offline_ms: i64,
+
+    /// Address the local web UI binds to. #120 (#123/H1): defaults to loopback
+    /// so the registration endpoint and the toolguard-state view (member PII +
+    /// offline-attackable card digests) are not exposed to the whole LAN. An
+    /// operator who genuinely needs LAN access can set "0.0.0.0", accepting that
+    /// the pairing token is then the only thing gating registration.
+    #[serde(default = "default_web_ui_bind_address")]
+    pub web_ui_bind_address: String,
+}
+
+fn default_web_ui_bind_address() -> String {
+    "127.0.0.1".to_string()
 }
 
 fn default_toolguard_sync_interval() -> u64 {
@@ -151,6 +163,7 @@ impl Default for Config {
             module_lease_ttl_ms: default_module_lease_ttl_ms(),
             module_lease_interval_ms: default_module_lease_interval_ms(),
             module_offline_ms: default_module_offline_ms(),
+            web_ui_bind_address: default_web_ui_bind_address(),
         }
     }
 }
