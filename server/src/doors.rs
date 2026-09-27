@@ -57,6 +57,9 @@ pub struct DoorService {
     transport: Arc<DeviceTransport>,
     profile_field: String,
     config: Arc<ConfigManager>,
+    /// #120 (#122/H3): digests door card tokens before they leave the server, so
+    /// a stolen edge controller's snapshot yields no plaintext card codes.
+    card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
     /// Last-published snapshot hash per device. Used by the schedule ticker
     /// to skip republish when nothing changed.
     last_snapshot_hash: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, u64>>>,
@@ -68,23 +71,16 @@ impl DoorService {
         transport: Arc<DeviceTransport>,
         profile_field: String,
         config: Arc<ConfigManager>,
+        card_cipher: Option<Arc<css_lib::card_crypto::CardCipher>>,
     ) -> Self {
         Self {
             db,
             transport,
             profile_field,
             config,
+            card_cipher,
             last_snapshot_hash: Arc::new(std::sync::Mutex::new(Default::default())),
         }
-    }
-
-    // ----- card extraction helpers -------------------------------------
-
-    /// Pull all card values out of a user's profile JSONB at the configured
-    /// field. Accepts either a scalar string or an array of strings (matches
-    /// what the new TextArray profile-field shape stores).
-    fn cards_for_user(&self, user: &User) -> Vec<String> {
-        cards_in_profile(&user.profile, &self.profile_field)
     }
 
     // ----- state compilation -------------------------------------------
@@ -113,11 +109,20 @@ impl DoorService {
             .db
             .effective_levels_for(&active_users.iter().map(|u| u.id).collect::<Vec<_>>())?;
 
+        // #120 (#122/H3+H4): per-user card wire-digests (first-class cards unioned
+        // with digested legacy profile values), computed once. The snapshot ships
+        // these digests, never plaintext codes.
+        let cards_by_user = self.db.card_digests_by_user(
+            &active_users,
+            &self.profile_field,
+            self.card_cipher.as_deref(),
+        )?;
+
         let mut compiled = Vec::with_capacity(doors.len());
         for door in &doors {
             let rules = self.db.list_rules_for_door(door.id)?;
             let (allow, deny) =
-                self.expand_rules(&rules, &active_users, &schedules, tz, &user_levels);
+                self.expand_rules(&rules, &cards_by_user, &schedules, tz, &user_levels);
             let hold_unlock_until = open_access_hold_until_at(&rules, &schedules, tz, Utc::now());
             compiled.push(CompiledDoor {
                 id: door.id,
@@ -139,7 +144,7 @@ impl DoorService {
     fn expand_rules(
         &self,
         rules: &[DoorAccessRule],
-        active_users: &[User],
+        cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
         user_levels: &std::collections::HashMap<Uuid, i16>,
@@ -147,10 +152,9 @@ impl DoorService {
         let graph = self.db.rbac();
         expand_rules_at(
             rules,
-            active_users,
+            cards_by_user,
             schedules,
             tz,
-            &self.profile_field,
             Utc::now(),
             &graph,
             user_levels,
@@ -203,11 +207,23 @@ impl DoorService {
         duration_ms: i32,
         reason: &str,
     ) -> Result<(), DatabaseError> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "door_id": door_id,
             "duration_ms": duration_ms,
             "reason": reason,
         });
+        // #120 (#121): HMAC-sign the command with the device's key so the edge
+        // rejects any doors/unlock not signed by this server. Only when the
+        // device has a key (registered since #121); otherwise it goes unsigned
+        // and the edge, also keyless, accepts it -- graceful during rollout, with
+        // the broker per-device ACLs as the primary control throughout.
+        if let Some(cipher) = self.card_cipher.as_deref() {
+            if let Some(key) = self.db.device_command_key(device_id, cipher)? {
+                let msg =
+                    css_lib::sig::doors_unlock_message(&door_id.to_string(), duration_ms, reason);
+                payload["sig"] = serde_json::Value::String(css_lib::sig::sign(&key, &msg));
+            }
+        }
         if !self
             .transport
             .push(device_id, css_lib::wire::kinds::DOORS_UNLOCK, payload)
@@ -238,22 +254,40 @@ impl DoorService {
         let tz = self.site_tz();
         let mut allow = HashSet::<String>::new();
         let mut deny = HashSet::<String>::new();
-        let user_cards: HashSet<String> = self.cards_for_user(user).into_iter().collect();
+        // #120 (#122/H3+H4): a kind=card rule stores a card wire-digest at rest,
+        // so match it against THIS user's card digests -- first-class cards
+        // unioned with digested legacy profile values, exactly as the compiled
+        // snapshot does.
+        let user_cards: HashSet<String> = self
+            .db
+            .card_digests_by_user(
+                std::slice::from_ref(user),
+                &self.profile_field,
+                self.card_cipher.as_deref(),
+            )?
+            .remove(&user.id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         let user_id_str = user.id.to_string();
         let graph = self.db.rbac();
         let user_level = Some(self.db.user_effective_level(user.id)?);
 
         for rule in &rules {
-            // Schedule-gated rules are silent when their window is closed.
-            if !schedule_is_active_at(rule.schedule_id, &schedules, tz, Utc::now()) {
-                continue;
-            }
-            // Same fail-open as the compilation path: an unrecognized effect
-            // used to be treated as allow. Skipped now.
+            // Parse the effect first: the schedule gate is fail-closed per effect
+            // (an unrecognized effect used to default to allow -- skipped now).
             let effect = match DoorRuleEffect::parse(&rule.effect) {
                 Some(e) => e,
                 None => continue,
             };
+            // Schedule-gated rules are silent when their window is closed; an
+            // unresolvable schedule keeps a deny but drops an allow (#122/#7).
+            if !rule_fires(
+                effect,
+                schedule_state_at(rule.schedule_id, &schedules, tz, Utc::now()),
+            ) {
+                continue;
+            }
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
                 None => continue,
@@ -372,41 +406,63 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 
 /// Resolve a rule's schedule (by id) and ask whether *now* falls in any
 /// interval. Rules with no schedule are always active.
-fn schedule_is_active_at(
+/// Whether a rule's schedule window is open, shut, or cannot be resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleState {
+    /// `now` falls inside the window (or the rule has no schedule).
+    Active,
+    /// `now` falls outside a well-defined window.
+    Inactive,
+    /// The schedule row is missing (a deleted schedule, whose FK is
+    /// `ON DELETE SET NULL`, or the narrow read-time race between the
+    /// `list_rules_for_door` and `list_schedules` snapshots) or its intervals do
+    /// not parse. #120 (#122/#7): this ambiguity must *tighten* access, never
+    /// widen it -- an allow rule is dropped, a deny rule still applies.
+    Unresolvable,
+}
+
+fn schedule_state_at(
     schedule_id: Option<Uuid>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
     now: chrono::DateTime<Utc>,
-) -> bool {
+) -> ScheduleState {
     let sid = match schedule_id {
         Some(id) => id,
-        None => return true,
+        None => return ScheduleState::Active,
     };
     let sched = match schedules.iter().find(|s| s.id == sid) {
         Some(s) => s,
         None => {
-            // schedule_id's FK is ON DELETE SET NULL, so a genuinely
-            // deleted schedule can never leave a dangling id here — this
-            // only fires from the narrow read-time race between this
-            // call's list_rules_for_door and list_schedules snapshots (a
-            // schedule deleted in between). Fail closed on that ambiguity
-            // rather than treating the rule as unconditionally active,
-            // consistent with the invalid-intervals case just below.
             warn!(
                 "Schedule {} referenced but not found in current snapshot",
                 sid
             );
-            return false;
+            return ScheduleState::Unresolvable;
         }
     };
     let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
         Ok(v) => v,
         Err(e) => {
             warn!("Schedule {} has invalid intervals: {}", sched.id, e);
-            return false;
+            return ScheduleState::Unresolvable;
         }
     };
-    crate::schedules::matches_at(&intervals, tz, now)
+    if crate::schedules::matches_at(&intervals, tz, now) {
+        ScheduleState::Active
+    } else {
+        ScheduleState::Inactive
+    }
+}
+
+/// Whether a rule of `effect` fires now, given its schedule's state. Fail-closed:
+/// an unresolvable schedule keeps a deny in force but drops an allow (#122/#7).
+fn rule_fires(effect: DoorRuleEffect, state: ScheduleState) -> bool {
+    match state {
+        ScheduleState::Active => true,
+        ScheduleState::Inactive => false,
+        ScheduleState::Unresolvable => matches!(effect, DoorRuleEffect::Deny),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,13 +543,21 @@ pub fn open_access_hold_until_at(
     latest
 }
 
-/// Expand access rules into flat allow/deny card sets, as of `now`.
+/// Expand access rules into flat allow/deny card-token sets, as of `now`.
+///
+/// #120 (#122/H3+H4): the tokens are card *wire-digests*, not plaintext codes.
+/// `cards_by_user` maps a user to the digests that identify them (first-class
+/// cards unioned with digested legacy profile values -- see
+/// `DatabaseManager::card_digests_by_user`), so a `kind=user`/`kind=role` rule
+/// expands to those digests and a `kind=card` rule contributes `rule.value`
+/// (stored as a digest at rest). This function stays pure and free of the
+/// cipher: it routes opaque tokens, which is exactly what the golden vectors in
+/// `contracts/door_rules.json` pin.
 pub fn expand_rules_at(
     rules: &[DoorAccessRule],
-    active_users: &[User],
+    cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
-    profile_field: &str,
     now: chrono::DateTime<Utc>,
     graph: &crate::rbac::RoleGraph,
     user_levels: &std::collections::HashMap<Uuid, i16>,
@@ -502,14 +566,10 @@ pub fn expand_rules_at(
     let mut deny = BTreeSet::<String>::new();
 
     for rule in rules {
-        // A schedule-gated rule contributes nothing while its window is shut.
-        if !schedule_is_active_at(rule.schedule_id, schedules, tz, now) {
-            continue;
-        }
-
         // An unparseable effect used to default to Allow. On a door, that is a
         // fail-open: a typo in a rule's effect column silently granted access
-        // to whatever the rule named. It is skipped now, and loudly.
+        // to whatever the rule named. It is skipped now, and loudly. Parsed
+        // before the schedule gate because the gate is fail-closed per effect.
         let effect = match DoorRuleEffect::parse(&rule.effect) {
             Some(e) => e,
             None => {
@@ -521,6 +581,15 @@ pub fn expand_rules_at(
                 continue;
             }
         };
+
+        // A schedule-gated rule contributes nothing while its window is shut; an
+        // unresolvable schedule keeps a deny in force but drops an allow (#122/#7).
+        if !rule_fires(
+            effect,
+            schedule_state_at(rule.schedule_id, schedules, tz, now),
+        ) {
+            continue;
+        }
 
         let kind = match DoorRuleKind::parse(&rule.kind) {
             Some(k) => k,
@@ -543,13 +612,14 @@ pub fn expand_rules_at(
             // inert, so it is correct that this arm ignores the effect bucket.
             DoorRuleKind::OpenAccess => {}
             DoorRuleKind::Card => {
+                // rule.value is a card wire-digest at rest (#122/H3).
                 bucket.insert(rule.value.clone());
             }
             DoorRuleKind::User => {
                 if let Ok(uid) = Uuid::parse_str(&rule.value) {
-                    if let Some(u) = active_users.iter().find(|u| u.id == uid) {
-                        for c in cards_in_profile(&u.profile, profile_field) {
-                            bucket.insert(c);
+                    if let Some(cards) = cards_by_user.get(&uid) {
+                        for c in cards {
+                            bucket.insert(c.clone());
                         }
                     }
                 } else {
@@ -564,10 +634,12 @@ pub fn expand_rules_at(
                         continue;
                     }
                 };
-                for u in active_users.iter() {
-                    if user_levels.get(&u.id).copied().unwrap_or(0) >= required {
-                        for c in cards_in_profile(&u.profile, profile_field) {
-                            bucket.insert(c);
+                // Users with no card are absent from cards_by_user and so add
+                // nothing -- exactly the previous behaviour.
+                for (uid, cards) in cards_by_user {
+                    if user_levels.get(uid).copied().unwrap_or(0) >= required {
+                        for c in cards {
+                            bucket.insert(c.clone());
                         }
                     }
                 }
@@ -576,4 +648,33 @@ pub fn expand_rules_at(
     }
 
     (allow, deny)
+}
+
+#[cfg(test)]
+mod schedule_fail_closed_tests {
+    use super::{rule_fires, ScheduleState};
+    use crate::models::DoorRuleEffect;
+
+    // #120 (#122/#7): losing a schedule must tighten access, never widen it.
+    // An unresolvable schedule keeps a deny in force and drops an allow; a
+    // definitively-closed window silences both.
+    #[test]
+    fn an_unresolvable_schedule_keeps_deny_and_drops_allow() {
+        assert!(
+            rule_fires(DoorRuleEffect::Deny, ScheduleState::Unresolvable),
+            "a deny with a deleted/invalid schedule must still deny"
+        );
+        assert!(
+            !rule_fires(DoorRuleEffect::Allow, ScheduleState::Unresolvable),
+            "an allow with a deleted/invalid schedule must NOT grant"
+        );
+    }
+
+    #[test]
+    fn active_fires_both_and_inactive_silences_both() {
+        assert!(rule_fires(DoorRuleEffect::Allow, ScheduleState::Active));
+        assert!(rule_fires(DoorRuleEffect::Deny, ScheduleState::Active));
+        assert!(!rule_fires(DoorRuleEffect::Allow, ScheduleState::Inactive));
+        assert!(!rule_fires(DoorRuleEffect::Deny, ScheduleState::Inactive));
+    }
 }

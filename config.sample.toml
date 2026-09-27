@@ -21,6 +21,13 @@ password_min_length = 8
 session_timeout_minutes = 1440
 # Enable password reset functionality
 password_reset_enabled = true
+# Brute-force throttle for login and MFA verification (#120/#8). After
+# login_throttle_attempts failures for one identity (the submitted username on
+# login, the user id on verify) that identity is locked for login_throttle_seconds.
+# Kept short so it slows spraying without becoming a victim-lockout DoS.
+login_throttle_enabled = true
+login_throttle_attempts = 10
+login_throttle_seconds = 60
 
 # Registration Challenge Configuration
 # Use this to require a passphrase or challenge question for new registrations
@@ -73,8 +80,6 @@ timezone = "UTC"
 max_session_age = 1440
 # Enable debug mode (shows detailed error messages)
 debug = false
-# Secret key for cryptographic operations (CHANGE THIS IN PRODUCTION!)
-secret_key = "change-me-in-production"
 # Force HTTPS for all connections
 https = false
 # Optional: Google Analytics or similar tracking ID
@@ -243,6 +248,7 @@ host = "postgres"
 port = 5432
 database = "css"
 username = "css_user"
+# Database password -- CHANGE THIS IN PRODUCTION!
 password = "css_pass"
 # Maximum number of concurrent database connections
 max_connections = 10

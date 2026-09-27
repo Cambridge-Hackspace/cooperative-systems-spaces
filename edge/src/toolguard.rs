@@ -146,6 +146,18 @@ impl ToolGuardState {
         self.inner.read().unwrap().clone()
     }
 
+    /// #120 (#122/H3): hex wire-digest of a scanned card, using the same device
+    /// pepper the server used to compile door allow-lists, so the edge can match
+    /// a swipe against the digests it now receives (never plaintext codes).
+    /// `None` when no digester is configured -- the edge then matches nobody,
+    /// fail-closed, exactly as the tool path does without a pepper.
+    pub fn wire_digest_hex(&self, card_value: &str) -> Option<String> {
+        self.card_digester
+            .as_ref()
+            .and_then(|d| d.wire_digest(card_value).ok())
+            .map(hex::encode)
+    }
+
     /// Check whether a card holder is authorized to activate a tool.
     ///
     /// `card_value`  – the scanned card, hashed here and matched against
@@ -180,7 +192,9 @@ impl ToolGuardState {
         let user = match state
             .users
             .iter()
-            .find(|u| u.profile_field_digest == presented)
+            // #120 (#14 / L1): constant-time digest comparison, on principle --
+            // the presented card digest is a credential and `==` short-circuits.
+            .find(|u| css_lib::ct::constant_time_str_eq(&u.profile_field_digest, &presented))
         {
             Some(u) => u,
             None => return AccessResult::UnknownCard,

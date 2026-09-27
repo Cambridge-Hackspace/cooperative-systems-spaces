@@ -866,6 +866,29 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Atomically transition a tool from Idle to InUse (#120/M2). Returns true
+    /// iff this call made the transition; false means the row was not Idle -- a
+    /// concurrent activation already won, or the status changed. tool_on checked
+    /// tool.status on a loaded row and then called the unconditional
+    /// update_tool_status, a check-then-act that let two requests both activate;
+    /// this compare-and-set closes that window.
+    pub fn try_activate_tool(&self, tool_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::tools::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(
+            tools
+                .filter(id.eq(tool_id))
+                .filter(status.eq(crate::models::ToolStatus::Idle)),
+        )
+        .set((
+            status.eq(crate::models::ToolStatus::InUse),
+            updated_at.eq(chrono::Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(affected == 1)
+    }
+
     /// Find user by ID
     pub fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, DatabaseError> {
         let mut conn = self.get_connection()?;
@@ -894,11 +917,20 @@ impl DatabaseManager {
 
     /// Find a user by email address
     pub fn find_user_by_email(&self, email: &str) -> Result<Option<User>, DatabaseError> {
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Bool, Text};
+
         let mut conn = self.get_connection()?;
 
+        // Case-insensitive (#120/#3 + M8). This was `email = $1`, so a mixed-case
+        // registrant could not be found by the lowercased reset/resend path, and
+        // ADMIN@x resolved as a different account from admin@x. Compared as
+        // `lower(email) = $1` against the lower(email) functional index the
+        // migration adds; the needle is bound (via .bind), never interpolated.
+        let needle = email.trim().to_lowercase();
         let user = users::table
             .select(User::as_select())
-            .filter(users::email.eq(email))
+            .filter(sql::<Bool>("lower(email) = ").bind::<Text, _>(needle))
             .first::<User>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)?;
@@ -914,6 +946,23 @@ impl DatabaseManager {
     ) -> Result<Option<User>, DatabaseError> {
         use diesel::dsl::sql;
         use diesel::sql_types::{Bool, Text};
+
+        // #120/M12: field_name is interpolated into the SQL below (only the value
+        // is bound), so it must be a bare identifier. It comes from config today
+        // (toolguard.profile_field) and is not remotely writable, but a stray
+        // quote would corrupt the query, and the interpolation becomes an
+        // injection the moment the field is ever admin-editable. Reject anything
+        // that is not ^[A-Za-z0-9_]+$ before it reaches the query. Checked before
+        // acquiring a connection so it holds even against a dead pool.
+        if field_name.is_empty()
+            || !field_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(DatabaseError::Other(format!(
+                "invalid profile field name (must be [A-Za-z0-9_]+): {field_name:?}"
+            )));
+        }
 
         let mut conn = self.get_connection()?;
 
@@ -1136,11 +1185,42 @@ impl DatabaseManager {
         // Role is no longer a `users` column; the tier role lives in `user_roles`
         // and is set via `set_user_primary_role`. This only touches profile/
         // status/etc. fields.
+        //
+        // #120/M9: any password change revokes live sessions. Every write that
+        // sets password_hash -- self-service change, admin reset, or a reset
+        // token -- comes through here, so bumping token_version in the same
+        // transaction is the one place that cannot be forgotten. Updates that do
+        // not touch the password leave token_version alone.
+        conn.transaction::<User, diesel::result::Error, _>(|conn| {
+            let user = diesel::update(users::table.filter(users::id.eq(user_id)))
+                .set(&updates)
+                .returning(User::as_returning())
+                .get_result::<User>(conn)?;
+            if updates.password_hash.is_some() {
+                return diesel::update(users::table.filter(users::id.eq(user_id)))
+                    .set(users::token_version.eq(users::token_version + 1))
+                    .returning(User::as_returning())
+                    .get_result::<User>(conn);
+            }
+            Ok(user)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Clear a user's email-verified flag (#120/#2).
+    ///
+    /// Called when the address changes so `require_email_verification` re-gates
+    /// and a fresh confirmation is sent to the new address. Separate from
+    /// `update_user` because `UpdateUser` has no way to express "set this
+    /// nullable column back to NULL" without changing the changeset for every
+    /// other caller.
+    pub fn clear_email_verified_at(&self, user_id: uuid::Uuid) -> Result<(), DatabaseError> {
+        let mut conn = self.get_connection()?;
         diesel::update(users::table.filter(users::id.eq(user_id)))
-            .set(&updates)
-            .returning(User::as_returning())
-            .get_result::<User>(&mut conn)
-            .map_err(DatabaseError::Diesel)
+            .set(users::email_verified_at.eq(None::<chrono::DateTime<chrono::Utc>>))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
     }
 
     /// Update user profile only
@@ -2784,7 +2864,12 @@ impl DatabaseManager {
     // ── ToolGuard ────────────────────────────────────────────────────────────
 
     /// Look up a device by its auth token.
-    /// Returns (device_id, token) if found.
+    /// Returns (device_id, stored_hash) if found.
+    ///
+    /// #120 (#14): the column stores `SHA-256(token)`, not the token itself, so a
+    /// database read (backup, dump, stray SELECT) no longer yields a working
+    /// credential for every device. The presented plaintext is hashed here and
+    /// the lookup is by hash -- still one indexed equality, so no scan.
     pub fn find_device_by_auth_token(
         &self,
         token: &str,
@@ -2793,9 +2878,10 @@ impl DatabaseManager {
 
         let mut conn = self.get_connection()?;
 
+        let token_hash = crate::tokens::hash_token(token);
         let result = space_device_auth::table
             .inner_join(space_devices::table)
-            .filter(space_device_auth::auth_token.eq(token))
+            .filter(space_device_auth::auth_token.eq(token_hash))
             .filter(space_devices::deleted_at.is_null())
             .select((space_device_auth::device_id, space_device_auth::auth_token))
             .first::<(uuid::Uuid, String)>(&mut conn)
@@ -2803,6 +2889,63 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)?;
 
         Ok(result)
+    }
+
+    /// Whether a device is bound to a specific tool through `tool_modules`.
+    ///
+    /// #120 (#14): a device's Bearer token authorizes tool operations only for
+    /// the tools that device is actually wired to. This is the same binding that
+    /// scopes the device's sync payload (#104), applied to actuation so a reader
+    /// for one tool cannot energise another by presenting its own valid token.
+    pub fn device_is_bound_to_tool(
+        &self,
+        device_id: uuid::Uuid,
+        tool_id: uuid::Uuid,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::tool_modules;
+        use diesel::dsl::exists;
+        use diesel::select;
+
+        let mut conn = self.get_connection()?;
+
+        select(exists(
+            tool_modules::table
+                .filter(tool_modules::device_id.eq(device_id))
+                .filter(tool_modules::tool_id.eq(tool_id)),
+        ))
+        .get_result::<bool>(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// The device's command-channel HMAC key (unsealed), or `None` if it has
+    /// none -- registered before #121, or minted without a cipher. #120 (#121):
+    /// stored sealed at rest, opened here with the card cipher when the server
+    /// needs to sign a command to, or verify an event from, this device.
+    pub fn device_command_key(
+        &self,
+        device_id: uuid::Uuid,
+        cipher: &css_lib::card_crypto::CardCipher,
+    ) -> Result<Option<Vec<u8>>, DatabaseError> {
+        use crate::schema::space_device_auth;
+        let mut conn = self.get_connection()?;
+        let row: Option<(Option<Vec<u8>>, Option<Vec<u8>>)> = space_device_auth::table
+            .filter(space_device_auth::device_id.eq(device_id))
+            .select((
+                space_device_auth::command_key_sealed,
+                space_device_auth::command_key_nonce,
+            ))
+            .first::<(Option<Vec<u8>>, Option<Vec<u8>>)>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        match row {
+            Some((Some(sealed), Some(nonce))) => {
+                let key = cipher
+                    .open(&sealed, &nonce)
+                    .map_err(|e| DatabaseError::Other(format!("open device command key: {e}")))?;
+                Ok(Some(key.into_bytes()))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Return the IDs of all non-deleted devices (for MQTT broadcast).
@@ -3477,35 +3620,100 @@ impl DatabaseManager {
 
     /// Replace any existing TOTP row for the user with a new unconfirmed one.
     /// Returns the freshly-inserted row.
-    pub fn replace_user_totp_unconfirmed(
+    /// Begin a TOTP setup (#120/#9). If a *confirmed* factor already exists, the
+    /// new secret is stored as `pending_secret_base32`, leaving the working
+    /// secret and its `confirmed_at` untouched -- so an abandoned or hijacked
+    /// setup can no longer destroy a live factor. If there is no confirmed factor
+    /// (first enrollment, or an earlier unconfirmed attempt) the row is written
+    /// with the new secret, unconfirmed, clearing any stale pending/step.
+    pub fn begin_totp_setup(
         &self,
         uid: uuid::Uuid,
         new_secret_base32: &str,
-    ) -> Result<crate::models::UserMfaTotp, DatabaseError> {
+    ) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            diesel::delete(user_mfa_totp.filter(user_id.eq(uid))).execute(conn)?;
-            let new_row = crate::models::NewUserMfaTotp {
-                user_id: uid,
-                secret_base32: new_secret_base32.to_string(),
-            };
-            diesel::insert_into(user_mfa_totp)
-                .values(&new_row)
-                .returning(crate::models::UserMfaTotp::as_returning())
-                .get_result(conn)
+            let existing: Option<crate::models::UserMfaTotp> = user_mfa_totp
+                .filter(user_id.eq(uid))
+                .select(crate::models::UserMfaTotp::as_select())
+                .first(conn)
+                .optional()?;
+            match existing {
+                Some(row) if row.confirmed_at.is_some() => {
+                    diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+                        .set((
+                            pending_secret_base32.eq(Some(new_secret_base32.to_string())),
+                            updated_at.eq(chrono::Utc::now()),
+                        ))
+                        .execute(conn)?;
+                }
+                Some(_) => {
+                    diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+                        .set((
+                            secret_base32.eq(new_secret_base32.to_string()),
+                            pending_secret_base32.eq(None::<String>),
+                            confirmed_at.eq(None::<chrono::DateTime<chrono::Utc>>),
+                            last_used_step.eq(None::<i64>),
+                            updated_at.eq(chrono::Utc::now()),
+                        ))
+                        .execute(conn)?;
+                }
+                None => {
+                    diesel::insert_into(user_mfa_totp)
+                        .values(crate::models::NewUserMfaTotp {
+                            user_id: uid,
+                            secret_base32: new_secret_base32.to_string(),
+                        })
+                        .execute(conn)?;
+                }
+            }
+            Ok(())
         })
         .map_err(DatabaseError::Diesel)
     }
 
-    pub fn confirm_user_totp(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
+    /// Promote a pending TOTP secret (if any) to the live secret and confirm it
+    /// (#120/#9). `last_used_step` resets to NULL: the replay watermark (#120/#12)
+    /// tracks *login* steps, and a freshly confirmed factor has consumed none.
+    pub fn finalize_totp_confirmation(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
-        // The row count is the answer, not a detail to discard.
-        // Enrolment was reported confirmed whether or not a row moved.
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let row: crate::models::UserMfaTotp = user_mfa_totp
+                .filter(user_id.eq(uid))
+                .select(crate::models::UserMfaTotp::as_select())
+                .first(conn)?;
+            let effective = row
+                .pending_secret_base32
+                .clone()
+                .unwrap_or_else(|| row.secret_base32.clone());
+            diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+                .set((
+                    secret_base32.eq(effective),
+                    pending_secret_base32.eq(None::<String>),
+                    confirmed_at.eq(Some(chrono::Utc::now())),
+                    last_used_step.eq(None::<i64>),
+                    updated_at.eq(chrono::Utc::now()),
+                ))
+                .execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Advance the replay watermark after a login TOTP verify (#120/#12). Reads
+    /// the row count so a vanished row is a NotFound, not a silent success.
+    pub fn update_totp_last_used_step(
+        &self,
+        uid: uuid::Uuid,
+        step: i64,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
         let affected = diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
             .set((
-                confirmed_at.eq(Some(chrono::Utc::now())),
+                last_used_step.eq(Some(step)),
                 updated_at.eq(chrono::Utc::now()),
             ))
             .execute(&mut conn)
@@ -3513,7 +3721,6 @@ impl DatabaseManager {
         if affected == 0 {
             return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
         }
-
         Ok(())
     }
 
@@ -3635,14 +3842,21 @@ impl DatabaseManager {
     pub fn mark_recovery_code_used(&self, code_id: uuid::Uuid) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_recovery_codes::dsl::*;
         let mut conn = self.get_connection()?;
-        // The row count is the answer, not a detail to discard.
-        // A recovery code is single-use. Matching zero rows means it was NOT consumed
-        // while the caller went on to treat the login as authenticated, so the
-        // code stays usable.
-        let affected = diesel::update(user_mfa_recovery_codes.filter(id.eq(code_id)))
-            .set(used_at.eq(Some(chrono::Utc::now())))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
+        // #120/H8: compare-and-set, not a bare id match. The `used_at IS NULL`
+        // filter makes consuming a code atomic: two concurrent logins presenting
+        // the same code both list it as unused and both reach here, but only the
+        // first UPDATE matches (affected == 1). The loser matches zero rows and
+        // is rejected, so a single code cannot authenticate twice. Without the
+        // filter both UPDATEs matched by id and both succeeded. The row count is
+        // the answer, not a detail to discard.
+        let affected = diesel::update(
+            user_mfa_recovery_codes
+                .filter(id.eq(code_id))
+                .filter(used_at.is_null()),
+        )
+        .set(used_at.eq(Some(chrono::Utc::now())))
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
         if affected == 0 {
             return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
         }
@@ -4203,25 +4417,27 @@ impl DatabaseManager {
         seconds: bigdecimal::BigDecimal,
     ) -> Result<(), DatabaseError> {
         use crate::schema::tool_usage_sessions::dsl::*;
+        use diesel::dsl::sql;
+        use diesel::sql_types::Numeric;
         let mut conn = self.get_connection()?;
-        // COALESCE(reported_seconds, 0) + seconds, in Rust to keep the query simple.
-        let current: Option<Option<bigdecimal::BigDecimal>> = tool_usage_sessions
-            .filter(id.eq(session_id))
-            .filter(status.eq("open"))
-            .select(reported_seconds)
-            .first(&mut conn)
-            .optional()
-            .map_err(DatabaseError::Diesel)?;
-        let Some(existing) = current else {
-            return Ok(()); // not open (or gone) -- nothing to accumulate
-        };
-        let total = existing.unwrap_or_else(|| bigdecimal::BigDecimal::from(0)) + seconds;
+        // #120/M13: accumulate in a single atomic UPDATE
+        // (COALESCE(reported_seconds, 0) + $n) rather than SELECT-add-in-Rust-then-
+        // UPDATE. The read-modify-write let two concurrent device reports on the
+        // same session read the same base and clobber each other, underbilling by
+        // one report -- directly gameable by parallel reporting. A zero-row update
+        // means the session is no longer open, so nothing accumulates (the settle
+        // path bounds the charge by wall-clock and the cap regardless).
         diesel::update(
             tool_usage_sessions
                 .filter(id.eq(session_id))
                 .filter(status.eq("open")),
         )
-        .set(reported_seconds.eq(total))
+        .set(
+            reported_seconds.eq(sql::<diesel::sql_types::Nullable<Numeric>>(
+                "COALESCE(reported_seconds, 0) + ",
+            )
+            .bind::<Numeric, _>(seconds)),
+        )
         .execute(&mut conn)
         .map_err(DatabaseError::Diesel)?;
         Ok(())
@@ -4631,6 +4847,122 @@ impl DatabaseManager {
         diesel::delete(schedules.find(sid))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)
+    }
+
+    /// Per user in `users`, the hex wire-digests of every card that identifies
+    /// them: their first-class active cards (`user_cards.code_wire_digest`)
+    /// unioned with the digests of any legacy profile-field card values.
+    ///
+    /// #120 (#122/H3+H4): the door pipeline matches on these digests, never on
+    /// plaintext card codes, and first-class cards now count for door access
+    /// (H4) exactly as they already do for tools. Mirrors the tool-sync union in
+    /// `get_toolguard_sync_data`. A user with no cards is simply absent.
+    pub fn card_digests_by_user(
+        &self,
+        users: &[crate::models::User],
+        profile_field: &str,
+        cipher: Option<&css_lib::card_crypto::CardCipher>,
+    ) -> Result<std::collections::HashMap<uuid::Uuid, Vec<String>>, DatabaseError> {
+        use crate::schema::user_cards;
+        let mut conn = self.get_connection()?;
+
+        let ids: Vec<uuid::Uuid> = users.iter().map(|u| u.id).collect();
+        let active_cards = user_cards::table
+            .filter(user_cards::status.eq(crate::models::CardStatus::Active))
+            .filter(user_cards::user_id.eq_any(&ids))
+            .select((user_cards::user_id, user_cards::code_wire_digest))
+            .load::<(uuid::Uuid, Option<Vec<u8>>)>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        let mut by_user: std::collections::HashMap<uuid::Uuid, Vec<String>> =
+            std::collections::HashMap::new();
+        let push =
+            |uid: uuid::Uuid,
+             hexd: String,
+             map: &mut std::collections::HashMap<uuid::Uuid, Vec<String>>| {
+                let e = map.entry(uid).or_default();
+                if !e.contains(&hexd) {
+                    e.push(hexd);
+                }
+            };
+        for (uid, stored) in active_cards {
+            if let Some(d) = stored {
+                push(uid, hex::encode(d), &mut by_user);
+            }
+        }
+        // Legacy profile-field card values, digested here (few once first-class
+        // cards are in use, mirroring the tool-sync note).
+        if let Some(c) = cipher {
+            for u in users {
+                for v in crate::doors::cards_in_profile(&u.profile, profile_field) {
+                    if let Ok(d) = c.wire_digest(&v) {
+                        push(u.id, hex::encode(d), &mut by_user);
+                    }
+                }
+            }
+        }
+        Ok(by_user)
+    }
+
+    /// One-time backfill of legacy plaintext `kind='card'` door rule values to
+    /// their wire-digests. #120 (#122/H3): the digest is keyed by the device
+    /// pepper, so this cannot be a plain-SQL migration -- it runs at boot with
+    /// the cipher in hand. Idempotent: a value that is already a 64-char hex
+    /// digest is left alone (a real RFID code is far shorter, so the collision
+    /// risk is negligible), making it a no-op on a migrated or fresh install.
+    /// Returns how many rows were rewritten.
+    pub fn backfill_door_card_rule_digests(
+        &self,
+        cipher: &css_lib::card_crypto::CardCipher,
+    ) -> Result<usize, DatabaseError> {
+        use crate::schema::door_access_rules::dsl::*;
+        let mut conn = self.get_connection()?;
+        let card_rules: Vec<(uuid::Uuid, String)> = door_access_rules
+            .filter(kind.eq("card"))
+            .select((id, value))
+            .load::<(uuid::Uuid, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+
+        let mut rewritten = 0usize;
+        for (rid, v) in card_rules {
+            if v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue; // already a digest
+            }
+            let digest = hex::encode(
+                cipher
+                    .wire_digest(&v)
+                    .map_err(|e| DatabaseError::Other(format!("digest door card rule: {e}")))?,
+            );
+            diesel::update(door_access_rules.filter(id.eq(rid)))
+                .set(value.eq(digest))
+                .execute(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+            rewritten += 1;
+        }
+        Ok(rewritten)
+    }
+
+    /// How many door access rules and tools currently reference this schedule.
+    ///
+    /// #120 (#122/#7): both FKs are `ON DELETE SET NULL`, so deleting a schedule
+    /// silently un-gates everything that pointed at it -- a time-restricted door
+    /// rule becomes 24/7, a scheduled tool becomes always-open. The delete
+    /// endpoint refuses when this is non-zero rather than widen access by side
+    /// effect.
+    pub fn schedule_reference_count(&self, sid: uuid::Uuid) -> Result<i64, DatabaseError> {
+        use crate::schema::{door_access_rules, tools};
+        let mut conn = self.get_connection()?;
+        let door_refs: i64 = door_access_rules::table
+            .filter(door_access_rules::schedule_id.eq(Some(sid)))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let tool_refs: i64 = tools::table
+            .filter(tools::schedule_id.eq(Some(sid)))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(door_refs + tool_refs)
     }
 
     // ---------------------------------------------------------------------
@@ -6061,5 +6393,45 @@ mod overage_math_tests {
             &HashMap::new(),
         );
         assert_eq!(totals, vec![(c1, bd(0)), (c2, bd(0))]);
+    }
+}
+
+#[cfg(test)]
+mod profile_field_injection_tests {
+    use super::{DatabaseError, DatabaseManager};
+
+    #[test]
+    fn find_user_by_profile_field_rejects_a_non_identifier() {
+        // #120/M12: field_name is interpolated into the SQL, so a value that is
+        // not a bare identifier must be refused before it reaches the query. The
+        // guard runs before get_connection, so the disconnected fixture proves it
+        // without a database: a dead-pool error here would mean the guard let the
+        // value through. Mutation check: delete the guard and these hit the pool
+        // and fail with the wrong error.
+        let db = DatabaseManager::disconnected();
+        for bad in [
+            "",
+            "card'; DROP TABLE users; --",
+            "a b",
+            "profile->x",
+            "id)",
+        ] {
+            let err = db
+                .find_user_by_profile_field(bad, "x")
+                .expect_err("a non-identifier field name must be rejected");
+            assert!(
+                matches!(err, DatabaseError::Other(ref m) if m.contains("invalid profile field name")),
+                "expected the identifier-validation error for {bad:?}, got {err:?}"
+            );
+        }
+
+        // A valid identifier passes the guard and only then reaches the dead pool
+        // -- a DIFFERENT error -- proving the guard does not reject a legitimate
+        // field name.
+        let ok_err = db.find_user_by_profile_field("card_id", "x").unwrap_err();
+        assert!(
+            !matches!(ok_err, DatabaseError::Other(ref m) if m.contains("invalid profile field name")),
+            "a valid identifier was wrongly rejected by the guard: {ok_err:?}"
+        );
     }
 }

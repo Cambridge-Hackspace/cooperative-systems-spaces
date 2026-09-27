@@ -173,6 +173,12 @@ async fn disable_card(
         admin.0.id,
         req.reason.clone(),
     );
+    // #120 (#123/H2): propagate the revocation to devices now. Without this a
+    // disabled card keeps authorizing tools and doors offline until some
+    // *unrelated* event (a tool on/off, a user edit, the hourly billing sweep)
+    // happens to trigger a broadcast -- an unbounded revocation window.
+    crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    state.door_service.republish_all();
     Ok(Json(ApiResponse::success(card_response(
         card,
         state.card_cipher.as_deref(),
@@ -194,6 +200,11 @@ async fn release_card(
         admin.0.id,
         None,
     );
+    // #120 (#123/H2): propagate the revocation to devices immediately, mirroring
+    // disable_card -- otherwise a released card keeps working offline until an
+    // unrelated broadcast happens to fire.
+    crate::api::toolguard::broadcast_toolguard_state(&state).await;
+    state.door_service.republish_all();
     Ok(Json(ApiResponse::success(card_response(
         card,
         state.card_cipher.as_deref(),

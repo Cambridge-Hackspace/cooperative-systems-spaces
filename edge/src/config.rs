@@ -109,6 +109,25 @@ pub struct Config {
     /// -- that one records a finding for a human, this one withholds a lease.
     #[serde(default = "default_module_offline_ms")]
     pub module_offline_ms: i64,
+
+    /// Address the local web UI binds to. #120 (#123/H1): defaults to loopback
+    /// so the registration endpoint and the toolguard-state view (member PII +
+    /// offline-attackable card digests) are not exposed to the whole LAN. An
+    /// operator who genuinely needs LAN access can set "0.0.0.0", accepting that
+    /// the pairing token is then the only thing gating registration.
+    #[serde(default = "default_web_ui_bind_address")]
+    pub web_ui_bind_address: String,
+
+    /// #120 (#121): per-device command-channel HMAC key (hex), issued once at
+    /// registration. Used to verify signed `doors/unlock` commands and to sign
+    /// outbound `doors/event`. `None` on a device registered before #121 -- it
+    /// then runs with unsigned commands.
+    #[serde(default)]
+    pub command_key: Option<String>,
+}
+
+fn default_web_ui_bind_address() -> String {
+    "127.0.0.1".to_string()
 }
 
 fn default_toolguard_sync_interval() -> u64 {
@@ -151,6 +170,8 @@ impl Default for Config {
             module_lease_ttl_ms: default_module_lease_ttl_ms(),
             module_lease_interval_ms: default_module_lease_interval_ms(),
             module_offline_ms: default_module_offline_ms(),
+            web_ui_bind_address: default_web_ui_bind_address(),
+            command_key: None,
         }
     }
 }
@@ -181,6 +202,19 @@ impl Config {
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
+        // #120/M3: this file holds MQTT credentials and the edge's registration
+        // token; it must not stay world-readable (umask leaves a fresh file
+        // 0644). Restrict to owner-only on Unix; Windows has no POSIX mode (its
+        // ACLs govern), so the chmod is skipped there -- the edge ships as a
+        // cross-platform release binary.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path.as_ref(), std::fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!("Failed to secure config file: {}", path.as_ref().display())
+                })?;
+        }
 
         Ok(())
     }

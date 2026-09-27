@@ -33,6 +33,7 @@ use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +65,11 @@ pub struct UnlockCommand {
     pub door_id: Uuid,
     pub duration_ms: i32,
     pub reason: String,
+    /// #120 (#121): HMAC of the command, present when the server holds this
+    /// device's command key. `#[serde(default)]` keeps a keyless/legacy server's
+    /// unsigned command parseable.
+    #[serde(default)]
+    pub sig: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +95,11 @@ pub struct DoorsEvent {
     pub reason: Option<String>,
     pub source: &'static str,
     pub occurred_at: DateTime<Utc>,
+    /// #120 (#121): HMAC of the event so the server can reject a forged
+    /// doors/event. Set by the edge when it holds a command key; omitted
+    /// otherwise (a keyless server accepts it, rollout-graceful).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 /// Decision returned by [`DoorsState::decide`].
@@ -138,8 +149,17 @@ pub fn hold_pulse_ms(
 /// In-memory state cache fed by `doors/state` snapshots and read by the
 /// scan handler.
 #[derive(Debug, Default)]
+struct Cache {
+    doors: Vec<CompiledDoor>,
+    /// `snapshot_at` of the most recently applied snapshot (#120 #123/L2).
+    applied_at: Option<DateTime<Utc>>,
+}
+
+/// In-memory state cache fed by `doors/state` snapshots and read by the
+/// scan handler.
+#[derive(Debug, Default)]
 pub struct DoorsState {
-    inner: RwLock<Vec<CompiledDoor>>,
+    inner: RwLock<Cache>,
 }
 
 impl DoorsState {
@@ -147,10 +167,28 @@ impl DoorsState {
         Arc::new(Self::default())
     }
 
-    /// Replace the cache with a fresh snapshot.
+    /// Replace the cache with a fresh snapshot, unless it is stale.
+    ///
+    /// #120 (#123/L2): a config snapshot carries no per-door expiry, so a
+    /// replayed *older* snapshot could re-add a removed door, revert a
+    /// `deny_cards` entry, or flip `enabled` back on. `snapshot_at` is monotonic
+    /// per publisher, so a strictly-older stamp than the one already applied is
+    /// dropped; an equal or newer stamp is applied. (The separate hazard of a
+    /// stale snapshot *holding a door open* is handled independently by
+    /// `decide_at` checking `hold_unlock_until` against this device's clock.)
     pub fn apply_snapshot(&self, snapshot: DoorStateSnapshot) {
         let mut w = self.inner.write().expect("doors state poisoned");
-        *w = snapshot.doors;
+        if let Some(applied) = w.applied_at {
+            if snapshot.snapshot_at < applied {
+                warn!(
+                    "Ignoring stale doors snapshot (snapshot_at {} < applied {})",
+                    snapshot.snapshot_at, applied
+                );
+                return;
+            }
+        }
+        w.doors = snapshot.doors;
+        w.applied_at = Some(snapshot.snapshot_at);
     }
 
     /// Decide an RFID scan against the current cache, as of now. Deny beats
@@ -166,7 +204,7 @@ impl DoorsState {
     /// open window, but otherwise a live held-unlock admits any card.
     pub fn decide_at(&self, door_id: Uuid, card_id: &str, now: DateTime<Utc>) -> Decision {
         let guard = self.inner.read().expect("doors state poisoned");
-        let door = match guard.iter().find(|d| d.id == door_id) {
+        let door = match guard.doors.iter().find(|d| d.id == door_id) {
             Some(d) => d,
             None => return Decision::Deny("Unknown door"),
         };
@@ -206,6 +244,7 @@ impl DoorsState {
     ) -> Vec<(Uuid, i32)> {
         let guard = self.inner.read().expect("doors state poisoned");
         guard
+            .doors
             .iter()
             .filter(|d| d.enabled)
             .filter_map(|d| hold_pulse_ms(d.hold_unlock_until, now, refresh).map(|ms| (d.id, ms)))
@@ -214,7 +253,7 @@ impl DoorsState {
 
     /// Number of doors currently cached. Useful for `/status` / logging.
     pub fn len(&self) -> usize {
-        self.inner.read().map(|g| g.len()).unwrap_or(0)
+        self.inner.read().map(|g| g.doors.len()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -277,6 +316,53 @@ mod tests {
         let id = Uuid::new_v4();
         s.apply_snapshot(snap(id, &["A1"], &[]));
         assert!(matches!(s.decide(id, "ZZ"), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn a_stale_snapshot_is_ignored_but_a_newer_one_applies() {
+        // #120 (#123/L2): a replayed *older* config snapshot must not revert the
+        // cache (re-allow a denied card, resurrect a removed door). A strictly
+        // newer snapshot must still take effect. Two-sided: remove the freshness
+        // check and the "still denied" assertion fails.
+        let s = DoorsState::default();
+        let id = Uuid::new_v4();
+        let door = |allow: &[&str], deny: &[&str]| CompiledDoor {
+            id,
+            name: "Front".into(),
+            enabled: true,
+            unlock_duration_ms: 4200,
+            allow_cards: allow.iter().map(|s| s.to_string()).collect(),
+            deny_cards: deny.iter().map(|s| s.to_string()).collect(),
+            hold_unlock_until: None,
+        };
+        let at = |secs| DateTime::from_timestamp(secs, 0).unwrap();
+
+        // Current snapshot: A1 is denied.
+        s.apply_snapshot(DoorStateSnapshot {
+            snapshot_at: at(1_000_060),
+            doors: vec![door(&[], &["A1"])],
+        });
+        assert!(matches!(s.decide(id, "A1"), Decision::Deny(_)));
+
+        // Replay an OLDER snapshot that would re-allow A1 -- must be ignored.
+        s.apply_snapshot(DoorStateSnapshot {
+            snapshot_at: at(1_000_000),
+            doors: vec![door(&["A1"], &[])],
+        });
+        assert!(
+            matches!(s.decide(id, "A1"), Decision::Deny(_)),
+            "a replayed older snapshot must not revert deny_cards"
+        );
+
+        // A genuinely newer snapshot that re-allows A1 IS applied.
+        s.apply_snapshot(DoorStateSnapshot {
+            snapshot_at: at(1_000_120),
+            doors: vec![door(&["A1"], &[])],
+        });
+        assert!(
+            matches!(s.decide(id, "A1"), Decision::Allow { .. }),
+            "a newer snapshot must still be applied"
+        );
     }
 
     #[test]

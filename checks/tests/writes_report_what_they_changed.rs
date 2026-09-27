@@ -76,13 +76,14 @@ const WRITERS: &[Writer] = &[
     Writer {
         name: "add_reported_seconds",
         exempt: Some(
-            "Accumulates metered tool usage onto an OPEN session, which the \
-                      method loads and checks first. A zero-row update means the \
-                      session closed between that load and this write (a race); \
-                      the usage simply is not accumulated, and the settle path \
-                      still bounds the charge by wall-clock and the max cap, so a \
-                      miss cannot over-bill -- there is no wrong decision to make \
-                      from the count.",
+            "Accumulates metered tool usage onto an OPEN session in a single \
+                      atomic UPDATE (COALESCE(reported_seconds,0) + $n WHERE \
+                      status='open'); #120/M13 removed the read-modify-write that \
+                      let concurrent reports clobber each other. A zero-row update \
+                      means the session is no longer open, so nothing accumulates, \
+                      and the settle path still bounds the charge by wall-clock and \
+                      the max cap -- there is no wrong decision to make from the \
+                      count.",
         ),
     },
     Writer {
@@ -105,6 +106,18 @@ const WRITERS: &[Writer] = &[
                       here is not a missing target -- it is a duplicate grant, \
                       which is the intended no-op. Unassign, by contrast, returns \
                       the count and 404s on zero.",
+        ),
+    },
+    Writer {
+        name: "clear_email_verified_at",
+        exempt: Some(
+            "Clears the email-verified flag when the address changes (#120/#2). \
+                      Called only after `update_user` has just loaded and updated the \
+                      same row in the same request, so the user is known to exist; the \
+                      UPDATE matches by primary key and affects that one row whatever \
+                      the flag's prior value (clearing an already-null flag is the \
+                      intended idempotent no-op). A zero count is unreachable here, so \
+                      there is no missing-target signal to read.",
         ),
     },
     // Every other writer that used to be here has been fixed: each reads the row
@@ -288,9 +301,14 @@ fn the_two_writers_already_fixed_stay_fixed() {
     /// Writers that were in the offending shape and have been fixed. A regression
     /// here is the same defect coming back, so it is a gate rather than part of
     /// the ratchet above.
+    // #120/#9 removed `confirm_user_totp` from this list because the function no
+    // longer exists: it was replaced by `finalize_totp_confirmation`, which
+    // loads the row with `.first(conn)?` (a missing row is NotFound) before
+    // updating, so the "row was not there" case is caught by the load rather
+    // than an `if affected == 0` guard. The safety property this list protects
+    // is preserved by a different mechanism, so it is not a regression.
     const ALREADY_FIXED: &[&str] = &[
         "mark_recovery_code_used",
-        "confirm_user_totp",
         "set_user_mfa_enrolled",
         "remove_training_prerequisite",
         "revoke_instructor_certification",

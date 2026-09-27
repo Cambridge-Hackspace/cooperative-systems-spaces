@@ -527,6 +527,23 @@ impl PagesService {
             let entry = entry?;
             let path = entry.path();
 
+            // #120 (#5): never follow symlinks. is_dir()/is_file() stat the link
+            // *target*, so a symlink committed into the wiki repo
+            // (secrets.md -> /app/config/config.toml) would be read and rendered
+            // into a public, unauthenticated page -- leaking jwt_secret and every
+            // other secret in that file -- and a symlinked directory loop would
+            // recurse until the stack overflows. DirEntry::file_type() reports
+            // the link itself (it does not traverse), so a symlink is dropped
+            // before its target is ever touched. Wiki pages are regular files.
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                warn!(
+                    path = %path.display(),
+                    "pages: skipping symlink; wiki/site pages must be regular files"
+                );
+                continue;
+            }
+
             // Skip hidden files and directories
             if let Some(filename) = path.file_name() {
                 let filename_str = filename.to_string_lossy();
@@ -540,9 +557,9 @@ impl PagesService {
                 }
             }
 
-            if path.is_dir() {
+            if file_type.is_dir() {
                 Self::scan_directory_static(base_path, &path, pages, page_type, include_readme)?;
-            } else if path.is_file() {
+            } else if file_type.is_file() {
                 if let Some(ext) = path.extension() {
                     if ext == "md" || ext == "markdown" {
                         if let Ok(page) = Self::build_page_static(&path, base_path, page_type) {
@@ -794,6 +811,79 @@ mod publish_tests {
         PagesService::publish_into(&store, later);
 
         assert_eq!(None, store.read().unwrap().wiki_default_branch);
+    }
+}
+
+#[cfg(test)]
+mod scan_symlink_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// #120 (#5): a symlink committed into the wiki repo must not be followed.
+    /// Before the fix, `path.is_file()` stat-ed the target, so `secrets.md ->
+    /// /app/config/config.toml` was read and rendered into a public,
+    /// unauthenticated page -- handing out `jwt_secret`. This builds exactly that
+    /// attack and asserts the secret never reaches a page.
+    #[test]
+    fn a_symlinked_file_is_not_read_or_published() {
+        let root = tempfile::tempdir().expect("a temp dir");
+        let outside = tempfile::tempdir().expect("a second temp dir");
+
+        // The secret lives OUTSIDE the repo, exactly as config.toml does.
+        let secret = outside.path().join("config.toml");
+        fs::write(&secret, "jwt_secret = \"TOP-SECRET-DO-NOT-LEAK\"\n").unwrap();
+
+        // A legitimate page, so a passing scan is distinguishable from an empty one.
+        fs::write(root.path().join("welcome.md"), "# Welcome\n\nhello\n").unwrap();
+
+        // The attack: a .md symlink pointing at the out-of-tree secret.
+        symlink(&secret, root.path().join("secrets.md")).unwrap();
+
+        let pages = PagesService::build_pages_static(root.path(), PageType::Wiki, false)
+            .expect("scan succeeds");
+
+        assert!(
+            pages.contains_key("welcome"),
+            "the legitimate page must still publish"
+        );
+        assert!(
+            !pages.contains_key("secrets"),
+            "a symlinked page must not be published under any slug"
+        );
+        for page in pages.values() {
+            assert!(
+                !page.raw_content.contains("TOP-SECRET"),
+                "secret leaked into raw content of slug {}",
+                page.slug
+            );
+            assert!(
+                !page.html_content.contains("TOP-SECRET"),
+                "secret leaked into rendered HTML of slug {}",
+                page.slug
+            );
+        }
+    }
+
+    /// #120 (#5): a symlinked directory loop must terminate, not recurse until
+    /// the stack overflows. The test returning at all is the assertion; the real
+    /// nested page proves the walk still descended into genuine subdirectories.
+    #[test]
+    fn a_symlinked_directory_loop_terminates() {
+        let root = tempfile::tempdir().expect("a temp dir");
+        let sub = root.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("page.md"), "# Page\n").unwrap();
+
+        // sub/back -> root : following it would recurse forever.
+        symlink(root.path(), sub.join("back")).unwrap();
+
+        let pages = PagesService::build_pages_static(root.path(), PageType::Wiki, false)
+            .expect("scan terminates and succeeds");
+
+        assert!(
+            pages.contains_key("sub/page"),
+            "the real nested page is still found once"
+        );
     }
 }
 

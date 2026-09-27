@@ -202,6 +202,8 @@ impl DeviceInbound {
             source: Option<String>,
             #[serde(default)]
             occurred_at: Option<chrono::DateTime<Utc>>,
+            #[serde(default)]
+            sig: Option<String>,
         }
 
         let event: DoorEventIn = match serde_json::from_slice(payload) {
@@ -215,11 +217,50 @@ impl DeviceInbound {
             }
         };
 
+        // #120 (#121): if this device holds a command key, require a valid HMAC
+        // on the event -- otherwise a forged doors/event could enter the audit
+        // trail as a genuine DoorUnlockedCard. A keyless (legacy) device's
+        // unsigned event is accepted, as before; a key-load error fails closed.
+        if let Some(cipher) = self.card_cipher.as_deref() {
+            match self.db.device_command_key(device_id, cipher) {
+                Ok(Some(key)) => {
+                    let msg = css_lib::sig::doors_event_message(
+                        &event.door_id.to_string(),
+                        event.card_id.as_deref().unwrap_or(""),
+                        event.granted,
+                        event.source.as_deref().unwrap_or(""),
+                    );
+                    let ok = event
+                        .sig
+                        .as_deref()
+                        .is_some_and(|s| css_lib::sig::verify(&key, &msg, s));
+                    if !ok {
+                        warn!(
+                            "Rejected doors/event from device {}: missing or invalid signature",
+                            device_id
+                        );
+                        return;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("Failed to load command key for device {}: {}", device_id, e);
+                    return;
+                }
+            }
+        }
+
         // Resolve the scanned card to a member regardless of card status, so a
         // disabled/released card is still attributable in the door record. A
         // revoked card presented at a door raises the same high-signal fraud
         // event as at a tool (recorded after the access event below).
         let mut revoked_card: Option<(uuid::Uuid, crate::models::UserCard)> = None;
+        // #120 (#123/H5): the resolved card's UUID, so the durable row and the
+        // audit log can attribute the swipe without persisting the plaintext
+        // scanned code (a card identifier the tool path already refuses to store,
+        // #107/#108). None for an unknown card -- we keep no record of an
+        // unrecognized code's value.
+        let mut card_uuid: Option<uuid::Uuid> = None;
         let user_id = match event.card_id.as_deref() {
             Some(card) if !card.is_empty() => {
                 match self.db.resolve_card(
@@ -227,9 +268,13 @@ impl DeviceInbound {
                     card,
                     self.card_cipher.as_deref(),
                 ) {
-                    Ok(crate::models::CardResolution::Active { user, .. }) => Some(user.id),
+                    Ok(crate::models::CardResolution::Active { user, card }) => {
+                        card_uuid = card.as_ref().map(|c| c.id);
+                        Some(user.id)
+                    }
                     Ok(crate::models::CardResolution::Revoked { user, card }) => {
                         let uid = user.id;
+                        card_uuid = Some(card.id);
                         revoked_card = Some((uid, card));
                         Some(uid)
                     }
@@ -263,7 +308,8 @@ impl DeviceInbound {
             door_id: event.door_id,
             user_id,
             method: method.as_str().to_string(),
-            card_id_attempted: event.card_id.clone(),
+            // #120 (#123/H5): the resolved card UUID, never the plaintext code.
+            card_id_attempted: card_uuid.map(|id| id.to_string()),
             granted: event.granted,
             reason: event.reason.clone(),
             ip_address: None,
@@ -306,7 +352,8 @@ impl DeviceInbound {
             event_data: serde_json::json!({
                 "door_id": event.door_id,
                 "device_id": device_id,
-                "card_id_attempted": event.card_id,
+                // #120 (#123/H5): resolved card UUID, not the plaintext code.
+                "card_id": card_uuid,
                 "granted": event.granted,
                 "reason": event.reason,
                 "source": method.as_str(),

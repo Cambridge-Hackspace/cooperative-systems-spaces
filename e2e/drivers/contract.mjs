@@ -21,7 +21,7 @@
 
 import {
   GET, PUT, POST, DELETE, req, BASE,
-  account, login, register,
+  account, login, register, PASSWORD,
   assertEq, assertNe, ok, record, main, RUN_TAG, ADMIN_EMAIL,
 } from './lib.mjs'
 
@@ -401,6 +401,115 @@ main(async () => {
   assertNe('contract/cors-preflight-from-an-unlisted-origin-is-not-allowed',
     'https://not-allowed.example',
     denied.headers.get('access-control-allow-origin'))
+
+  // #120/#2: a user changing their OWN password through PUT /api/users/{id}
+  // must supply the current one. update_user is the admin-reset path and skips
+  // that when a manager acts on someone else, but a self-edit used to re-key the
+  // account with only a bearer token -- a stolen token was permanent takeover.
+  // A fresh account is used so the mutation touches nothing else. Without the
+  // fix the first assertion gets 200.
+  const selfEditor = await account('selfpw')
+  const NEWPW = 'brand-new-password-9999'
+  const noCurrent = await PUT(`/api/users/${selfEditor.user.id}`, {
+    token: selfEditor.token,
+    body: { password: NEWPW },
+  })
+  assertEq('contract/self-password-needs-current', 400, noCurrent.status,
+    `self password change with no current_password -> ${noCurrent.status}`)
+
+  const wrongCurrent = await PUT(`/api/users/${selfEditor.user.id}`, {
+    token: selfEditor.token,
+    body: { current_password: 'not-the-password', password: NEWPW },
+  })
+  assertEq('contract/self-password-wrong-current', 400, wrongCurrent.status,
+    `self password change with wrong current_password -> ${wrongCurrent.status}`)
+
+  const rightCurrent = await PUT(`/api/users/${selfEditor.user.id}`, {
+    token: selfEditor.token,
+    body: { current_password: PASSWORD, password: NEWPW },
+  })
+  assertEq('contract/self-password-with-current', 200, rightCurrent.status,
+    `self password change with correct current_password -> ${rightCurrent.status}`)
+
+  // Two oracles that the change took effect: the old password stops working and
+  // the new one starts. Asserting only one would pass a handler that accepted
+  // the request but wrote nothing.
+  const oldLogin = await login(selfEditor.username, PASSWORD)
+  assertEq('contract/old-password-rejected-after-change', 401, oldLogin.status,
+    `old password after change -> ${oldLogin.status}`)
+  const newLogin = await login(selfEditor.username, NEWPW)
+  assertEq('contract/new-password-accepted-after-change', 200, newLogin.status,
+    `new password after change -> ${newLogin.status}`)
+
+  // #120/#2 (email): a self-service email change also requires the current
+  // password -- a stolen token could otherwise re-address the account and then
+  // password-reset it. Without current_password -> 400; with -> 200. Without the
+  // fix the first is a 200.
+  const emailEditor = await account('selfemail')
+  const movedAddr = `moved.${RUN_TAG}@e2e.invalid`
+  const emailNoPw = await PUT(`/api/users/${emailEditor.user.id}`, {
+    token: emailEditor.token,
+    body: { email: movedAddr },
+  })
+  assertEq('contract/self-email-needs-current', 400, emailNoPw.status,
+    `self email change with no current_password -> ${emailNoPw.status}`)
+  const emailWithPw = await PUT(`/api/users/${emailEditor.user.id}`, {
+    token: emailEditor.token,
+    body: { current_password: PASSWORD, email: movedAddr },
+  })
+  assertEq('contract/self-email-with-current', 200, emailWithPw.status,
+    `self email change with current_password -> ${emailWithPw.status}`)
+
+  // #120/#3 + M8: email identity is case-insensitive. An address differing from
+  // an existing one only by case must be refused -- before, Alice@x and alice@x
+  // registered as two accounts, which (with the case-insensitive setup grant)
+  // let a second ADMIN@... also be granted admin. Without the fix the variant
+  // registration is a 200.
+  const caseEmail = `Collide.${RUN_TAG}@e2e.invalid`
+  const firstReg = await register(`collide1_${RUN_TAG}`, caseEmail)
+  ok('contract/case-email-first-registers', firstReg.status === 200 || firstReg.status === 201,
+    `first registration -> ${firstReg.status}`)
+  const variantReg = await register(`collide2_${RUN_TAG}`, caseEmail.toLowerCase())
+  assertEq('contract/case-variant-email-refused', 409, variantReg.status,
+    `a case-variant of an existing email must be refused (got ${variantReg.status})`)
+
+  // #120/M9: a password change revokes live sessions. Log in, confirm the token
+  // works, change the password with that same token, then the OLD token must be
+  // refused (401) on a protected endpoint -- token_version was bumped. Without
+  // the epoch the old token stays valid until expiry, so the last assertion 200s.
+  const revUser = await account('revoke')
+  const oldToken = revUser.token
+  const meBefore = await GET('/api/auth/me', { token: oldToken })
+  assertEq('contract/revoke-token-valid-before', 200, meBefore.status,
+    `me before -> ${meBefore.status}`)
+  const revChanged = await PUT(`/api/users/${revUser.user.id}`, {
+    token: oldToken,
+    body: { current_password: PASSWORD, password: 'revoke-newpass-9999' },
+  })
+  assertEq('contract/revoke-password-changed', 200, revChanged.status,
+    `change -> ${revChanged.status}`)
+  const meAfter = await GET('/api/auth/me', { token: oldToken })
+  assertEq('contract/revoke-old-token-rejected-after', 401, meAfter.status,
+    `old token after password change -> ${meAfter.status} (M9 revocation)`)
+
+  // #120/#8 (H6): login is throttled. A burst of failed logins for one identity
+  // is eventually refused with 429 rather than letting password spraying run
+  // unbounded. A throwaway username is used so the short lockout affects nothing
+  // else. Without the throttle every attempt is a 401 and this never trips.
+  // (login_throttle_attempts defaults to 10; the loop allows margin.)
+  const sprayUser = `e2e_spray_${RUN_TAG}`
+  let loginThrottled = false
+  let lastSprayStatus = 0
+  for (let i = 0; i < 15; i++) {
+    const r = await login(sprayUser, 'definitely-the-wrong-password')
+    lastSprayStatus = r.status
+    if (r.status === 429) {
+      loginThrottled = true
+      break
+    }
+  }
+  ok('contract/login-throttled-after-burst', loginThrottled,
+    `a burst of failed logins was never throttled (last status ${lastSprayStatus}) -- #120/#8`)
 
   // Deleting the accounts this run created, through the shipping path, so a
   // cluster without rollback does not accumulate them across runs.

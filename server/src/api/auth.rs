@@ -166,9 +166,20 @@ async fn register(
     let password_hash = PasswordHashUtil::hash(&payload.password)
         .map_err(|_| ApiError::InternalServerError("Failed to hash password".to_string()))?;
 
-    // Check if this should be the first admin user
+    // Check if this should be the first admin user.
+    //
+    // #120/#3: the initial-setup grant is one-shot -- it may mint an admin only
+    // while none exists. setup_enabled defaulted true and was never auto-
+    // disabled, so whoever registered the setup address first became admin; and
+    // because the grant matched case-insensitively while the address was a
+    // case-sensitive unique, a second ADMIN@... could register and also be
+    // granted. Gating on zero existing admins closes both -- once the first
+    // admin exists the grant never fires again. Case-variant duplicate accounts
+    // are separately prevented by the lower(email) uniqueness migration and the
+    // now case-insensitive find_user_by_email.
     let config = state.config_manager.get_config();
-    let should_be_admin = config.should_grant_admin_role(&payload.email);
+    let should_be_admin = config.should_grant_admin_role(&payload.email)
+        && state.db.count_active_admins().map_err(ApiError::from)? == 0;
 
     // New users get the `guest` tier; the setup admin address gets `admin`.
     let assigned_role = if should_be_admin {
@@ -246,9 +257,45 @@ async fn login(
     let config = state.config_manager.get_config();
     let auth_service = AuthService::new(&state.db, &config.auth.jwt_secret);
 
-    let user = auth_service
-        .authenticate_user(&payload.username_or_email, &payload.password)
-        .map_err(ApiError::from)?;
+    // #120/#8 (H6): throttle password spraying. Keyed on the submitted identity
+    // (lowercased, so case cannot dodge it); a short lockout bounds the spray
+    // rate without the victim-lockout DoS a long one would enable. IP-based
+    // limiting waits on trustworthy client-IP resolution (#13) -- the leftmost
+    // X-Forwarded-For is spoofable. Checked before authenticate, recorded on
+    // failure, cleared on success.
+    let throttle_id = format!("login:{}", payload.username_or_email.trim().to_lowercase());
+    if config.auth.login_throttle_enabled {
+        if let Err(remaining) = state.throttle_service.check_attempt(
+            &throttle_id,
+            config.auth.login_throttle_attempts,
+            config.auth.login_throttle_seconds,
+        ) {
+            return Err(ApiError::TooManyRequests(format!(
+                "Too many login attempts. Try again in {remaining} seconds."
+            )));
+        }
+    }
+
+    let user = match auth_service.authenticate_user(&payload.username_or_email, &payload.password) {
+        Ok(user) => {
+            if config.auth.login_throttle_enabled {
+                state
+                    .throttle_service
+                    .record_successful_attempt(&throttle_id);
+            }
+            user
+        }
+        Err(e) => {
+            if config.auth.login_throttle_enabled {
+                state.throttle_service.record_failed_attempt(
+                    &throttle_id,
+                    config.auth.login_throttle_attempts,
+                    config.auth.login_throttle_seconds,
+                );
+            }
+            return Err(ApiError::from(e));
+        }
+    };
 
     // Confirmed address required, if the operator asked for that.
     //
@@ -280,7 +327,9 @@ async fn login(
         )));
     }
 
-    let token = auth_service.create_token(&user).map_err(ApiError::from)?;
+    let token = auth_service
+        .create_token(&user, config.auth.jwt_expiration_hours)
+        .map_err(ApiError::from)?;
 
     // Flag users whose role requires enrollment under the current policy so
     // the frontend can route them to the enrollment page on first sight.
@@ -650,7 +699,7 @@ async fn password_reset_consume(
 /// mailer switched off does not fail a registration over a message it was
 /// never going to send. Any real failure is audited as `EmailSendFailed`, which
 /// is how an operator finds out, since neither caller may vary its response.
-async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
+pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
     let config = state.config_manager.get_config();
     if !config.email.enabled {
         return;

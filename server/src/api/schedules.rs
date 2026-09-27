@@ -263,6 +263,18 @@ async fn delete_schedule(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let prev = state.db.get_schedule(id)?;
+    // #120 (#122/#7): refuse to delete a schedule still gating a door rule or a
+    // tool. Both FKs are ON DELETE SET NULL, so deleting one would silently widen
+    // a time-restricted door to 24/7 and a scheduled tool to always-open. The
+    // operator must detach the rules/tools first (an explicit act), not lose the
+    // restriction as a side effect of a delete.
+    let refs = state.db.schedule_reference_count(id)?;
+    if refs > 0 {
+        return Err(ApiError::Conflict(format!(
+            "Schedule '{}' is still used by {} rule/tool(s); detach them before deleting it",
+            prev.name, refs
+        )));
+    }
     let deleted = state.db.delete_schedule(id)?;
     if deleted == 0 {
         return Err(ApiError::NotFound("Schedule not found".to_string()));
@@ -273,7 +285,8 @@ async fn delete_schedule(
         Some(admin.0.id),
         serde_json::json!({ "schedule_id": id, "name": prev.name }),
     );
-    // FK is `ON DELETE SET NULL` — rules that pointed here are now ungated.
+    // No references remain (checked above), so nothing was un-gated; republish so
+    // any device caching this schedule id drops it.
     state.door_service.republish_all();
     Ok(Json(ApiResponse::<()> {
         success: true,

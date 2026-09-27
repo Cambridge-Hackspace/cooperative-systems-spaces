@@ -112,14 +112,15 @@ diesel::table! {
         #[max_length = 255]
         auth_token -> Varchar,
         created_at -> Timestamptz,
+        command_key_sealed -> Nullable<Bytea>,
+        command_key_nonce -> Nullable<Bytea>,
     }
 }
 
 diesel::table! {
     space_device_auth_requests (id) {
         id -> Uuid,
-        #[max_length = 32]
-        device_code -> Varchar,
+        device_code -> Text,
         expires_at -> Timestamptz,
         used_at -> Nullable<Timestamptz>,
         created_by -> Nullable<Uuid>,
@@ -520,6 +521,7 @@ diesel::table! {
         stripe_customer_id -> Nullable<Text>,
         stripe_subscription_id -> Nullable<Text>,
         subscription_status -> Nullable<Text>,
+        token_version -> Int4,
     }
 }
 
@@ -638,6 +640,8 @@ diesel::table! {
         confirmed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        pending_secret_base32 -> Nullable<Text>,
+        last_used_step -> Nullable<Int8>,
     }
 }
 

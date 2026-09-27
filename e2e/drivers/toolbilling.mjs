@@ -35,6 +35,8 @@ const toolOn = (card, tid, key) =>
   POST('/api/toolguard/tool-on', { body: { card, tool_id: tid, api_key: key } })
 const toolOff = (card, tid, key) =>
   POST('/api/toolguard/tool-off', { body: { card, tool_id: tid, api_key: key } })
+const toolLog = (card, tid, key, seconds) =>
+  POST('/api/toolguard/tool-log', { body: { card, tool_id: tid, api_key: key, seconds } })
 
 async function createMeteredTool(admin, { externalId, flatFee, maxMin, requiresTraining }) {
   const res = await POST('/api/tools', {
@@ -310,4 +312,64 @@ await main(async () => {
   })
   assertEq('tiers/clear-assignment', 200, clear.status)
   await runTierCase('comp-after-clear', tierMembers.comp, 'E2E-TIER-COMP', 1.0, null)
+
+  // #120/M2: two concurrent activations of the same idle NON-metered tool must
+  // not both succeed. A non-metered tool has no open-session unique index to
+  // serialize on, so this drives the try_activate_tool compare-and-set directly:
+  // exactly one tool-on gets tool_on:true, the other is refused. Without the CAS
+  // both pass the loaded-row status check and both write InUse -> wins == 2. A
+  // few rounds since a race won once may lose the next.
+  const m2Rounds = Number(process.env.CSS_RACE_ROUNDS ?? 3)
+  for (let r = 0; r < m2Rounds; r++) {
+    const ext = `e2e-m2-race-${r}`
+    await createMeteredTool(admin, {
+      externalId: ext,
+      flatFee: null,
+      maxMin: null,
+      requiresTraining: false,
+    })
+    const racer = await account(`tb_m2_${r}`)
+    const card = `M2-RACE-${r}`
+    await setCard(racer, card)
+    const [a, b] = await Promise.all([
+      toolOn(card, ext, TOOL_KEY),
+      toolOn(card, ext, TOOL_KEY),
+    ])
+    const wins = [a, b].filter((x) => x.json?.tool_on === true).length
+    assertEq(`toolbilling/m2-one-activation-wins-r${r}`, 1, wins,
+      `concurrent activations returned tool_on=${JSON.stringify([a.json?.tool_on, b.json?.tool_on])}; exactly one must win`)
+    await toolOff(card, ext, TOOL_KEY)
+  }
+
+  // #120/M1: a billable usage report must come from the card that activated the
+  // session; a stray card must not inflate the activator's usage. tool-OFF stays
+  // open to any card (anyone can cut power for safety) -- this guards *reporting*
+  // only. Without the check the stranger's report is accepted (status "ok").
+  {
+    const ext = 'e2e-m1-tool'
+    await createMeteredTool(admin, {
+      externalId: ext,
+      flatFee: '1.00',
+      maxMin: 60,
+      requiresTraining: false,
+    })
+    const owner = await account('tb_m1_owner')
+    await setCard(owner, 'M1-OWNER')
+    await fund(admin, owner, '20.00')
+    const stranger = await account('tb_m1_stranger')
+    await setCard(stranger, 'M1-STRANGER')
+
+    const on = await toolOn('M1-OWNER', ext, TOOL_KEY)
+    ok('toolbilling/m1-owner-activated', on.json?.tool_on === true, JSON.stringify(on.json))
+
+    const strangerLog = await toolLog('M1-STRANGER', ext, TOOL_KEY, 30)
+    assertEq('toolbilling/m1-stranger-report-refused', 'error', strangerLog.json?.status,
+      `a stranger's card reported usage onto the owner's session: ${JSON.stringify(strangerLog.json)}`)
+
+    const ownerLog = await toolLog('M1-OWNER', ext, TOOL_KEY, 30)
+    assertEq('toolbilling/m1-owner-report-accepted', 'ok', ownerLog.json?.status,
+      `the activating member's own report was refused: ${JSON.stringify(ownerLog.json)}`)
+
+    await toolOff('M1-OWNER', ext, TOOL_KEY)
+  }
 })

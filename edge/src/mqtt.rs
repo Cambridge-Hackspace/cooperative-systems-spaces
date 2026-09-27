@@ -447,6 +447,9 @@ pub struct LocalMqttClient {
     /// Wiring + interlocks. Written here only to record module liveness; the
     /// lease watchdog in `main` is what reads it.
     module_state: Arc<crate::modules::ModuleState>,
+    /// #120 (#121): per-device command-channel HMAC key, used to sign outbound
+    /// `doors/event`. `None` on a legacy device -> events go unsigned.
+    command_key: Option<Vec<u8>>,
 }
 
 impl LocalMqttClient {
@@ -460,6 +463,7 @@ impl LocalMqttClient {
         doors_state: Arc<DoorsState>,
         doors_event_tx: DoorsEventSender,
         module_state: Arc<crate::modules::ModuleState>,
+        command_key: Option<Vec<u8>>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
@@ -505,6 +509,7 @@ impl LocalMqttClient {
                 doors_state,
                 doors_event_tx,
                 module_state,
+                command_key,
             },
             rx,
         ))
@@ -582,11 +587,20 @@ impl LocalMqttClient {
             }
         };
 
-        let (granted, duration_ms, reason) =
-            match self.doors_state.decide(req.door_id, &req.card_id) {
-                Decision::Allow { duration_ms } => (true, duration_ms, None),
-                Decision::Deny(why) => (false, 0, Some(why.to_string())),
-            };
+        // #120 (#122/H3): the server ships door allow/deny lists as card
+        // wire-digests, so match on the digest of the swipe, not the raw code.
+        // No digester configured -> empty token -> matches nothing -> deny
+        // (fail-closed, as the tool path does without a pepper). The raw code
+        // still travels upstream below for server-side resolution.
+        let scan_token = self
+            .toolguard_state
+            .wire_digest_hex(&req.card_id)
+            .unwrap_or_default();
+        let (granted, duration_ms, reason) = match self.doors_state.decide(req.door_id, &scan_token)
+        {
+            Decision::Allow { duration_ms } => (true, duration_ms, None),
+            Decision::Deny(why) => (false, 0, Some(why.to_string())),
+        };
 
         // Tell the local relay controller what to do.
         let response = LocalUnlockResponse {
@@ -600,14 +614,25 @@ impl LocalMqttClient {
         }
 
         // Tell the server what just happened (audit log, webhook, etc.).
-        let event = doors::DoorsEvent {
+        let mut event = doors::DoorsEvent {
             door_id: req.door_id,
             card_id: Some(req.card_id),
             granted,
             reason,
             source: "rfid",
             occurred_at: chrono::Utc::now(),
+            sig: None,
         };
+        // #120 (#121): sign the event so the server rejects a forged doors/event.
+        if let Some(key) = &self.command_key {
+            let msg = css_lib::sig::doors_event_message(
+                &event.door_id.to_string(),
+                event.card_id.as_deref().unwrap_or(""),
+                event.granted,
+                event.source,
+            );
+            event.sig = Some(css_lib::sig::sign(key, &msg));
+        }
         if self.doors_event_tx.send(event).is_err() {
             warn!("Doors event bridge channel closed; cannot report scan upstream");
         }

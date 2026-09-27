@@ -179,40 +179,12 @@ function fillPath(template) {
 // checking, and it is the reason a suppression list eventually stops describing
 // anything.
 const KNOWN = [
-  {
-    // Removed when unrepresentable text became a 400, then restored when this
-    // route was given back its 500 -- and the round trip is the reason to keep
-    // this comment rather than tidy it away.
-    //
-    // Every other route answering 500 for unstorable text was answering for
-    // text the CALLER sent, and 400 is right for those. This one generates its
-    // own value: a device code is eight characters from a 242-entry emoji
-    // alphabet, of which LATIN1 can store none. A 400 would tell an
-    // administrator their input was bad when they supplied no input.
-    //
-    // So the 500 here is correct rather than unfixed, and this exemption is
-    // narrower than it looks: it says "a server that genuinely cannot do the
-    // job may say so", not "this route is allowed to fail". The finding it
-    // rests on -- device registration is impossible without a UTF-8 database --
-    // is pinned by the concurrency tier and recorded in TESTING.md.
-    //
-    // `only` is LATIN1 and other non-Unicode encodings, NOT every non-UTF-8 one.
-    // SQL_ASCII stores the code's bytes verbatim (device_code is VARCHAR(64),
-    // wide enough for the 56-byte worst case even byte-counted), so there the
-    // invite is created (201) and this 500 does not occur. Folding SQL_ASCII in
-    // with `enc !== 'UTF8'` made this KNOWN entry flaky: it fired
-    // `known-finding-fixed` on a 201 or, unsuppressed, tripped the no-5xx oracle
-    // on the intermittent overflow 500. Both symptoms of the same VARCHAR(32)
-    // byte-overflow, now fixed; see the widen_device_code migration.
-    method: 'POST',
-    template: '/api/admin/devices/invite',
-    status: 500,
-    only: (enc) => enc !== 'UTF8' && enc !== 'SQL_ASCII',
-    why:
-      'a device invite code is eight emoji and this cluster can store none of ' +
-      'them. The server generated the value, so this is genuinely the ' +
-      "server's failure and 500 is the honest answer. TESTING.md, \"Known defects\".",
-  },
+  // #120 (#137): the "POST /api/admin/devices/invite answers 500 on a
+  // non-Unicode cluster" entry was removed here. Invite codes are now stored as
+  // ASCII hex (server::models::encode_device_code), so the invite is created
+  // (201) on any encoding -- LATIN1 included -- and that finding no longer
+  // exists. Its concurrency-tier pinned finding was removed in the same change.
+  //
   // The four registered-but-unimplemented routes. A 501 is honest rather than
   // broken -- but each is a route the frontend can call and that can never
   // succeed, so they are recorded rather than ignored.

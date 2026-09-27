@@ -119,13 +119,16 @@
                 :disabled="authStore.isLoading"
                 required
               />
-              <!-- Deliberate and narrow: this is the terms-of-service text from config.toml, which only a server
-       administrator can set -- the same person who can already change anything
-       else the server serves. NOTE: the field is named _md and holds markdown,
-       but nothing converts it, so markdown syntax renders literally. That is a
-       separate rendering bug, recorded rather than fixed here. -->
-              <!-- eslint-disable-next-line vue/no-v-html -->
-              <span class="label-text ml-3" v-html="challengeConfig?.terms_of_service_md"></span>
+              <!-- #120 (XSS): render the terms-of-service text (config.toml
+                   terms_of_service_md) as plain text, not raw HTML. v-html here
+                   executed any <script>/<img onerror> an admin-set value
+                   contained, while giving nothing back: the field holds markdown
+                   and nothing converts it, so under v-html markdown syntax
+                   already rendered literally. Text interpolation shows the same
+                   characters and closes the injection. A sanitizing markdown
+                   renderer, if that formatting is ever wanted, is a separate
+                   enhancement -- not a reason to keep executing raw input. -->
+              <span class="label-text ml-3">{{ challengeConfig?.terms_of_service_md }}</span>
             </label>
           </div>
 

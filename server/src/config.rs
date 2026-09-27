@@ -82,8 +82,6 @@ pub struct SiteConfig {
     pub max_session_age: i32,
     /// Enable debug mode
     pub debug: bool,
-    /// Secret key for cryptographic signing
-    pub secret_key: String,
     /// Enable HTTPS enforcement
     pub https: bool,
     /// Analytics tracking ID (optional)
@@ -103,7 +101,6 @@ impl Default for SiteConfig {
             timezone: "UTC".to_string(),
             max_session_age: 1440, // 24 hours
             debug: false,
-            secret_key: "change-me-in-production".to_string(),
             https: false,
             analytics_id: None,
             homepage_links: HomepageLinksConfig::default(),
@@ -545,9 +542,32 @@ pub struct AuthConfig {
     pub session_timeout_minutes: u32,
     /// Enable password reset functionality
     pub password_reset_enabled: bool,
+    /// Login / MFA-verify brute-force throttle (#120/#8). After
+    /// `login_throttle_attempts` failures for one identity -- the submitted
+    /// username on login, the user id on verify -- that identity is locked for
+    /// `login_throttle_seconds`. Kept short so it slows password spraying and
+    /// TOTP brute force without being a victim-lockout DoS. serde-default so a
+    /// config written before these keys existed still loads; a bulk-login test
+    /// tier can disable it.
+    #[serde(default = "default_login_throttle_enabled")]
+    pub login_throttle_enabled: bool,
+    #[serde(default = "default_login_throttle_attempts")]
+    pub login_throttle_attempts: u32,
+    #[serde(default = "default_login_throttle_seconds")]
+    pub login_throttle_seconds: u32,
     /// Multi-factor authentication settings
     #[serde(default)]
     pub mfa: AuthMfaConfig,
+}
+
+fn default_login_throttle_enabled() -> bool {
+    true
+}
+fn default_login_throttle_attempts() -> u32 {
+    10
+}
+fn default_login_throttle_seconds() -> u32 {
+    60
 }
 
 /// Who is required to enroll in MFA before they can use the system fully.
@@ -652,6 +672,9 @@ impl Default for AuthConfig {
             password_min_length: 8,
             session_timeout_minutes: 1440, // 24 hours
             password_reset_enabled: true,
+            login_throttle_enabled: default_login_throttle_enabled(),
+            login_throttle_attempts: default_login_throttle_attempts(),
+            login_throttle_seconds: default_login_throttle_seconds(),
             mfa: AuthMfaConfig::default(),
         }
     }
@@ -1646,6 +1669,19 @@ impl AppConfig {
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
+        // #120/M3: config holds the JWT secret, DB password, Stripe and card
+        // encryption/index keys, and MQTT passwords; it must not stay
+        // world-readable (umask leaves a fresh file 0644). Restrict to owner-only
+        // on Unix; Windows has no POSIX mode (its ACLs govern), so the chmod is
+        // skipped there -- the server ships as a cross-platform release binary.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path.as_ref(), std::fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!("Failed to secure config file: {}", path.as_ref().display())
+                })?;
+        }
 
         Ok(())
     }
@@ -1674,7 +1710,15 @@ impl ConfigManager {
 
     /// Get the current configuration (read-only)
     pub fn get_config(&self) -> AppConfig {
-        self.config.read().unwrap().clone()
+        // #120 (low): recover a poisoned lock rather than panic. One panic while
+        // the write guard was held would otherwise poison this RwLock, and every
+        // request thereafter -- each auth extractor calls get_config -- would
+        // panic on the lock, an auth-wide outage. (The whole-config clone this
+        // still performs per call is a separate perf item; #120 tracks it.)
+        self.config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Reload configuration from disk
@@ -1976,6 +2020,20 @@ fn validate_config(config: &AppConfig) -> Result<()> {
             return Err(anyhow::anyhow!(
                 "tool_billing.min_balance ({:?}) is not a valid decimal amount: {e}",
                 config.tool_billing.min_balance
+            ));
+        }
+    }
+
+    // #120/M12: the toolguard profile field is interpolated into the card-lookup
+    // SQL (find_user_by_profile_field binds only the value, not the field name),
+    // so it must be a bare identifier. Refused at boot and reload rather than at
+    // the first card scan; the query itself has its own guard as defense in depth.
+    {
+        let f = &config.toolguard.profile_field;
+        if f.is_empty() || !f.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(anyhow::anyhow!(
+                "toolguard.profile_field must be a bare identifier ([A-Za-z0-9_]+); \
+                 it is interpolated into the card-lookup query. Got {f:?}."
             ));
         }
     }

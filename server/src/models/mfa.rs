@@ -19,6 +19,15 @@ pub struct UserMfaTotp {
     pub confirmed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// A new secret being set up while a confirmed one is still live (#120/#9).
+    /// `None` when no setup is in progress. Promoted into `secret_base32` on a
+    /// successful confirm, so an abandoned setup never destroys the working
+    /// factor. Last fields for the positional-Queryable reason the User model
+    /// documents.
+    pub pending_secret_base32: Option<String>,
+    /// The last TOTP time-step consumed (#120/#12). A code whose step is `<=`
+    /// this is a replay and is refused. `None` until the first code is spent.
+    pub last_used_step: Option<i64>,
 }
 
 #[derive(Debug, Clone, Insertable)]

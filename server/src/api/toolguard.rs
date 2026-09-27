@@ -411,19 +411,14 @@ async fn tool_on(
     // a CI artifact and readable by anyone who can reach the container host.
     tracing::info!("Tool on request: tool_id={}", req.tool_id);
 
-    let tool_for_key_check = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    if !validate_api_key(
-        &state,
-        req.api_key.as_deref().unwrap_or(""),
-        tool_for_key_check.as_ref(),
-    )
-    .await?
-    {
-        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
-        return Ok(Json(ToolGuardResponse::tool_denied(
-            "Invalid or missing API key",
-        )));
-    }
+    // #120 (#14): authentication already happened in authorize_toolguard above
+    // (a device token bound to this tool, or a valid per-tool/global API key).
+    // The second validate_api_key gate that used to stand here was the dead
+    // double-auth the review flagged -- it demanded an API key even from a device
+    // that had already authenticated by bound Bearer token, so the device path
+    // could never succeed. Metered tools keep their own stricter key check
+    // (metered_key_ok) below.
+    let tool_lookup = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
 
     // The card's id travels with the user; its *code* does not. The id says
     // which credential was presented -- everything an operator reading the
@@ -457,7 +452,7 @@ async fn tool_on(
         return Ok(Json(ToolGuardResponse::tool_denied("User is not active")));
     }
 
-    let tool = match tool_for_key_check {
+    let tool = match tool_lookup {
         Some(t) => t,
         None => {
             log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool not found").await?;
@@ -542,12 +537,21 @@ async fn tool_on(
         }
     }
 
-    state
+    // #120/M2: atomic Idle->InUse. If another request won the race between the
+    // status check above and here, deny as already-in-use rather than writing a
+    // duplicate activation and event. (For a metered tool the open-session unique
+    // index already blocked the double; this closes the window for non-metered
+    // tools, which have no session to serialize on.)
+    let activated = state
         .db
-        .update_tool_status(tool.id, &crate::models::ToolStatus::InUse)
-        .map_err(|e| {
-            ApiError::InternalServerError(format!("Failed to update tool status: {}", e))
-        })?;
+        .try_activate_tool(tool.id)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to activate tool: {}", e)))?;
+    if !activated {
+        log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use").await?;
+        return Ok(Json(ToolGuardResponse::tool_denied(
+            "Tool is already in use",
+        )));
+    }
 
     use crate::models::NewToolEvent;
     let event = NewToolEvent {
@@ -597,10 +601,9 @@ async fn tool_off(
     tracing::info!("Tool off request: tool_id={}", req.tool_id);
 
     let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
-        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
-        return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
-    }
+    // #120 (#14): authenticated by authorize_toolguard above; the dead
+    // double-auth gate that stood here (an API key required even from an
+    // already-authenticated bound device) is removed. See tool_on.
 
     // Settle/report path: an already-open session must still close even if the
     // card was disabled or released mid-use, so both Active and Revoked resolve
@@ -702,10 +705,9 @@ async fn tool_log(
     );
 
     let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    if !validate_api_key(&state, req.api_key.as_deref().unwrap_or(""), tool.as_ref()).await? {
-        log_tool_access_denied(&state, None, &req.tool_id, "Invalid or missing API key").await?;
-        return Ok(Json(ToolGuardResponse::error("Invalid or missing API key")));
-    }
+    // #120 (#14): authenticated by authorize_toolguard above; the dead
+    // double-auth gate that stood here (an API key required even from an
+    // already-authenticated bound device) is removed. See tool_on.
 
     // Settle/report path: an already-open session must still close even if the
     // card was disabled or released mid-use, so both Active and Revoked resolve
@@ -744,6 +746,30 @@ async fn tool_log(
                 return Ok(Json(ToolGuardResponse::error(
                     "Metered tool requires its own API key",
                 )));
+            }
+            // #120/M1: a billable usage report must come from the card of the
+            // member who activated the session -- otherwise a found or stray card
+            // could inflate someone else's billed usage. The open session (not the
+            // tool) holds the activator. Note this guards *reporting*, not
+            // stopping: tool-off stays open to any card so anyone can cut power
+            // for safety.
+            if let Some(session) = state
+                .db
+                .open_tool_session_for_tool(tool.id)
+                .map_err(ApiError::from)?
+            {
+                if session.user_id != user.id {
+                    log_tool_access_denied(
+                        &state,
+                        Some(&user),
+                        &req.tool_id,
+                        "Usage report from a card that did not activate this session",
+                    )
+                    .await?;
+                    return Ok(Json(ToolGuardResponse::error(
+                        "This card did not activate the tool",
+                    )));
+                }
             }
             let applied = billing
                 .record_usage(tool.id, req.seconds)
@@ -1223,15 +1249,36 @@ fn closed_tool_ids_now(state: &AppState) -> Result<std::collections::HashSet<Uui
     for (tool_id, schedule_id) in rows {
         let sid = match schedule_id {
             Some(s) => s,
-            None => continue, // No schedule = always open.
+            None => continue, // No schedule = always open (intended).
         };
+        // #120 (#122/low): a tool that *references* a schedule which cannot be
+        // resolved (deleted mid-race, or invalid intervals) is locked, not left
+        // open -- fail closed, consistent with the door path (#7). Only a tool
+        // with no schedule at all is unconditionally open.
         let sched = match by_id.get(&sid) {
             Some(s) => s,
-            None => continue, // Schedule went missing; treat as always open.
+            None => {
+                tracing::warn!(
+                    "Tool {} references missing schedule {}; locking it",
+                    tool_id,
+                    sid
+                );
+                closed.insert(tool_id);
+                continue;
+            }
         };
         let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
             Ok(v) => v,
-            Err(_) => continue, // Invalid intervals — fail-open rather than locking the tool.
+            Err(e) => {
+                tracing::warn!(
+                    "Tool {} schedule {} has invalid intervals ({}); locking it",
+                    tool_id,
+                    sid,
+                    e
+                );
+                closed.insert(tool_id);
+                continue;
+            }
         };
         if !crate::schedules::matches_now(&intervals, tz) {
             closed.insert(tool_id);
@@ -1293,13 +1340,23 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
 ///
 /// Two accepted credentials, in cost order:
 ///
-/// 1. A registered device's Bearer token. This is the normal path: the edge
-///    already sends `bearer_auth` on all three of these calls, so it needed no
-///    change to keep working — the server was simply discarding a credential
-///    it was being given.
+/// 1. A registered device's Bearer token (stored hashed since #120/#14). For a
+///    per-tool operation the device must be *bound to that tool* through
+///    `tool_modules` (#104): a reader wired to one tool cannot energise another
+///    with its own token. Device-wide operations (`sync`, `boot_reset`, called
+///    with an empty `toolguard_id`) need only a valid token. The edge already
+///    sends `bearer_auth` on all three per-tool calls.
 /// 2. A per-tool `external_api_key` or the global `toolguard.global_api_key`,
-///    for controllers that authenticate that way instead. Checked second
-///    because it needs a database round-trip to resolve the tool first.
+///    for controllers that authenticate that way instead (constant-time
+///    compared, #14/L1). Checked second because it needs a database round-trip
+///    to resolve the tool first.
+///
+/// This is the single authentication point for these endpoints: the redundant
+/// second `validate_api_key` gate that `tool_on`/`tool_off`/`tool_log` used to
+/// run after calling this — which demanded an API key even from an
+/// already-authenticated bound device, making the device path dead — has been
+/// removed (#14). Metered tools additionally require their own key at report
+/// time via [`metered_key_ok`], a separate billing-integrity check.
 async fn authorize_toolguard(
     state: &AppState,
     headers: &HeaderMap,
@@ -1307,7 +1364,27 @@ async fn authorize_toolguard(
     toolguard_id: &str,
 ) -> Result<(), ApiError> {
     match extract_device_auth(state, headers).await {
-        Ok(_) => return Ok(()),
+        Ok((device_id, _)) => {
+            // #120 (#14): a device token authorizes device-wide operations
+            // (sync, boot-reset -- called with an empty toolguard_id)
+            // unconditionally, but a per-tool operation only for a tool this
+            // device is actually bound to (tool_modules, #104). A reader wired to
+            // one tool therefore cannot energise another with its own valid
+            // token. A non-bound device falls through to the API-key path below.
+            if toolguard_id.is_empty() {
+                return Ok(());
+            }
+            if let Some(tool) = find_tool_by_toolguard_id(state, toolguard_id).await? {
+                // `?` converts a DatabaseError through the classified
+                // From<DatabaseError> impl rather than a bare 500 -- a genuine DB
+                // fault here is ours (500), but the classification stays in the
+                // one place that owns it (api/errors.rs), per the blanket-500
+                // ratchet.
+                if state.db.device_is_bound_to_tool(device_id, tool.id)? {
+                    return Ok(());
+                }
+            }
+        }
         // A database fault must stay a database fault. Folding it into "not
         // authenticated" would report an outage as a credential problem and
         // send whoever is holding a dead tool looking in the wrong place.
@@ -1338,7 +1415,11 @@ async fn authorize_toolguard(
 /// design, an unbillable/forgeable metered tool is refused rather than trusted.
 fn metered_key_ok(api_key: Option<&str>, tool: &crate::models::Tool) -> bool {
     match (api_key, tool.external_api_key.as_deref()) {
-        (Some(provided), Some(tool_key)) => !tool_key.is_empty() && provided == tool_key,
+        (Some(provided), Some(tool_key)) => {
+            // #120 (#14 / L1): constant-time compare so the check does not leak,
+            // through timing, how many leading bytes of a guessed key are right.
+            !tool_key.is_empty() && css_lib::ct::constant_time_str_eq(provided, tool_key)
+        }
         _ => false,
     }
 }
@@ -1352,15 +1433,18 @@ async fn validate_api_key(
     if api_key.is_empty() {
         return Ok(false);
     }
+    // #120 (#14 / L1): constant-time key comparisons (both the per-tool key and
+    // the shared global key), so a timing side-channel cannot recover either.
     if let Some(tool) = tool {
         if let Some(tool_api_key) = &tool.external_api_key {
-            if !tool_api_key.is_empty() && tool_api_key == api_key {
+            if !tool_api_key.is_empty() && css_lib::ct::constant_time_str_eq(tool_api_key, api_key)
+            {
                 return Ok(true);
             }
         }
     }
     if let Some(global_key) = &config.toolguard.global_api_key {
-        if !global_key.is_empty() && global_key == api_key {
+        if !global_key.is_empty() && css_lib::ct::constant_time_str_eq(global_key, api_key) {
             return Ok(true);
         }
     }

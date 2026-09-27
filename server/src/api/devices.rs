@@ -64,6 +64,11 @@ pub struct EdgeMqttConfig {
     pub mqtt_username: Option<String>,
     pub mqtt_password: Option<String>,
     pub mqtt_namespace: String,
+    /// #120 (#121): the per-device command-channel HMAC key (hex), handed to the
+    /// device once at registration. `None` when no cipher was available to mint
+    /// one; the device then runs with unsigned commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_key: Option<String>,
 }
 
 /// Device list item for admin
@@ -112,9 +117,11 @@ pub async fn create_device_invite(
         ApiError::from(e)
     })?;
 
-    // Create the invite request
+    // Create the invite request. #120 (#137): the emoji code is stored ASCII-hex
+    // so it lands on any DB encoding; the raw emoji is returned to the admin
+    // below and never persisted.
     let new_invite = NewSpaceDeviceAuthRequest {
-        device_code: device_code.clone(),
+        device_code: crate::models::encode_device_code(&device_code),
         expires_at,
         created_by: Some(admin.0.id),
     };
@@ -156,7 +163,8 @@ pub async fn create_device_invite(
         user_id: None,
         actor_id: Some(admin.0.id),
         event_data: serde_json::json!({
-            "device_code": device_code,
+            // #120 (#137): hex form -- emoji cannot go in a non-Unicode JSONB.
+            "device_code": crate::models::encode_device_code(&device_code),
             "expires_at": expires_at,
             "expires_in_hours": expires_in_hours,
         }),
@@ -169,7 +177,9 @@ pub async fn create_device_invite(
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::success(DeviceInviteResponse {
-            device_code: invite.device_code,
+            // #120 (#137): return the raw emoji to the admin (the operator types
+            // it); the DB holds only the hex form.
+            device_code,
             expires_at: invite.expires_at,
         })),
     ))
@@ -193,7 +203,11 @@ pub async fn register_device(
 
     // Find and validate the invite code
     let invite: SpaceDeviceAuthRequest = space_device_auth_requests::table
-        .filter(space_device_auth_requests::device_code.eq(&req.device_code))
+        // #120 (#137): the device sends the emoji code; match the hex form at rest.
+        .filter(
+            space_device_auth_requests::device_code
+                .eq(crate::models::encode_device_code(&req.device_code)),
+        )
         .first(conn)
         .map_err(|_| ApiError::BadRequest("Invalid device code".to_string()))?;
 
@@ -277,13 +291,38 @@ pub async fn register_device(
         .values(&new_device)
         .get_result(conn)?;
 
-    // Generate auth token (using UUID for now, could use JWT or other token format)
-    let auth_token = Uuid::new_v4().to_string();
+    // #120 (#14): generate a 256-bit token, store only its SHA-256, and return
+    // the plaintext to the device once here. A database read never yields a
+    // working device credential again. (Was a raw UUID stored in the clear.)
+    let (auth_token, auth_token_hash) = crate::tokens::generate_token();
+
+    // #120 (#121): a per-device command-channel HMAC key, returned to the device
+    // once and stored SEALED at rest. Only minted when a cipher is configured
+    // (it is, mandatorily, since #108); a seal failure is logged and the device
+    // simply runs with unsigned commands (broker ACLs remain the primary
+    // control) rather than failing registration.
+    let (command_key, command_key_sealed, command_key_nonce) = match state.card_cipher.as_deref() {
+        Some(cipher) => {
+            let (key, _digest) = crate::tokens::generate_token();
+            match cipher.seal(&key) {
+                Ok(sealed) => (Some(key), Some(sealed.ciphertext), Some(sealed.nonce)),
+                Err(e) => {
+                    tracing::error!(
+                            "Failed to seal device command key ({e}); device will use unsigned commands"
+                        );
+                    (None, None, None)
+                }
+            }
+        }
+        None => (None, None, None),
+    };
 
     // Create device auth
     let new_auth = NewSpaceDeviceAuth {
         device_id: device.id,
-        auth_token: auth_token.clone(),
+        auth_token: auth_token_hash,
+        command_key_sealed,
+        command_key_nonce,
     };
 
     diesel::insert_into(space_device_auth::table)
@@ -296,7 +335,8 @@ pub async fn register_device(
         user_id: None,
         actor_id: None,
         event_data: serde_json::json!({
-            "device_code": req.device_code,
+            // #120 (#137): hex form -- emoji cannot go in a non-Unicode JSONB.
+            "device_code": crate::models::encode_device_code(&req.device_code),
             "device_id": device.id,
             "device_name": device.name,
         }),
@@ -336,11 +376,20 @@ pub async fn register_device(
             "Providing MQTT config to device: url={}",
             mqtt.mqtt_instance_url
         );
+        // #120 (#121/CR1): hand the device ITS OWN broker credentials -- its UUID
+        // as the username and its auth token as the password -- never the
+        // server's shared credential. This is what lets the broker enforce
+        // per-device topic ACLs (a device may pub/sub only under its own UUID),
+        // so one compromised controller can no longer drive or impersonate the
+        // whole fleet. The broker must be configured to authenticate these
+        // per-device creds and apply the ACLs (see docs/mqtt-broker-security.md);
+        // the server's own mqtt_username/password never leave the server.
         EdgeMqttConfig {
             mqtt_instance_url: mqtt.mqtt_instance_url,
-            mqtt_username: mqtt.mqtt_username,
-            mqtt_password: mqtt.mqtt_password,
+            mqtt_username: Some(device.id.to_string()),
+            mqtt_password: Some(auth_token.clone()),
             mqtt_namespace: mqtt.mqtt_namespace,
+            command_key: command_key.clone(),
         }
     });
 
@@ -430,7 +479,8 @@ pub async fn list_device_invites(
         .into_iter()
         .map(|inv| DeviceInviteListItem {
             id: inv.id,
-            device_code: inv.device_code,
+            // #120 (#137): decode the hex-at-rest form back to emoji for display.
+            device_code: crate::models::decode_device_code(&inv.device_code),
             expires_at: inv.expires_at,
             used_at: inv.used_at,
             created_by: inv.created_by,
@@ -451,9 +501,12 @@ pub async fn expire_device_invite(
 ) -> Result<impl IntoResponse, ApiError> {
     let conn = &mut state.db.pool().get()?;
 
-    // Update the invite to expire it
+    // Update the invite to expire it. #120 (#137): the admin passes the emoji
+    // code; match the hex form at rest.
     let updated = diesel::update(space_device_auth_requests::table)
-        .filter(space_device_auth_requests::device_code.eq(&code))
+        .filter(
+            space_device_auth_requests::device_code.eq(crate::models::encode_device_code(&code)),
+        )
         .filter(space_device_auth_requests::used_at.is_null())
         .set(space_device_auth_requests::expires_at.eq(Utc::now()))
         .execute(conn)?;
@@ -470,7 +523,8 @@ pub async fn expire_device_invite(
         user_id: None,
         actor_id: Some(admin.0.id),
         event_data: serde_json::json!({
-            "device_code": code,
+            // #120 (#137): hex form -- emoji cannot go in a non-Unicode JSONB.
+            "device_code": crate::models::encode_device_code(&code),
         }),
         ip_address: None,
         user_agent: None,
@@ -633,8 +687,12 @@ async fn handle_device_ws(
     tracing::info!("WebSocket: device {} connected", device_id);
 
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::unbounded_channel::<WireMessage>();
-    state.device_registry.register(device_id, mpsc_tx);
+    let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::channel::<WireMessage>(
+        crate::devices_transport::DEVICE_CHANNEL_CAPACITY,
+    );
+    // #120 (#15): keep this connection's epoch so teardown only unregisters our
+    // own sender, never a reconnect that has since taken the slot.
+    let epoch = state.device_registry.register(device_id, mpsc_tx);
 
     // Writer task — drains the mpsc and sends pings every 15s.
     let writer_handle = tokio::spawn(async move {
@@ -708,7 +766,7 @@ async fn handle_device_ws(
         }
     }
 
-    state.device_registry.unregister(device_id);
+    state.device_registry.unregister(device_id, epoch);
     writer_handle.abort();
     tracing::info!("WebSocket: device {} disconnected", device_id);
 }

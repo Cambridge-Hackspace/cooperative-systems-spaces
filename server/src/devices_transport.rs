@@ -7,6 +7,7 @@
 //! without an MQTT broker entirely (WS only) or without WS (MQTT only).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use css_lib::wire::WireMessage;
@@ -16,12 +17,29 @@ use uuid::Uuid;
 
 use crate::mqtt::MqttService;
 
+/// Capacity of a per-device WebSocket send queue. #120 (#15): the queue used to
+/// be unbounded, so a device that connected but stopped draining would grow it
+/// without limit. A full bounded queue makes `try_send` fail and `push` falls
+/// back to MQTT (or reports the message undelivered) rather than buffering
+/// forever.
+pub const DEVICE_CHANNEL_CAPACITY: usize = 256;
+
+/// One connection's outbound sender, tagged with the epoch that identifies it.
+struct Session {
+    /// Monotonic id of this specific connection. A later connection gets a
+    /// higher epoch; an older connection's teardown must not evict a newer
+    /// session's sender.
+    epoch: u64,
+    tx: mpsc::Sender<WireMessage>,
+}
+
 /// One slot per WebSocket-connected device. When a device disconnects the
 /// session removes itself from the registry so subsequent pushes fall back
 /// to MQTT (or warn if MQTT isn't configured).
 #[derive(Default)]
 pub struct DeviceChannelRegistry {
-    inner: RwLock<HashMap<Uuid, mpsc::UnboundedSender<WireMessage>>>,
+    inner: RwLock<HashMap<Uuid, Session>>,
+    next_epoch: AtomicU64,
 }
 
 impl DeviceChannelRegistry {
@@ -29,14 +47,27 @@ impl DeviceChannelRegistry {
         Arc::new(Self::default())
     }
 
-    pub fn register(&self, device_id: Uuid, tx: mpsc::UnboundedSender<WireMessage>) {
+    /// Register a connection's sender, returning its epoch. #120 (#15): pass the
+    /// returned epoch back to [`unregister`](Self::unregister) so a stale
+    /// connection's cleanup cannot evict the sender a newer reconnect installed.
+    /// Before this, `unregister(device_id)` removed whatever was in the slot --
+    /// so a reconnect (which overwrote the slot) was silently unregistered when
+    /// the *old* socket finally closed, and the live device went unreachable.
+    pub fn register(&self, device_id: Uuid, tx: mpsc::Sender<WireMessage>) -> u64 {
+        let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
         let mut map = self.inner.write().expect("device registry poisoned");
-        map.insert(device_id, tx);
+        map.insert(device_id, Session { epoch, tx });
+        epoch
     }
 
-    pub fn unregister(&self, device_id: Uuid) {
+    /// Remove a connection's sender, but only if it is still the current one for
+    /// this device (its epoch matches). A mismatch means a newer connection has
+    /// taken the slot and must be left in place.
+    pub fn unregister(&self, device_id: Uuid, epoch: u64) {
         let mut map = self.inner.write().expect("device registry poisoned");
-        map.remove(&device_id);
+        if map.get(&device_id).is_some_and(|s| s.epoch == epoch) {
+            map.remove(&device_id);
+        }
     }
 
     pub fn contains(&self, device_id: Uuid) -> bool {
@@ -49,8 +80,8 @@ impl DeviceChannelRegistry {
     /// Returns true if the message was queued on a WS session.
     pub fn try_send(&self, device_id: Uuid, msg: WireMessage) -> bool {
         let map = self.inner.read().expect("device registry poisoned");
-        if let Some(tx) = map.get(&device_id) {
-            if tx.send(msg).is_ok() {
+        if let Some(s) = map.get(&device_id) {
+            if s.tx.try_send(msg).is_ok() {
                 return true;
             }
         }
@@ -121,19 +152,45 @@ impl DeviceTransport {
 mod tests {
     use super::*;
     use serde_json::json;
-    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn registry_round_trip() {
         let r = DeviceChannelRegistry::new();
         let id = Uuid::new_v4();
-        let (tx, mut rx) = unbounded_channel();
-        r.register(id, tx);
+        let (tx, mut rx) = mpsc::channel(4);
+        let epoch = r.register(id, tx);
         assert!(r.contains(id));
         assert!(r.try_send(id, WireMessage::new("data", json!({"k": 1}))));
         let got = rx.try_recv().unwrap();
         assert_eq!(got.kind, "data");
-        r.unregister(id);
+        r.unregister(id, epoch);
+        assert!(!r.contains(id));
+    }
+
+    // #120 (#15): a reconnect overwrites the slot; when the *old* connection
+    // then tears down it must not evict the new sender. Under the old
+    // epoch-less unregister this removed the reconnect's sender and the live
+    // device fell silent (pushes dropped to MQTT-or-nothing).
+    #[test]
+    fn a_stale_connection_teardown_does_not_evict_a_reconnect() {
+        let r = DeviceChannelRegistry::new();
+        let id = Uuid::new_v4();
+        let (tx_old, _rx_old) = mpsc::channel(4);
+        let (tx_new, mut rx_new) = mpsc::channel(4);
+
+        let epoch_old = r.register(id, tx_old);
+        let epoch_new = r.register(id, tx_new); // reconnect takes the slot
+        assert_ne!(epoch_old, epoch_new);
+
+        // The OLD connection tears down last, referencing its own epoch.
+        r.unregister(id, epoch_old);
+
+        assert!(r.contains(id), "the reconnect's sender was wrongly evicted");
+        assert!(r.try_send(id, WireMessage::new("data", json!({"k": 1}))));
+        assert_eq!(rx_new.try_recv().unwrap().kind, "data");
+
+        // The current connection can still remove itself.
+        r.unregister(id, epoch_new);
         assert!(!r.contains(id));
     }
 
@@ -141,7 +198,7 @@ mod tests {
     fn push_uses_ws_when_present() {
         let r = DeviceChannelRegistry::new();
         let id = Uuid::new_v4();
-        let (tx, mut rx) = unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(4);
         r.register(id, tx);
         let t = DeviceTransport::new(r, None);
         assert!(t.push(id, "name", json!({"name": "x"})));

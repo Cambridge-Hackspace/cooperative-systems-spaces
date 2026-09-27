@@ -3,8 +3,10 @@ services:
   postgres:
     image: postgres:17
     container_name: css_postgres
+    # #120 (low): bind to loopback only. Publishing on all interfaces (0.0.0.0)
+    # exposed the database (password css_pass) and the brokers to the whole LAN.
     ports:
-      - 5432:5432
+      - 127.0.0.1:5432:5432
     environment:
       POSTGRES_DB: css
       POSTGRES_USER: css_user
@@ -15,14 +17,14 @@ services:
     image: eclipse-mosquitto:2.0.18
     container_name: css_mosquitto
     ports:
-      - 1883:1883
+      - 127.0.0.1:1883:1883
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:Z
   mosquitto-3883:
     image: eclipse-mosquitto:2.0.18
     container_name: css_mosquitto_3883
     ports:
-      - 3883:3883
+      - 127.0.0.1:3883:3883
     volumes:
       - ./mosquitto-3883.conf:/mosquitto/config/mosquitto.conf:Z
 volumes:

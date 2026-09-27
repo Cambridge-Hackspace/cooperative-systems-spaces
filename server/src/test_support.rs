@@ -99,12 +99,14 @@ pub async fn app_state() -> AppState {
         .await
         .expect("PagesService::new with both repos None does no I/O");
 
+    let card_cipher = config
+        .cards
+        .cipher()
+        .expect("test card keys parse")
+        .map(Arc::new);
+
     AppState {
-        card_cipher: config
-            .cards
-            .cipher()
-            .expect("test card keys parse")
-            .map(Arc::new),
+        card_cipher: card_cipher.clone(),
         shutdown,
         audit_logger: AuditLogger::new(db.clone()),
         throttle_service: Arc::new(RegistrationThrottleService::new()),
@@ -124,6 +126,7 @@ pub async fn app_state() -> AppState {
             device_transport.clone(),
             config.toolguard.profile_field.clone(),
             config_manager.clone(),
+            card_cipher.clone(),
         )),
         device_inbound: Arc::new(DeviceInbound::new(
             db.clone(),

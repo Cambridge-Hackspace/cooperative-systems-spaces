@@ -27,7 +27,7 @@
 import { createHmac } from 'node:crypto'
 
 import {
-  GET, POST, DELETE,
+  GET, POST, PUT, DELETE,
   account, adminAccount, login,
   assertEq, ok, record, main,
 } from './lib.mjs'
@@ -558,10 +558,15 @@ main(async () => {
   // Turning it off
   // -----------------------------------------------------------------------
   const finalChallenge = await challengeFor(alice.username, 'disable run')
+  // Use a NEXT-step code (now + one 30s period, accepted within the server's
+  // +/-1 skew): #120/#12 records the step of alice's earlier successful login
+  // (`good`), and this run is inside the same window, so re-using that step's
+  // code would now be refused as a replay. A distinct later step both proves
+  // TOTP still logs in and does not depend on wall-clock crossing a boundary.
   const finalVerify = await verify({
     challenge_token: finalChallenge,
     method: 'totp',
-    code: totpCode(secret),
+    code: totpCode(secret, Math.floor(Date.now() / 1000) + 30),
   })
   const liveToken = finalVerify.json?.data?.token
 
@@ -598,4 +603,81 @@ main(async () => {
     // delete the pin.
     'unspent recovery codes survive disabling the factor they belonged to',
   )
+
+  // #120/#9: starting a new TOTP setup must not destroy the confirmed factor.
+  // Enroll+confirm (S1), begin a second setup WITHOUT confirming, then the
+  // original S1 code still completes a login. Before the fix, setup deleted the
+  // confirmed row and S1 stopped working (the next login even 500'd).
+  {
+    const u = await account('mfa_9')
+    const { secret: s1 } = await enrollTotp(u.token)
+    const setup2 = await POST('/api/auth/mfa/totp/setup', { token: u.token })
+    assertEq('mfa/9-second-setup-accepted', 200, setup2.status, `setup2 -> ${setup2.status}`)
+    const tok = await challengeFor(u.username, 'issue9')
+    const v = await verify({ challenge_token: tok, method: 'totp', code: totpCode(s1) })
+    assertEq('mfa/9-confirmed-factor-survives-a-new-setup', 200, v.status,
+      `original TOTP after a new unconfirmed setup -> ${v.status}`)
+  }
+
+  // #120/#12: a login TOTP code cannot be replayed within its window. One login
+  // spends the code; presenting the SAME code for a second login is refused.
+  {
+    const u = await account('mfa_12')
+    const { secret } = await enrollTotp(u.token)
+    const code = totpCode(secret)
+    const tokA = await challengeFor(u.username, 'issue12a')
+    const first = await verify({ challenge_token: tokA, method: 'totp', code })
+    assertEq('mfa/12-first-use-succeeds', 200, first.status, `first -> ${first.status}`)
+    const tokB = await challengeFor(u.username, 'issue12b')
+    const replay = await verify({ challenge_token: tokB, method: 'totp', code })
+    ok('mfa/12-replayed-code-refused', replay.status !== 200,
+      `a replayed TOTP code was accepted (${replay.status})`)
+  }
+
+  // #120/L5: an account deactivated between the password step and MFA verify
+  // must not be handed a token. Enroll, take a challenge, deactivate via admin,
+  // then verify with a VALID code -- the code is valid, so without the is_active
+  // re-check this would be a 200.
+  {
+    const l5 = await account('mfa_l5')
+    const { secret: l5secret } = await enrollTotp(l5.token)
+    const l5tok = await challengeFor(l5.username, 'l5')
+    const l5admin = await adminAccount('mfa_l5_admin')
+    const deact = await PUT(`/api/users/${l5.user.id}`, {
+      token: l5admin.token,
+      body: { is_active: false },
+    })
+    assertEq('mfa/l5-deactivate-setup', 200, deact.status, `deactivate -> ${deact.status}`)
+    const l5res = await verify({ challenge_token: l5tok, method: 'totp', code: totpCode(l5secret) })
+    ok('mfa/l5-deactivated-user-cannot-complete-mfa', l5res.status !== 200,
+      `a deactivated user completed MFA with a valid code (${l5res.status})`)
+  }
+
+  // #120/H8: a recovery code is single-use even under concurrency. Two logins
+  // presenting the SAME code at once must not both succeed -- before the
+  // compare-and-set fix, mark_recovery_code_used matched by id alone, so both
+  // UPDATEs "succeeded" and both logins got a token. Fire two verifies at once
+  // and assert exactly one wins; a race that wins once may lose the next, so it
+  // runs a few rounds. Sequential sibling: reusing a spent code is refused.
+  const h8Rounds = Number(process.env.CSS_RACE_ROUNDS ?? 3)
+  for (let round = 0; round < h8Rounds; round++) {
+    const acct = await account(`mfa_h8_r${round}`)
+    const { recoveryCodes } = await enrollTotp(acct.token)
+    const code = recoveryCodes[0]
+    const [tokA, tokB] = await Promise.all([
+      challengeFor(acct.username, 'h8-a'),
+      challengeFor(acct.username, 'h8-b'),
+    ])
+    const [rA, rB] = await Promise.all([
+      verify({ challenge_token: tokA, method: 'recovery', code }),
+      verify({ challenge_token: tokB, method: 'recovery', code }),
+    ])
+    const wins = [rA, rB].filter((r) => r.status === 200).length
+    assertEq(`mfa/h8-recovery-single-use-under-race-r${round}`, 1, wins,
+      `concurrent recovery uses returned ${rA.status} and ${rB.status}; exactly one must win`)
+    const tokC = await challengeFor(acct.username, 'h8-c')
+    const again = await verify({ challenge_token: tokC, method: 'recovery', code })
+    ok(`mfa/h8-spent-code-refused-r${round}`, again.status !== 200,
+      `a spent recovery code was accepted again (${again.status})`)
+  }
 })

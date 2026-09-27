@@ -15,6 +15,17 @@ use uuid::Uuid;
 
 use crate::{database::DatabaseManager, models::User, AppState};
 
+/// A fixed, valid Argon2 hash used to equalize the timing of a login for an
+/// unknown user with one for a real user (#120/M11). Built once from the same
+/// hasher, so a not-found verify costs the same KDF work as a real one; the
+/// password is never expected to match it. A malformed constant would make
+/// `verify` return early with a parse error and skip the KDF, which is exactly
+/// the oracle this removes -- a unit test asserts it does real work.
+static DUMMY_PASSWORD_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    PasswordHashUtil::hash("timing-equalization-dummy-not-a-real-password")
+        .expect("hashing a fixed constant cannot fail")
+});
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: String, // Subject (user ID)
@@ -22,12 +33,22 @@ pub struct Claims {
     pub iat: usize,  // Issued at
     pub user_id: Uuid,
     pub username: String,
+    /// Session-revocation epoch (#120/M9), checked against users.token_version
+    /// on every request. `serde(default)` so a token minted before this field
+    /// existed decodes as 0 and still matches an unbumped account -- no forced
+    /// logout on deploy; only a credential change (which bumps the row) revokes.
+    #[serde(default)]
+    pub token_version: i32,
 }
 
 impl Claims {
-    pub fn new(user: &User, jwt_secret: &str) -> Result<String, AuthError> {
+    pub fn new(user: &User, jwt_secret: &str, expiration_hours: u32) -> Result<String, AuthError> {
+        // #120/#10 (M6): the lifetime was hardcoded to 24h while the login
+        // response reported auth.jwt_expiration_hours, so an operator who set 1h
+        // got a token that actually lived 24h. The caller passes the configured
+        // value, read at token-creation time so a config reload is not stale.
         let expiration = Utc::now()
-            .checked_add_signed(Duration::hours(24))
+            .checked_add_signed(Duration::hours(expiration_hours as i64))
             .expect("valid timestamp")
             .timestamp();
 
@@ -37,6 +58,7 @@ impl Claims {
             iat: Utc::now().timestamp() as usize,
             user_id: user.id,
             username: user.username.clone(),
+            token_version: user.token_version,
         };
 
         let token = encode(
@@ -187,22 +209,35 @@ impl<'a> AuthService<'a> {
                     .find_user_by_email(username_or_email)
                     .map_err(|_| AuthError::InternalError)
                     .unwrap_or(None)
-            })
-            .ok_or(AuthError::WrongCredentials)?;
+            });
 
-        if !user.is_active {
-            return Err(AuthError::UserInactive);
+        // #120/M11: a login for a user who does not exist must cost the same as
+        // one for a user who does, and must not reveal account status. Before,
+        // an unknown user returned WrongCredentials with no Argon2 verify (fast),
+        // while a real user paid the full ~hundreds-of-ms verify -- a username
+        // timing oracle -- and an inactive account was rejected *before* the
+        // password check, leaking its existence to an unauthenticated prober. So:
+        // always run one verify (the real hash when found, a fixed dummy of the
+        // same cost when not) and disclose is_active only after a correct password.
+        match user {
+            Some(user) => {
+                if !PasswordHashUtil::verify(password, &user.password_hash)? {
+                    return Err(AuthError::WrongCredentials);
+                }
+                if !user.is_active {
+                    return Err(AuthError::UserInactive);
+                }
+                Ok(user)
+            }
+            None => {
+                let _ = PasswordHashUtil::verify(password, &DUMMY_PASSWORD_HASH);
+                Err(AuthError::WrongCredentials)
+            }
         }
-
-        if !PasswordHashUtil::verify(password, &user.password_hash)? {
-            return Err(AuthError::WrongCredentials);
-        }
-
-        Ok(user)
     }
 
-    pub fn create_token(&self, user: &User) -> Result<String, AuthError> {
-        Claims::new(user, self.jwt_secret)
+    pub fn create_token(&self, user: &User, expiration_hours: u32) -> Result<String, AuthError> {
+        Claims::new(user, self.jwt_secret, expiration_hours)
     }
 
     pub fn verify_token(&self, token: &str) -> Result<Claims, AuthError> {
@@ -219,6 +254,13 @@ impl<'a> AuthService<'a> {
 
         if !user.is_active {
             return Err(AuthError::UserInactive);
+        }
+
+        // #120/M9: reject a token minted before the user's current epoch. A
+        // password change bumps users.token_version, so a session issued before
+        // it is refused here even though the JWT signature is still valid.
+        if claims.token_version != user.token_version {
+            return Err(AuthError::InvalidToken);
         }
 
         Ok(user)
@@ -291,7 +333,9 @@ where
             .strip_prefix("Bearer ")
             .ok_or(AuthError::InvalidToken)?;
 
-        let (device_id, token_value) = app_state
+        // find_device_by_auth_token returns the stored *hash* (#120/#14); keep the
+        // plaintext the device presented as the token here, never the digest.
+        let (device_id, _) = app_state
             .db
             .find_device_by_auth_token(token)
             .map_err(|_| AuthError::InternalError)?
@@ -299,7 +343,7 @@ where
 
         Ok(DeviceAuth {
             device_id,
-            token: token_value,
+            token: token.to_string(),
         })
     }
 }
@@ -426,5 +470,80 @@ where
             Ok(None) => Err(AuthError::InvalidToken),
             Err(_) => Err(AuthError::InternalError),
         }
+    }
+}
+
+#[cfg(test)]
+mod token_ttl_tests {
+    use super::*;
+
+    fn sample_user() -> User {
+        User {
+            id: uuid::Uuid::nil(),
+            username: "ttl".to_string(),
+            email: "ttl@example.com".to_string(),
+            password_hash: String::new(),
+            full_name: "TTL User".to_string(),
+            is_active: true,
+            created_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch")
+                .naive_utc(),
+            updated_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("epoch")
+                .naive_utc(),
+            profile: serde_json::Value::Null,
+            meta: serde_json::Value::Null,
+            mfa_enrolled_at: None,
+            email_verified_at: None,
+            mailing_list_opt_out_at: None,
+            membership_next_due_at: None,
+            stripe_customer_id: None,
+            stripe_subscription_id: None,
+            subscription_status: None,
+            token_version: 0,
+        }
+    }
+
+    #[test]
+    fn token_lifetime_honours_the_configured_hours() {
+        // #120/#10 (M6): the lifetime was hardcoded to 24h while the response
+        // reported the configured value. A 1-hour token must now actually expire
+        // in ~3600s. Mutation check: restore Duration::hours(24) and this fails
+        // (86400 is nowhere near 3600). The +/-1 tolerance covers the two
+        // separate Utc::now() calls in Claims::new straddling a second boundary.
+        for hours in [1u32, 3, 24] {
+            let token = Claims::new(&sample_user(), "test-secret", hours).expect("mints a token");
+            let claims = Claims::verify_token(&token, "test-secret").expect("verifies");
+            let ttl = claims.exp as i64 - claims.iat as i64;
+            let want = hours as i64 * 3600;
+            assert!(
+                (ttl - want).abs() <= 1,
+                "a {hours}h token lived {ttl}s, expected ~{want}s"
+            );
+        }
+    }
+
+    #[test]
+    fn a_token_carries_and_round_trips_the_epoch() {
+        // #120/M9: Claims must carry user.token_version so the extractor can
+        // compare it against the row on every request. Mutation check: drop
+        // token_version from Claims::new and this reads back 0 instead of 7.
+        let mut user = sample_user();
+        user.token_version = 7;
+        let token = Claims::new(&user, "test-secret", 1).expect("mints a token");
+        let claims = Claims::verify_token(&token, "test-secret").expect("verifies");
+        assert_eq!(claims.token_version, 7);
+    }
+
+    #[test]
+    fn the_dummy_hash_makes_the_not_found_path_do_real_work() {
+        // #120/M11: the unknown-user path verifies against DUMMY_PASSWORD_HASH so
+        // its timing matches a real user's. A malformed dummy would make verify
+        // return Err early and skip the KDF -- reopening the timing oracle. This
+        // proves the dummy parses and verify runs the comparison (Ok(false)).
+        assert_eq!(
+            PasswordHashUtil::verify("anything", &DUMMY_PASSWORD_HASH).ok(),
+            Some(false)
+        );
     }
 }

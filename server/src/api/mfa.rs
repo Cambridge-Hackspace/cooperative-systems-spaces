@@ -124,7 +124,16 @@ pub struct MfaVerifyRequest {
 // ---------------------------------------------------------------------------
 
 fn require_enabled(state: &AppState) -> Result<(), ApiError> {
-    if !state.mfa_service.config().enabled {
+    // #120/#11: read the live, reloadable config -- not mfa_service.config(),
+    // which is frozen at startup. login (api/auth.rs) already gates the
+    // challenge on config_manager's auth.mfa.enabled; when this read used the
+    // startup value the two diverged on reload: turning MFA on issued a
+    // challenge that verify then 403'd (locking out every enrolled user), and
+    // turning it off let login skip MFA while enrollment still claimed it was
+    // on. Both sides now read the same source. (The mfa_service still supplies
+    // the TOTP/WebAuthn machinery, whose rp_id/origin are built at startup and
+    // still need a restart to change -- only the enabled gate hot-reloads.)
+    if !state.config_manager.get_config().auth.mfa.enabled {
         return Err(ApiError::Forbidden(
             "MFA is disabled in server configuration".to_string(),
         ));
@@ -149,7 +158,9 @@ fn audit(state: &AppState, event: AuditEventType, user_id: Uuid, data: serde_jso
 fn issue_token(state: &AppState, user: &crate::models::User) -> Result<LoginResponse, ApiError> {
     let config = state.config_manager.get_config();
     let auth = AuthService::new(&state.db, &config.auth.jwt_secret);
-    let token = auth.create_token(user).map_err(ApiError::from)?;
+    let token = auth
+        .create_token(user, config.auth.jwt_expiration_hours)
+        .map_err(ApiError::from)?;
     let primary_role = state
         .db
         .user_primary_role(user.id)
@@ -199,7 +210,9 @@ async fn totp_setup(
         return Err(ApiError::Forbidden("TOTP disabled".to_string()));
     }
     let secret = generate_totp_secret_base32();
-    state.db.replace_user_totp_unconfirmed(user.0.id, &secret)?;
+    // #120/#9: hold the new secret as pending if a confirmed factor exists, so
+    // an unconfirmed (or hijacked) setup cannot destroy the working one.
+    state.db.begin_totp_setup(user.0.id, &secret)?;
     let totp = state
         .mfa_service
         .totp(&secret, &user.0.email)
@@ -220,13 +233,21 @@ async fn totp_confirm(
         .db
         .get_user_totp(user.0.id)?
         .ok_or_else(|| ApiError::BadRequest("No TOTP setup in progress".to_string()))?;
+    // #120/#9: confirm against the pending secret when a setup is in progress
+    // over a live factor; otherwise the row's own (unconfirmed) secret. #120/#12:
+    // capture the matched step so the confirmation code cannot be replayed at the
+    // first login.
+    let verify_secret = stored
+        .pending_secret_base32
+        .as_deref()
+        .unwrap_or(&stored.secret_base32);
     if !state
         .mfa_service
-        .verify_totp(&stored.secret_base32, &user.0.email, req.code.trim())
+        .verify_totp(verify_secret, &user.0.email, req.code.trim())
     {
         return Err(ApiError::BadRequest("Invalid code".to_string()));
     }
-    state.db.confirm_user_totp(user.0.id)?;
+    state.db.finalize_totp_confirmation(user.0.id)?;
     state.db.recompute_user_mfa_enrolled(user.0.id)?;
 
     // Generate recovery codes on first enrollment so the user has a fallback.
@@ -479,6 +500,31 @@ async fn verify_login(
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::Unauthorized("User no longer exists".to_string()))?;
 
+    // #120/L5: re-check is_active before completing the login. The password step
+    // (authenticate_user) checked it, but an account deactivated between issuing
+    // the challenge and verifying it would otherwise still be handed a token.
+    if !user.is_active {
+        return Err(ApiError::Unauthorized("Account is not active".to_string()));
+    }
+
+    // #120/#8 (H7): throttle TOTP/recovery brute force. take_login already
+    // consumed this challenge, but a fresh one is just another /login+/verify
+    // cycle, so without a per-user limit the guessing is unbounded. Keyed on the
+    // user id; checked before verifying, recorded on failure, cleared on success.
+    let config = state.config_manager.get_config();
+    let throttle_id = format!("mfa:{}", user.id);
+    if config.auth.login_throttle_enabled {
+        if let Err(remaining) = state.throttle_service.check_attempt(
+            &throttle_id,
+            config.auth.login_throttle_attempts,
+            config.auth.login_throttle_seconds,
+        ) {
+            return Err(ApiError::TooManyRequests(format!(
+                "Too many verification attempts. Try again in {remaining} seconds."
+            )));
+        }
+    }
+
     let outcome = match req.method.as_str() {
         methods::TOTP => verify_totp_path(&state, &user, req.code.as_deref()),
         methods::WEBAUTHN => verify_webauthn_path(&state, &user, &challenge, req.response).await,
@@ -488,6 +534,11 @@ async fn verify_login(
 
     match outcome {
         Ok(()) => {
+            if config.auth.login_throttle_enabled {
+                state
+                    .throttle_service
+                    .record_successful_attempt(&throttle_id);
+            }
             audit(
                 &state,
                 AuditEventType::MfaLoginPassed,
@@ -505,6 +556,13 @@ async fn verify_login(
                 .into_response())
         }
         Err(e) => {
+            if config.auth.login_throttle_enabled {
+                state.throttle_service.record_failed_attempt(
+                    &throttle_id,
+                    config.auth.login_throttle_attempts,
+                    config.auth.login_throttle_seconds,
+                );
+            }
             audit(
                 &state,
                 AuditEventType::MfaLoginFailed,
@@ -531,14 +589,26 @@ fn verify_totp_path(
         .map_err(ApiError::from)?
         .filter(|t| t.confirmed_at.is_some())
         .ok_or_else(|| ApiError::Unauthorized("No confirmed TOTP for user".to_string()))?;
-    if state
+
+    // #120/#12: reject replay. verify_totp_step returns the matched time-step
+    // when a code is valid; a step at or below the last consumed one is the same
+    // code (or an older one still inside the window) being presented again.
+    let step = state
         .mfa_service
-        .verify_totp(&stored.secret_base32, &user.email, code)
-    {
-        Ok(())
-    } else {
-        Err(ApiError::Unauthorized("Invalid TOTP code".to_string()))
+        .verify_totp_step(&stored.secret_base32, &user.email, code)
+        .ok_or_else(|| ApiError::Unauthorized("Invalid TOTP code".to_string()))?;
+    if let Some(last) = stored.last_used_step {
+        if (step as i64) <= last {
+            return Err(ApiError::Unauthorized(
+                "This TOTP code has already been used".to_string(),
+            ));
+        }
     }
+    state
+        .db
+        .update_totp_last_used_step(user.id, step as i64)
+        .map_err(ApiError::from)?;
+    Ok(())
 }
 
 async fn verify_webauthn_path(

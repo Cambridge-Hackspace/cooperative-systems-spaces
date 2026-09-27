@@ -40,6 +40,9 @@ struct EdgeMqttConfig {
     mqtt_username: Option<String>,
     mqtt_password: Option<String>,
     mqtt_namespace: String,
+    /// #120 (#121): per-device command-channel HMAC key, issued once here.
+    #[serde(default)]
+    command_key: Option<String>,
 }
 
 /// Register the edge apparatus with the Space Server
@@ -145,6 +148,9 @@ pub async fn register_device(
             mqtt_password: mqtt.mqtt_password,
             mqtt_namespace: mqtt.mqtt_namespace,
         });
+        // #120 (#121): persist the command-channel signing key issued at
+        // registration, so signed commands verify and outbound events are signed.
+        new_config.command_key = mqtt.command_key;
 
         info!("MQTT configuration applied successfully");
     } else {
