@@ -235,3 +235,22 @@ impl SpaceDeviceAuthRequest {
             .collect::<String>()
     }
 }
+
+/// #120 (#137): the storage/wire form of a device invite code -- the code's
+/// UTF-8 bytes as lowercase hex. That is pure ASCII, so it stores on any
+/// database encoding; the codes themselves are emoji, which a non-Unicode
+/// cluster (e.g. LATIN1) cannot hold. Encode before persisting or matching a
+/// code; decode only to show the emoji back to an operator.
+pub fn encode_device_code(display: &str) -> String {
+    hex::encode(display.as_bytes())
+}
+
+/// Inverse of [`encode_device_code`]. Returns the input unchanged when it is not
+/// valid hex-of-UTF-8 -- e.g. a legacy raw-emoji row on a UTF-8 cluster that
+/// predates the migration -- so display never breaks.
+pub fn decode_device_code(stored: &str) -> String {
+    hex::decode(stored)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_else(|| stored.to_string())
+}

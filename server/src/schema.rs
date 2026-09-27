@@ -120,8 +120,7 @@ diesel::table! {
 diesel::table! {
     space_device_auth_requests (id) {
         id -> Uuid,
-        #[max_length = 32]
-        device_code -> Varchar,
+        device_code -> Text,
         expires_at -> Timestamptz,
         used_at -> Nullable<Timestamptz>,
         created_by -> Nullable<Uuid>,

@@ -117,9 +117,11 @@ pub async fn create_device_invite(
         ApiError::from(e)
     })?;
 
-    // Create the invite request
+    // Create the invite request. #120 (#137): the emoji code is stored ASCII-hex
+    // so it lands on any DB encoding; the raw emoji is returned to the admin
+    // below and never persisted.
     let new_invite = NewSpaceDeviceAuthRequest {
-        device_code: device_code.clone(),
+        device_code: crate::models::encode_device_code(&device_code),
         expires_at,
         created_by: Some(admin.0.id),
     };
@@ -161,7 +163,8 @@ pub async fn create_device_invite(
         user_id: None,
         actor_id: Some(admin.0.id),
         event_data: serde_json::json!({
-            "device_code": device_code,
+            // #120 (#137): hex form -- emoji cannot go in a non-Unicode JSONB.
+            "device_code": crate::models::encode_device_code(&device_code),
             "expires_at": expires_at,
             "expires_in_hours": expires_in_hours,
         }),
@@ -174,7 +177,9 @@ pub async fn create_device_invite(
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::success(DeviceInviteResponse {
-            device_code: invite.device_code,
+            // #120 (#137): return the raw emoji to the admin (the operator types
+            // it); the DB holds only the hex form.
+            device_code,
             expires_at: invite.expires_at,
         })),
     ))
@@ -198,7 +203,11 @@ pub async fn register_device(
 
     // Find and validate the invite code
     let invite: SpaceDeviceAuthRequest = space_device_auth_requests::table
-        .filter(space_device_auth_requests::device_code.eq(&req.device_code))
+        // #120 (#137): the device sends the emoji code; match the hex form at rest.
+        .filter(
+            space_device_auth_requests::device_code
+                .eq(crate::models::encode_device_code(&req.device_code)),
+        )
         .first(conn)
         .map_err(|_| ApiError::BadRequest("Invalid device code".to_string()))?;
 
@@ -326,7 +335,8 @@ pub async fn register_device(
         user_id: None,
         actor_id: None,
         event_data: serde_json::json!({
-            "device_code": req.device_code,
+            // #120 (#137): hex form -- emoji cannot go in a non-Unicode JSONB.
+            "device_code": crate::models::encode_device_code(&req.device_code),
             "device_id": device.id,
             "device_name": device.name,
         }),
@@ -469,7 +479,8 @@ pub async fn list_device_invites(
         .into_iter()
         .map(|inv| DeviceInviteListItem {
             id: inv.id,
-            device_code: inv.device_code,
+            // #120 (#137): decode the hex-at-rest form back to emoji for display.
+            device_code: crate::models::decode_device_code(&inv.device_code),
             expires_at: inv.expires_at,
             used_at: inv.used_at,
             created_by: inv.created_by,
@@ -490,9 +501,12 @@ pub async fn expire_device_invite(
 ) -> Result<impl IntoResponse, ApiError> {
     let conn = &mut state.db.pool().get()?;
 
-    // Update the invite to expire it
+    // Update the invite to expire it. #120 (#137): the admin passes the emoji
+    // code; match the hex form at rest.
     let updated = diesel::update(space_device_auth_requests::table)
-        .filter(space_device_auth_requests::device_code.eq(&code))
+        .filter(
+            space_device_auth_requests::device_code.eq(crate::models::encode_device_code(&code)),
+        )
         .filter(space_device_auth_requests::used_at.is_null())
         .set(space_device_auth_requests::expires_at.eq(Utc::now()))
         .execute(conn)?;
@@ -509,7 +523,8 @@ pub async fn expire_device_invite(
         user_id: None,
         actor_id: Some(admin.0.id),
         event_data: serde_json::json!({
-            "device_code": code,
+            // #120 (#137): hex form -- emoji cannot go in a non-Unicode JSONB.
+            "device_code": crate::models::encode_device_code(&code),
         }),
         ip_address: None,
         user_agent: None,

@@ -34,7 +34,6 @@ import { GET, POST, PUT, adminAccount, record, ok, assertEq, main, RUN_TAG, allP
 const FANOUT = Number(process.env.CSS_RACE_FANOUT ?? 8)
 const ROUNDS = Number(process.env.CSS_RACE_ROUNDS ?? 3)
 const TAG = `${RUN_TAG}_${process.hrtime.bigint().toString(36).slice(-6)}`
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
 
 main(async () => {
   console.log(`fan-out ${FANOUT}, rounds ${ROUNDS}, tag ${TAG}`)
@@ -59,64 +58,12 @@ main(async () => {
 // meant to have it, and every audit trail afterwards shows one legitimate
 // registration.
 async function inviteRedemption(admin) {
-  // A device invite code is eight emoji -- `SpaceDeviceAuthRequest::new_device_code`
-  // picks from a ~250-entry emoji alphabet, so that a code can be read aloud
-  // across a workshop. Whether an invite can be created depends on whether the
-  // cluster can store the code, and that is NOT the same as "is UTF-8":
-  //
-  //   * UTF-8: eight emoji store and the invite is created. The race runs.
-  //   * SQL_ASCII: it validates nothing and stores the code's bytes verbatim, so
-  //     the invite is created there too and the race runs, exactly as on UTF-8.
-  //     This held only after device_code was widened to VARCHAR(64): on a
-  //     SQL_ASCII cluster that limit is counted in BYTES, and at VARCHAR(32) a
-  //     code drawing a 6-7-byte variation-selector emoji overflowed 32 bytes and
-  //     the insert failed 22001 -- an intermittent 500 that made this stage
-  //     non-deterministic. See the widen_device_code migration and
-  //     checks/tests/device_code_fits_its_column.rs.
-  //   * LATIN1: the code cannot be represented at all; Postgres rejects it
-  //     (22P05), the handler answers 500, and this scenario asserts that finding
-  //     rather than running a race it cannot set up.
-  //
-  // So the narrowing is exactly the clusters that cannot store the code: LATIN1
-  // and any other non-Unicode encoding. UTF-8 and SQL_ASCII both fall through to
-  // the real race and the sequential sibling below.
-  if (ENCODING !== 'UTF8' && ENCODING !== 'SQL_ASCII') {
-    const probe = await POST('/api/admin/devices/invite', {
-      token: admin.token,
-      body: { expires_in_hours: 1 },
-    })
-    // Still a pinned finding, and still the same finding. Only the status
-    // changed: 500 became 400 when text the database cannot represent started
-    // being classified as the caller's input rather than the server breaking.
-    //
-    // What has NOT changed, and is the point of this assertion: on a non-UTF-8
-    // cluster a device invite cannot be created at all, because the code is
-    // eight emoji drawn from a ~250-character alphabet that is almost entirely
-    // astral-plane. Device registration is therefore impossible, and nothing in
-    // the application or its sample configuration says a UTF-8 database is
-    // required. A 400 is a better answer than a 500 and is still an answer
-    // nobody can act on: the caller supplied no text at all -- the server
-    // generated it.
-    //
-    // If this fails again, check three things in order: the status
-    // classification, the code alphabet, and the cluster encoding.
-    assertEq(
-      'findings/device-invite-codes-require-a-utf8-database',
-      500,
-      probe.status,
-      `PINNED FINDING, not a passing behavior: on a ${ENCODING} cluster a device ` +
-        'invite cannot be created at all, because the code is eight emoji. ' +
-        'Device registration is therefore impossible, and nothing says the ' +
-        'application requires a UTF-8 database. 500 is correct here rather ' +
-        'than unfixed: the server generated the code, so this is its failure ' +
-        'and not the caller. See TESTING.md, "Known defects".',
-    )
-    record('race/invite/not-run-on-this-cluster', 'skip',
-      `the invite race needs an invite, and this cluster (${ENCODING}) cannot ` +
-      'store one. The profile-config race below still runs.')
-    return
-  }
-
+  // #120 (#137): the invite code is now stored as ASCII hex
+  // (server::models::encode_device_code), so an invite can be created on ANY
+  // cluster encoding -- LATIN1 included -- and this race therefore runs
+  // everywhere. The former "device-invite-codes-require-a-utf8-database" pinned
+  // finding is resolved: creating an invite below returning 200/201 is the
+  // positive assertion that replaces it.
   let worst = null
 
   for (let round = 0; round < ROUNDS; round += 1) {
