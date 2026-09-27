@@ -4876,7 +4876,7 @@ impl DatabaseManager {
 
         let mut by_user: std::collections::HashMap<uuid::Uuid, Vec<String>> =
             std::collections::HashMap::new();
-        let mut push =
+        let push =
             |uid: uuid::Uuid,
              hexd: String,
              map: &mut std::collections::HashMap<uuid::Uuid, Vec<String>>| {

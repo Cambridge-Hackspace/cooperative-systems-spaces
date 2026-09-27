@@ -213,7 +213,7 @@ impl Cmi5Service {
 
         // Read and validate the manifest before writing anything to disk.
         let manifest_xml = {
-            let mut f = archive
+            let f = archive
                 .by_name("cmi5.xml")
                 .map_err(|_| Cmi5Error::NoManifest)?;
             let mut s = String::new();
