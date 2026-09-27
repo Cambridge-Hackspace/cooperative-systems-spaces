@@ -4818,6 +4818,29 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// How many door access rules and tools currently reference this schedule.
+    ///
+    /// #120 (#122/#7): both FKs are `ON DELETE SET NULL`, so deleting a schedule
+    /// silently un-gates everything that pointed at it -- a time-restricted door
+    /// rule becomes 24/7, a scheduled tool becomes always-open. The delete
+    /// endpoint refuses when this is non-zero rather than widen access by side
+    /// effect.
+    pub fn schedule_reference_count(&self, sid: uuid::Uuid) -> Result<i64, DatabaseError> {
+        use crate::schema::{door_access_rules, tools};
+        let mut conn = self.get_connection()?;
+        let door_refs: i64 = door_access_rules::table
+            .filter(door_access_rules::schedule_id.eq(Some(sid)))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let tool_refs: i64 = tools::table
+            .filter(tools::schedule_id.eq(Some(sid)))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(door_refs + tool_refs)
+    }
+
     // ---------------------------------------------------------------------
     // Places (configurable hierarchy)
     // ---------------------------------------------------------------------

@@ -244,16 +244,20 @@ impl DoorService {
         let user_level = Some(self.db.user_effective_level(user.id)?);
 
         for rule in &rules {
-            // Schedule-gated rules are silent when their window is closed.
-            if !schedule_is_active_at(rule.schedule_id, &schedules, tz, Utc::now()) {
-                continue;
-            }
-            // Same fail-open as the compilation path: an unrecognized effect
-            // used to be treated as allow. Skipped now.
+            // Parse the effect first: the schedule gate is fail-closed per effect
+            // (an unrecognized effect used to default to allow -- skipped now).
             let effect = match DoorRuleEffect::parse(&rule.effect) {
                 Some(e) => e,
                 None => continue,
             };
+            // Schedule-gated rules are silent when their window is closed; an
+            // unresolvable schedule keeps a deny but drops an allow (#122/#7).
+            if !rule_fires(
+                effect,
+                schedule_state_at(rule.schedule_id, &schedules, tz, Utc::now()),
+            ) {
+                continue;
+            }
             let kind = match DoorRuleKind::parse(&rule.kind) {
                 Some(k) => k,
                 None => continue,
@@ -372,41 +376,63 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 
 /// Resolve a rule's schedule (by id) and ask whether *now* falls in any
 /// interval. Rules with no schedule are always active.
-fn schedule_is_active_at(
+/// Whether a rule's schedule window is open, shut, or cannot be resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleState {
+    /// `now` falls inside the window (or the rule has no schedule).
+    Active,
+    /// `now` falls outside a well-defined window.
+    Inactive,
+    /// The schedule row is missing (a deleted schedule, whose FK is
+    /// `ON DELETE SET NULL`, or the narrow read-time race between the
+    /// `list_rules_for_door` and `list_schedules` snapshots) or its intervals do
+    /// not parse. #120 (#122/#7): this ambiguity must *tighten* access, never
+    /// widen it -- an allow rule is dropped, a deny rule still applies.
+    Unresolvable,
+}
+
+fn schedule_state_at(
     schedule_id: Option<Uuid>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
     now: chrono::DateTime<Utc>,
-) -> bool {
+) -> ScheduleState {
     let sid = match schedule_id {
         Some(id) => id,
-        None => return true,
+        None => return ScheduleState::Active,
     };
     let sched = match schedules.iter().find(|s| s.id == sid) {
         Some(s) => s,
         None => {
-            // schedule_id's FK is ON DELETE SET NULL, so a genuinely
-            // deleted schedule can never leave a dangling id here — this
-            // only fires from the narrow read-time race between this
-            // call's list_rules_for_door and list_schedules snapshots (a
-            // schedule deleted in between). Fail closed on that ambiguity
-            // rather than treating the rule as unconditionally active,
-            // consistent with the invalid-intervals case just below.
             warn!(
                 "Schedule {} referenced but not found in current snapshot",
                 sid
             );
-            return false;
+            return ScheduleState::Unresolvable;
         }
     };
     let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
         Ok(v) => v,
         Err(e) => {
             warn!("Schedule {} has invalid intervals: {}", sched.id, e);
-            return false;
+            return ScheduleState::Unresolvable;
         }
     };
-    crate::schedules::matches_at(&intervals, tz, now)
+    if crate::schedules::matches_at(&intervals, tz, now) {
+        ScheduleState::Active
+    } else {
+        ScheduleState::Inactive
+    }
+}
+
+/// Whether a rule of `effect` fires now, given its schedule's state. Fail-closed:
+/// an unresolvable schedule keeps a deny in force but drops an allow (#122/#7).
+fn rule_fires(effect: DoorRuleEffect, state: ScheduleState) -> bool {
+    match state {
+        ScheduleState::Active => true,
+        ScheduleState::Inactive => false,
+        ScheduleState::Unresolvable => matches!(effect, DoorRuleEffect::Deny),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -502,14 +528,10 @@ pub fn expand_rules_at(
     let mut deny = BTreeSet::<String>::new();
 
     for rule in rules {
-        // A schedule-gated rule contributes nothing while its window is shut.
-        if !schedule_is_active_at(rule.schedule_id, schedules, tz, now) {
-            continue;
-        }
-
         // An unparseable effect used to default to Allow. On a door, that is a
         // fail-open: a typo in a rule's effect column silently granted access
-        // to whatever the rule named. It is skipped now, and loudly.
+        // to whatever the rule named. It is skipped now, and loudly. Parsed
+        // before the schedule gate because the gate is fail-closed per effect.
         let effect = match DoorRuleEffect::parse(&rule.effect) {
             Some(e) => e,
             None => {
@@ -521,6 +543,15 @@ pub fn expand_rules_at(
                 continue;
             }
         };
+
+        // A schedule-gated rule contributes nothing while its window is shut; an
+        // unresolvable schedule keeps a deny in force but drops an allow (#122/#7).
+        if !rule_fires(
+            effect,
+            schedule_state_at(rule.schedule_id, schedules, tz, now),
+        ) {
+            continue;
+        }
 
         let kind = match DoorRuleKind::parse(&rule.kind) {
             Some(k) => k,
@@ -576,4 +607,33 @@ pub fn expand_rules_at(
     }
 
     (allow, deny)
+}
+
+#[cfg(test)]
+mod schedule_fail_closed_tests {
+    use super::{rule_fires, ScheduleState};
+    use crate::models::DoorRuleEffect;
+
+    // #120 (#122/#7): losing a schedule must tighten access, never widen it.
+    // An unresolvable schedule keeps a deny in force and drops an allow; a
+    // definitively-closed window silences both.
+    #[test]
+    fn an_unresolvable_schedule_keeps_deny_and_drops_allow() {
+        assert!(
+            rule_fires(DoorRuleEffect::Deny, ScheduleState::Unresolvable),
+            "a deny with a deleted/invalid schedule must still deny"
+        );
+        assert!(
+            !rule_fires(DoorRuleEffect::Allow, ScheduleState::Unresolvable),
+            "an allow with a deleted/invalid schedule must NOT grant"
+        );
+    }
+
+    #[test]
+    fn active_fires_both_and_inactive_silences_both() {
+        assert!(rule_fires(DoorRuleEffect::Allow, ScheduleState::Active));
+        assert!(rule_fires(DoorRuleEffect::Deny, ScheduleState::Active));
+        assert!(!rule_fires(DoorRuleEffect::Allow, ScheduleState::Inactive));
+        assert!(!rule_fires(DoorRuleEffect::Deny, ScheduleState::Inactive));
+    }
 }

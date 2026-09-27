@@ -1249,15 +1249,36 @@ fn closed_tool_ids_now(state: &AppState) -> Result<std::collections::HashSet<Uui
     for (tool_id, schedule_id) in rows {
         let sid = match schedule_id {
             Some(s) => s,
-            None => continue, // No schedule = always open.
+            None => continue, // No schedule = always open (intended).
         };
+        // #120 (#122/low): a tool that *references* a schedule which cannot be
+        // resolved (deleted mid-race, or invalid intervals) is locked, not left
+        // open -- fail closed, consistent with the door path (#7). Only a tool
+        // with no schedule at all is unconditionally open.
         let sched = match by_id.get(&sid) {
             Some(s) => s,
-            None => continue, // Schedule went missing; treat as always open.
+            None => {
+                tracing::warn!(
+                    "Tool {} references missing schedule {}; locking it",
+                    tool_id,
+                    sid
+                );
+                closed.insert(tool_id);
+                continue;
+            }
         };
         let intervals = match crate::schedules::parse_intervals(&sched.intervals) {
             Ok(v) => v,
-            Err(_) => continue, // Invalid intervals — fail-open rather than locking the tool.
+            Err(e) => {
+                tracing::warn!(
+                    "Tool {} schedule {} has invalid intervals ({}); locking it",
+                    tool_id,
+                    sid,
+                    e
+                );
+                closed.insert(tool_id);
+                continue;
+            }
         };
         if !crate::schedules::matches_now(&intervals, tz) {
             closed.insert(tool_id);
