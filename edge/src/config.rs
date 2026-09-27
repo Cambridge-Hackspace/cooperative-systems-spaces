@@ -117,6 +117,13 @@ pub struct Config {
     /// the pairing token is then the only thing gating registration.
     #[serde(default = "default_web_ui_bind_address")]
     pub web_ui_bind_address: String,
+
+    /// #120 (#121): per-device command-channel HMAC key (hex), issued once at
+    /// registration. Used to verify signed `doors/unlock` commands and to sign
+    /// outbound `doors/event`. `None` on a device registered before #121 -- it
+    /// then runs with unsigned commands.
+    #[serde(default)]
+    pub command_key: Option<String>,
 }
 
 fn default_web_ui_bind_address() -> String {
@@ -164,6 +171,7 @@ impl Default for Config {
             module_lease_interval_ms: default_module_lease_interval_ms(),
             module_offline_ms: default_module_offline_ms(),
             web_ui_bind_address: default_web_ui_bind_address(),
+            command_key: None,
         }
     }
 }

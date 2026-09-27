@@ -160,6 +160,10 @@ pub struct SpaceDeviceAuth {
     pub device_id: Uuid,
     pub auth_token: String,
     pub created_at: DateTime<Utc>,
+    /// #120 (#121): the device's command-channel HMAC key, sealed at rest.
+    /// Appended last to keep the positional Queryable aligned with schema.rs.
+    pub command_key_sealed: Option<Vec<u8>>,
+    pub command_key_nonce: Option<Vec<u8>>,
 }
 
 /// New device auth for insertion
@@ -169,6 +173,9 @@ pub struct SpaceDeviceAuth {
 pub struct NewSpaceDeviceAuth {
     pub device_id: Uuid,
     pub auth_token: String,
+    /// #120 (#121): sealed per-device command-channel HMAC key (+ its nonce).
+    pub command_key_sealed: Option<Vec<u8>>,
+    pub command_key_nonce: Option<Vec<u8>>,
 }
 
 /// Device authentication request (invite code)

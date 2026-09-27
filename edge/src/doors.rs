@@ -65,6 +65,11 @@ pub struct UnlockCommand {
     pub door_id: Uuid,
     pub duration_ms: i32,
     pub reason: String,
+    /// #120 (#121): HMAC of the command, present when the server holds this
+    /// device's command key. `#[serde(default)]` keeps a keyless/legacy server's
+    /// unsigned command parseable.
+    #[serde(default)]
+    pub sig: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +95,11 @@ pub struct DoorsEvent {
     pub reason: Option<String>,
     pub source: &'static str,
     pub occurred_at: DateTime<Utc>,
+    /// #120 (#121): HMAC of the event so the server can reject a forged
+    /// doors/event. Set by the edge when it holds a command key; omitted
+    /// otherwise (a keyless server accepts it, rollout-graceful).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 /// Decision returned by [`DoorsState::decide`].

@@ -64,6 +64,11 @@ pub struct EdgeMqttConfig {
     pub mqtt_username: Option<String>,
     pub mqtt_password: Option<String>,
     pub mqtt_namespace: String,
+    /// #120 (#121): the per-device command-channel HMAC key (hex), handed to the
+    /// device once at registration. `None` when no cipher was available to mint
+    /// one; the device then runs with unsigned commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_key: Option<String>,
 }
 
 /// Device list item for admin
@@ -282,10 +287,33 @@ pub async fn register_device(
     // working device credential again. (Was a raw UUID stored in the clear.)
     let (auth_token, auth_token_hash) = crate::tokens::generate_token();
 
+    // #120 (#121): a per-device command-channel HMAC key, returned to the device
+    // once and stored SEALED at rest. Only minted when a cipher is configured
+    // (it is, mandatorily, since #108); a seal failure is logged and the device
+    // simply runs with unsigned commands (broker ACLs remain the primary
+    // control) rather than failing registration.
+    let (command_key, command_key_sealed, command_key_nonce) = match state.card_cipher.as_deref() {
+        Some(cipher) => {
+            let (key, _digest) = crate::tokens::generate_token();
+            match cipher.seal(&key) {
+                Ok(sealed) => (Some(key), Some(sealed.ciphertext), Some(sealed.nonce)),
+                Err(e) => {
+                    tracing::error!(
+                            "Failed to seal device command key ({e}); device will use unsigned commands"
+                        );
+                    (None, None, None)
+                }
+            }
+        }
+        None => (None, None, None),
+    };
+
     // Create device auth
     let new_auth = NewSpaceDeviceAuth {
         device_id: device.id,
         auth_token: auth_token_hash,
+        command_key_sealed,
+        command_key_nonce,
     };
 
     diesel::insert_into(space_device_auth::table)
@@ -351,6 +379,7 @@ pub async fn register_device(
             mqtt_username: Some(device.id.to_string()),
             mqtt_password: Some(auth_token.clone()),
             mqtt_namespace: mqtt.mqtt_namespace,
+            command_key: command_key.clone(),
         }
     });
 

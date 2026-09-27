@@ -36,6 +36,17 @@ pub struct EdgeInbound {
 }
 
 impl EdgeInbound {
+    /// #120 (#121): the device's command-channel HMAC key as bytes, or `None`
+    /// if it holds none (legacy device). Read from the live config.
+    fn command_key_bytes(&self) -> Option<Vec<u8>> {
+        self.config_manager
+            .read()
+            .ok()?
+            .command_key
+            .as_ref()
+            .map(|s| s.clone().into_bytes())
+    }
+
     pub async fn dispatch(&self, kind: &str, payload: &[u8]) {
         match kind {
             kinds::NAME => match serde_json::from_slice::<NameUpdate>(payload) {
@@ -88,6 +99,28 @@ impl EdgeInbound {
             },
             kinds::DOORS_UNLOCK => match serde_json::from_slice::<UnlockCommand>(payload) {
                 Ok(cmd) => {
+                    // #120 (#121): if this device holds a command key, require a
+                    // valid HMAC on the command -- a physical strike is the last
+                    // thing that should act on an unauthenticated message. A
+                    // keyless (legacy) device accepts it, as before.
+                    if let Some(key) = self.command_key_bytes() {
+                        let msg = css_lib::sig::doors_unlock_message(
+                            &cmd.door_id.to_string(),
+                            cmd.duration_ms,
+                            &cmd.reason,
+                        );
+                        let ok = cmd
+                            .sig
+                            .as_deref()
+                            .is_some_and(|s| css_lib::sig::verify(&key, &msg, s));
+                        if !ok {
+                            warn!(
+                                "Rejected doors/unlock for door {}: missing or invalid signature",
+                                cmd.door_id
+                            );
+                            return;
+                        }
+                    }
                     info!(
                         "Received doors/unlock for door {} (reason={})",
                         cmd.door_id, cmd.reason

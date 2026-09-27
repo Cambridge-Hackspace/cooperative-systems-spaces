@@ -207,11 +207,23 @@ impl DoorService {
         duration_ms: i32,
         reason: &str,
     ) -> Result<(), DatabaseError> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "door_id": door_id,
             "duration_ms": duration_ms,
             "reason": reason,
         });
+        // #120 (#121): HMAC-sign the command with the device's key so the edge
+        // rejects any doors/unlock not signed by this server. Only when the
+        // device has a key (registered since #121); otherwise it goes unsigned
+        // and the edge, also keyless, accepts it -- graceful during rollout, with
+        // the broker per-device ACLs as the primary control throughout.
+        if let Some(cipher) = self.card_cipher.as_deref() {
+            if let Some(key) = self.db.device_command_key(device_id, cipher)? {
+                let msg =
+                    css_lib::sig::doors_unlock_message(&door_id.to_string(), duration_ms, reason);
+                payload["sig"] = serde_json::Value::String(css_lib::sig::sign(&key, &msg));
+            }
+        }
         if !self
             .transport
             .push(device_id, css_lib::wire::kinds::DOORS_UNLOCK, payload)

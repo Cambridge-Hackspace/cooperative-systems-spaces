@@ -112,6 +112,8 @@ diesel::table! {
         #[max_length = 255]
         auth_token -> Varchar,
         created_at -> Timestamptz,
+        command_key_sealed -> Nullable<Bytea>,
+        command_key_nonce -> Nullable<Bytea>,
     }
 }
 

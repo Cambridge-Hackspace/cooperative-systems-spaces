@@ -350,6 +350,11 @@ async fn main() -> Result<()> {
                     Arc::clone(&doors_state),
                     doors_event_tx.clone(),
                     Arc::clone(&module_state),
+                    // #120 (#121): command-channel key for signing outbound events.
+                    app_config
+                        .command_key
+                        .as_ref()
+                        .map(|s| s.clone().into_bytes()),
                 )
                 .await
                 {

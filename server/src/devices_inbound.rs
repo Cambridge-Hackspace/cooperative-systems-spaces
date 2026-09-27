@@ -202,6 +202,8 @@ impl DeviceInbound {
             source: Option<String>,
             #[serde(default)]
             occurred_at: Option<chrono::DateTime<Utc>>,
+            #[serde(default)]
+            sig: Option<String>,
         }
 
         let event: DoorEventIn = match serde_json::from_slice(payload) {
@@ -214,6 +216,39 @@ impl DeviceInbound {
                 return;
             }
         };
+
+        // #120 (#121): if this device holds a command key, require a valid HMAC
+        // on the event -- otherwise a forged doors/event could enter the audit
+        // trail as a genuine DoorUnlockedCard. A keyless (legacy) device's
+        // unsigned event is accepted, as before; a key-load error fails closed.
+        if let Some(cipher) = self.card_cipher.as_deref() {
+            match self.db.device_command_key(device_id, cipher) {
+                Ok(Some(key)) => {
+                    let msg = css_lib::sig::doors_event_message(
+                        &event.door_id.to_string(),
+                        event.card_id.as_deref().unwrap_or(""),
+                        event.granted,
+                        event.source.as_deref().unwrap_or(""),
+                    );
+                    let ok = event
+                        .sig
+                        .as_deref()
+                        .is_some_and(|s| css_lib::sig::verify(&key, &msg, s));
+                    if !ok {
+                        warn!(
+                            "Rejected doors/event from device {}: missing or invalid signature",
+                            device_id
+                        );
+                        return;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("Failed to load command key for device {}: {}", device_id, e);
+                    return;
+                }
+            }
+        }
 
         // Resolve the scanned card to a member regardless of card status, so a
         // disabled/released card is still attributable in the door record. A

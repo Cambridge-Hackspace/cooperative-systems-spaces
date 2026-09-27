@@ -2917,6 +2917,37 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    /// The device's command-channel HMAC key (unsealed), or `None` if it has
+    /// none -- registered before #121, or minted without a cipher. #120 (#121):
+    /// stored sealed at rest, opened here with the card cipher when the server
+    /// needs to sign a command to, or verify an event from, this device.
+    pub fn device_command_key(
+        &self,
+        device_id: uuid::Uuid,
+        cipher: &css_lib::card_crypto::CardCipher,
+    ) -> Result<Option<Vec<u8>>, DatabaseError> {
+        use crate::schema::space_device_auth;
+        let mut conn = self.get_connection()?;
+        let row: Option<(Option<Vec<u8>>, Option<Vec<u8>>)> = space_device_auth::table
+            .filter(space_device_auth::device_id.eq(device_id))
+            .select((
+                space_device_auth::command_key_sealed,
+                space_device_auth::command_key_nonce,
+            ))
+            .first::<(Option<Vec<u8>>, Option<Vec<u8>>)>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        match row {
+            Some((Some(sealed), Some(nonce))) => {
+                let key = cipher
+                    .open(&sealed, &nonce)
+                    .map_err(|e| DatabaseError::Other(format!("open device command key: {e}")))?;
+                Ok(Some(key.into_bytes()))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Return the IDs of all non-deleted devices (for MQTT broadcast).
     pub fn list_approved_devices(&self) -> Result<Vec<uuid::Uuid>, DatabaseError> {
         use crate::schema::space_devices::dsl::*;
