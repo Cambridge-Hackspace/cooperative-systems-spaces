@@ -1671,12 +1671,17 @@ impl AppConfig {
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))?;
         // #120/M3: config holds the JWT secret, DB password, Stripe and card
         // encryption/index keys, and MQTT passwords; it must not stay
-        // world-readable (umask leaves a fresh file 0644). Restrict to owner-only.
-        fs::set_permissions(
-            path.as_ref(),
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        )
-        .with_context(|| format!("Failed to secure config file: {}", path.as_ref().display()))?;
+        // world-readable (umask leaves a fresh file 0644). Restrict to owner-only
+        // on Unix; Windows has no POSIX mode (its ACLs govern), so the chmod is
+        // skipped there -- the server ships as a cross-platform release binary.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path.as_ref(), std::fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!("Failed to secure config file: {}", path.as_ref().display())
+                })?;
+        }
 
         Ok(())
     }
