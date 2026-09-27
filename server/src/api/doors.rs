@@ -181,13 +181,22 @@ fn require_enabled(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Best-effort client IP extraction for the checkin log.
+/// Best-effort client IP for the checkin log.
+///
+/// #120 (#122/#13): X-Forwarded-For is a comma-separated chain
+/// `client, proxy1, proxy2`; the *left*-most entry is set by the client and so
+/// is forgeable (an attacker poisons the audit IP by sending any XFF they like).
+/// The right-most entry is the one the nearest trusted reverse proxy appended,
+/// so we take that. (This assumes the standard single-trusted-proxy deployment;
+/// a directly-exposed server should prefer the peer socket address, and a
+/// multi-proxy chain would strip a known number of trailing hops.)
 fn client_ip(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.rsplit(',').next())
         .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .or_else(|| {
             headers
                 .get("x-real-ip")
@@ -258,6 +267,12 @@ async fn door_info(
     })))
 }
 
+/// #120 (#122/#13): at most this many QR check-ins per member+door within the
+/// window, so a static QR cannot be used to spam unlocks. A person legitimately
+/// checks in once; this is generous enough not to bite real use.
+const CHECKIN_MAX_ATTEMPTS: u32 = 5;
+const CHECKIN_WINDOW_SECS: u32 = 30;
+
 /// POST /api/doors/{id}/checkin — `I'm here, unlock the door`.
 async fn door_checkin(
     State(state): State<AppState>,
@@ -266,6 +281,28 @@ async fn door_checkin(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     require_enabled(&state)?;
+
+    // #120 (#122/#13): rate-limit before touching the DB or actuating anything.
+    // Every check-in counts toward the window, so a flood is refused regardless
+    // of whether each would be granted. (Proof-of-presence -- binding a check-in
+    // to a rotating secret the door itself emits -- needs door-side display or
+    // beacon hardware and is tracked separately; this bounds abuse meanwhile.)
+    let throttle_key = format!("checkin:{}:{}", user.0.id, id);
+    if let Err(retry_after) = state.throttle_service.check_attempt(
+        &throttle_key,
+        CHECKIN_MAX_ATTEMPTS,
+        CHECKIN_WINDOW_SECS,
+    ) {
+        return Err(ApiError::TooManyRequests(format!(
+            "Too many check-ins for this door; try again in {retry_after}s"
+        )));
+    }
+    state.throttle_service.record_failed_attempt(
+        &throttle_key,
+        CHECKIN_MAX_ATTEMPTS,
+        CHECKIN_WINDOW_SECS,
+    );
+
     let door = state.db.get_door(id)?;
 
     let decision = state
@@ -673,4 +710,35 @@ async fn remove_rule(
         message: Some("Rule removed".to_string()),
         error: None,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_ip;
+    use axum::http::HeaderMap;
+
+    // #120 (#122/#13): the left-most X-Forwarded-For entry is client-set and
+    // forgeable; the right-most is what the trusted proxy appended. Taking the
+    // left-most would let an attacker poison the audit IP.
+    #[test]
+    fn client_ip_takes_the_rightmost_forwarded_for_not_the_client_value() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "x-forwarded-for",
+            "6.6.6.6, 10.0.0.2, 198.51.100.7".parse().unwrap(),
+        );
+        assert_eq!(client_ip(&h).as_deref(), Some("198.51.100.7"));
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_x_real_ip() {
+        let mut h = HeaderMap::new();
+        h.insert("x-real-ip", "203.0.113.9".parse().unwrap());
+        assert_eq!(client_ip(&h).as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn client_ip_is_none_without_headers() {
+        assert_eq!(client_ip(&HeaderMap::new()), None);
+    }
 }
