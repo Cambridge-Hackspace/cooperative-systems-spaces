@@ -11,7 +11,7 @@
 //
 // What this does NOT prove: nothing here energizes hardware -- that is #44.
 
-import { GET, POST, PATCH, PUT, DELETE, adminAccount, account, assertEq, ok, main } from './lib.mjs'
+import { GET, POST, PATCH, PUT, DELETE, adminAccount, account, assertEq, ok, main, METRICS_BASE } from './lib.mjs'
 
 main(async () => {
   const admin = await adminAccount('circuits_admin')
@@ -209,8 +209,9 @@ main(async () => {
   assertEq('report/latest-only-overwrites', 3, drawOf(tel, circuitId))
 
   // #49: with the history submodule enabled (stack-config), the latest reading
-  // is exposed as a per-tool Prometheus gauge on /metrics.
-  const metrics = await GET('/metrics')
+  // is exposed as a per-tool Prometheus gauge on /metrics -- which #139 moved to
+  // its own loopback listener, so scrape METRICS_BASE, not the public base.
+  const metrics = await GET(`${METRICS_BASE}/metrics`)
   ok(
     'report/metrics-exposes-draw-gauge',
     metrics.text.includes(`css_tool_power_draw_amps{tool_id="${powerToolId}"}`),

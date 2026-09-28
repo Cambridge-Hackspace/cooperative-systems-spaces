@@ -77,6 +77,10 @@ MQTT_NAMESPACE="${CSS_E2E_MQTT_NAMESPACE:-css-e2e}"
 # Set by write_stack_config; the address a human types to reach this stack.
 export STACK_HOST="127.0.0.1"
 SERVER_PORT="${CSS_E2E_SERVER_PORT:-4399}"
+# #120 (#139): /metrics binds to its own loopback listener, separate from
+# SERVER_PORT. Distinct port so a scrape of it proves the separate listener is
+# up rather than accidentally hitting the public one.
+METRICS_PORT="${CSS_E2E_METRICS_PORT:-4392}"
 SMTP_PORT="${CSS_E2E_SMTP_PORT:-2525}"
 GROUPSIO_PORT="${CSS_E2E_GROUPSIO_PORT:-4390}"
 STRIPE_PORT="${CSS_E2E_STRIPE_PORT:-4391}"
@@ -561,6 +565,7 @@ write_stack_config() {
     -e "s|@WIKI_REPO@|${STACK_DIR}/wiki-fixture|g" \
     -e "s|@CHECKOUT_DIR@|${STACK_DIR}|g" \
     -e "s|@SERVER_PORT@|${SERVER_PORT}|g" \
+    -e "s|@METRICS_PORT@|${METRICS_PORT}|g" \
     -e "s|@STACK_TZ@|${STACK_TZ}|g" \
     -e "s|@CARDS_ENC_KEY@|${CARDS_ENC_KEY}|g" \
     -e "s|@CARDS_IDX_KEY@|${CARDS_IDX_KEY}|g" \
@@ -839,6 +844,7 @@ run_node() {
     ensure_node
     CASES_OUT="${cases_out}" \
       CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
+      CSS_METRICS_URL="http://127.0.0.1:${METRICS_PORT}" \
       CSS_STACK_DIR="${STACK_DIR}" \
       CSS_DB_ENCODING="${PG_ENCODING}" \
       CSS_GROUPSIO_SINK_URL="http://127.0.0.1:${GROUPSIO_PORT}" \
@@ -872,6 +878,7 @@ run_node() {
       ${passthrough[@]+"${passthrough[@]}"} \
       -e CASES_OUT=/stack/driver-cases.tsv \
       -e CSS_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
+      -e CSS_METRICS_URL="http://127.0.0.1:${METRICS_PORT}" \
       -e CSS_STACK_DIR=/stack \
       -e CSS_DB_ENCODING="${PG_ENCODING}" \
       -e CSS_GROUPSIO_SINK_URL="http://127.0.0.1:${GROUPSIO_PORT}" \

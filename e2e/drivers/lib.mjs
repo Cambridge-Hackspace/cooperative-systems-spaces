@@ -13,6 +13,11 @@
 import { appendFileSync, writeFileSync } from 'node:fs'
 
 export const BASE = process.env.CSS_BASE_URL ?? 'http://127.0.0.1:4399'
+// #120 (#139): /metrics lives on its own loopback listener, separate from BASE.
+// A driver reaches it by passing an absolute URL to GET (new URL(abs, BASE)
+// ignores the base), so `${METRICS_BASE}/metrics` hits the metrics listener
+// while every other path stays on the public one.
+export const METRICS_BASE = process.env.CSS_METRICS_URL ?? 'http://127.0.0.1:9090'
 const CASES_OUT = process.env.CASES_OUT
 
 const cases = []

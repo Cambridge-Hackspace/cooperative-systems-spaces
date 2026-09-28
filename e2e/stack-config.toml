@@ -163,6 +163,8 @@ request_timeout_seconds = 30
 max_request_body_size = 16777216
 cors_enabled = true
 cors_origins = ["http://127.0.0.1:@SERVER_PORT@"]
+# #120 (#139): /metrics on its own loopback listener; the harness scrapes it here.
+metrics_bind_address = "127.0.0.1:@METRICS_PORT@"
 
 [auth]
 jwt_secret = "e2e-jwt-secret-not-a-production-value"

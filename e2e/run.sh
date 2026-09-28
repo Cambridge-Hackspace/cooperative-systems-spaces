@@ -1436,12 +1436,28 @@ stage_health() {
   # /metrics comes from dr-metrix, which lives entirely in the bin shim. Its
   # absence would mean the release binary was built without the metrics wiring
   # -- invisible to every other tier, since no library test can reach it.
-  assert_eq "health/metrics-200" "200" "$(http_status /metrics)"
-  if http_head /metrics | grep -q '^# HELP'; then
+  #
+  # #120 (#139): /metrics is on its own loopback listener (METRICS_PORT), NOT on
+  # the public SERVER_PORT. Scraping it on METRICS_PORT is the first oracle that
+  # the separate listener is up; the SERVER_PORT probe below is the second, that
+  # metrics have actually LEFT the public surface -- either alone would pass a
+  # regression that re-exposed them or that never split the listener.
+  assert_eq "health/metrics-200" "200" "$(http_status /metrics "${METRICS_PORT}")"
+  if http_head /metrics "${METRICS_PORT}" | grep -q '^# HELP'; then
     record_case "health/metrics-is-prometheus-text" ok
   else
     record_case "health/metrics-is-prometheus-text" fail \
       "no '# HELP' line; the endpoint answered but not with an exposition format"
+  fi
+  # The public listener must NOT serve /metrics anymore. The main Router has no
+  # /metrics route, so the SPA fallback answers -- 200 with index.html, never the
+  # exposition format. Assert both: a non-metrics status AND no '# HELP', so a
+  # fallback that happened to 200 cannot be mistaken for the metrics endpoint.
+  if http_head /metrics "${SERVER_PORT}" | grep -q '^# HELP'; then
+    record_case "health/metrics-off-public-listener" fail \
+      "the public listener on ${SERVER_PORT} still serves the Prometheus exposition format"
+  else
+    record_case "health/metrics-off-public-listener" ok
   fi
 
   # The SPA fallback. `not_found_service` serves index.html for any unmatched
