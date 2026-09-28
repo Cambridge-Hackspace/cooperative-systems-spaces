@@ -1372,6 +1372,25 @@ pub struct Cmi5Config {
     pub fetch_ttl_secs: u64,
     /// Lifetime of an issued session credential, in seconds.
     pub session_ttl_secs: u64,
+    /// #120 (#134): origin to serve cmi5 package content from, instead of the
+    /// app's own origin.
+    ///
+    /// cmi5 packages are staff-uploaded HTML/JS. Served from the app origin
+    /// (`None`, the default), a malicious package runs there and can ride the
+    /// session cookie (#135 stops it *reading* the token, not *using* it) and
+    /// touch app-origin storage. Set this to a DISTINCT origin (a subdomain,
+    /// scheme+host+optional port, no path, e.g. `https://cmi5.example.org`) and
+    /// the launch URL points content there while the LRS and fetch endpoints stay
+    /// on the app origin; that origin is CORS-admitted for the (uncredentialed,
+    /// fetch-token-authenticated) LRS calls but cannot use the session cookie.
+    ///
+    /// Left `None` by default deliberately: turning it on requires actually
+    /// deploying that origin to serve the same `content_dir`, so it is opt-in for
+    /// operators who serve untrusted packages. `validate_config` refuses it when
+    /// CORS is disabled (the cross-origin LRS fetch would have no headers) or when
+    /// it is not a bare origin.
+    #[serde(default)]
+    pub content_origin: Option<String>,
 }
 
 impl Default for Cmi5Config {
@@ -1382,6 +1401,7 @@ impl Default for Cmi5Config {
             max_package_bytes: 100 * 1024 * 1024,
             fetch_ttl_secs: 300,
             session_ttl_secs: 4 * 60 * 60,
+            content_origin: None,
         }
     }
 }
@@ -2068,7 +2088,44 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     // cannot do anything except mislead. Refused here rather than defaulted to
     // a wildcard, because '*' on a bearer-token API is a data exposure, not a
     // permissive convenience. See `cors::build_layer`.
-    crate::cors::validate(&config.server)?;
+    crate::cors::validate(&config.server, config.cmi5.content_origin.as_deref())?;
+
+    // #120 (#134): a cmi5 content origin only works with CORS on -- the package's
+    // cross-origin LRS fetch needs the Access-Control headers the layer emits --
+    // and it must be a bare origin, since it is concatenated with `/cmi5-content/`
+    // to form the launch URL and admitted as a CORS origin (both of which a path
+    // or trailing slash would corrupt). Refused here rather than surfacing later
+    // as content that will not load or a launch URL with a doubled slash.
+    if let Some(origin) = config
+        .cmi5
+        .content_origin
+        .as_deref()
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+    {
+        if !config.server.cors_enabled {
+            return Err(anyhow::anyhow!(
+                "cmi5.content_origin is set ({origin:?}) but server.cors_enabled is \
+                 false. The package runs on that origin and posts xAPI statements \
+                 back to the app's LRS cross-origin, which needs CORS. Enable CORS, \
+                 or unset cmi5.content_origin to serve content same-origin."
+            ));
+        }
+        // A bare origin is `scheme://host[:port]` with nothing after the host:
+        // the only "/" are the two in "://". Split on "://" and refuse a scheme
+        // that is absent or a remainder that carries a path or trailing slash.
+        let bare = match origin.split_once("://") {
+            Some((scheme, rest)) => !scheme.is_empty() && !rest.is_empty() && !rest.contains('/'),
+            None => false,
+        };
+        if !bare || origin.parse::<axum::http::HeaderValue>().is_err() {
+            return Err(anyhow::anyhow!(
+                "cmi5.content_origin ({origin:?}) is not a bare origin. It must be \
+                 scheme, host and optional port with no path or trailing slash, \
+                 e.g. \"https://cmi5.example.org\"."
+            ));
+        }
+    }
 
     // Validate initial setup admin email format
     if config.initial_setup.setup_enabled && !config.initial_setup.setup_admin_email.contains('@') {
@@ -2543,6 +2600,62 @@ mod tests {
             err.to_string().contains("from_email"),
             "the refusal should name the field an operator has to fix, got: {err}"
         );
+    }
+
+    #[test]
+    fn no_cmi5_content_origin_imposes_nothing() {
+        // #120 (#134): anti-vacuity. The default leaves content_origin unset
+        // (same-origin), and that must never be refused -- otherwise every
+        // existing deployment fails to boot on upgrade.
+        let config = AppConfig::default();
+        assert!(config.cmi5.content_origin.is_none());
+        validate_config(&config).expect("the same-origin default imposes no cmi5 requirement");
+    }
+
+    #[test]
+    fn a_valid_cmi5_content_origin_with_cors_on_is_accepted() {
+        // The default has CORS enabled with a usable origin, so this isolates the
+        // content_origin acceptance.
+        let mut config = AppConfig::default();
+        config.cmi5.content_origin = Some("https://cmi5.example.org".to_string());
+        validate_config(&config).expect("a bare content origin with CORS on is valid");
+    }
+
+    #[test]
+    fn a_cmi5_content_origin_without_cors_is_refused() {
+        // Mutation check: delete the cors_enabled arm and this fails. The defect
+        // it guards is content served cross-origin whose LRS fetch has no CORS
+        // headers and silently cannot report completion.
+        let mut config = AppConfig::default();
+        config.server.cors_enabled = false;
+        config.cmi5.content_origin = Some("https://cmi5.example.org".to_string());
+        let err = validate_config(&config)
+            .expect_err("a content origin needs CORS for its cross-origin LRS calls");
+        assert!(
+            err.to_string().contains("cmi5.content_origin"),
+            "the refusal should name the field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_cmi5_content_origin_that_is_not_a_bare_origin_is_refused() {
+        // A path or trailing slash corrupts both the launch URL concatenation and
+        // the CORS origin match. Two shapes, both refused.
+        for bad in [
+            "https://cmi5.example.org/content", // a path
+            "https://cmi5.example.org/",        // a trailing slash
+            "cmi5.example.org",                 // no scheme
+        ] {
+            let mut config = AppConfig::default();
+            config.cmi5.content_origin = Some(bad.to_string());
+            let err = validate_config(&config)
+                .expect_err(&format!("{bad:?} is not a bare origin"))
+                .to_string();
+            assert!(
+                err.contains("bare origin"),
+                "the refusal should say it must be a bare origin, got: {err}"
+            );
+        }
     }
 
     #[test]
