@@ -28,6 +28,11 @@ password_reset_enabled = true
 login_throttle_enabled = true
 login_throttle_attempts = 10
 login_throttle_seconds = 60
+# Whether the browser session cookie carries the Secure attribute (#135). The
+# session JWT rides an httpOnly cookie; Secure keeps it off plain-HTTP. Leave
+# true in production (HTTPS); set false ONLY for a plain-HTTP dev deployment,
+# or the browser will never send the cookie back.
+cookie_secure = true
 
 # Registration Challenge Configuration
 # Use this to require a passphrase or challenge question for new registrations

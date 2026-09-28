@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -1074,6 +1074,27 @@ stage_circuits() {
 
   collect_server_log
   emit_junit circuits "driver=circuits.mjs"
+}
+
+# #120 (#135): the browser session rides an httpOnly cookie. Proves login installs
+# a hardened cookie, that the cookie alone authenticates /auth/me, and that logout
+# expires it. The Bearer path every other stage uses is unaffected.
+stage_cookie() {
+  cases_begin cookie
+  stack_paths
+
+  if ! server_ready; then
+    record_case "cookie/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit cookie
+    return 1
+  fi
+  record_case "cookie/stack-is-up" ok
+
+  run_node cookie.mjs >"${OUT}/logs/cookie.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit cookie "driver=cookie.mjs"
 }
 
 # ===========================================================================

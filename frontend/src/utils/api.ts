@@ -34,21 +34,20 @@ import { useAuthStore } from '@/stores/auth'
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  // #135: the session rides an httpOnly cookie the SPA cannot read. `withCredentials`
+  // makes the browser attach it to same-origin API calls; there is no Authorization
+  // header to inject any more, so the request interceptor no longer sets one.
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 })
 
-// Request interceptor to add auth token
+// Request interceptor. The auth token is no longer carried here (#135) -- it is
+// the httpOnly session cookie, attached automatically by the browser. The
+// interceptor is kept for its typed error path.
 api.interceptors.request.use(
   (config) => {
-    const authStore = useAuthStore()
-    const token = authStore.token
-
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-
     return config
   },
   (error: unknown) => {
@@ -70,11 +69,11 @@ api.interceptors.response.use(
   (error: AxiosError) => {
     const authStore = useAuthStore()
 
-    // Handle 401 unauthorized - clear auth and redirect to login
+    // Handle 401 unauthorized - clear auth and redirect to login. Fire-and-forget
+    // from this synchronous rejection handler: logout is async now (#135, it hits
+    // /auth/logout to clear the cookie), and the components handle the redirect.
     if (error.response?.status === 401) {
-      authStore.logout()
-      // Note: In a real app, you might want to redirect to login page here
-      // But we'll let the components handle this
+      void authStore.logout()
     }
 
     return Promise.reject(error)

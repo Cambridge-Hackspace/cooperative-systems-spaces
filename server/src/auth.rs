@@ -267,6 +267,73 @@ impl<'a> AuthService<'a> {
     }
 }
 
+/// Name of the httpOnly cookie carrying the browser session JWT (#120/#135).
+pub const SESSION_COOKIE_NAME: &str = "css_session";
+
+/// Build the `Set-Cookie` value that installs the session (#120/#135).
+///
+/// `HttpOnly` keeps it out of `document.cookie`, so an XSS on the app origin
+/// cannot read the token. `SameSite=Strict` is the CSRF defense: the cookie is
+/// never attached to a cross-site request, and every mutating API route is a
+/// non-GET, so a cross-site page cannot forge an authenticated call. `Secure` is
+/// caller-controlled (`auth.cookie_secure`) so the plain-HTTP e2e stack can
+/// still round-trip the cookie while production keeps it HTTPS-only.
+pub fn session_set_cookie(token: &str, max_age_secs: i64, secure: bool) -> String {
+    let mut cookie = format!(
+        "{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age_secs}"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// Build the `Set-Cookie` value that clears the session (logout, #120/#135).
+///
+/// Same attributes as `session_set_cookie` so the browser matches and replaces
+/// the existing cookie, with an empty value and `Max-Age=0` to expire it now.
+pub fn session_clear_cookie(secure: bool) -> String {
+    let mut cookie =
+        format!("{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+/// Pull the session token out of a `Cookie:` request header value.
+///
+/// Parses the standard `a=1; b=2` form and returns the `css_session` value, or
+/// `None` when it is absent. Whitespace around each pair is trimmed; a bare name
+/// with no `=` is skipped rather than treated as an empty match.
+pub fn token_from_cookie_header(header: &str) -> Option<&str> {
+    header.split(';').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        if name.trim() == SESSION_COOKIE_NAME {
+            Some(value.trim())
+        } else {
+            None
+        }
+    })
+}
+
+/// Choose the session token from a request's `Cookie` and `Authorization`
+/// header values (#120/#135). Cookie first -- the SPA path -- then a `Bearer`
+/// header for API, CLI, test and device clients. Both failure variants map to
+/// 401, so the missing-vs-invalid distinction is internal only.
+fn select_request_token<'a>(
+    cookie_header: Option<&'a str>,
+    authorization: Option<&'a str>,
+) -> Result<&'a str, AuthError> {
+    if let Some(token) = cookie_header.and_then(token_from_cookie_header) {
+        return Ok(token);
+    }
+    authorization
+        .ok_or(AuthError::MissingCredentials)?
+        .strip_prefix("Bearer ")
+        .ok_or(AuthError::InvalidToken)
+}
+
 // JWT middleware for extracting user from request
 #[derive(Clone)]
 pub struct AuthUser(pub User);
@@ -281,17 +348,18 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state: AppState = AppState::from_ref(state);
 
-        // Extract the token from Authorization header
-        let auth_header = parts
-            .headers
-            .get("authorization")
-            .ok_or(AuthError::MissingCredentials)?
-            .to_str()
-            .map_err(|_| AuthError::InvalidToken)?;
-
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or(AuthError::InvalidToken)?;
+        // The browser session rides an httpOnly cookie (#120/#135); API, CLI,
+        // test and device clients still present `Authorization: Bearer`. Accepting
+        // Bearer does not weaken the XSS win: the SPA no longer holds a
+        // JS-readable token, so there is nothing for a script on the app origin to
+        // steal regardless of what the server also accepts.
+        let token = select_request_token(
+            parts.headers.get("cookie").and_then(|v| v.to_str().ok()),
+            parts
+                .headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok()),
+        )?;
 
         // Create auth service
         let config = app_state.config_manager.get_config();
@@ -545,5 +613,92 @@ mod token_ttl_tests {
             PasswordHashUtil::verify("anything", &DUMMY_PASSWORD_HASH).ok(),
             Some(false)
         );
+    }
+}
+
+#[cfg(test)]
+mod session_cookie_tests {
+    use super::*;
+
+    #[test]
+    fn set_cookie_carries_the_hardening_attributes() {
+        // #120/#135: the whole security value is in these attributes. HttpOnly
+        // keeps the token out of document.cookie; SameSite=Strict is the CSRF
+        // defense; Path=/ scopes it to the whole app; Max-Age sets the lifetime.
+        // Mutation check: drop any attribute from session_set_cookie and the
+        // matching assertion here fails.
+        let c = session_set_cookie("the.jwt.value", 3600, true);
+        assert!(c.starts_with("css_session=the.jwt.value"), "{c}");
+        assert!(c.contains("; HttpOnly"), "{c}");
+        assert!(c.contains("; SameSite=Strict"), "{c}");
+        assert!(c.contains("; Path=/"), "{c}");
+        assert!(c.contains("; Max-Age=3600"), "{c}");
+    }
+
+    #[test]
+    fn secure_is_present_only_when_asked() {
+        // The flag is config-driven so the plain-HTTP e2e stack can still receive
+        // the cookie. Both directions asserted -- a helper that ignored the flag
+        // would fail one of these.
+        assert!(session_set_cookie("t", 60, true).contains("; Secure"));
+        assert!(!session_set_cookie("t", 60, false).contains("; Secure"));
+        assert!(session_clear_cookie(true).contains("; Secure"));
+        assert!(!session_clear_cookie(false).contains("; Secure"));
+    }
+
+    #[test]
+    fn clear_cookie_expires_immediately() {
+        // Logout must expire the cookie the SPA cannot clear itself (it is
+        // HttpOnly). Max-Age=0 is what does that; the value is emptied too.
+        let c = session_clear_cookie(false);
+        assert!(c.starts_with("css_session=;"), "{c}");
+        assert!(c.contains("; Max-Age=0"), "{c}");
+    }
+
+    #[test]
+    fn token_is_pulled_out_of_a_multi_cookie_header() {
+        assert_eq!(
+            token_from_cookie_header("theme=dark; css_session=abc.def.ghi; other=1"),
+            Some("abc.def.ghi")
+        );
+        // Leading/trailing whitespace around the pair is tolerated.
+        assert_eq!(token_from_cookie_header("css_session = xyz "), Some("xyz"));
+    }
+
+    #[test]
+    fn absent_session_cookie_is_none() {
+        assert_eq!(token_from_cookie_header("theme=dark; other=1"), None);
+        assert_eq!(token_from_cookie_header(""), None);
+        // A bare name with no value is skipped, not read as an empty match.
+        assert_eq!(token_from_cookie_header("css_session"), None);
+    }
+
+    #[test]
+    fn cookie_is_chosen_over_bearer_and_bearer_is_the_fallback() {
+        // Cookie wins when both are present (the SPA path), Bearer is used when no
+        // cookie is present (API/CLI/test/device), and the absence of both is
+        // MissingCredentials. Mutation check: swap the order in
+        // select_request_token and the precedence assertion fails.
+        assert_eq!(
+            select_request_token(Some("css_session=cookie.tok"), Some("Bearer header.tok")).ok(),
+            Some("cookie.tok")
+        );
+        assert_eq!(
+            select_request_token(None, Some("Bearer header.tok")).ok(),
+            Some("header.tok")
+        );
+        assert_eq!(
+            select_request_token(Some("theme=dark"), Some("Bearer header.tok")).ok(),
+            Some("header.tok"),
+            "a cookie header without css_session must fall through to Bearer"
+        );
+        assert!(matches!(
+            select_request_token(None, None),
+            Err(AuthError::MissingCredentials)
+        ));
+        assert!(matches!(
+            select_request_token(None, Some("Basic abc")),
+            Err(AuthError::InvalidToken)
+        ));
     }
 }

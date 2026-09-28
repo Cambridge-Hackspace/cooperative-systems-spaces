@@ -315,8 +315,10 @@ describe('verifying with an authenticator code', () => {
     await buttonNamed(w, 'Verify').trigger('click')
     await flushPromises()
 
-    expect(localStorage.getItem('css_token')).toBe('jwt-after-mfa')
+    // #135: sign-in is the redirect home; the token is never written to
+    // localStorage (it is the server's httpOnly cookie).
     expect(mocks.push).toHaveBeenCalledWith('/')
+    expect(localStorage.getItem('css_token')).toBeNull()
   })
 
   it('sends a user who must still enroll to the settings page', async () => {

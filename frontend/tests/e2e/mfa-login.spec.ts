@@ -6,9 +6,9 @@
 // reachable without a credential. None of them can answer the question a member
 // standing at the login form actually has: **does a password alone get you in?**
 //
-// That needs a real navigation, a real router guard, real localStorage and a
-// real page reload -- because the ways it could go wrong are a token written to
-// storage before the second factor is judged, or a guard that lets a
+// That needs a real navigation, a real router guard, a real cookie jar and a
+// real page reload -- because the ways it could go wrong are a session cookie
+// set before the second factor is judged, or a guard that lets a
 // half-authenticated store through, and both are invisible to a mounted
 // component.
 //
@@ -52,8 +52,12 @@ async function submitPassword(page: import('@playwright/test').Page, who = ENROL
     .click()
 }
 
-const storedToken = (page: import('@playwright/test').Page) =>
-  page.evaluate(() => window.localStorage.getItem('css_token'))
+// #135: the session is an httpOnly cookie, invisible to document.cookie and
+// localStorage. Playwright's context CAN see it, which is exactly why this is a
+// real oracle: a no-session state has no css_session cookie, a signed-in one
+// does, and either assertion can genuinely fail.
+const sessionCookie = async (page: import('@playwright/test').Page) =>
+  (await page.context().cookies()).find((c) => c.name === 'css_session') ?? null
 
 test.describe('a password is not enough on its own', () => {
   test('stops at the challenge and leaves the browser unauthenticated', async ({ page }) => {
@@ -63,7 +67,7 @@ test.describe('a password is not enough on its own', () => {
 
     await expect(page.getByText(/two-factor verification/i)).toBeVisible()
     expect(new URL(page.url()).pathname, 'the challenge navigated away').toBe('/login')
-    expect(await storedToken(page), 'a token was persisted before the second factor').toBeNull()
+    expect(await sessionCookie(page), 'a token was persisted before the second factor').toBeNull()
     await expect(
       page.getByLabel(/password/i),
       'the password form is still on screen behind the challenge'
@@ -73,8 +77,8 @@ test.describe('a password is not enough on its own', () => {
   test('a reload during the challenge lands back on the login form, not inside', async ({
     page,
   }) => {
-    // The test the store cannot run. If anything had been written to
-    // localStorage, `initialize()` would restore a session on reload and the
+    // The test the store cannot run. If a session cookie had been set before the
+    // second factor, `initialize()` would restore a session on reload and the
     // guard would wave the user through -- and the only place that is visible
     // is a browser that actually reloads.
     await submitPassword(page)
@@ -83,7 +87,7 @@ test.describe('a password is not enough on its own', () => {
     await page.reload()
 
     await expect(page.getByLabel(/password/i).first()).toBeVisible()
-    expect(await storedToken(page)).toBeNull()
+    expect(await sessionCookie(page)).toBeNull()
   })
 
   test('a protected page is still refused while a challenge is outstanding', async ({ page }) => {
@@ -111,7 +115,11 @@ test.describe('completing the second factor', () => {
 
     await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 10_000 })
     await expect(page.locator(APP_SHELL)).toBeVisible()
-    expect(await storedToken(page)).not.toBeNull()
+    const cookie = await sessionCookie(page)
+    expect(cookie).not.toBeNull()
+    // The security property #135 buys: the session cookie is httpOnly, so an XSS
+    // on the app origin cannot read the token out of it.
+    expect(cookie?.httpOnly, 'the session cookie must be httpOnly').toBe(true)
   })
 
   test('the session survives a reload, which is what makes it a session', async ({ page }) => {
@@ -135,14 +143,14 @@ test.describe('completing the second factor', () => {
 
     // Spent: signing out and presenting the same code again must fail. A
     // recovery code that survived its own use would be a permanent password.
-    await page.evaluate(() => window.localStorage.clear())
+    await page.context().clearCookies()
     await submitPassword(page)
     await page.getByRole('tab', { name: /recovery/i }).click()
     await page.getByLabel(/recovery code/i).fill(GOOD_RECOVERY)
     await page.getByRole('button', { name: /^verify$/i }).click()
 
     await expect(page.getByText(/invalid recovery code/i)).toBeVisible()
-    expect(await storedToken(page)).toBeNull()
+    expect(await sessionCookie(page)).toBeNull()
   })
 
   test('abandoning the challenge returns to the password form', async ({ page }) => {
@@ -150,7 +158,7 @@ test.describe('completing the second factor', () => {
     await page.getByRole('button', { name: /use a different account/i }).click()
 
     await expect(page.getByLabel(/password/i).first()).toBeVisible()
-    expect(await storedToken(page)).toBeNull()
+    expect(await sessionCookie(page)).toBeNull()
   })
 })
 
@@ -162,7 +170,7 @@ test.describe('a wrong code', () => {
 
     await expect(page.getByText(/invalid totp code/i)).toBeVisible()
     expect(new URL(page.url()).pathname).toBe('/login')
-    expect(await storedToken(page)).toBeNull()
+    expect(await sessionCookie(page)).toBeNull()
   })
 
   test('leaves the user on a form whose token is already dead -- a pinned finding', async ({
@@ -204,7 +212,7 @@ test.describe('a wrong code', () => {
         'delete this pin -- but check that /verify gained a rate limit first'
     ).toBeVisible()
     expect(
-      await storedToken(page),
+      await sessionCookie(page),
       'the correct code was accepted on a challenge that had already been spent'
     ).toBeNull()
   })

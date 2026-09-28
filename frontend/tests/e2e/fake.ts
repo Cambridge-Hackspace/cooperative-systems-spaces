@@ -52,10 +52,11 @@ export const PASSWORD = 'fake-password'
 /**
  * Sign in through the real login form.
  *
- * Deliberately through the UI rather than by writing a token into
- * localStorage. Half the interesting failures in this application are in the
- * login path, and a suite that skips it to save four seconds per test skips the
- * thing most likely to be broken.
+ * Deliberately through the UI rather than by short-circuiting the credential
+ * (there is nothing to inject now that the session is an httpOnly cookie, #135).
+ * Half the interesting failures in this application are in the login path, and a
+ * suite that skips it to save four seconds per test skips the thing most likely
+ * to be broken.
  */
 export async function signIn(page: Page, username = 'grace') {
   await page.goto('/login')

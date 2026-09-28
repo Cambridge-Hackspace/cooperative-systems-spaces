@@ -75,7 +75,6 @@ describe('a password that is not enough on its own', () => {
 
     expect(result).toBe('mfa')
     expect(auth.pendingMfa).toEqual(CHALLENGE)
-    expect(auth.token, 'a challenge must not issue a token').toBeNull()
     expect(auth.user, 'a challenge must not populate the user').toBeNull()
     expect(auth.isAuthenticated).toBe(false)
     expect(
@@ -128,18 +127,19 @@ describe('a password that is not enough on its own', () => {
 })
 
 describe('a password that is enough', () => {
-  it('signs the user in and persists the token', async () => {
+  it('signs the user in without keeping the token in JS', async () => {
     // The positive half. Without it, a store that refused every login would
-    // satisfy every assertion in the block above.
+    // satisfy every assertion in the block above. #135: the session is the
+    // httpOnly cookie the server set on the response; the store keeps only the
+    // user, and nothing lands in localStorage for an XSS to steal.
     mocks.post.mockResolvedValue(tokenResponse())
     const auth = useAuthStore()
 
     expect(await auth.login({ username_or_email: 'ada', password: 'pw' })).toBe('ok')
-    expect(auth.token).toBe('jwt-xyz')
     expect(auth.user).toEqual(USER)
     expect(auth.isAuthenticated).toBe(true)
     expect(auth.pendingMfa).toBeNull()
-    expect(localStorage.getItem('css_token')).toBe('jwt-xyz')
+    expect(localStorage.getItem('css_token')).toBeNull()
   })
 
   it('passes the credentials through unchanged', async () => {
@@ -190,7 +190,8 @@ describe('a login that fails', () => {
 
     expect(await auth.login({ username_or_email: 'ada', password: 'no' })).toBe('error')
     expect(auth.error).toBe('Invalid credentials')
-    expect(auth.token).toBeNull()
+    expect(auth.user).toBeNull()
+    expect(auth.isAuthenticated).toBe(false)
     expect(localStorage.getItem('css_token')).toBeNull()
   })
 
@@ -226,10 +227,11 @@ describe('completing the second factor', () => {
 
     auth.completeMfa({ token: 'jwt-after-mfa', user: USER, expires_in: 86400 })
 
-    expect(auth.token).toBe('jwt-after-mfa')
+    // #135: /verify set the httpOnly cookie; the store keeps only the user and
+    // never writes the token to JS-readable storage.
     expect(auth.user).toEqual(USER)
     expect(auth.isAuthenticated).toBe(true)
-    expect(localStorage.getItem('css_token')).toBe('jwt-after-mfa')
+    expect(localStorage.getItem('css_token')).toBeNull()
     expect(auth.pendingMfa, 'the spent challenge must not linger').toBeNull()
   })
 
@@ -255,7 +257,7 @@ describe('completing the second factor', () => {
     auth.cancelMfa()
 
     expect(auth.pendingMfa).toBeNull()
-    expect(auth.token).toBeNull()
+    expect(auth.user).toBeNull()
     expect(auth.isAuthenticated).toBe(false)
     expect(localStorage.getItem('css_token')).toBeNull()
   })

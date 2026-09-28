@@ -150,6 +150,12 @@ async function enrollPasskey(page: Page, label = 'Virtual Key') {
   return label
 }
 
+// #135: the session is the real server's httpOnly `css_session` cookie, which
+// document.cookie/localStorage cannot see but Playwright's context can. A
+// no-session state has no cookie; a completed ceremony that issued a JWT has one.
+const sessionCookie = async (page: Page) =>
+  (await page.context().cookies()).find((c) => c.name === 'css_session') ?? null
+
 test.describe('a passkey, end to end', () => {
   test.beforeEach(({ page }) => {
     watch(page)
@@ -194,7 +200,7 @@ test.describe('a passkey, end to end', () => {
     await enrollPasskey(page)
 
     // Drop the session and come back with the password only.
-    await page.evaluate(() => window.localStorage.clear())
+    await page.context().clearCookies()
     await signInWithPassword(page, username)
 
     await expect(
@@ -202,7 +208,7 @@ test.describe('a passkey, end to end', () => {
       'a password alone still signed in an account with a passkey enrolled'
     ).toBeVisible({ timeout: 20_000 })
     expect(
-      await page.evaluate(() => window.localStorage.getItem('css_token')),
+      await sessionCookie(page),
       'a token was persisted before the passkey was presented'
     ).toBeNull()
 
@@ -211,7 +217,7 @@ test.describe('a passkey, end to end', () => {
 
     await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 20_000 })
     expect(
-      await page.evaluate(() => window.localStorage.getItem('css_token')),
+      await sessionCookie(page),
       'the ceremony completed but no session was established, so ' +
         'finish_passkey_authentication did not issue a JWT'
     ).not.toBeNull()
@@ -269,7 +275,7 @@ test.describe('a passkey, end to end', () => {
       await route.continue({ postData: JSON.stringify(body) })
     })
 
-    await page.evaluate(() => window.localStorage.clear())
+    await page.context().clearCookies()
     await signInWithPassword(page, username)
     await expect(page.getByText(/two-factor verification/i)).toBeVisible({ timeout: 20_000 })
     await page.getByRole('button', { name: /use security key/i }).click()
@@ -277,7 +283,7 @@ test.describe('a passkey, end to end', () => {
     await expect(page.locator('.alert-error')).toBeVisible({ timeout: 20_000 })
     expect(tampered, 'the verify request was never intercepted, so nothing was tampered').toBe(true)
     expect(
-      await page.evaluate(() => window.localStorage.getItem('css_token')),
+      await sessionCookie(page),
       'the server accepted an assertion whose signature had been altered'
     ).toBeNull()
   })
@@ -300,7 +306,7 @@ test.describe('a passkey, end to end', () => {
     // challenge is still offered -- but nothing present can satisfy it.
     await client.send('WebAuthn.clearCredentials', { authenticatorId })
 
-    await page.evaluate(() => window.localStorage.clear())
+    await page.context().clearCookies()
     await signInWithPassword(page, mine)
     await expect(page.getByText(/two-factor verification/i)).toBeVisible({ timeout: 20_000 })
 
@@ -311,7 +317,7 @@ test.describe('a passkey, end to end', () => {
     // must not start, and the page must say something rather than hanging.
     await expect(page.getByText(/two-factor verification/i)).toBeVisible()
     expect(
-      await page.evaluate(() => window.localStorage.getItem('css_token')),
+      await sessionCookie(page),
       'an authenticator holding no registered credential completed the login'
     ).toBeNull()
     await expect(
