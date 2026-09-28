@@ -230,18 +230,19 @@ impl From<DatabaseError> for ApiError {
 // caller's own input violated is theirs to fix and gets a 4xx; anything else is
 // ours and gets a 500.
 //
-// Only the kinds diesel classifies structurally are matched. Postgres reports a
-// great deal more through SQLSTATE — 22P05 untranslatable_character among
-// them — but `DatabaseErrorInformation` exposes message, details, hint, table,
-// column, constraint and statement position, and no SQLSTATE. Recovering one by
-// matching on the message text would key this function on English prose that
-// changes with the server's lc_messages, which is a worse failure than the one
-// it fixes: it would work in testing and stop working in a deployment whose
-// locale differs, silently, in the direction of calling a 4xx a 500.
-//
-// So untranslatable text still becomes a 500. That is a real finding, it is
-// recorded in TESTING.md rather than papered over here, and the stack battery
-// reports it on every hostile-encoding run.
+// Diesel classifies some kinds structurally (unique, FK, not-null, check).
+// Postgres reports a great deal more through SQLSTATE — 22001
+// string_data_right_truncation and 22P05 untranslatable_character among them —
+// but `DatabaseErrorInformation` exposes message, details, hint, table, column,
+// constraint and statement position, and no SQLSTATE. Two of those SQLSTATE-only
+// cases are the caller's own fault and we refuse to leave them as 500, so they
+// are recovered by matching Postgres's own message text (`is_unrepresentable_text`
+// and `is_field_length_violation`). That keys those two arms on English prose a
+// server with a non-English lc_messages would not emit — a deliberate, documented
+// trade, not an oversight: such a server falls through to the 500 arm, which is
+// the previous behavior rather than a new failure, and the exact phrases are
+// pinned in this file's tests so a silent rewording is caught here, not in
+// production. Every other Unknown stays ours and stays a 500.
 /// Does this Postgres message mean "the bytes you sent cannot be stored"?
 ///
 /// Kept as a named function rather than inlined so the two phrases have one
@@ -249,6 +250,20 @@ impl From<DatabaseError> for ApiError {
 fn is_unrepresentable_text(message: &str) -> bool {
     message.contains("invalid byte sequence for encoding")
         || message.contains("has no equivalent in encoding")
+}
+
+/// Does this Postgres message mean "the value you sent is too long for its column"?
+///
+/// SQLSTATE 22001 (string_data_right_truncation). Diesel surfaces it as
+/// `DatabaseErrorKind::Unknown` with no code, so this matches the message — the
+/// same deliberate, tested trade as `is_unrepresentable_text`. The fuzz tier found
+/// the 500 on `PATCH /api/admin/webhooks/auth-headers/{id}` with an over-long
+/// value (#138): the caller sent more than the column holds, which is theirs to
+/// fix (400), not the server's (500). Postgres's phrasing is
+/// `value too long for type character varying(N)`; the type suffix is not matched
+/// so the same arm covers `character`, `bit`, and any other length-limited type.
+fn is_field_length_violation(message: &str) -> bool {
+    message.contains("value too long for type")
 }
 
 impl From<diesel::result::Error> for ApiError {
@@ -311,6 +326,20 @@ impl From<diesel::result::Error> for ApiError {
             {
                 ApiError::BadRequest(
                     "Text contained characters this database cannot store".to_string(),
+                )
+            }
+
+            // A value longer than its column allows (SQLSTATE 22001). Same
+            // message-matched shape as the unrepresentable-text arm above and the
+            // same reason: diesel reports it as Unknown with no code. The caller
+            // sent more than the field holds -- theirs to fix, so 400 not 500.
+            // The fuzz tier found this one as a blanket 500 on
+            // PATCH /api/admin/webhooks/auth-headers/{id} (#138).
+            E::DatabaseError(Kind::Unknown, ref info)
+                if is_field_length_violation(info.message()) =>
+            {
+                ApiError::BadRequest(
+                    "A field value exceeded the maximum length for its column".to_string(),
                 )
             }
 
@@ -392,6 +421,38 @@ mod tests {
                 !is_unrepresentable_text(msg),
                 "{msg:?} is not a text-representation problem and must keep its \
                  own classification"
+            );
+        }
+    }
+
+    /// The Postgres field-length message this classification depends on (#138).
+    ///
+    /// SQLSTATE 22001, copied from real server output rather than memory. If
+    /// Postgres rewords it or the predicate is "tidied", this fails here rather
+    /// than silently returning 500s in production again.
+    #[test]
+    fn the_field_length_message_is_recognized() {
+        assert!(
+            super::is_field_length_violation("value too long for type character varying(64)"),
+            "the over-long-value case the fuzz tier found on the webhooks \
+             auth-headers PATCH"
+        );
+    }
+
+    /// And the predicate does not reach past the one phrase it is for -- it is a
+    /// substring match on prose, the shape that quietly grows to swallow things.
+    #[test]
+    fn the_field_length_predicate_is_not_greedy() {
+        for msg in [
+            "deadlock detected",
+            "out of shared memory",
+            "invalid byte sequence for encoding \"UTF8\": 0x00",
+            "duplicate key value violates unique constraint \"users_email_key\"",
+        ] {
+            assert!(
+                !super::is_field_length_violation(msg),
+                "{msg:?} is not a field-length violation and must keep its own \
+                 classification"
             );
         }
     }
@@ -536,6 +597,20 @@ mod tests {
                 "{message:?}"
             );
         }
+
+        // A value too long for its column (SQLSTATE 22001) is the caller's to
+        // fix, so 400 (#138). This is the arm's real oracle: without it, the
+        // message falls through to the `_` arm below and answers 500, and this
+        // line is what catches that regression -- exercised end to end through
+        // the same From the `?` operator uses in every handler.
+        assert_eq!(
+            status_of(ApiError::from(db_error(
+                Kind::Unknown,
+                "value too long for type character varying(64)"
+            ))),
+            StatusCode::BAD_REQUEST,
+            "an over-long field value is a client error, not a server fault"
+        );
 
         // The other half of the original assertion, kept: an Unknown that is
         // NOT a text-representation problem must stay ours. The predicate is a
