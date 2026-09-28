@@ -115,6 +115,9 @@ pub struct Cmi5Service {
     max_package_bytes: usize,
     fetch_ttl: chrono::Duration,
     session_ttl: chrono::Duration,
+    /// #120 (#134): origin the launch URL serves content from, when set. `None`
+    /// means the app's own origin (the `site_url` passed to `create_launch`).
+    content_origin: Option<String>,
 }
 
 /// The server-side truth about a launched session, resolved from a session
@@ -136,6 +139,28 @@ pub struct Cmi5SessionContext {
 pub struct LaunchResult {
     pub launch_url: String,
     pub registration_id: Uuid,
+}
+
+/// Build the base URL the launched content is served from (#120/#134).
+///
+/// `content_origin` when set (a distinct origin for staff-uploaded package JS),
+/// otherwise `site_url` (the app's own origin, the same-origin default). The LRS
+/// and fetch endpoints are built from `site_url` separately and deliberately are
+/// NOT routed through here: the content lives on one origin and reports back to
+/// the app's LRS on another. Pure and free-standing so the origin choice is unit-
+/// testable without a database.
+fn launch_content_base(
+    content_origin: Option<&str>,
+    site_url: &str,
+    content_path: &str,
+    au_launch_url: &str,
+) -> String {
+    let root = content_origin.unwrap_or(site_url);
+    format!(
+        "{root}/cmi5-content/{}/{}",
+        content_path,
+        au_launch_url.trim_start_matches('/')
+    )
 }
 
 /// A launchable cmi5 module as a learner sees it: an AU bound to a training
@@ -172,6 +197,10 @@ impl Cmi5Service {
             max_package_bytes: config.max_package_bytes,
             fetch_ttl: chrono::Duration::seconds(config.fetch_ttl_secs as i64),
             session_ttl: chrono::Duration::seconds(config.session_ttl_secs as i64),
+            content_origin: config
+                .content_origin
+                .as_deref()
+                .map(|o| o.trim_end_matches('/').to_string()),
         }
     }
 
@@ -495,10 +524,16 @@ impl Cmi5Service {
             activity_id: &au.au_iri,
         })
         .map_err(|e| Cmi5Error::Json(e.to_string()))?;
-        let content_base = format!(
-            "{site_url}/cmi5-content/{}/{}",
-            course.content_path,
-            au.launch_url.trim_start_matches('/')
+        // #120 (#134): content is served from `content_origin` when configured, so
+        // staff-uploaded package JS runs on a distinct origin that cannot reach the
+        // app-origin session. The LRS `endpoint` and `fetch` above stay on
+        // `site_url` -- the content posts statements back cross-origin, authorized
+        // by the fetch token, never the session cookie.
+        let content_base = launch_content_base(
+            self.content_origin.as_deref(),
+            site_url,
+            &course.content_path,
+            &au.launch_url,
         );
         // Opaque launchParameters, if any, precede the cmi5 params.
         let with_params = match &au.launch_parameters {
@@ -1087,6 +1122,35 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::{SimpleFileOptions, ZipWriter};
+
+    #[test]
+    fn launch_content_base_defaults_to_the_app_origin() {
+        // #120 (#134): with no content origin configured, content is served
+        // same-origin from site_url -- the pre-#134 behavior, unchanged.
+        assert_eq!(
+            launch_content_base(None, "https://app.example", "abc", "index.html"),
+            "https://app.example/cmi5-content/abc/index.html"
+        );
+    }
+
+    #[test]
+    fn launch_content_base_uses_the_content_origin_when_set() {
+        // The whole point of #134: the package is served from the distinct origin,
+        // NOT site_url. Both halves asserted -- it uses the content origin and does
+        // not fall back to the app origin -- so a regression that ignored the
+        // configured origin fails here.
+        let url = launch_content_base(
+            Some("https://cmi5.example"),
+            "https://app.example",
+            "abc",
+            "/index.html",
+        );
+        assert_eq!(url, "https://cmi5.example/cmi5-content/abc/index.html");
+        assert!(
+            !url.starts_with("https://app.example"),
+            "content must not be served from the app origin when a content origin is set: {url}"
+        );
+    }
 
     /// Build an in-memory zip from (name, contents) pairs, names written
     /// verbatim so a traversal name survives to the reader.

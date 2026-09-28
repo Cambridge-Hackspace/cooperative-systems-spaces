@@ -565,7 +565,10 @@ async fn main() -> Result<(), anyhow::Error> {
     // check pins (main_composes_the_same_router). An invalid configuration was
     // already refused by validate_config at load; the `?` here covers the
     // reload path and keeps this total. See css_server::cors.
-    let cors = css_server::cors::build_layer(&app_config.server)?;
+    let cors = css_server::cors::build_layer(
+        &app_config.server,
+        app_config.cmi5.content_origin.as_deref(),
+    )?;
 
     // The SPA fallback below catches everything the router did not match --
     // including, without care, unmatched /api paths. `api::api_routes()` owns
