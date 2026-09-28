@@ -555,9 +555,21 @@ pub struct AuthConfig {
     pub login_throttle_attempts: u32,
     #[serde(default = "default_login_throttle_seconds")]
     pub login_throttle_seconds: u32,
+    /// Whether the session cookie carries the `Secure` attribute (#120/#135).
+    /// The browser session JWT rides an httpOnly cookie; `Secure` keeps it off
+    /// plain-HTTP connections, which is what production wants. Defaults to true
+    /// and serde-defaults so a config written before this key existed still
+    /// loads. Set false ONLY for a plain-HTTP dev/test deployment (the e2e stack
+    /// runs over http on loopback, so a Secure cookie would never be sent back).
+    #[serde(default = "default_cookie_secure")]
+    pub cookie_secure: bool,
     /// Multi-factor authentication settings
     #[serde(default)]
     pub mfa: AuthMfaConfig,
+}
+
+fn default_cookie_secure() -> bool {
+    true
 }
 
 fn default_login_throttle_enabled() -> bool {
@@ -675,6 +687,7 @@ impl Default for AuthConfig {
             login_throttle_enabled: default_login_throttle_enabled(),
             login_throttle_attempts: default_login_throttle_attempts(),
             login_throttle_seconds: default_login_throttle_seconds(),
+            cookie_secure: default_cookie_secure(),
             mfa: AuthMfaConfig::default(),
         }
     }

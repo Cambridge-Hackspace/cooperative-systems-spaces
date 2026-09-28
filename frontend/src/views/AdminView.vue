@@ -517,16 +517,12 @@ const reloadConfig = async () => {
   reloadMessage.value = ''
 
   try {
-    const token = authStore.token
-    if (!token) {
-      throw new Error('Authentication token not found')
-    }
-
     const response = await fetch('/api/admin/reload-config', {
       method: 'POST',
+      // #135: authenticate via the httpOnly session cookie, not a JS-held token.
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
       },
     })
 
@@ -582,16 +578,12 @@ const refreshWikiPages = async () => {
   reloadMessage.value = ''
 
   try {
-    const token = authStore.token
-    if (!token) {
-      throw new Error('Authentication token not found')
-    }
-
     const response = await fetch('/api/admin/pages/wiki/refresh', {
       method: 'POST',
+      // #135: authenticate via the httpOnly session cookie, not a JS-held token.
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
       },
     })
 
@@ -625,16 +617,12 @@ const refreshSitePages = async () => {
   reloadMessage.value = ''
 
   try {
-    const token = authStore.token
-    if (!token) {
-      throw new Error('Authentication token not found')
-    }
-
     const response = await fetch('/api/admin/pages/site/refresh', {
       method: 'POST',
+      // #135: authenticate via the httpOnly session cookie, not a JS-held token.
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
       },
     })
 

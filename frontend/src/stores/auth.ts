@@ -14,7 +14,10 @@ import { apiClient } from '@/utils/api'
 export const useAuthStore = defineStore('auth', () => {
   // State
   const user = ref<User | null>(null)
-  const token = ref<string | null>(localStorage.getItem('css_token'))
+  // #135: the session JWT now lives in an httpOnly cookie the browser sends
+  // automatically. The SPA never holds it in JS, so there is no `token` here and
+  // nothing in localStorage for an XSS on the app origin to steal. "Are we
+  // signed in?" is answered by whether /auth/me returned a user.
   const isLoading = ref(false)
   const error = ref<string | null>(null)
   const initialized = ref(false)
@@ -28,7 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
   const permissions = ref<string[]>([])
 
   // Getters
-  const isAuthenticated = computed(() => !!token.value && !!user.value)
+  const isAuthenticated = computed(() => !!user.value)
   const isAdmin = computed(() => {
     if (!user.value?.role) return false
     const role = String(user.value.role).toLowerCase()
@@ -84,10 +87,10 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       const data = response.data
-      token.value = data.token
+      // The server set the httpOnly session cookie on this response; the token in
+      // the body is ignored (#135). Only the user is kept, in memory.
       user.value = data.user
       mustEnrollMfa.value = !!data.must_enroll_mfa
-      localStorage.setItem('css_token', data.token)
       return 'ok'
     } catch (err: any) {
       error.value = err.response?.data?.error || 'Network error during login'
@@ -99,10 +102,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   /** Apply a successful MFA `/verify` response to the auth store. */
   const completeMfa = (resp: LoginResponse) => {
-    token.value = resp.token
+    // The /verify response set the httpOnly session cookie (#135); the body token
+    // is ignored. Keep only the user in memory.
     user.value = resp.user
     mustEnrollMfa.value = !!resp.must_enroll_mfa
-    localStorage.setItem('css_token', resp.token)
     pendingMfa.value = null
   }
 
@@ -132,20 +135,29 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  const logout = () => {
+  /** Drop the in-memory signed-in state. Does not touch the server cookie. */
+  const clearSession = () => {
     roles.value = []
     permissions.value = []
     user.value = null
-    token.value = null
-    localStorage.removeItem('css_token')
-    // Note: We could also call the server logout endpoint here if implemented
+  }
+
+  const logout = async () => {
+    // The session cookie is httpOnly, so JS cannot clear it -- the server must,
+    // via /auth/logout (#135). Best-effort: even if the call fails (offline, an
+    // already-expired session), the in-memory state is still cleared so the SPA
+    // reflects a signed-out user.
+    try {
+      await apiClient.post('/auth/logout')
+    } catch (err) {
+      console.error(err)
+    }
+    clearSession()
   }
 
   const getCurrentUser = async (): Promise<boolean> => {
-    if (!token.value) {
-      return false
-    }
-
+    // No client-side token to gate on: the httpOnly cookie decides. Always ask
+    // /auth/me; a 401 (no/expired cookie) resolves us to signed-out.
     isLoading.value = true
     error.value = null
 
@@ -161,16 +173,17 @@ export const useAuthStore = defineStore('auth', () => {
         permissions.value = response.data.permissions ?? []
         return true
       } else {
-        // Token might be invalid
-        logout()
+        // No valid session -- clear in memory. No server round-trip: the cookie
+        // is already absent/expired, so calling /auth/logout would be pointless.
+        clearSession()
         return false
       }
     } catch (err: any) {
       // Logged rather than discarded: a swallowed error is indistinguishable
       // from a successful no-op to anyone reading the console.
       console.error(err)
-      // Token is likely invalid
-      logout()
+      // Session is likely absent or expired.
+      clearSession()
       return false
     } finally {
       isLoading.value = false
@@ -225,18 +238,17 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = null
   }
 
-  // Initialize auth state on store creation
+  // Initialize auth state on store creation. Always probe /auth/me: with the
+  // token in an httpOnly cookie there is no client-side flag to gate on, and the
+  // cookie (if any) rehydrates the session; otherwise we resolve to signed-out.
   const initialize = async () => {
-    if (token.value) {
-      await getCurrentUser()
-    }
+    await getCurrentUser()
     initialized.value = true
   }
 
   return {
     // State
     user,
-    token,
     isLoading,
     error,
     initialized,

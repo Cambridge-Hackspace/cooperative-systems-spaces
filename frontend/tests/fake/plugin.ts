@@ -113,6 +113,23 @@ function bearer(req: IncomingMessage): string | undefined {
 }
 
 /**
+ * The session token out of the `css_session` cookie (#135). Mirrors the real
+ * server's httpOnly session cookie: the browser sends it automatically, and the
+ * cookie-only SPA presents no Bearer header, so the fake must read it here or
+ * every post-login request 401s.
+ */
+function sessionCookie(req: IncomingMessage): string | undefined {
+  const raw = req.headers.cookie
+  if (!raw) return undefined
+  for (const pair of raw.split(';')) {
+    const eq = pair.indexOf('=')
+    if (eq === -1) continue
+    if (pair.slice(0, eq).trim() === 'css_session') return pair.slice(eq + 1).trim()
+  }
+  return undefined
+}
+
+/**
  * Apply an armed fault, if one matches. Returns true when the request was
  * answered (or deliberately abandoned) and the handler should not run.
  */
@@ -320,7 +337,8 @@ const api: Connect.NextHandleFunction = (req, res) => {
     const body = ['POST', 'PUT', 'PATCH'].includes(method)
       ? ((await readBody(req)) as Record<string, unknown>)
       : {}
-    const me = world.userByToken(bearer(req))
+    // Cookie first, then Bearer -- the real server's #135 precedence.
+    const me = world.userByToken(sessionCookie(req) ?? bearer(req))
 
     // --- public ------------------------------------------------------------
     if (path === '/config/public') {
@@ -370,6 +388,12 @@ const api: Connect.NextHandleFunction = (req, res) => {
           webauthn_options: null,
         })
       }
+      // Mirror the real server's #135 httpOnly session cookie (no Secure -- the
+      // fake speaks http). The body still carries the token for Bearer clients.
+      res.setHeader(
+        'set-cookie',
+        'css_session=' + session.token + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'
+      )
       return ok(res, { token: session.token, user: session.user, expires_in: 86400 })
     }
 
@@ -383,10 +407,19 @@ const api: Connect.NextHandleFunction = (req, res) => {
         asText(body.code)
       )
       if ('error' in outcome) return err(res, outcome.status, outcome.error)
+      // Completing the challenge is where the session is issued, so this is where
+      // the #135 cookie is set -- matching the real server (the /login path set
+      // none, having only issued a challenge).
+      res.setHeader(
+        'set-cookie',
+        'css_session=' + outcome.token + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'
+      )
       return ok(res, { token: outcome.token, user: outcome.user, expires_in: 86400 })
     }
 
     if (path === '/auth/logout' && method === 'POST') {
+      // Expire the #135 cookie the SPA cannot clear itself (it is HttpOnly).
+      res.setHeader('set-cookie', 'css_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
       return ok(res, null, 'Logged out')
     }
 

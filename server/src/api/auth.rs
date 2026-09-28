@@ -1,6 +1,7 @@
 use axum::{
     extract::State,
-    response::Json,
+    http::{header::SET_COOKIE, HeaderValue},
+    response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
@@ -14,11 +15,26 @@ use crate::{
             ResendVerificationRequest, UserResponse,
         },
     },
-    auth::{AuthService, AuthUser, PasswordHashUtil},
+    auth::{session_clear_cookie, session_set_cookie, AuthService, AuthUser, PasswordHashUtil},
     models::{AuditEventType, NewUser, UpdateUser},
     tokens::{generate_token, hash_token, RESET_TOKEN_TTL_MINUTES, VERIFICATION_TOKEN_TTL_HOURS},
     AppState,
 };
+
+/// Attach the session cookie (#120/#135) to a response, best-effort.
+///
+/// A JWT is base64url plus dots, so it is always a valid header value; the
+/// `Result` is handled rather than unwrapped so a future token format that is
+/// not cannot panic a login. On the (unreachable) error the response goes out
+/// without the cookie, and the body still carries the token for Bearer clients.
+fn attach_session_cookie(resp: &mut Response, cookie: String) {
+    match HeaderValue::from_str(&cookie) {
+        Ok(value) => {
+            resp.headers_mut().insert(SET_COOKIE, value);
+        }
+        Err(e) => tracing::error!("session cookie was not a valid header value: {e}"),
+    }
+}
 
 pub fn auth_routes() -> Router<AppState> {
     Router::new()
@@ -247,7 +263,7 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+) -> Result<Response, ApiError> {
     if payload.username_or_email.is_empty() || payload.password.is_empty() {
         return Err(ApiError::BadRequest(
             "Username/email and password are required".to_string(),
@@ -321,10 +337,13 @@ async fn login(
     // a token. They complete login via /api/auth/mfa/verify.
     if user.mfa_enrolled_at.is_some() && config.auth.mfa.enabled {
         let challenge = crate::api::mfa::build_login_challenge(&state, &user)?;
+        // No token issued yet -- and so no session cookie. The cookie is set when
+        // the challenge is completed at /api/auth/mfa/verify.
         return Ok(Json(ApiResponse::success_with_message(
             challenge,
             "MFA challenge required".to_string(),
-        )));
+        ))
+        .into_response());
     }
 
     let token = auth_service
@@ -369,10 +388,22 @@ async fn login(
     let value = serde_json::to_value(&response).map_err(|e| {
         ApiError::InternalServerError(format!("Failed to serialize login response: {e}"))
     })?;
-    Ok(Json(ApiResponse::success_with_message(
+    // The token still travels in the body for Bearer clients (API, CLI, tests);
+    // the SPA ignores it and rides the httpOnly cookie set here (#120/#135).
+    let mut resp = Json(ApiResponse::success_with_message(
         value,
         "Login successful".to_string(),
-    )))
+    ))
+    .into_response();
+    attach_session_cookie(
+        &mut resp,
+        session_set_cookie(
+            &response.token,
+            (config.auth.jwt_expiration_hours as i64) * 60 * 60,
+            config.auth.cookie_secure,
+        ),
+    );
+    Ok(resp)
 }
 
 // Get current user info (protected endpoint)
@@ -399,15 +430,18 @@ async fn me(
     })))
 }
 
-// Logout endpoint (for completeness, JWT is stateless)
-async fn logout() -> Result<Json<ApiResponse<()>>, ApiError> {
-    // Since JWT tokens are stateless, we can't invalidate them server-side
-    // In a real application, you might want to implement a token blacklist
-    // or use refresh tokens with short-lived access tokens
-    Ok(Json(ApiResponse::success_with_message(
+// Logout endpoint. The JWT is stateless, so this cannot invalidate a Bearer
+// token server-side -- but the browser session lives in an httpOnly cookie the
+// SPA cannot clear from JS (#120/#135), so logout MUST expire it here.
+async fn logout(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let config = state.config_manager.get_config();
+    let mut resp = Json(ApiResponse::success_with_message(
         (),
-        "Logout successful. Please remove the token from client storage.".to_string(),
-    )))
+        "Logout successful.".to_string(),
+    ))
+    .into_response();
+    attach_session_cookie(&mut resp, session_clear_cookie(config.auth.cookie_secure));
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

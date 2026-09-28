@@ -381,7 +381,9 @@ const showWikiInNav = computed(() => {
 async function logout() {
   globalLoading.value = true
   try {
-    authStore.logout()
+    // Await so the server clears the httpOnly session cookie (#135) before we
+    // navigate away -- otherwise the redirect can race the cookie-clear.
+    await authStore.logout()
     await router.push('/')
   } finally {
     globalLoading.value = false

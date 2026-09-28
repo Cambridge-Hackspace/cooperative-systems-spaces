@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header::SET_COOKIE, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
-use crate::auth::{AuthService, AuthUser};
+use crate::auth::{session_set_cookie, AuthService, AuthUser};
 use crate::mfa::{
     generate_recovery_codes, generate_totp_secret_base32, hash_recovery_code, methods,
     verify_recovery_code, LoginChallenge, WebauthnRegistration,
@@ -545,15 +545,31 @@ async fn verify_login(
                 user.id,
                 serde_json::json!({ "method": req.method }),
             );
-            let resp = issue_token(&state, &user)?;
-            Ok((
+            // Completing the challenge is the moment the session is issued, so
+            // this is where the httpOnly cookie is set (#120/#135) -- the /login
+            // path set none, having only issued a challenge. The token also stays
+            // in the body for Bearer clients.
+            let login = issue_token(&state, &user)?;
+            let cookie = session_set_cookie(
+                &login.token,
+                (config.auth.jwt_expiration_hours as i64) * 60 * 60,
+                config.auth.cookie_secure,
+            );
+            let mut response = (
                 StatusCode::OK,
                 Json(ApiResponse::success_with_message(
-                    resp,
+                    login,
                     "Login successful".to_string(),
                 )),
             )
-                .into_response())
+                .into_response();
+            match HeaderValue::from_str(&cookie) {
+                Ok(value) => {
+                    response.headers_mut().insert(SET_COOKIE, value);
+                }
+                Err(e) => tracing::error!("session cookie was not a valid header value: {e}"),
+            }
+            Ok(response)
         }
         Err(e) => {
             if config.auth.login_throttle_enabled {

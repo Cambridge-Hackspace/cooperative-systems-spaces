@@ -26,8 +26,9 @@ const LEVELS: ReadonlyArray<[UserRole, number]> = [
 
 function signedInAs(role: UserRole) {
   const store = useAuthStore()
+  // #135: being signed in is having a user; the session token is the server's
+  // httpOnly cookie, not a store field.
   store.user = { id: 'u', username: 'u', email: 'u@e.com', full_name: 'U', role } as User
-  store.token = 'tok'
   return store
 }
 
@@ -107,16 +108,18 @@ describe('role getters', () => {
 })
 
 describe('isAuthenticated', () => {
-  it('needs both a token and a user', () => {
+  it('follows the presence of a user', () => {
+    // #135: the session token lives in an httpOnly cookie the SPA cannot read,
+    // so there is no client-side token to gate on. "Signed in" is exactly
+    // "/auth/me returned a user".
     const store = useAuthStore()
-    store.token = 'tok'
     store.user = null
     expect(store.isAuthenticated).toBe(false)
 
     store.user = { role: UserRole.Active } as User
     expect(store.isAuthenticated).toBe(true)
 
-    store.token = null
+    store.user = null
     expect(store.isAuthenticated).toBe(false)
   })
 })
