@@ -278,6 +278,11 @@ max_request_body_size = 16777216
 cors_enabled = true
 # List of allowed origins for CORS requests
 cors_origins = ["http://localhost:3000"]
+# Address the Prometheus /metrics endpoint binds to, on a separate listener from
+# bind_address (#120/#139). Loopback by default so metrics are not exposed on the
+# public interface; set it to a WireGuard interface address (e.g. "10.0.0.2:9090")
+# to scrape over the mesh.
+metrics_bind_address = "127.0.0.1:9090"
 
 [[user.profile_fields_seed]]
 key = "bio"

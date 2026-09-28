@@ -745,6 +745,17 @@ pub struct ServerConfig {
     pub cors_enabled: bool,
     /// Allowed CORS origins
     pub cors_origins: Vec<String>,
+    /// #120 (#139): address the Prometheus `/metrics` endpoint binds to, on a
+    /// SEPARATE listener from `bind_address`. Defaults to loopback so the
+    /// request/user/tool gauges are never exposed on the public interface;
+    /// point it at a WireGuard interface address (e.g. `10.x.x.x:9090`) to
+    /// scrape over the mesh.
+    #[serde(default = "default_metrics_bind_address")]
+    pub metrics_bind_address: String,
+}
+
+fn default_metrics_bind_address() -> String {
+    "127.0.0.1:9090".to_string()
 }
 
 impl Default for ServerConfig {
@@ -756,6 +767,7 @@ impl Default for ServerConfig {
             max_request_body_size: 16 * 1024 * 1024, // 16MB
             cors_enabled: true,
             cors_origins: vec!["http://localhost:3000".to_string()],
+            metrics_bind_address: default_metrics_bind_address(),
         }
     }
 }

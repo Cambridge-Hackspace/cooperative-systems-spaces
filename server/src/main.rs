@@ -555,8 +555,9 @@ async fn main() -> Result<(), anyhow::Error> {
     // ));
 
     // CORS applies to the /api nest and nowhere else: it is the only
-    // cross-origin surface a browser calls, and the SPA, /status and /metrics
-    // are served same-origin. `build_layer` returns None when cors_enabled is
+    // cross-origin surface a browser calls, and the SPA and /status are served
+    // same-origin (/metrics now lives on its own internal listener, #139).
+    // `build_layer` returns None when cors_enabled is
     // false -- the honest form of the pre-existing default, no layer and no
     // headers -- and `option_layer` makes that None a no-op. It is layered
     // inline rather than through a `let api = ...` so the nest stays literally
@@ -577,7 +578,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let cmi5_content = ServeDir::new(app_config.cmi5.content_dir.clone());
 
     let app = Router::new()
-        .route("/metrics", get(metrics_handler).with_state(prom.clone()))
         .merge(general_route)
         .nest(
             "/api",
@@ -588,6 +588,35 @@ async fn main() -> Result<(), anyhow::Error> {
         .nest_service("/cmi5-content", cmi5_content)
         .fallback_service(serve_dir)
         .with_state(app_state);
+
+    // #120 (#139): serve /metrics on a SEPARATE, internal listener, not the
+    // public router. Unauthenticated on the public interface it handed the
+    // request/user/tool gauges to anyone who could reach it. It now binds
+    // server.metrics_bind_address (loopback by default; point it at a WireGuard
+    // interface to scrape over the mesh). The prom.http_layer() instrumentation
+    // on /api is unaffected. A bind failure disables /metrics with a warning
+    // rather than taking down the server -- observability must not gate serving.
+    let metrics_app = Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(prom.clone());
+    let metrics_addr = app_config.server.metrics_bind_address.clone();
+    match tokio::net::TcpListener::bind(&metrics_addr).await {
+        Ok(metrics_listener) => {
+            info!("Metrics listener on {} (/metrics)", metrics_addr);
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(metrics_listener, metrics_app)
+                    .with_graceful_shutdown(shutdown_signal())
+                    .await
+                {
+                    warn!("Metrics listener error: {}", e);
+                }
+            });
+        }
+        Err(e) => warn!(
+            "Could not bind metrics listener on {}: {}; /metrics is disabled",
+            metrics_addr, e
+        ),
+    }
 
     let listener = tokio::net::TcpListener::bind(&app_config.server.bind_address).await?;
     info!("Server starting on {}", app_config.server.bind_address);

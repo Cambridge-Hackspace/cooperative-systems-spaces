@@ -29,6 +29,8 @@ const TEMPLATE: &str = include_str!("../../e2e/stack-config.toml");
 /// `every_substitution_is_used`.
 const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("@SERVER_PORT@", "4399"),
+    // #120 (#139): /metrics binds here, on its own loopback listener.
+    ("@METRICS_PORT@", "4392"),
     ("@STACK_TZ@", "America/Chicago"),
     ("@PG_USER@", "css_user"),
     ("@PG_PASS@", "css_pass"),

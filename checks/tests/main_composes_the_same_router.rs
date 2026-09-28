@@ -43,9 +43,12 @@ const MAIN_ONLY: &[(&str, &str)] = &[
     (
         "/metrics",
         "dr-metrix's exporter. It cannot live in api_routes() because the crate \
-         is Linux-only and the library has to build everywhere. Covered by the \
-         stack battery's `health` stage, which is the only tier that runs the \
-         real binary.",
+         is Linux-only and the library has to build everywhere. Since #139 it is \
+         composed onto its OWN internal listener (server.metrics_bind_address, \
+         loopback by default), not the public router, so it is doubly outside the \
+         contract tier's view. Covered by the stack battery's `health` stage, \
+         which scrapes the metrics port and separately proves /metrics is gone \
+         from the public port.",
     ),
     (
         "/status",
