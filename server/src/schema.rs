@@ -188,6 +188,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    resources (id) {
+        id -> Uuid,
+        kind -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ToolCategory;
     use super::sql_types::ToolStatus;
@@ -904,6 +913,8 @@ diesel::joinable!(space_devices -> places (place_id));
 diesel::joinable!(door_access_rules -> schedules (schedule_id));
 diesel::joinable!(schedules -> users (created_by));
 diesel::joinable!(tools -> schedules (schedule_id));
+diesel::joinable!(tools -> resources (id));
+diesel::joinable!(doors -> resources (id));
 diesel::joinable!(home_links -> users (created_by));
 diesel::joinable!(door_access_rules -> doors (door_id));
 diesel::joinable!(door_access_events -> doors (door_id));
@@ -1001,4 +1012,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     tool_tier_assignments,
     tool_modules,
     tool_interlocks,
+    resources,
 );

@@ -1486,15 +1486,28 @@ impl DatabaseManager {
         &self,
         new_tool: &crate::models::NewTool,
     ) -> Result<crate::models::Tool, DatabaseError> {
-        use crate::schema::tools;
+        use crate::schema::{resources, tools};
 
         let mut conn = self.get_connection()?;
 
-        diesel::insert_into(tools::table)
-            .values(new_tool)
-            .returning(crate::models::Tool::as_returning())
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        // #101: every tool IS a resource. The tool row is inserted first (its id
+        // is generated here), then the parent `resources` row with the same id, in
+        // one transaction; the shared-PK FK is DEFERRABLE INITIALLY DEFERRED, so it
+        // is checked at commit rather than rejecting the tool insert.
+        conn.transaction(|conn| {
+            let created: crate::models::Tool = diesel::insert_into(tools::table)
+                .values(new_tool)
+                .returning(crate::models::Tool::as_returning())
+                .get_result(conn)?;
+            diesel::insert_into(resources::table)
+                .values(crate::models::NewResource {
+                    id: created.id,
+                    kind: crate::models::ResourceKind::Tool.as_str().to_string(),
+                })
+                .execute(conn)?;
+            Ok(created)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Get all tools with InUse status (for boot-reset)
@@ -1512,21 +1525,23 @@ impl DatabaseManager {
 
     /// Delete a tool
     pub fn delete_tool(&self, tool_id: uuid::Uuid) -> Result<(), DatabaseError> {
-        use crate::schema::tools::dsl::*;
+        use crate::schema::{resources, tools};
 
         let mut conn = self.get_connection()?;
 
-        // The row count is the answer, not a detail to discard.
-        // Deleting nothing reported success.
-        let affected = diesel::delete(tools.find(tool_id))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-
-        if affected == 0 {
-            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
-        }
-
-        Ok(())
+        // #101: delete the tool (cascading to its dependents as before), then its
+        // parent `resources` row, in one transaction so no orphan resource is left.
+        conn.transaction(|conn| {
+            // The row count is the answer, not a detail to discard.
+            // Deleting nothing reported success.
+            let affected = diesel::delete(tools::table.find(tool_id)).execute(conn)?;
+            if affected == 0 {
+                return Err(diesel::result::Error::NotFound);
+            }
+            diesel::delete(resources::table.find(tool_id)).execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Create a tool event
@@ -4587,13 +4602,24 @@ impl DatabaseManager {
         &self,
         new_door: &crate::models::NewDoor,
     ) -> Result<crate::models::Door, DatabaseError> {
-        use crate::schema::doors;
+        use crate::schema::{doors, resources};
         let mut conn = self.get_connection()?;
-        diesel::insert_into(doors::table)
-            .values(new_door)
-            .returning(crate::models::Door::as_returning())
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        // #101: every door IS a resource -- insert the door then its parent
+        // `resources` row in one transaction (deferred shared-PK FK). See create_tool.
+        conn.transaction(|conn| {
+            let created: crate::models::Door = diesel::insert_into(doors::table)
+                .values(new_door)
+                .returning(crate::models::Door::as_returning())
+                .get_result(conn)?;
+            diesel::insert_into(resources::table)
+                .values(crate::models::NewResource {
+                    id: created.id,
+                    kind: crate::models::ResourceKind::Door.as_str().to_string(),
+                })
+                .execute(conn)?;
+            Ok(created)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     pub fn update_door(
@@ -4611,11 +4637,15 @@ impl DatabaseManager {
     }
 
     pub fn delete_door(&self, did: uuid::Uuid) -> Result<usize, DatabaseError> {
-        use crate::schema::doors::dsl::*;
+        use crate::schema::{doors, resources};
         let mut conn = self.get_connection()?;
-        diesel::delete(doors.find(did))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        // #101: remove the door and its parent `resources` row together.
+        conn.transaction(|conn| {
+            let affected = diesel::delete(doors::table.find(did)).execute(conn)?;
+            diesel::delete(resources::table.find(did)).execute(conn)?;
+            Ok(affected)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Doors served by a specific edge device.

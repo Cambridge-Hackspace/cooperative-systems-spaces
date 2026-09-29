@@ -42,8 +42,8 @@ use css_server::models::{
     NewToolTierAssignment, NewTrainingWaiver, NewUser, NewUserCard, ToolCategory, ToolStatus,
 };
 use css_server::schema::{
-    membership_ledger, roles, tool_rate_tiers, tool_tier_assignments, tool_usage_sessions, tools,
-    training_waivers, user_cards, user_roles, users,
+    membership_ledger, resources, roles, tool_rate_tiers, tool_tier_assignments,
+    tool_usage_sessions, tools, training_waivers, user_cards, user_roles, users,
 };
 
 /// Insert shape for a migrated historical session. `status` is `settled` (a
@@ -480,6 +480,11 @@ fn load(
                     .values(&new_tool)
                     .returning(tools::id)
                     .get_result(conn)?;
+                // #101: every tool IS a resource. Same-transaction parent row; the
+                // shared-PK FK is deferred so insert order does not matter here.
+                diesel::insert_into(resources::table)
+                    .values((resources::id.eq(id), resources::kind.eq("tool")))
+                    .execute(conn)?;
                 c.tools += 1;
                 id
             }
