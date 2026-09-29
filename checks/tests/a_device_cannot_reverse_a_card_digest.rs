@@ -31,11 +31,15 @@
 //! A third downgrade belongs to the same family -- swapping `wire_digest`'s
 //! argon2 for the HMAC that sits ten lines away in the same file, which is
 //! byte-identical on the wire and drops the 2^32 search behind a digest from
-//! years to seconds. It is **not** checked here, because `css_lib`'s
-//! `the_wire_digest_is_not_a_bare_hmac_of_the_code` already fails on it, one
-//! tier cheaper and without a grep. Neither that test nor any check here would
-//! notice argon2 kept but its `Params` weakened; that gap is real and is
-//! recorded rather than papered over with a check that cannot see it either.
+//! years to seconds. That exact swap is caught one tier cheaper, without a grep,
+//! by `css_lib`'s `the_wire_digest_is_not_a_bare_hmac_of_the_code`.
+//!
+//! A fourth is closely related and used to be uncovered: argon2 kept but its
+//! `Params` weakened -- the memory cost lowered, most temptingly to fit a
+//! microcontroller that cannot spare 19 MiB (#146). The wall-plug threat is
+//! identical and lowering the cost forfeits the very "2^32 is expensive"
+//! property the digest exists for, so it is pinned here by
+//! `the_wire_digest_argon2_params_are_not_weakened`.
 //!
 //! What this does NOT prove: that the digest actually reaches the device, or
 //! that a swipe matches it. That is the `toolmodules` stage under
@@ -149,7 +153,44 @@ fn struct_fields(src: &str, name: &str) -> Vec<String> {
         .collect()
 }
 
-// ── The three properties ─────────────────────────────────────────────────────
+/// The text inside the first brace-balanced `{ … }` in `src`.
+fn brace_body(src: &str) -> String {
+    let open = src
+        .find('{')
+        .unwrap_or_else(|| panic!("no opening brace in the given text"));
+    let mut depth = 0usize;
+    for (i, c) in src[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return src[open + 1..open + i].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces");
+}
+
+/// The body of the `wire_digest` that actually builds argon2.
+///
+/// `card_crypto.rs` has two: `CardDigester::wire_digest` (the argon2 one this
+/// file cares about) and `CardCipher::wire_digest` (which just delegates to it).
+/// The delegating one holds no `Argon2`, so selecting on that is what tells them
+/// apart without depending on which is declared first.
+fn wire_digest_argon2_body(src: &str) -> String {
+    for (i, _) in src.match_indices("fn wire_digest") {
+        let body = brace_body(&src[i..]);
+        if body.contains("Argon2") {
+            return body;
+        }
+    }
+    panic!("no `fn wire_digest` in card_crypto.rs builds argon2");
+}
+
+// ── The properties ───────────────────────────────────────────────────────────
 
 #[test]
 fn the_edge_holds_no_key_that_could_reverse_a_digest() {
@@ -187,6 +228,29 @@ fn the_digester_carries_nothing_but_the_pepper() {
          a second field carrying a cipher or the index key would leave every \
          wire-format assertion green while handing a wall plug the keys to the \
          card table."
+    );
+}
+
+#[test]
+fn the_wire_digest_argon2_params_are_not_weakened() {
+    let body = wire_digest_argon2_body(&read("css_lib/src/card_crypto.rs"));
+
+    assert!(
+        body.contains("Params::default()"),
+        "`CardDigester::wire_digest` must build argon2 with `Params::default()`. That is the \
+         memory/time cost the whole scheme leans on: a card is a 4-byte UID (2^32), a device \
+         holds the pepper and the digests of its own members, and only a costly KDF turns \
+         recovering the codes behind those digests into a multi-year campaign instead of \
+         seconds (#109). If you are changing this deliberately -- to STRENGTHEN it -- update \
+         this assertion in the same commit and say why."
+    );
+    assert!(
+        !body.contains("Params::new"),
+        "`CardDigester::wire_digest` builds its argon2 with `Params::new(...)`, which is how \
+         the cost gets lowered -- most temptingly to fit a microcontroller that cannot spare \
+         19 MiB (#146). Lowering it forfeits exactly the 2^32-is-expensive property the digest \
+         exists for. A small reader must not hash at all: it reports the card to an edge that \
+         does, or it runs online (see FIRMWARE.md). Keep `Params::default()`."
     );
 }
 
@@ -256,5 +320,48 @@ mod the_check_rejects_what_it_is_for {
     fn the_real_digester_parses_to_one_field() {
         let fields = struct_fields(&read("css_lib/src/card_crypto.rs"), "CardDigester");
         assert_eq!(fields.len(), 1, "got {fields:?}");
+    }
+
+    #[test]
+    fn a_weakened_params_new_is_rejected() {
+        // The regression the params check exists for: argon2 kept, cost lowered
+        // via `Params::new` to fit a small device.
+        let src = "pub fn wire_digest(&self) {\n    \
+                   let a = Argon2::new_with_secret(&p, Algorithm::Argon2id, \
+                   Version::V0x13, Params::new(64, 1, 1, None));\n}\n";
+        let body = wire_digest_argon2_body(src);
+        assert!(
+            body.contains("Params::new"),
+            "the weakening must be visible to the check"
+        );
+        assert!(
+            !body.contains("Params::default()"),
+            "and it must NOT read as the default, or the check passes on the weakened tree"
+        );
+    }
+
+    #[test]
+    fn the_default_params_body_passes() {
+        let src = "pub fn wire_digest(&self) {\n    \
+                   let a = Argon2::new_with_secret(&p, Algorithm::Argon2id, \
+                   Version::V0x13, Params::default());\n}\n";
+        let body = wire_digest_argon2_body(src);
+        assert!(body.contains("Params::default()"));
+        assert!(!body.contains("Params::new"));
+    }
+
+    #[test]
+    fn the_argon2_body_is_the_digester_not_the_delegating_wire_digest() {
+        // Two `wire_digest`s exist; the selector must land on the argon2 one even
+        // when the delegating one is declared first.
+        let src = "impl A { pub fn wire_digest(&self) { self.d.wire_digest(c) } }\n\
+                   impl B { pub fn wire_digest(&self) { \
+                   Argon2::new_with_secret(&p, X, Y, Params::default()); } }\n";
+        let body = wire_digest_argon2_body(src);
+        assert!(body.contains("Argon2") && body.contains("Params::default()"));
+        assert!(
+            !body.contains("self.d.wire_digest"),
+            "must skip the delegating one"
+        );
     }
 }
