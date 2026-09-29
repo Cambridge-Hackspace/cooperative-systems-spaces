@@ -27,6 +27,7 @@
 
 use std::sync::Arc;
 
+pub mod access_engine;
 pub mod api;
 pub mod auth;
 pub mod bypass;

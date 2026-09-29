@@ -408,7 +408,7 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 /// interval. Rules with no schedule are always active.
 /// Whether a rule's schedule window is open, shut, or cannot be resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScheduleState {
+pub(crate) enum ScheduleState {
     /// `now` falls inside the window (or the rule has no schedule).
     Active,
     /// `now` falls outside a well-defined window.
@@ -421,7 +421,7 @@ enum ScheduleState {
     Unresolvable,
 }
 
-fn schedule_state_at(
+pub(crate) fn schedule_state_at(
     schedule_id: Option<Uuid>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
@@ -457,7 +457,7 @@ fn schedule_state_at(
 
 /// Whether a rule of `effect` fires now, given its schedule's state. Fail-closed:
 /// an unresolvable schedule keeps a deny in force but drops an allow (#122/#7).
-fn rule_fires(effect: DoorRuleEffect, state: ScheduleState) -> bool {
+pub(crate) fn rule_fires(effect: DoorRuleEffect, state: ScheduleState) -> bool {
     match state {
         ScheduleState::Active => true,
         ScheduleState::Inactive => false,
