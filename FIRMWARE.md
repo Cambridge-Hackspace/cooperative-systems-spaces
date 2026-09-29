@@ -272,14 +272,34 @@ device:
 
 **`profile_field_digest` is not the card.** It is
 `argon2id(device_pepper, card)`, hex-encoded (#109). To match a swipe, hash the
-card you just read with the same pepper and compare against this list — do not
+card that was read with the same pepper and compare against this list — do not
 expect to find the card value here, because it is deliberately not sent.
 
-The pepper is configured on the device (`card_device_pepper` on an edge) and is
-the **only** card key a device is given: the keys that decrypt cards at rest and
-that index them server-side never leave the server. One argon2id invocation per
-swipe is the cost; a plug taken off a wall yielding no member's card identifier
-is what it buys.
+**Hashing is the edge coordinator's job, not a card reader's (#146).** `argon2id`
+at the server's parameters needs about **19 MiB of RAM per invocation**, and the
+memory-hardness is the point: it is what stops a stolen pepper from reversing a
+4-byte UID's 2^32 space in seconds (#109, and
+`checks/tests/a_device_cannot_reverse_a_card_digest.rs`). A microcontroller-class
+reader — an ESP32-C3 has ~400 KB of SRAM and no PSRAM — **cannot** run it and
+**must not** be handed the pepper or asked to match offline. Do **not** lower the
+parameters to fit such a device: that throws away exactly what the digest buys.
+Two shapes are correct instead:
+
+- **Edge-fronted (the normal shape).** The reader is a [module](#concepts) that
+  reports the card it read to its [edge](#concepts) over the local broker; the
+  edge holds the pepper, calls `sync`, hashes, and evaluates access. The reader
+  never hashes and never holds the pepper.
+- **Standalone, no edge.** Only an edge-class device with the RAM to run
+  `argon2id` may hold the pepper and match from the cache. A reader that cannot
+  must run **online**: treat every tool as `requires_online` and call the server
+  per swipe rather than caching and matching locally.
+
+The pepper is configured on whatever coordinator does the hashing
+(`card_device_pepper` on an edge) and is the **only** card key it is given: the
+keys that decrypt cards at rest and that index them server-side never leave the
+server. One `argon2id` invocation per swipe is the cost, and a plug taken off a
+wall yielding no member's card identifier is what it buys — but only while the
+pepper lives on a device that can actually run the slow KDF.
 
 Hash the card **exactly as read** — no trimming, no case folding. The server
 digests the stored value byte-for-byte, so any normalisation on your side
