@@ -65,7 +65,7 @@ main(async () => {
     body: {
       device_code: invite.json?.data?.device_code,
       name: `silent-plug-${tag}`,
-      kind: 'power_controller',
+      capabilities: { roles: ['power'] },
       mac_address: '02:00:00:00:84:01',
       software_version: '0.0.0-e2e',
       platform: 'linux',
@@ -194,7 +194,7 @@ main(async () => {
     body: {
       device_code: edgeInvite.json?.data?.device_code,
       name: `dark-edge-${tag}`,
-      kind: 'edge',
+      capabilities: { roles: ['edge'] },
       mac_address: '02:00:00:00:84:02',
       software_version: '0.0.0-e2e',
       platform: 'linux',

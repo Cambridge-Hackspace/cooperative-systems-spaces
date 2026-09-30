@@ -96,7 +96,7 @@ async function setup() {
   // Two devices, because that is the shape #83 exists for: the coordinator and
   // the thing it coordinates are separate hardware. Binding the edge to itself
   // would pass just as well and would quietly stop testing the decoupling.
-  const claim = async (name, kind, mac) => {
+  const claim = async (name, role, mac) => {
     const invite = await POST('/api/admin/devices/invite', {
       token: admin.token,
       body: { expires_in_hours: 1 },
@@ -105,7 +105,7 @@ async function setup() {
       body: {
         device_code: invite.json?.data?.device_code,
         name,
-        kind,
+        capabilities: { roles: [role] },
         mac_address: mac,
         software_version: '0.0.0-e2e',
         platform: 'linux',
@@ -123,7 +123,7 @@ async function setup() {
   ok('lease/edge-registered', !!edge.id, `register -> ${edge.status} ${edge.text.slice(0, 160)}`)
   ok('lease/edge-got-a-token', !!edge.token, 'registration must return an auth_token')
 
-  const plug = await claim(`lease-plug-${tag}`, 'power_controller', '02:00:00:00:83:02')
+  const plug = await claim(`lease-plug-${tag}`, 'power', '02:00:00:00:83:02')
   ok('lease/plug-registered', !!plug.id, `register -> ${plug.status} ${plug.text.slice(0, 160)}`)
 
   const authToken = edge.token

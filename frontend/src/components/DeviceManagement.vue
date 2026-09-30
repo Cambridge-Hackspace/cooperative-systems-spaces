@@ -36,7 +36,7 @@
                   {{ device.is_online ? 'Online' : 'Offline' }}
                 </span>
               </div>
-              <span class="device-kind-badge">{{ device.kind }}</span>
+              <span class="device-kind-badge">{{ device.roles.join(', ') }}</span>
             </div>
 
             <h3 class="device-name">{{ device.name }}</h3>
@@ -256,7 +256,8 @@ import { apiClient } from '@/utils/api'
 interface Device {
   id: string
   name: string
-  kind: string
+  // #101: the device's declared roles (was the single `kind`).
+  roles: string[]
   mac_address: string | null
   platform: string | null
   software_version: string | null

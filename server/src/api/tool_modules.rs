@@ -127,8 +127,24 @@ async fn create_module(
     if state.db.get_tool_by_id(req.tool_id)?.is_none() {
         return Err(ApiError::BadRequest("tool_id does not exist".to_string()));
     }
-    if !state.db.space_device_exists(req.device_id)? {
-        return Err(ApiError::BadRequest("device_id does not exist".to_string()));
+    // #101: the device must declare the role it is being bound in. Binding a
+    // `power` role onto a device that only reads cards would produce a tool the
+    // system believes it can de-energize and cannot -- caught here as a 400
+    // rather than discovered in a workshop. (This also serves as the existence
+    // check: no capabilities means no device.)
+    let device_caps = match state.db.space_device_capabilities(req.device_id)? {
+        Some(v) => css_lib::capabilities::DeviceCapabilities::from_value(&v),
+        None => return Err(ApiError::BadRequest("device_id does not exist".to_string())),
+    };
+    if !device_caps.has_role(&role) {
+        return Err(ApiError::BadRequest(format!(
+            "device does not declare the '{role}' role (declares: {})",
+            if device_caps.roles.is_empty() {
+                "none".to_string()
+            } else {
+                device_caps.roles.join(", ")
+            }
+        )));
     }
 
     let created = state.db.create_tool_module(&NewToolModule {
@@ -254,10 +270,15 @@ async fn create_interlock(
     // what it says -- the worst outcome available for a safety interlock, and
     // exactly the kind of thing nobody discovers until the day it matters.
     if enforce == crate::models::enforcement::FIRMWARE {
-        let caps: Vec<css_lib::capabilities::ModuleCapabilities> = bound
-            .iter()
-            .map(|m| css_lib::capabilities::ModuleCapabilities::from_params(&m.params))
-            .collect();
+        // #101: capabilities are read off each bound module's DEVICE now, not the
+        // binding's `params`. A device we cannot load contributes nothing, which
+        // leaves the tier unachievable -- the deny-biased direction.
+        let mut caps: Vec<css_lib::capabilities::ModuleCapabilities> = Vec::new();
+        for m in &bound {
+            if let Some(v) = state.db.space_device_capabilities(m.device_id)? {
+                caps.push(css_lib::capabilities::DeviceCapabilities::from_value(&v).module);
+            }
+        }
         if let Err(e) = css_lib::capabilities::firmware_enforcement_achievable(&condition, &caps) {
             return Err(ApiError::BadRequest(e.reason));
         }

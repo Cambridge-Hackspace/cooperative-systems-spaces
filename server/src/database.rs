@@ -2969,6 +2969,27 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    /// A device's declared `capabilities` blob, or `None` if no such device
+    /// exists. #101: the source for role-vs-capability checks at bind time and for
+    /// the firmware-enforcement descriptors that used to live on a binding's
+    /// `params`.
+    pub fn space_device_capabilities(
+        &self,
+        device_id: uuid::Uuid,
+    ) -> Result<Option<serde_json::Value>, DatabaseError> {
+        use crate::schema::space_devices;
+
+        let mut conn = self.get_connection()?;
+        space_devices::table
+            .filter(space_devices::id.eq(device_id))
+            // A soft-deleted device reads as absent, so a binding cannot name one.
+            .filter(space_devices::deleted_at.is_null())
+            .select(space_devices::capabilities)
+            .first::<serde_json::Value>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// The device's command-channel HMAC key (unsealed), or `None` if it has
     /// none -- registered before #121, or minted without a cipher. #120 (#121):
     /// stored sealed at rest, opened here with the card cipher when the server
@@ -6083,20 +6104,6 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Whether a (not soft-deleted) device exists, for validating a binding's
-    /// `device_id` before the insert turns a bad id into a foreign-key 500.
-    pub fn space_device_exists(&self, did: uuid::Uuid) -> Result<bool, DatabaseError> {
-        use crate::schema::space_devices::dsl::*;
-        let mut conn = self.get_connection()?;
-        let found: i64 = space_devices
-            .filter(id.eq(did))
-            .filter(deleted_at.is_null())
-            .count()
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-        Ok(found > 0)
-    }
-
     /// Every tool's `external_id`, for stringifying the module-state snapshot.
     pub fn tool_external_ids(&self) -> Result<Vec<(uuid::Uuid, Option<String>)>, DatabaseError> {
         use crate::schema::tools::dsl::*;
@@ -6277,15 +6284,22 @@ impl DatabaseManager {
         }
 
         // Derived once the bindings are in place: whether the modules that
-        // actually switch this tool can reach a safe state unaided.
+        // actually switch this tool can reach a safe state unaided. #101: the
+        // enforcement descriptors are a property of the DEVICE now, so read them
+        // off each power binding's device rather than the binding's `params`. A
+        // device we cannot load contributes nothing -- the deny-biased default --
+        // and `power_can_fail_safe` treats an empty set as "not fail-safe".
         let mut tools: Vec<css_lib::wire::ToolModuleTool> = by_tool.into_values().collect();
         for t in tools.iter_mut() {
-            let power: Vec<css_lib::capabilities::ModuleCapabilities> = t
-                .modules
-                .iter()
-                .filter(|m| m.role == "power")
-                .map(|m| css_lib::capabilities::ModuleCapabilities::from_params(&m.params))
-                .collect();
+            let mut power: Vec<css_lib::capabilities::ModuleCapabilities> = Vec::new();
+            for m in t.modules.iter().filter(|m| m.role == "power") {
+                if let Ok(device_id) = uuid::Uuid::parse_str(&m.device_id) {
+                    if let Some(v) = self.space_device_capabilities(device_id)? {
+                        power
+                            .push(css_lib::capabilities::DeviceCapabilities::from_value(&v).module);
+                    }
+                }
+            }
             t.power_fails_safe = css_lib::capabilities::power_can_fail_safe(&power);
         }
 

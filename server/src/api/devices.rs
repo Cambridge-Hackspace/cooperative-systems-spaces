@@ -40,7 +40,11 @@ pub struct DeviceInviteResponse {
 pub struct RegisterDeviceRequest {
     pub device_code: String,
     pub name: String,
-    pub kind: String, // "edge" or "kiosk"
+    /// #101: the device's declared capabilities -- at minimum a non-empty
+    /// `roles` array drawn from `device_role` (e.g. `{"roles":["power"]}`),
+    /// optionally the firmware-enforcement descriptors. Replaces the old single
+    /// `kind` string.
+    pub capabilities: serde_json::Value,
     pub mac_address: String,
     pub software_version: String,
     pub ipv4_address: Option<String>,
@@ -76,7 +80,8 @@ pub struct EdgeMqttConfig {
 pub struct DeviceListItem {
     pub id: Uuid,
     pub name: String,
-    pub kind: String,
+    /// #101: the roles the device declares (was the single `kind`).
+    pub roles: Vec<String>,
     pub platform: String,
     pub mac_address: String,
     pub software_version: String,
@@ -190,10 +195,29 @@ pub async fn register_device(
     State(state): State<AppState>,
     Json(req): Json<RegisterDeviceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Validate the declared capabilities before anything else: a device must name
+    // at least one role, and every role must be in the known vocabulary. Catching
+    // it here makes an unknown role a 400 that says what was wrong, rather than a
+    // raw `space_devices_roles_vocab` constraint 500 at insert time.
+    let caps = css_lib::capabilities::DeviceCapabilities::from_value(&req.capabilities);
+    if caps.roles.is_empty() {
+        return Err(ApiError::BadRequest(
+            "capabilities.roles must declare at least one role".to_string(),
+        ));
+    }
+    for role in &caps.roles {
+        if !crate::models::device_role::ALL.contains(&role.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "unknown device role '{role}'; must be one of: {}",
+                crate::models::device_role::ALL.join(", ")
+            )));
+        }
+    }
+
     tracing::info!(
-        "register_device called for device: {} ({})",
+        "register_device called for device: {} (roles: {})",
         req.name,
-        req.kind
+        caps.roles.join(", ")
     );
 
     let conn = &mut state.db.pool().get().map_err(|e| {
@@ -224,19 +248,7 @@ pub async fn register_device(
         return Err(ApiError::BadRequest("Device code has expired".to_string()));
     }
 
-    // Parse kind and platform
-    let kind = match req.kind.to_lowercase().as_str() {
-        "edge" => crate::models::SpaceDeviceKind::Edge,
-        "kiosk" => crate::models::SpaceDeviceKind::Kiosk,
-        // Tool access modules (#83). Accepted on the same registration path as an
-        // edge: a module is a device, it just fills a role in a tool's access
-        // chain rather than coordinating one.
-        "card_reader" => crate::models::SpaceDeviceKind::CardReader,
-        "power_controller" => crate::models::SpaceDeviceKind::PowerController,
-        "sensor" => crate::models::SpaceDeviceKind::Sensor,
-        _ => return Err(ApiError::BadRequest("Invalid device kind".to_string())),
-    };
-
+    // Parse platform (capabilities were validated above).
     let platform = match req.platform.to_lowercase().as_str() {
         "windows" => crate::models::SpaceDevicePlatform::Windows,
         "linux" => crate::models::SpaceDevicePlatform::Linux,
@@ -278,7 +290,7 @@ pub async fn register_device(
     // Create the device
     let new_device = NewSpaceDevice {
         name: req.name.clone(),
-        kind,
+        capabilities: req.capabilities.clone(),
         mac_address: req.mac_address,
         software_version: req.software_version,
         ipv4_address: req.ipv4_address,
@@ -351,7 +363,7 @@ pub async fn register_device(
         event_data: serde_json::json!({
             "device_id": device.id,
             "device_name": device.name,
-            "kind": req.kind,
+            "roles": caps.roles,
             "platform": req.platform,
         }),
         ip_address: None,
@@ -446,7 +458,7 @@ pub async fn list_devices(
             DeviceListItem {
                 id: d.id,
                 name: d.name,
-                kind: format!("{:?}", d.kind).to_lowercase(),
+                roles: css_lib::capabilities::DeviceCapabilities::from_value(&d.capabilities).roles,
                 platform: format!("{:?}", d.platform).to_lowercase(),
                 mac_address: d.mac_address,
                 software_version: d.software_version,

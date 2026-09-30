@@ -8,8 +8,9 @@
 // coordinates from reflects what was authored and omits a disabled rule; a
 // delete that matched nothing is a 404 rather than a 200 claiming a deletion;
 // and every mutation lands an audit row. Where a device can be registered, it
-// also proves the new module device kinds (#83 increment 2) round-trip and that
-// a binding defaults to the fail-safe disconnect policy.
+// also proves a device's declared capability roles (#101) round-trip -- accepted,
+// validated, stored as JSONB, read back -- and that a binding defaults to the
+// fail-safe disconnect policy and is refused in a role the device does not declare.
 //
 // What this does NOT prove: that anything is actually energized, gated or cut.
 // Nothing here switches hardware -- the coordinator and its lease are a later
@@ -147,21 +148,22 @@ main(async () => {
     ok('toolmodules/invite-created', !!code,
       `POST /api/admin/devices/invite -> ${invite.status}`)
 
-    // Registering as `power_controller` is the end-to-end proof of the new enum
-    // values: the string is accepted by the API, stored by Postgres, and read
-    // back -- the four-way vocabulary the device_kinds_agree oracle pins.
+    // Registering with `capabilities.roles: ['power']` is the end-to-end proof of
+    // the #101 model: the roles array is accepted by the API, validated against
+    // the device_role vocabulary, stored as JSONB by Postgres, and read back --
+    // the vocabulary the device_capabilities_agree oracle pins.
     const reg = await POST('/api/devices/register', {
       body: {
         device_code: code,
         name: `plug-${tag}`,
-        kind: 'power_controller',
+        capabilities: { roles: ['power'] },
         mac_address: '02:00:00:00:83:01',
         software_version: '0.0.0-e2e',
         platform: 'linux',
       },
     })
-    ok('toolmodules/module-kind-registers', reg.status < 300,
-      `a power_controller must be registerable -> ${reg.status} ${reg.text.slice(0, 200)}`)
+    ok('toolmodules/module-role-registers', reg.status < 300,
+      `a power device must be registerable -> ${reg.status} ${reg.text.slice(0, 200)}`)
     const deviceId = reg.json?.data?.device_id ?? reg.json?.device_id
     ok('toolmodules/device-id', !!deviceId, `no device id in ${reg.text.slice(0, 200)}`)
 
@@ -245,7 +247,7 @@ main(async () => {
         body: {
           device_code: inv.json?.data?.device_code,
           name: `${name}-${tag}`,
-          kind: 'card_reader',
+          capabilities: { roles: ['reader'] },
           mac_address: mac,
           software_version: '0.0.0-e2e',
           platform: 'linux',
@@ -332,11 +334,20 @@ main(async () => {
       token: admin.token,
       body: { expires_in_hours: 1 },
     })
+    // #101: the enforcement descriptors are declared on the DEVICE now, not on the
+    // binding. This integrated plug senses the reed and can cut its own relay, so
+    // it registers with the capabilities that make `firmware` genuinely achievable.
     const capableReg = await POST('/api/devices/register', {
       body: {
         device_code: capableInvite.json?.data?.device_code,
         name: `integrated-plug-${tag}`,
-        kind: 'power_controller',
+        capabilities: {
+          roles: ['power'],
+          local_inputs: ['door_open'],
+          local_inhibit: true,
+          countdown: false,
+          holds_last_on_disconnect: false,
+        },
         mac_address: '02:00:00:00:83:02',
         software_version: '0.0.0-e2e',
         platform: 'linux',
@@ -350,14 +361,6 @@ main(async () => {
         device_id: capableDeviceId,
         role: 'power',
         name: 'integrated plug',
-        params: {
-          capabilities: {
-            local_inputs: ['door_open'],
-            local_inhibit: true,
-            countdown: false,
-            holds_last_on_disconnect: false,
-          },
-        },
       },
     })
     assertEq('toolmodules/capable-binding-created', 201, capableBinding.status)
@@ -396,6 +399,56 @@ main(async () => {
     ok('toolmodules/undeclared-plug-is-not-claimed-fail-safe',
       wiredEntry?.power_fails_safe === true && plainEntry !== undefined,
       'both tools should appear in the snapshot with an explicit fail-safe verdict')
+
+    // --- a device may only be bound in a role it declares (#101) --------------
+    // A reader-only device bound as `power` would be a tool the system believes it
+    // can de-energize and cannot. The bind must be refused with a 400, not
+    // discovered when an interlock fails to cut power in a workshop.
+    const readerOnlyInvite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const readerOnlyReg = await POST('/api/devices/register', {
+      body: {
+        device_code: readerOnlyInvite.json?.data?.device_code,
+        name: `reader-only-${tag}`,
+        capabilities: { roles: ['reader'] },
+        mac_address: '02:00:00:00:83:03',
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    const readerOnlyId = readerOnlyReg.json?.data?.device_id ?? readerOnlyReg.json?.device_id
+    const wrongRoleBind = await POST('/api/admin/tool-modules', {
+      token: admin.token,
+      body: { tool_id: wiredToolId, device_id: readerOnlyId, role: 'power', name: 'misbind' },
+    })
+    assertEq('toolmodules/bind-in-undeclared-role-is-refused', 400, wrongRoleBind.status)
+    // And the same device CAN be bound in the role it does declare, so the refusal
+    // above is about the capability, not a blanket rejection of the device.
+    const rightRoleBind = await POST('/api/admin/tool-modules', {
+      token: admin.token,
+      body: { tool_id: wiredToolId, device_id: readerOnlyId, role: 'reader', name: 'reader ok' },
+    })
+    assertEq('toolmodules/bind-in-declared-role-is-accepted', 201, rightRoleBind.status)
+
+    // An unknown role at registration is rejected, so the vocabulary is enforced
+    // at the door rather than stored and tripped over later.
+    const badRoleInvite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const badRoleReg = await POST('/api/devices/register', {
+      body: {
+        device_code: badRoleInvite.json?.data?.device_code,
+        name: `bad-role-${tag}`,
+        capabilities: { roles: ['welder'] },
+        mac_address: '02:00:00:00:83:04',
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    assertEq('toolmodules/unknown-role-at-registration-is-refused', 400, badRoleReg.status)
   }
 
   // --- the snapshot the edge coordinates from -------------------------------

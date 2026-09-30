@@ -37,9 +37,15 @@ Two things you need, and this document covers both:
 
 ## Concepts
 
-**Device.** Anything that registers and holds a token. Five kinds, all
-registering through the same endpoint: `edge`, `kiosk`, `card_reader`,
-`power_controller`, `sensor`.
+**Device.** Anything that registers and holds a token. A device declares its
+**capabilities** rather than a single kind (#101): a `roles` array drawn from
+`reader`, `power`, `sensor` (the roles it can be *bound* to a tool as), plus
+`edge` (local coordinator) and `kiosk` (display). A device may declare several —
+one unit that both reads a card and switches power registers with
+`"roles": ["reader", "power"]`, which the old single `kind` could not express.
+The capabilities blob may also carry the firmware-enforcement descriptors
+(`local_inputs`, `local_inhibit`, `countdown`, `holds_last_on_disconnect`) that
+decide whether a safety interlock can be enforced in firmware.
 
 **Tool.** A machine the space controls access to. A tool has a UUID and,
 usually, an `external_id` — the short string your firmware is configured with
@@ -118,7 +124,13 @@ Content-Type: application/json
 {
   "device_code": "<invite code from an administrator>",
   "name": "laser-cutter-guard",
-  "kind": "power_controller",
+  "capabilities": {
+    "roles": ["power"],
+    "local_inputs": ["door_open"],
+    "local_inhibit": true,
+    "countdown": false,
+    "holds_last_on_disconnect": false
+  },
   "mac_address": "02:00:00:00:00:01",
   "software_version": "1.2.3",
   "platform": "linux",
@@ -127,10 +139,12 @@ Content-Type: application/json
 }
 ```
 
-`kind` must be one of `edge`, `kiosk`, `card_reader`, `power_controller`,
-`sensor` (case-insensitive). `platform` must be one of `windows`, `linux`,
-`macos`, `other`. Anything else is a **400**, as is an expired or already-claimed
-code. `ipv4_address` and `ipv6_address` are optional.
+`capabilities.roles` must be a non-empty array, and every role must be one of
+`reader`, `power`, `sensor`, `edge`, `kiosk`. The enforcement descriptors
+(`local_inputs`, `local_inhibit`, `countdown`, `holds_last_on_disconnect`) are
+optional and each defaults to "cannot" when omitted. `platform` must be one of
+`windows`, `linux`, `macos`, `other`. Anything else is a **400**, as is an
+expired or already-claimed code. `ipv4_address` and `ipv6_address` are optional.
 
 The response is wrapped in the standard API envelope:
 

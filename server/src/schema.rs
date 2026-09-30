@@ -15,10 +15,6 @@ pub mod sql_types {
     pub struct CardStatus;
 
     #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "space_device_kind"))]
-    pub struct SpaceDeviceKind;
-
-    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "space_device_platform"))]
     pub struct SpaceDevicePlatform;
 
@@ -130,7 +126,6 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
-    use super::sql_types::SpaceDeviceKind;
     use super::sql_types::SpaceDevicePlatform;
 
     space_devices (id) {
@@ -141,7 +136,6 @@ diesel::table! {
         updated_at -> Timestamptz,
         deleted_at -> Nullable<Timestamptz>,
         last_seen_at -> Nullable<Timestamptz>,
-        kind -> SpaceDeviceKind,
         #[max_length = 17]
         mac_address -> Varchar,
         #[max_length = 50]
@@ -153,6 +147,7 @@ diesel::table! {
         uptime -> Int8,
         platform -> SpaceDevicePlatform,
         place_id -> Nullable<Uuid>,
+        capabilities -> Jsonb,
     }
 }
 
