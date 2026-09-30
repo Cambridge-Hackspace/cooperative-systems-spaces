@@ -234,6 +234,116 @@ fn the_vector_file_was_actually_read() {
 }
 
 #[test]
+fn may_reproduces_the_per_principal_door_decision() {
+    // #101 slice 2a: the unified engine must reproduce `DoorService::evaluate`'s
+    // per-principal answer. The vectors are the oracle: each case's `decisions`
+    // array carries hand-authored expected outcomes (allow/deny) for a named user,
+    // and we run them through `access_engine::may` -- independent of `may`'s own
+    // unit tests and of `expand_rules_at`. Door policy is Restricted (no default
+    // grant); the interesting variation is per-user role level, user/card match,
+    // and the inactive-member divergence (compiled into the card set, but denied
+    // to the user in person).
+    use css_server::access_engine::{may, Action, DefaultEffect, Principal, ResourcePolicy};
+
+    let doc = vectors();
+    let cases = doc["cases"].as_array().expect("cases");
+    let graph = seed_graph();
+    let mut failures = Vec::new();
+    let mut checked = 0usize;
+
+    for case in cases {
+        let Some(decisions) = case.get("decisions").and_then(|d| d.as_array()) else {
+            continue;
+        };
+        let name = case["name"].as_str().unwrap_or("<unnamed>");
+        let now: DateTime<Utc> = case["now"]
+            .as_str()
+            .expect("now")
+            .parse()
+            .expect("now rfc3339");
+        let tz: chrono_tz::Tz = case["tz"].as_str().expect("tz").parse().expect("tz");
+        let rules: Vec<DoorAccessRule> = case["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .map(rule_from)
+            .collect();
+        let schedules: Vec<Schedule> = case["schedules"]
+            .as_array()
+            .expect("schedules")
+            .iter()
+            .map(schedule_from)
+            .collect();
+        let users = case["users"].as_array().expect("users");
+
+        for dec in decisions {
+            let pid = dec["principal"].as_str().expect("principal");
+            let action = match dec["action"].as_str().expect("action") {
+                "unlock" => Action::Unlock,
+                "use" => Action::Use,
+                "unlock_remote" => Action::UnlockRemote,
+                other => panic!("unknown action {other} in case {name}"),
+            };
+            let want_allow = match dec["expect"].as_str().expect("expect") {
+                "allow" => true,
+                "deny" => false,
+                other => panic!("expect must be allow|deny, got {other}"),
+            };
+            let u = users
+                .iter()
+                .find(|u| u["id"].as_str() == Some(pid))
+                .unwrap_or_else(|| panic!("decision names user {pid} not in case {name}"));
+            let level = graph
+                .level_of_name(u["role"].as_str().expect("role"))
+                .unwrap_or(0);
+            let card_digests: BTreeSet<String> = u["cards"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.as_str())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let principal = Principal {
+                user_id: Some(uuid(pid)),
+                level,
+                card_digests,
+                is_active: u["is_active"].as_bool().unwrap_or(false),
+            };
+            // These are all door cases: a door is Restricted and carries no
+            // resource-level schedule (its schedules live on the rules).
+            let policy = ResourcePolicy {
+                locked_out: false,
+                unavailable: None,
+                default_effect: DefaultEffect::Restricted,
+                schedule_id: None,
+                training_ok: None,
+                metered_ok: None,
+            };
+            let got = may(
+                &principal, &policy, &rules, &schedules, tz, now, &graph, action,
+            );
+            if got.is_allow() != want_allow {
+                failures.push(format!(
+                    "{name}: principal {}.. -> {got:?}, expected {}",
+                    &pid[..8],
+                    if want_allow { "allow" } else { "deny" }
+                ));
+            }
+            checked += 1;
+        }
+    }
+
+    // Guard the guard: the decisions must actually be present and exercised.
+    assert!(
+        checked >= 6,
+        "expected >= 6 per-principal decisions, checked {checked}"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn cards_are_read_from_both_profile_shapes() {
     // The profile field holds either a scalar string (the original shape) or an
     // array (the TextArray shape). Both are live in deployed data.
