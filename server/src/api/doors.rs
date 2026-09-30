@@ -254,7 +254,7 @@ async fn door_info(
     let door = state.db.get_door(id)?;
     let decision = state
         .door_service
-        .evaluate(&door, &user.0)
+        .evaluate(&door, &user.0, crate::access_engine::Action::Unlock)
         .map_err(ApiError::from)?;
     let (you_are_authorized, reason) = match decision {
         AccessDecision::Allow => (true, None),
@@ -310,7 +310,7 @@ async fn door_checkin(
 
     let decision = state
         .door_service
-        .evaluate(&door, &user.0)
+        .evaluate(&door, &user.0, crate::access_engine::Action::Unlock)
         .map_err(ApiError::from)?;
 
     let ip = client_ip(&headers);
@@ -536,6 +536,52 @@ async fn admin_unlock(
     if !door.enabled {
         return Err(ApiError::BadRequest("Door is disabled".to_string()));
     }
+
+    // #101 (folding #140): a remote unlock COMPOSES WITH the door's rules instead
+    // of bypassing them. This used to publish the unlock on the strength of the
+    // AdminUser extractor alone -- it consulted no rule and no schedule and logged
+    // `granted: true` unconditionally, so every admin held an unconditional,
+    // invisible, per-door-unrevokable unlock on every door.
+    //
+    // Expressed as a rule instead, the same capability is explicit, auditable and
+    // revocable: `create_door` seeds a standing `role = staff` allow, and an
+    // administrator (a higher tier) satisfies it. Removing that rule on a
+    // sensitive door removes remote unlock for it -- which was not previously
+    // expressible at all.
+    //
+    // Deny rules and lockout still outrank it, by the same precedence every other
+    // decision follows: there is one engine, and this is not an exception to it.
+    let decision = state
+        .door_service
+        .evaluate(&door, &admin.0, crate::access_engine::Action::UnlockRemote)
+        .map_err(ApiError::from)?;
+    if let AccessDecision::Deny(reason) = &decision {
+        // Recorded like any other refusal: a denied remote unlock is exactly the
+        // kind of thing an operator needs to find afterwards.
+        let _ = state.db.insert_door_access_event(&NewDoorAccessEvent {
+            door_id: door.id,
+            user_id: Some(admin.0.id),
+            method: DoorAccessMethod::AdminRemote.as_str().to_string(),
+            card_id_attempted: None,
+            granted: false,
+            reason: Some(reason.clone()),
+            ip_address: None,
+            occurred_at: Utc::now(),
+        });
+        audit(
+            &state,
+            AuditEventType::DoorUnlockDenied,
+            Some(admin.0.id),
+            serde_json::json!({
+                "door_id": door.id,
+                "door_name": door.name,
+                "method": "admin_remote",
+                "reason": reason,
+            }),
+        );
+        return Err(ApiError::Forbidden(reason.clone()));
+    }
+
     let device_id = state
         .db
         .door_edge_device(id)?

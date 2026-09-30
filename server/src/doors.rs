@@ -242,7 +242,16 @@ impl DoorService {
     /// applied at edge for RFID scans, but operates on the user rather than
     /// a raw card ID so we can match `kind=user` rules even when the user
     /// has no card on file.
-    pub fn evaluate(&self, door: &Door, user: &User) -> Result<AccessDecision, DatabaseError> {
+    /// `action` distinguishes an in-person check-in from a remote unlock. Both run
+    /// the same rules -- #101 decided that a remote unlock *composes with* a
+    /// resource's rules rather than bypassing them -- so this takes the action
+    /// rather than assuming one, and there is still exactly one decision path.
+    pub fn evaluate(
+        &self,
+        door: &Door,
+        user: &User,
+        action: crate::access_engine::Action,
+    ) -> Result<AccessDecision, DatabaseError> {
         // #101: the QR check-in decision now runs through the one access engine
         // (`access_engine::may`), the same engine the tool path resolves through,
         // so the two cannot diverge. This method materializes the door's policy and
@@ -252,7 +261,7 @@ impl DoorService {
         // messages are preserved verbatim below. Pinned by contracts/door_rules.json
         // (`may_reproduces_the_per_principal_door_decision`).
         use crate::access_engine::{
-            may, Action, Decision, DefaultEffect, DenyReason, Principal, ResourcePolicy,
+            may, Decision, DefaultEffect, DenyReason, Principal, ResourcePolicy,
         };
 
         let rules = self.db.list_rules_for_door(door.id)?;
@@ -300,7 +309,7 @@ impl DoorService {
             tz,
             Utc::now(),
             graph.as_ref(),
-            Action::Unlock,
+            action,
         );
         Ok(match decision {
             Decision::Allow => AccessDecision::Allow,

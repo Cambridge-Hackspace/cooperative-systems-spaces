@@ -225,7 +225,22 @@ pub fn may(
         return Decision::Deny(DenyReason::Billing);
     }
 
-    // 8. Interlocks / presence: slice 3/4 (no-op here).
+    // 8. Interlocks are deliberately NOT evaluated here, and this is not a gap.
+    //
+    // An interlock carries an `enforcement` tier -- firmware | edge | server --
+    // and defaults to `edge`. The rules are shipped to the coordinator in the
+    // `module/state` snapshot and evaluated there, next to the signal: the edge is
+    // the only party that knows whether the lid is open *right now*. This function
+    // answers authorization, which is a different question from whether the
+    // machine is currently safe to start.
+    //
+    // Presence is the same story. It reaches a decision as the `authorized` /
+    // `auth_expired` interlock conditions over the card -> reader -> lease chain,
+    // not as a separate input here; a remote unlock composes with the resource's
+    // rules through `Action::UnlockRemote` above rather than bypassing them.
+    // Anything server-tier would need a live condition feed the server does not
+    // have a producer for, and inventing one here would be a rule that silently
+    // does not do what it says.
     Decision::Allow
 }
 

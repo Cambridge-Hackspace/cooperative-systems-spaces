@@ -102,8 +102,11 @@ main(async () => {
   }
   record('doors/module-is-enabled', 'ok')
 
+  // The door carries only the seeded standing staff grant, which a guest does not
+  // satisfy, so nothing matches this member. Doors are `Restricted`, so that is a
+  // refusal rather than a default-open.
   assertEq('doors/no-rule-denies', false, first.unlocked,
-    'doors are Restricted: no matching rule must refuse, not default open')
+    'doors are Restricted: no MATCHING rule must refuse, not default open')
   ok('doors/no-rule-denial-says-why', /no matching/i.test(String(first.reason ?? '')),
     `expected a "no matching access rule" reason, got ${JSON.stringify(first.reason)}`)
 
@@ -144,14 +147,16 @@ main(async () => {
   const memberB = await account('doors_member_b')
   ok('doors/second-door-created', !!doorB.id, `-> ${doorB.status}`)
   if (doorB.id) {
-    // A freshly registered account holds `guest` (level 1). A `staff` rule
-    // (level 4) must therefore refuse it: role rules compare tiers, and a rule
+    // A freshly registered account holds `guest` (level 1). An `admin` rule
+    // (level 5) must therefore refuse it: role rules compare tiers, and a rule
     // that matched any authenticated user would be a hole this proves closed.
-    const staffRule = await addRule(doorB.id, { kind: 'role', value: 'staff', effect: 'allow' })
-    assertEq('doors/staff-role-rule-created', 201, staffRule.status)
+    // (`admin` rather than `staff` because every door is seeded with a standing
+    // staff grant, and re-adding it would collide with the rules' UNIQUE key.)
+    const highTierRule = await addRule(doorB.id, { kind: 'role', value: 'admin', effect: 'allow' })
+    assertEq('doors/high-tier-role-rule-created', 201, highTierRule.status)
     const belowTier = verdict(await checkin(doorB.id, memberB.token))
     assertEq('doors/role-rule-refuses-a-lower-tier', false, belowTier.unlocked,
-      `a guest must not satisfy a staff rule: ${JSON.stringify(belowTier)}`)
+      `a guest must not satisfy an admin rule: ${JSON.stringify(belowTier)}`)
 
     // The same mechanism admits when the tier is met.
     const guestRule = await addRule(doorB.id, { kind: 'role', value: 'guest', effect: 'allow' })
@@ -210,6 +215,68 @@ main(async () => {
     Array.isArray(rows) && rows.some((r) => r.granted === false && !!r.reason),
     'a denied event with no reason tells an operator nothing about why')
 
+  // --- a remote unlock is subject to the door's rules (#101, folding #140) ---
+  // It used to publish on the strength of the AdminUser extractor alone: no rule,
+  // no schedule, `granted: true` unconditionally. Every admin therefore held an
+  // unconditional unlock on every door that could not be revoked for one door and
+  // was recorded nowhere as a grant. Now it composes with the rules, so the same
+  // capability is explicit, auditable and revocable -- and this proves revoking it
+  // actually takes effect.
+  //
+  // Deliberately needs no device: the rules are consulted BEFORE the coordinator
+  // is resolved, which makes the two refusals distinguishable -- 400 is
+  // "authorized, but nothing to drive", 403 is "not authorized". That ordering is
+  // what lets this run on every cluster instead of only where a device can be
+  // registered, which matters because this is the security-relevant claim of the
+  // slice.
+  const doorE = await mkDoor('doors-remote')
+  ok('doors/remote-door-created', !!doorE.id, `-> ${doorE.status}`)
+  if (doorE.id) {
+    const seeded = (await GET(`/api/admin/doors/${doorE.id}/rules`, T)).json?.data ?? []
+    const grantId = seeded.find(
+      (r) => r.kind === 'role' && r.value === 'staff' && r.effect === 'allow',
+    )?.id
+    ok('doors/a-new-door-is-seeded-with-a-staff-grant', !!grantId,
+      `a new door must carry a standing staff allow rule, or a Restricted door is ` +
+        `one nobody can open remotely: ${JSON.stringify(seeded).slice(0, 300)}`)
+
+    // With the grant in place an admin (a higher tier) is authorized, so the only
+    // thing left to refuse is the absent coordinator.
+    const authorized = await POST(`/api/admin/doors/${doorE.id}/unlock`, T)
+    assertEq('doors/remote-unlock-passes-the-rules-then-wants-a-coordinator', 400, authorized.status,
+      `the seeded staff grant should authorize an admin, leaving only the missing ` +
+        `coordinator to refuse: ${authorized.text.slice(0, 200)}`)
+
+    if (grantId) {
+      const revoked = await DELETE(`/api/admin/doors/${doorE.id}/rules/${grantId}`, T)
+      assertEq('doors/staff-grant-removed', 200, revoked.status)
+
+      const refused = await POST(`/api/admin/doors/${doorE.id}/unlock`, T)
+      assertEq('doors/remote-unlock-is-refused-without-a-grant', 403, refused.status,
+        `with its grant revoked the door must refuse an admin's remote unlock. A 400 ` +
+          `here means the rules were skipped and only the coordinator was missing; a ` +
+          `200 means the remote path still bypasses the rules entirely: ` +
+          `${refused.text.slice(0, 200)}`)
+
+      // The refusal is on the record, like every other denial.
+      const ev = await GET(`/api/admin/doors/${doorE.id}/events`, T)
+      const evRows = ev.json?.data?.events ?? ev.json?.data ?? []
+      ok('doors/a-refused-remote-unlock-is-recorded',
+        Array.isArray(evRows) &&
+          evRows.some((r) => r.method === 'admin_remote' && r.granted === false && !!r.reason),
+        `a denied remote unlock must leave an admin_remote event carrying its reason: ` +
+          `${JSON.stringify(evRows).slice(0, 300)}`)
+
+      // And restoring the grant restores the capability: the refusal was the rule
+      // doing its job, not the door becoming permanently unopenable.
+      const regrant = await addRule(doorE.id, { kind: 'role', value: 'staff', effect: 'allow' })
+      assertEq('doors/staff-grant-restored', 201, regrant.status)
+      const again = await POST(`/api/admin/doors/${doorE.id}/unlock`, T)
+      assertEq('doors/remote-unlock-is-authorized-again-once-regranted', 400, again.status,
+        `back to "authorized but no coordinator" -- not 403: ${again.text.slice(0, 200)}`)
+    }
+  }
+
   // --- a door's coordinator is a device binding (#101) ----------------------
   // The last ad-hoc device association: a tool named its devices through a
   // binding row, a door named exactly one through `doors.edge_device_id`. Now
@@ -230,11 +297,11 @@ main(async () => {
   ok('doors/coordinator-door-created', !!doorD.id, `-> ${doorD.status}`)
   if (!doorD.id) return
 
-  // A standing staff grant, so these assertions are about the COORDINATOR and not
-  // about whether the remote unlock is authorized -- admin outranks staff, so this
-  // holds both now and once admin_unlock becomes rule-subject.
-  const staffGrant = await addRule(doorD.id, { kind: 'role', value: 'staff', effect: 'allow' })
-  assertEq('doors/coordinator-door-granted-to-staff', 201, staffGrant.status)
+  // `create_door` seeds a standing staff grant and an administrator outranks staff,
+  // so everything below is about the COORDINATOR rather than about authorization --
+  // the seeding itself is pinned above on `doors-remote`, which runs on every
+  // cluster. If the seed ever stopped happening these 400s would become 403s, and
+  // that assertion is what would catch it.
 
   // With nothing bound there is no strike to drive, and the refusal says so.
   const unboundUnlock = await POST(`/api/admin/doors/${doorD.id}/unlock`, T)

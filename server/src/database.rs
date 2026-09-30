@@ -4698,7 +4698,18 @@ impl DatabaseManager {
         &self,
         new_door: &crate::models::NewDoor,
     ) -> Result<crate::models::Door, DatabaseError> {
-        use crate::schema::{doors, resources};
+        use crate::schema::{access_rules, doors, resources};
+
+        // #101: seed a standing staff grant unless the tier is missing from this
+        // deployment's RBAC. A `kind=role` rule is matched by NAME through
+        // `RoleGraph::level_of_name`, and an unresolvable name matches nobody -- so
+        // seeding one blindly could leave a dead rule on every door and a door
+        // nothing could open remotely. Resolved before the transaction opens.
+        let seed_staff = self
+            .rbac()
+            .level_of_name(crate::models::role::STAFF)
+            .is_some();
+
         let mut conn = self.get_connection()?;
         // #101: every door IS a resource -- insert the door then its parent
         // `resources` row in one transaction (deferred shared-PK FK). See create_tool.
@@ -4713,6 +4724,30 @@ impl DatabaseManager {
                     kind: crate::models::ResourceKind::Door.as_str().to_string(),
                 })
                 .execute(conn)?;
+
+            // A door is `Restricted`: with no rule at all it denies EVERYONE,
+            // administrators included. That used to be masked because a remote
+            // unlock skipped the engine; now that it composes with the rules, a
+            // freshly created door with no rules would be one nobody could open.
+            //
+            // So the capability every admin already had implicitly is written down
+            // explicitly, per door, where it can be audited and revoked. Matching is
+            // `principal.level >= level_of_name("staff")`, so one rule covers admin
+            // too. After the `resources` row, because the FK points at it;
+            // `on_conflict` because the UNIQUE(resource_id, kind, value, effect)
+            // makes re-seeding the same grant a no-op rather than an error.
+            if seed_staff {
+                diesel::insert_into(access_rules::table)
+                    .values(crate::models::NewAccessRule {
+                        resource_id: created.id,
+                        kind: crate::models::DoorRuleKind::Role.as_str().to_string(),
+                        value: crate::models::role::STAFF.to_string(),
+                        effect: crate::models::DoorRuleEffect::Allow.as_str().to_string(),
+                        schedule_id: None,
+                    })
+                    .on_conflict_do_nothing()
+                    .execute(conn)?;
+            }
             Ok(created)
         })
         .map_err(DatabaseError::Diesel)
