@@ -1736,21 +1736,58 @@ impl DatabaseManager {
         // including the free-tool early return below -- so a locked circuit's
         // step-less tool is still refused. Both the web self-check and the edge
         // allow-list resolve through this one rule, so they cannot disagree.
-        if self.tool_is_locked_out(tool_id)? {
-            return Ok(false);
-        }
+        // #101: the decision runs through the one access engine
+        // (`access_engine::may`) rather than a bespoke sequence, so the tool path
+        // and the door path (`DoorService::evaluate`) cannot diverge. The tool's
+        // lockout + training state is materialized here and handed to `may` as a
+        // resource policy; behaviour is identical to the previous inline sequence
+        // (lockout is a hard override; an ungated tool is open; otherwise a waiver
+        // or completed steps). Pinned by the door_vectors equivalence and
+        // tool_access_agrees oracles.
+        let locked_out = self.tool_is_locked_out(tool_id)?;
         let has_steps = self.tool_has_training_steps(tool_id)?;
-        if !has_steps && !requires_training {
-            return Ok(true);
-        }
-        if self.user_has_active_waiver(user_id, tool_id)? {
-            return Ok(true);
-        }
-        if has_steps {
-            return self.user_has_completed_all_training_steps(user_id, tool_id);
-        }
-        // requires_training, no steps, no waiver.
-        Ok(false)
+        let training_ok = if !has_steps && !requires_training {
+            true
+        } else if self.user_has_active_waiver(user_id, tool_id)? {
+            true
+        } else if has_steps {
+            self.user_has_completed_all_training_steps(user_id, tool_id)?
+        } else {
+            // requires_training, no steps, no waiver.
+            false
+        };
+
+        let policy = crate::access_engine::ResourcePolicy {
+            locked_out,
+            unavailable: None,
+            default_effect: crate::access_engine::DefaultEffect::Open,
+            // The online tool path does not schedule-gate today; #101 preserves
+            // that here (the schedule-asymmetry change is a separate, flag-gated
+            // step). Only the edge sync builder gates tools on a schedule.
+            schedule_id: None,
+            training_ok: Some(training_ok),
+            metered_ok: None,
+        };
+        let principal = crate::access_engine::Principal {
+            user_id: Some(user_id),
+            level: 0,
+            card_digests: std::collections::BTreeSet::new(),
+            is_active: true,
+        };
+        // No rules and no schedule for a tool decision, so the graph and tz are
+        // never consulted; an empty graph and UTC keep the call total.
+        let graph = crate::rbac::RoleGraph::from_rows(&[], &[], &[]);
+        let decision = crate::access_engine::may(
+            &principal,
+            &policy,
+            &[],
+            &[],
+            chrono_tz::UTC,
+            chrono::Utc::now(),
+            &graph,
+            crate::access_engine::Action::Use,
+        );
+        Ok(decision.is_allow())
     }
 
     /// Grant (or update, keyed on (user, tool)) a training waiver.
