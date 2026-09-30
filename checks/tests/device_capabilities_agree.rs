@@ -15,7 +15,7 @@
 //! later. This oracle duplicates the mapping deliberately and asserts they agree.
 //!
 //! It also pins an invariant the two vocabularies must satisfy between them:
-//! every bindable `module_role` (reader / power / sensor) must be a declarable
+//! every bindable `binding_role` (reader / power / sensor) must be a declarable
 //! `device_role`, or a device could never legally be bound in a role the tool
 //! wiring accepts.
 //!
@@ -127,18 +127,18 @@ fn the_device_role_vocabularies_agree() {
 }
 
 #[test]
-fn every_bindable_module_role_is_a_declarable_device_role() {
+fn every_bindable_binding_role_is_a_declarable_device_role() {
     let device = rust_vocab(&read(MODELS_DEVICES), "device_role");
-    let module = rust_vocab(&read(MODELS_MODULES), "module_role");
+    let module = rust_vocab(&read(MODELS_MODULES), "binding_role");
 
     assert!(
         !module.is_empty(),
-        "parsed no module_role values; the scan is broken"
+        "parsed no binding_role values; the scan is broken"
     );
     let orphans: Vec<&String> = module.difference(&device).collect();
     assert!(
         orphans.is_empty(),
-        "these `module_role` values are not in `device_role`: {orphans:?}\n\n\
+        "these `binding_role` values are not in `device_role`: {orphans:?}\n\n\
          A tool binding accepts these roles, but a device cannot declare them, so \
          no device could ever be legally bound in one. Add them to `device_role` \
          (and the SQL CHECK)."
@@ -203,13 +203,13 @@ mod the_checks_reject_what_they_are_for {
     }
 
     #[test]
-    fn an_orphan_module_role_would_be_caught() {
+    fn an_orphan_binding_role_would_be_caught() {
         let device: BTreeSet<String> = ["edge", "kiosk"].iter().map(|s| s.to_string()).collect();
         let module: BTreeSet<String> = ["reader"].iter().map(|s| s.to_string()).collect();
         let orphans: Vec<&String> = module.difference(&device).collect();
         assert!(
             !orphans.is_empty(),
-            "a module_role absent from device_role must be reported"
+            "a binding_role absent from device_role must be reported"
         );
     }
 }

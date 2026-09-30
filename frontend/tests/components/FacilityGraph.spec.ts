@@ -111,7 +111,6 @@ function door(id: string, name: string, over: Partial<Door> = {}): Door {
     name,
     location: null,
     description: null,
-    edge_device_id: null,
     unlock_duration_ms: 3000,
     enabled: true,
     created_at: '2026-01-15T12:00:00Z',

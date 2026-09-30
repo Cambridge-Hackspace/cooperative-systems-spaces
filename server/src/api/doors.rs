@@ -63,7 +63,6 @@ pub struct DoorSummary {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub edge_device_id: Option<Uuid>,
     pub unlock_duration_ms: i32,
     pub enabled: bool,
     pub created_at: chrono::DateTime<Utc>,
@@ -79,7 +78,6 @@ impl From<Door> for DoorSummary {
             name: d.name,
             location: d.location,
             description: d.description,
-            edge_device_id: d.edge_device_id,
             unlock_duration_ms: d.unlock_duration_ms,
             enabled: d.enabled,
             created_at: d.created_at,
@@ -102,7 +100,6 @@ pub struct CreateDoorRequest {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub edge_device_id: Option<Uuid>,
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     /// Required. Use a special place (e.g. `Outside`) for exterior doors.
@@ -116,7 +113,6 @@ pub struct UpdateDoorRequest {
     pub name: Option<String>,
     pub location: Option<Option<String>>,
     pub description: Option<Option<String>>,
-    pub edge_device_id: Option<Option<Uuid>>,
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     /// PATCH-style: `Some` = set; absent = leave alone. Doors can no longer
@@ -230,10 +226,17 @@ fn maybe_publish_state(state: &AppState, door: &Door) {
     if !state.config_manager.get_config().door.enabled {
         return;
     }
-    if let Some(device_id) = door.edge_device_id {
-        if let Err(e) = state.door_service.publish_state(device_id) {
-            tracing::warn!("Failed to republish doors/state for {}: {}", device_id, e);
+    // #101: the coordinator is an `edge` binding rather than a column, so it is
+    // looked up. A door with none is normal (nothing to publish to), which is why
+    // that case is silent and only a lookup failure warns.
+    match state.db.door_edge_device(door.id) {
+        Ok(Some(device_id)) => {
+            if let Err(e) = state.door_service.publish_state(device_id) {
+                tracing::warn!("Failed to republish doors/state for {}: {}", device_id, e);
+            }
         }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("Failed to resolve the edge binding for {}: {}", door.id, e),
     }
 }
 
@@ -340,8 +343,9 @@ async fn door_checkin(
             user_agent: ua,
         })?;
 
-        // Publish the unlock command if we have a device.
-        if let Some(device_id) = door.edge_device_id {
+        // Publish the unlock command if a coordinator is bound (#101: an `edge`
+        // binding rather than a column).
+        if let Some(device_id) = state.db.door_edge_device(door.id)? {
             if let Err(e) = state.door_service.publish_unlock(
                 device_id,
                 door.id,
@@ -352,7 +356,7 @@ async fn door_checkin(
             }
         } else {
             tracing::warn!(
-                "Door {} has no edge_device_id; unlock is logged only",
+                "Door {} has no edge binding; unlock is logged only",
                 door.id
             );
         }
@@ -423,7 +427,6 @@ async fn create_door(
         name: req.name,
         location: req.location,
         description: req.description,
-        edge_device_id: req.edge_device_id,
         unlock_duration_ms: req
             .unlock_duration_ms
             .unwrap_or(cfg.door.default_unlock_duration_ms),
@@ -465,12 +468,10 @@ async fn update_door(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateDoorRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let prev_device = state.db.get_door(id)?.edge_device_id;
     let changes = UpdateDoor {
         name: req.name,
         location: req.location,
         description: req.description,
-        edge_device_id: req.edge_device_id,
         unlock_duration_ms: req.unlock_duration_ms,
         enabled: req.enabled,
         updated_at: Some(Utc::now()),
@@ -484,16 +485,11 @@ async fn update_door(
         Some(admin.0.id),
         serde_json::json!({ "door_id": door.id }),
     );
-    // Republish to the new device, and to the previous device if it changed
-    // (so the door disappears from the old device's snapshot).
+    // #101: a door's coordinator can no longer change on this route -- it is an
+    // `edge` binding now, and the bindings endpoint republishes to both the old
+    // and the new device when it moves. So this republishes only to the door's
+    // own coordinator.
     maybe_publish_state(&state, &door);
-    if prev_device != door.edge_device_id {
-        if let Some(old_id) = prev_device {
-            if let Err(e) = state.door_service.publish_state(old_id) {
-                tracing::warn!("Failed to republish old device {}: {}", old_id, e);
-            }
-        }
-    }
     Ok(Json(ApiResponse::success(DoorSummary::from(door))))
 }
 
@@ -503,6 +499,10 @@ async fn delete_door(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let prev = state.db.get_door(id)?;
+    // #101: resolve the coordinator BEFORE the delete. The binding row is cascaded
+    // away with the resource, so afterwards there is nothing left to look up and
+    // the old device would never be told the door is gone.
+    let prev_device = state.db.door_edge_device(id)?;
     let deleted = state.db.delete_door(id)?;
     if deleted == 0 {
         return Err(ApiError::NotFound("Door not found".to_string()));
@@ -513,7 +513,7 @@ async fn delete_door(
         Some(admin.0.id),
         serde_json::json!({ "door_id": id, "name": prev.name }),
     );
-    if let Some(device_id) = prev.edge_device_id {
+    if let Some(device_id) = prev_device {
         if let Err(e) = state.door_service.publish_state(device_id) {
             tracing::warn!("Failed to republish after delete: {}", e);
         }
@@ -536,9 +536,10 @@ async fn admin_unlock(
     if !door.enabled {
         return Err(ApiError::BadRequest("Door is disabled".to_string()));
     }
-    let device_id = door
-        .edge_device_id
-        .ok_or_else(|| ApiError::BadRequest("Door has no edge device".to_string()))?;
+    let device_id = state
+        .db
+        .door_edge_device(id)?
+        .ok_or_else(|| ApiError::BadRequest("Door has no edge device bound".to_string()))?;
     state.door_service.publish_unlock(
         device_id,
         door.id,
@@ -573,8 +574,9 @@ async fn admin_republish(
     _admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let door = state.db.get_door(id)?;
-    if let Some(device_id) = door.edge_device_id {
+    // Resolves the door to 404 a missing id before reporting a republish.
+    let _door = state.db.get_door(id)?;
+    if let Some(device_id) = state.db.door_edge_device(id)? {
         state.door_service.publish_state(device_id)?;
     }
     Ok(Json(ApiResponse::success(

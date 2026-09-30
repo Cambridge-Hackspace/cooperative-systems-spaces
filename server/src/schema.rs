@@ -552,7 +552,6 @@ diesel::table! {
         name -> Varchar,
         location -> Nullable<Text>,
         description -> Nullable<Text>,
-        edge_device_id -> Nullable<Uuid>,
         unlock_duration_ms -> Int4,
         enabled -> Bool,
         created_by -> Nullable<Uuid>,
@@ -899,7 +898,6 @@ diesel::joinable!(webhook_deliveries -> audit_logs (audit_log_id));
 diesel::joinable!(user_mfa_totp -> users (user_id));
 diesel::joinable!(user_mfa_webauthn -> users (user_id));
 diesel::joinable!(user_mfa_recovery_codes -> users (user_id));
-diesel::joinable!(doors -> space_devices (edge_device_id));
 diesel::joinable!(doors -> users (created_by));
 // (places → places self-join not registered via `joinable!`; walked manually
 // in the ancestor query helper.)

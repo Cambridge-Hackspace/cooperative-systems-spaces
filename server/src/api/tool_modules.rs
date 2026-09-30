@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::auth::AdminUser;
 use crate::models::{
-    enforcement, interlock_condition, interlock_kind, interlock_reset, module_role, on_disconnect,
+    binding_role, enforcement, interlock_condition, interlock_kind, interlock_reset, on_disconnect,
     AuditEventType, DeviceBinding, NewAuditLog, NewDeviceBinding, NewToolInterlock, ToolInterlock,
 };
 use crate::AppState;
@@ -59,8 +59,8 @@ pub fn admin_interlock_routes() -> Router<AppState> {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateModuleRequest {
-    /// #101: the resource to bind to. Only tools bind today (doors' coordinator
-    /// folds in with slice 4b), so this must resolve to a tool for now.
+    /// #101: the resource to bind to -- a tool or a door. A door's coordinator is
+    /// bound here with role `edge`; a tool's chain with reader / power / sensor.
     pub resource_id: Uuid,
     pub device_id: Uuid,
     pub role: String,
@@ -112,7 +112,7 @@ async fn create_module(
     admin: AdminUser,
     Json(req): Json<CreateModuleRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let role = one_of(&req.role, &module_role::ALL, "role")?;
+    let role = one_of(&req.role, &binding_role::ALL, "role")?;
     let on_disc = match req.on_disconnect.as_deref() {
         Some(v) => one_of(v, &on_disconnect::ALL, "on_disconnect")?,
         // Deny-biased: an unstated policy is the fail-safe one, matching the
@@ -124,9 +124,14 @@ async fn create_module(
         return Err(ApiError::BadRequest("name is required".to_string()));
     }
 
-    // Resolve both FKs first so a missing tool or device is a 400 naming which
+    // Resolve both FKs first so a missing resource or device is a 400 naming which
     // one, rather than a raw foreign-key 500 from the insert.
-    if state.db.get_tool_by_id(req.resource_id)?.is_none() {
+    //
+    // #101: any resource may be bound, so this asks `resources` rather than
+    // `tools`. The role is deliberately NOT constrained by resource kind -- a door
+    // can legitimately have a `reader` -- so the guards that matter are that the
+    // resource exists and that the device declares the role.
+    if state.db.resource_kind(req.resource_id)?.is_none() {
         return Err(ApiError::BadRequest(
             "resource_id does not exist".to_string(),
         ));
@@ -174,8 +179,30 @@ async fn create_module(
         }),
     );
     broadcast(&state).await;
+    // #101: binding an `edge` coordinator is how a door gets its strike driver
+    // now, so the door snapshot has to reach that device -- `broadcast` above only
+    // pushes tool module state. Harmless when the device coordinates no doors: the
+    // snapshot is then simply empty.
+    republish_doors_if_edge(&state, &created.role, created.device_id);
 
     Ok((StatusCode::CREATED, Json(ApiResponse::success(created))))
+}
+
+/// Push `doors/state` to a device when an `edge` binding appears or disappears.
+///
+/// Moving a door's coordinator is two calls -- delete the old binding, create the
+/// new one -- and each has to tell the device it affects, or the door lingers in
+/// the old device's snapshot and never reaches the new one.
+fn republish_doors_if_edge(state: &AppState, role: &str, device_id: Uuid) {
+    if role != binding_role::EDGE {
+        return;
+    }
+    if !state.config_manager.get_config().door.enabled {
+        return;
+    }
+    if let Err(e) = state.door_service.publish_state(device_id) {
+        tracing::warn!("Failed to republish doors/state to {}: {}", device_id, e);
+    }
 }
 
 async fn delete_module(
@@ -183,6 +210,9 @@ async fn delete_module(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<DeletedResponse>>, ApiError> {
+    // #101: read the binding before removing it -- afterwards there is no row to
+    // tell us which device to notify.
+    let removed = state.db.get_device_binding(id)?;
     // The row count decides the status: deleting an id that matched nothing is a
     // 404, not a 200 plus an audit entry claiming a deletion that never happened.
     let affected = state.db.delete_tool_module(id)?;
@@ -197,6 +227,9 @@ async fn delete_module(
         serde_json::json!({ "module_id": id }),
     );
     broadcast(&state).await;
+    if let Some(b) = removed {
+        republish_doors_if_edge(&state, &b.role, b.device_id);
+    }
 
     Ok(Json(ApiResponse::success(DeletedResponse {
         deleted: true,

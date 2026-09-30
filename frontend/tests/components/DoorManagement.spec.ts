@@ -35,6 +35,9 @@ const mocks = vi.hoisted(() => ({
   removeRule: vi.fn(),
   listPlaces: vi.fn(),
   listSchedules: vi.fn(),
+  listBindings: vi.fn(),
+  createBinding: vi.fn(),
+  removeBinding: vi.fn(),
   rawGet: vi.fn(),
   clientGet: vi.fn(),
   toDataURL: vi.fn(),
@@ -53,6 +56,11 @@ vi.mock('@/utils/api', () => ({
     qrUrl: mocks.qrUrl,
     addRule: mocks.addRule,
     removeRule: mocks.removeRule,
+  },
+  toolModulesApi: {
+    listModules: mocks.listBindings,
+    createModule: mocks.createBinding,
+    removeModule: mocks.removeBinding,
   },
   placesApi: { list: mocks.listPlaces },
   schedulesApi: { list: mocks.listSchedules },
@@ -116,7 +124,6 @@ function door(over: Partial<Door> = {}): Door {
     name: 'Front door',
     location: 'Lobby',
     description: null,
-    edge_device_id: 'dev-1',
     unlock_duration_ms: 5000,
     enabled: true,
     created_at: '2026-01-01T00:00:00Z',
@@ -172,6 +179,8 @@ beforeEach(() => {
   mocks.listDoors.mockResolvedValue({ success: true, data: [] })
   mocks.listPlaces.mockResolvedValue({ success: true, data: PLACES })
   mocks.listSchedules.mockResolvedValue({ success: true, data: [] })
+  mocks.createBinding.mockResolvedValue({ success: true, data: { id: 'b-new' } })
+  mocks.removeBinding.mockResolvedValue({ success: true, data: { deleted: true } })
   mocks.rawGet.mockResolvedValue({ data: { data: [{ id: 'dev-1', name: 'Edge A' }] } })
   mocks.clientGet.mockResolvedValue({ success: true, data: USERS })
   mocks.getDoor.mockResolvedValue({ success: true, data: detail() })
@@ -192,8 +201,17 @@ beforeEach(() => {
   )
 })
 
-async function page(doors: Door[] = []) {
+/**
+ * #101: a door's coordinator is an `edge` device binding, so the screen reads it
+ * from the bindings list rather than off the door. The default keeps the old
+ * fixture's shape -- d1 coordinated by dev-1 -- so tests about unlocking still
+ * describe a door that has a coordinator.
+ */
+const EDGE_BINDINGS = [{ id: 'b1', resource_id: 'd1', device_id: 'dev-1', role: 'edge' }]
+
+async function page(doors: Door[] = [], bindings: typeof EDGE_BINDINGS = EDGE_BINDINGS) {
   mocks.listDoors.mockResolvedValue({ success: true, data: doors })
+  mocks.listBindings.mockResolvedValue({ success: true, data: bindings })
   const w = mount(DoorManagement, { global: { stubs } })
   await flushPromises()
   return w
@@ -237,10 +255,12 @@ describe('the door list', () => {
   })
 
   it('names the edge device, the places and falls back to a short id', async () => {
-    const w = await page([door({ edge_device_id: 'dev-1' })])
+    const w = await page([door()])
     expect(w.find('tbody tr').text()).toContain('Edge A')
 
-    const unknown = await page([door({ edge_device_id: 'dev-missing-9999' })])
+    const unknown = await page([door()], [
+      { id: 'b9', resource_id: 'd1', device_id: 'dev-missing-9999', role: 'edge' },
+    ])
     expect(unknown.find('tbody tr').text()).toContain('dev-miss')
   })
 

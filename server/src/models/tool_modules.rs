@@ -12,12 +12,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// A module's role in a tool's access chain.
-pub mod module_role {
+/// The role a device fills for the resource it is bound to (#101).
+///
+/// `reader` / `power` / `sensor` are a tool's access chain; `edge` is the local
+/// coordinator that drives a door's strike, which used to be the ad-hoc
+/// `doors.edge_device_id` column. Every value here must also be a declarable
+/// `device_role` (a device cannot be bound in a role it does not claim) --
+/// `checks/tests/device_capabilities_agree.rs` asserts that containment, and
+/// `tool_module_vocab_matches.rs` asserts this set equals the SQL CHECK.
+///
+/// Was `module_role`, renamed when `edge` joined: a coordinator is not a module.
+pub mod binding_role {
     pub const READER: &str = "reader";
     pub const POWER: &str = "power";
     pub const SENSOR: &str = "sensor";
-    pub const ALL: [&str; 3] = [READER, POWER, SENSOR];
+    pub const EDGE: &str = "edge";
+    pub const ALL: [&str; 4] = [READER, POWER, SENSOR, EDGE];
 }
 
 /// Fail-safe behaviour when a module loses its link (#83 sec 6).

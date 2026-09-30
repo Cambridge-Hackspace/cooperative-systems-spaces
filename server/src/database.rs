@@ -2970,6 +2970,43 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    /// The `kind` of a resource ("door" or "tool"), or `None` if there is no such
+    /// resource. #101: a binding may name any resource, so the endpoint needs to
+    /// know one exists without caring which subtype it is.
+    pub fn resource_kind(&self, resource_id: uuid::Uuid) -> Result<Option<String>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        resources::table
+            .filter(resources::id.eq(resource_id))
+            .select(resources::kind)
+            .first::<String>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The device bound to this resource as its coordinator (role `edge`), or
+    /// `None` if nothing is bound.
+    ///
+    /// #101: replaces `doors.edge_device_id`. A partial unique index guarantees at
+    /// most one coordinator per resource, so there is no ambiguity to resolve here
+    /// -- a second one could not be inserted.
+    pub fn door_edge_device(
+        &self,
+        resource_id: uuid::Uuid,
+    ) -> Result<Option<uuid::Uuid>, DatabaseError> {
+        use crate::schema::device_bindings;
+
+        let mut conn = self.get_connection()?;
+        device_bindings::table
+            .filter(device_bindings::resource_id.eq(resource_id))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
+            .select(device_bindings::device_id)
+            .first::<uuid::Uuid>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// A device's declared `capabilities` blob, or `None` if no such device
     /// exists. #101: the source for role-vs-capability checks at bind time and for
     /// the firmware-enforcement descriptors that used to live on a binding's
@@ -4707,31 +4744,39 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
-    /// Doors served by a specific edge device.
+    /// Doors served by a specific edge device (#101: through its `edge` binding,
+    /// which replaced `doors.edge_device_id`).
     pub fn list_doors_for_device(
         &self,
         edge_id: uuid::Uuid,
     ) -> Result<Vec<crate::models::Door>, DatabaseError> {
-        use crate::schema::doors::dsl::*;
+        use crate::schema::{device_bindings, doors};
         let mut conn = self.get_connection()?;
-        doors
-            .filter(edge_device_id.eq(edge_id))
+        doors::table
+            .inner_join(device_bindings::table.on(device_bindings::resource_id.eq(doors::id)))
+            .filter(device_bindings::device_id.eq(edge_id))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
             .select(crate::models::Door::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Distinct edge device IDs that have at least one door bound to them.
+    /// Distinct devices that coordinate at least one DOOR.
     /// Used for "republish to every device whose state might have changed".
+    ///
+    /// Joined to `doors` rather than reading every `edge` binding, so an `edge`
+    /// binding on some other kind of resource cannot pull a device into the door
+    /// republish set.
     pub fn list_door_device_ids(&self) -> Result<Vec<uuid::Uuid>, DatabaseError> {
-        use crate::schema::doors::dsl::*;
+        use crate::schema::{device_bindings, doors};
         let mut conn = self.get_connection()?;
-        let ids: Vec<Option<uuid::Uuid>> = doors
-            .select(edge_device_id)
+        device_bindings::table
+            .inner_join(doors::table.on(doors::id.eq(device_bindings::resource_id)))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
+            .select(device_bindings::device_id)
             .distinct()
-            .load(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-        Ok(ids.into_iter().flatten().collect())
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 
     pub fn list_rules_for_door(
@@ -6049,6 +6094,23 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// One binding by id, or `None`. #101: the delete path needs the row *before*
+    /// it is removed, so it can tell the device that was bound that the resource
+    /// has left its snapshot.
+    pub fn get_device_binding(
+        &self,
+        binding_id: uuid::Uuid,
+    ) -> Result<Option<crate::models::DeviceBinding>, DatabaseError> {
+        use crate::schema::device_bindings::dsl::*;
+        let mut conn = self.get_connection()?;
+        device_bindings
+            .find(binding_id)
+            .select(crate::models::DeviceBinding::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Row count, not `()`: the caller answers 404 rather than 200 for an id
     /// that matched nothing (see `checks/tests/writes_report_what_they_changed.rs`).
     pub fn delete_tool_module(&self, mid: uuid::Uuid) -> Result<usize, DatabaseError> {
@@ -6238,6 +6300,15 @@ impl DatabaseManager {
         let mut by_tool: BTreeMap<uuid::Uuid, css_lib::wire::ToolModuleTool> = BTreeMap::new();
 
         for m in modules {
+            // #101: `device_bindings` now also holds a door's `edge` coordinator.
+            // This snapshot is the TOOL wiring, so a binding whose resource is not
+            // a tool is skipped -- otherwise doors would arrive in the edge's
+            // module-state payload as tools with no external_id, and the
+            // coordinator would try to interlock them. `external` is keyed by
+            // every tool id, so membership in it is exactly "this is a tool".
+            if !external.contains_key(&m.resource_id) {
+                continue;
+            }
             by_tool
                 .entry(m.resource_id)
                 .or_insert_with(|| css_lib::wire::ToolModuleTool {

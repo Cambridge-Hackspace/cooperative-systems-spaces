@@ -213,7 +213,6 @@ export interface Door {
   name: string
   location: string | null
   description: string | null
-  edge_device_id: string | null
   unlock_duration_ms: number
   enabled: boolean
   created_at: string
@@ -255,7 +254,6 @@ export interface CreateDoorRequest {
   name: string
   location?: string | null
   description?: string | null
-  edge_device_id?: string | null
   unlock_duration_ms?: number
   enabled?: boolean
   /** Required. Use a special place (e.g. `Outside`) for exterior doors. */
@@ -269,7 +267,6 @@ export interface UpdateDoorRequest {
   /** Pass `null` to clear; omit to leave unchanged. */
   location?: string | null
   description?: string | null
-  edge_device_id?: string | null
   unlock_duration_ms?: number
   enabled?: boolean
   /** PATCH-style: set to a real place ID (special places included).

@@ -9,6 +9,10 @@ use crate::schema::{access_rules, door_access_events, door_checkins, doors};
 // doors
 // ---------------------------------------------------------------------------
 
+/// A door. #101: the device that drives its strike is a `device_bindings` row
+/// with role `edge`, not a column here -- resolve it with
+/// `DatabaseManager::door_edge_device`. It was the last ad-hoc device
+/// association left once tools bound through a binding row.
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize)]
 #[diesel(table_name = doors)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -17,7 +21,6 @@ pub struct Door {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub edge_device_id: Option<Uuid>,
     pub unlock_duration_ms: i32,
     pub enabled: bool,
     pub created_by: Option<Uuid>,
@@ -34,7 +37,6 @@ pub struct NewDoor {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub edge_device_id: Option<Uuid>,
     pub unlock_duration_ms: i32,
     pub enabled: bool,
     pub created_by: Option<Uuid>,
@@ -51,7 +53,6 @@ pub struct UpdateDoor {
     pub name: Option<String>,
     pub location: Option<Option<String>>,
     pub description: Option<Option<String>>,
-    pub edge_device_id: Option<Option<Uuid>>,
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     pub updated_at: Option<DateTime<Utc>>,

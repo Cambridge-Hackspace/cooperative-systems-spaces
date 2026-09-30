@@ -42,6 +42,9 @@
 
 import { GET, POST, PATCH, DELETE, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
+const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
+const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
+
 main(async () => {
   const admin = await adminAccount('doors_admin')
   const T = { token: admin.token }
@@ -206,4 +209,88 @@ main(async () => {
   ok('doors/a-refusal-carries-its-reason',
     Array.isArray(rows) && rows.some((r) => r.granted === false && !!r.reason),
     'a denied event with no reason tells an operator nothing about why')
+
+  // --- a door's coordinator is a device binding (#101) ----------------------
+  // The last ad-hoc device association: a tool named its devices through a
+  // binding row, a door named exactly one through `doors.edge_device_id`. Now
+  // both go through `device_bindings`, so this proves the binding endpoint
+  // accepts a DOOR as its resource and that the server drives the strike through
+  // whatever is bound in role `edge`.
+  //
+  // Registering a device needs an eight-emoji invite code, so this half runs only
+  // where the cluster can store one -- the same guard as toolmodules/bypass/lease.
+  if (!CAN_REGISTER_DEVICE) {
+    record('doors/coordinator-binding-not-run-on-this-cluster', 'skip',
+      `binding a coordinator needs a registered device, a device needs an invite, and this ` +
+      `cluster (${ENCODING}) cannot store an eight-emoji invite code.`)
+    return
+  }
+
+  const doorD = await mkDoor('doors-coordinator')
+  ok('doors/coordinator-door-created', !!doorD.id, `-> ${doorD.status}`)
+  if (!doorD.id) return
+
+  // A standing staff grant, so these assertions are about the COORDINATOR and not
+  // about whether the remote unlock is authorized -- admin outranks staff, so this
+  // holds both now and once admin_unlock becomes rule-subject.
+  const staffGrant = await addRule(doorD.id, { kind: 'role', value: 'staff', effect: 'allow' })
+  assertEq('doors/coordinator-door-granted-to-staff', 201, staffGrant.status)
+
+  // With nothing bound there is no strike to drive, and the refusal says so.
+  const unboundUnlock = await POST(`/api/admin/doors/${doorD.id}/unlock`, T)
+  assertEq('doors/unlock-without-a-coordinator-is-refused', 400, unboundUnlock.status)
+
+  const mkDevice = async (name, roles, mac) => {
+    const inv = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const reg = await POST('/api/devices/register', {
+      body: {
+        device_code: inv.json?.data?.device_code,
+        name: `${name}-${tag}`,
+        capabilities: { roles },
+        mac_address: mac,
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    return { id: reg.json?.data?.device_id ?? reg.json?.device_id, status: reg.status, text: reg.text }
+  }
+
+  const coordinator = await mkDevice('door-edge', ['edge'], '02:00:00:00:85:01')
+  ok('doors/edge-device-registered', !!coordinator.id,
+    `register -> ${coordinator.status} ${coordinator.text.slice(0, 160)}`)
+
+  // The unified model's point: the binding endpoint takes a door, not just a tool.
+  const bound = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: {
+      resource_id: doorD.id,
+      device_id: coordinator.id,
+      role: 'edge',
+      name: 'door coordinator',
+    },
+  })
+  assertEq('doors/a-door-can-be-bound-a-coordinator', 201, bound.status)
+
+  // And the server resolves the strike through that binding: the same unlock that
+  // had nothing to drive a moment ago is now accepted.
+  const boundUnlock = await POST(`/api/admin/doors/${doorD.id}/unlock`, T)
+  assertEq('doors/unlock-uses-the-bound-coordinator', 200, boundUnlock.status,
+    `after binding an edge device the remote unlock must resolve it: ${boundUnlock.text.slice(0, 200)}`)
+
+  // The capability check applies to a door exactly as it does to a tool: a device
+  // that only declares `reader` cannot be a coordinator.
+  const readerOnly = await mkDevice('door-reader', ['reader'], '02:00:00:00:85:02')
+  const wrongCap = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: {
+      resource_id: doorD.id,
+      device_id: readerOnly.id,
+      role: 'edge',
+      name: 'not a coordinator',
+    },
+  })
+  assertEq('doors/coordinator-must-declare-the-edge-role', 400, wrongCap.status)
 })

@@ -8,10 +8,10 @@ use uuid::Uuid;
 /// The roles a device can declare in its `capabilities` (#101, replacing the old
 /// single-valued `SpaceDeviceKind`).
 ///
-/// `reader` / `power` / `sensor` are the tool access-module roles a device can be
-/// *bound* as -- they are exactly the bindable `module_role` set, and a device
-/// must declare a role before it can be bound in it. `edge` is the local
-/// coordinator and `kiosk` a display; neither is bound to a tool. A device may
+/// `reader` / `power` / `sensor` are a tool's access-chain roles and `edge` is a
+/// door's coordinator -- together the bindable `binding_role` set, which this
+/// vocabulary must contain, because a device cannot be bound in a role it does
+/// not declare. `kiosk` is a display and is bound to no resource. A device may
 /// declare several: the point of the move away from a single `kind` is that one
 /// unit can both read a card and switch power.
 ///
