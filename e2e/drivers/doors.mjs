@@ -322,7 +322,12 @@ main(async () => {
         platform: 'linux',
       },
     })
-    return { id: reg.json?.data?.device_id ?? reg.json?.device_id, status: reg.status, text: reg.text }
+    return {
+      id: reg.json?.data?.device_id ?? reg.json?.device_id,
+      token: reg.json?.data?.auth_token ?? reg.json?.auth_token,
+      status: reg.status,
+      text: reg.text,
+    }
   }
 
   const coordinator = await mkDevice('door-edge', ['edge'], '02:00:00:00:85:01')
@@ -360,4 +365,23 @@ main(async () => {
     },
   })
   assertEq('doors/coordinator-must-declare-the-edge-role', 400, wrongCap.status)
+
+  // --- a door binding does not widen the TOOL sync scope (#101 slice 5) ------
+  // The toolguard payload hands a device the tools it may actuate and the card
+  // digests of the members authorized for them. Its scope is the device's
+  // bindings, and since #101 a binding can name any resource -- so a door
+  // coordinator's binding must not put it in scope for tools. Asserted from both
+  // sides, because either alone is satisfiable by an accident: no tools AND no
+  // member identifiers. This device is bound to a door and nothing else, so a
+  // non-empty answer here would mean a door coordinator had been handed the
+  // membership's identifiers.
+  const coordSync = await GET('/api/toolguard/sync', { token: coordinator.token })
+  const coordBody = coordSync.json?.data ?? coordSync.json
+  assertEq('doors/a-door-coordinator-receives-no-tools', 0, (coordBody?.tools ?? []).length,
+    `a device bound only to a door must be in scope for no tools: ` +
+      `${JSON.stringify(coordBody?.tools ?? []).slice(0, 200)}`)
+  assertEq('doors/a-door-coordinator-receives-no-member-identifiers', 0,
+    (coordBody?.users ?? []).length,
+    `and therefore for no member identifiers either: ` +
+      `${JSON.stringify(coordBody?.users ?? []).slice(0, 200)}`)
 })

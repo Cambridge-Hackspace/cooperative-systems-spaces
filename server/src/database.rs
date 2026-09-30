@@ -3118,7 +3118,14 @@ impl DatabaseManager {
         // top-level tool list is built from those authorizations.
         let bound: Vec<uuid::Uuid> = {
             use crate::schema::device_bindings;
+            // Joined to `tools` on purpose. This is the TOOLguard payload, and since
+            // #101 a binding can name any resource -- a device that coordinates a
+            // door has that door's id among its bindings. Filtering on device_id
+            // alone would carry a door id into the tool authorization scope; it
+            // matches no tool so nothing leaked, but the scope of a security-
+            // relevant query should not depend on a downstream lookup failing.
             device_bindings::table
+                .inner_join(tools::table.on(tools::id.eq(device_bindings::resource_id)))
                 .filter(device_bindings::device_id.eq(device_id))
                 .select(device_bindings::resource_id)
                 .distinct()
@@ -3130,7 +3137,7 @@ impl DatabaseManager {
             // look identical from the device's side: an empty allow-list. The
             // device will refuse every card and report nothing wrong.
             tracing::warn!(
-                "Device {} has no tool_modules bindings, so its sync payload is \
+                "Device {} has no tool bindings, so its sync payload is \
                  empty and it will authorize nobody. Bind it to the tools it \
                  serves.",
                 device_id
