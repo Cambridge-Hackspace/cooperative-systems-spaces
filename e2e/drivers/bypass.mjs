@@ -15,14 +15,13 @@
 // detector cannot tell that apart from a module pulled off the wall -- which is
 // exactly the limit the event text states rather than papers over.
 //
-// Cluster encoding: binding a module needs a registered device, which needs an
-// invite code of eight emoji. On a cluster that cannot store one the whole
-// stage is skipped with that reason, as in toolmodules.mjs and concurrency.mjs.
+// Cluster encoding: this stage used to skip on a non-UTF8 cluster, because a
+// device invite code is eight emoji and LATIN1 cannot store one. #120 (#137)
+// made invite codes hex-at-rest -- the emoji are generated, returned over HTTP
+// and matched as hex, so none reaches the database -- and the guard outlived its
+// reason, skipping this stage entirely on the default cluster. Removed.
 
 import { GET, POST, adminAccount, assertEq, ok, record, main } from './lib.mjs'
-
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -38,16 +37,6 @@ main(async () => {
   const admin = await adminAccount('bypass_admin')
   const T = { token: admin.token }
   const tag = admin.username
-
-  if (!CAN_REGISTER_DEVICE) {
-    record(
-      'bypass/not-run-on-this-cluster',
-      'skip',
-      `the liveness sweep needs a module bound to a registered device, a device needs an ` +
-        `invite, and this cluster (${ENCODING}) cannot store an eight-emoji invite code.`
-    )
-    return
-  }
 
   // --- a tool with a power module whose device has never reported ------------
   const tool = await POST('/api/tools', {

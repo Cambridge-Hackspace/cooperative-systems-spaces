@@ -7,25 +7,24 @@
 // re-authorization unless told otherwise; the `module/state` snapshot the edge
 // coordinates from reflects what was authored and omits a disabled rule; a
 // delete that matched nothing is a 404 rather than a 200 claiming a deletion;
-// and every mutation lands an audit row. Where a device can be registered, it
-// also proves a device's declared capability roles (#101) round-trip -- accepted,
-// validated, stored as JSONB, read back -- and that a binding defaults to the
-// fail-safe disconnect policy and is refused in a role the device does not declare.
+// and every mutation lands an audit row. It also proves a device's declared
+// capability roles (#101) round-trip -- accepted, validated, stored as JSONB, read
+// back -- and that a binding defaults to the fail-safe disconnect policy and is
+// refused in a role the device does not declare.
 //
 // What this does NOT prove: that anything is actually energized, gated or cut.
 // Nothing here switches hardware -- the coordinator and its lease are a later
 // increment, and the firmware tier is outside this repository.
 //
-// Cluster encoding: registering a device needs a device invite, and an invite
-// code is eight emoji. On a cluster that cannot store one (LATIN1 and friends;
-// see the same branch in concurrency.mjs) the binding half cannot be set up at
-// all, so it is skipped with that reason rather than reported as a defect in
-// this feature. Everything that does not need a device still runs there.
+// Cluster encoding: the binding half used to be skipped on a non-UTF8 cluster,
+// because a device invite code is eight emoji and LATIN1 cannot store one. That
+// stopped being true when #120 (#137) made invite codes hex-at-rest -- the emoji
+// are generated, returned to the operator over HTTP, and matched as hex; none of
+// them ever reaches the database. The guard outlived its reason and was skipping
+// the entire binding half of this stage on the default cluster, which is the
+// coverage this suite exists to have. Removed; the stage now runs everywhere.
 
 import { GET, POST, DELETE, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
-
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
 
 // A syntactically valid id that exists in no table, for the validation paths.
 const ABSENT = '00000000-0000-4000-8000-0000000000ff'
@@ -132,14 +131,11 @@ main(async () => {
   assertEq('toolmodules/create-disabled-gate', 201, disabled.status)
   const disabledId = disabled.json?.data?.id
 
-  // --- the binding half, where a device can be registered -------------------
+  // --- the binding half ------------------------------------------------------
+  // A bare block, kept so the bindings below stay scoped together after the
+  // cluster-encoding guard that used to wrap them was retired.
   let moduleId = null
-  if (!CAN_REGISTER_DEVICE) {
-    record('toolmodules/bindings-not-run-on-this-cluster', 'skip',
-      `binding a module needs a registered device, a device needs an invite, and this ` +
-      `cluster (${ENCODING}) cannot store an eight-emoji invite code. The interlock and ` +
-      `snapshot assertions above and below still run.`)
-  } else {
+  {
     const invite = await POST('/api/admin/devices/invite', {
       token: admin.token,
       body: { expires_in_hours: 1 },

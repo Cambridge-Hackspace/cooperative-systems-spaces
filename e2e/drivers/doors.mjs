@@ -42,8 +42,6 @@
 
 import { GET, POST, PATCH, DELETE, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
 
 main(async () => {
   const admin = await adminAccount('doors_admin')
@@ -283,16 +281,6 @@ main(async () => {
   // both go through `device_bindings`, so this proves the binding endpoint
   // accepts a DOOR as its resource and that the server drives the strike through
   // whatever is bound in role `edge`.
-  //
-  // Registering a device needs an eight-emoji invite code, so this half runs only
-  // where the cluster can store one -- the same guard as toolmodules/bypass/lease.
-  if (!CAN_REGISTER_DEVICE) {
-    record('doors/coordinator-binding-not-run-on-this-cluster', 'skip',
-      `binding a coordinator needs a registered device, a device needs an invite, and this ` +
-      `cluster (${ENCODING}) cannot store an eight-emoji invite code.`)
-    return
-  }
-
   const doorD = await mkDoor('doors-coordinator')
   ok('doors/coordinator-door-created', !!doorD.id, `-> ${doorD.status}`)
   if (!doorD.id) return

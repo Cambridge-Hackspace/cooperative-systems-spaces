@@ -29,17 +29,17 @@
 // and correctly timed; what a module does with it is firmware's half of the
 // contract, and FIRMWARE.md is where that half is stated.
 //
-// Cluster encoding: binding a module needs a registered device, which needs an
-// invite code of eight emoji, so on a cluster that cannot store one the whole
-// stage skips -- as in toolmodules.mjs and bypass.mjs.
+// Cluster encoding: this stage used to skip on a non-UTF8 cluster, because a
+// device invite code is eight emoji and LATIN1 cannot store one. #120 (#137)
+// made invite codes hex-at-rest -- the emoji are generated, returned over HTTP
+// and matched as hex, so none reaches the database -- and the guard outlived its
+// reason, skipping this stage entirely on the default cluster. Removed.
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { GET, POST, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
 
 const FIXTURE = path.join(STACK_DIR, 'lease-fixture.json')
 const SKIPPED = path.join(STACK_DIR, 'lease-skipped')
@@ -70,17 +70,8 @@ function captured(name) {
 // ── setup ────────────────────────────────────────────────────────────────────
 
 async function setup() {
-  if (!CAN_REGISTER_DEVICE) {
-    fs.writeFileSync(SKIPPED, `${ENCODING}\n`)
-    record(
-      'lease/not-run-on-this-cluster',
-      'skip',
-      `the coordinator needs a module bound to a registered device, a device ` +
-        `needs an invite, and this cluster (${ENCODING}) cannot store an ` +
-        `eight-emoji invite code.`
-    )
-    return
-  }
+  // Clears a sentinel left by an older checkout: this stage used to skip on a
+  // non-UTF8 cluster, and the later phases read this file to know it had.
   if (fs.existsSync(SKIPPED)) fs.unlinkSync(SKIPPED)
 
   const admin = await adminAccount('lease_admin')

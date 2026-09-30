@@ -2119,18 +2119,17 @@ stage_logs() {
   # which was the right fix, and is why they are deleted rather than kept as
   # permanent skips. An exemption nobody has to justify again is an exemption
   # that outlives its reason.
-  local expected=(
-    # A device invite code is eight emoji and this suite's cluster is LATIN1, so
-    # the row cannot be written at all. TESTING.md, "Known defects".
-    #
-    # ERROR is the right level and consistent with the rule `from_db` applies
-    # elsewhere, because this route answers 500. It answers 500 because the
-    # server generated the value that could not be stored -- the caller supplied
-    # nothing -- so it is genuinely the server's failure. The operator whose
-    # deployment cannot register any device is the person who needs to see it,
-    # and they are the only one who can fix it, by changing the encoding.
-    'Failed to insert device invite: character with byte sequence'
-  )
+  # Empty, and that is the point: the server is expected to log no ERROR at all,
+  # so any line here fails the stage.
+  #
+  # The last entry exempted 'Failed to insert device invite: character with byte
+  # sequence' -- a device invite code is eight emoji and this suite's cluster is
+  # LATIN1, so the row could not be written. #120 (#137) made invite codes
+  # hex-at-rest, so the emoji never reach the database and the message became
+  # impossible. The stage had been reporting it as a stale exemption on every run,
+  # which is what that check is for; deleted rather than left, like the two before
+  # it.
+  local expected=()
 
   local unexpected=0 sample=''
   local line
@@ -2452,9 +2451,10 @@ INVENTORY
   if [[ -n ${fw_invite} ]]; then
     record_case "devseed/firmware-invite" ok
   elif grep -q 'require a UTF-8 database' "${OUT}/devseed-invite.json" 2>/dev/null; then
-    # An invite code is eight emoji and this cluster cannot store one. The same
-    # constraint switches off cases in bypass.mjs, toolmodules.mjs and
-    # concurrency.mjs, and it says so there too rather than passing quietly.
+    # Defensive only: since #120 (#137) invite codes are stored hex-at-rest, so a
+    # non-Unicode cluster can hold one and this branch should be unreachable. Kept
+    # because reaching it would mean that regressed, and a skip naming the reason
+    # beats a bare empty response.
     #
     # The devlive profile sets CSS_E2E_DB_ENCODING=UTF8 precisely so this does
     # not happen on the instance firmware developers are told to use; reaching
