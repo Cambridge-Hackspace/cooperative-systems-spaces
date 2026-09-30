@@ -5,7 +5,7 @@
 //! the Rust-side source of truth. `checks/tests/tool_module_vocab_matches.rs` asserts
 //! the two agree, so a value can't be added on one side and forgotten on the other.
 
-use crate::schema::{tool_interlocks, tool_modules};
+use crate::schema::{device_bindings, tool_interlocks};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -73,13 +73,15 @@ pub mod enforcement {
     pub const ALL: [&str; 3] = [FIRMWARE, EDGE, SERVER];
 }
 
-/// A binding of one `space_device` to a tool in a role.
+/// A binding of one `space_device` to a resource (a tool or a door) in a role
+/// (#101). Was `ToolModule`; keyed on `resource_id` now that a door and a tool are
+/// both resources bound the same way.
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
-#[diesel(table_name = tool_modules)]
+#[diesel(table_name = device_bindings)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct ToolModule {
+pub struct DeviceBinding {
     pub id: Uuid,
-    pub tool_id: Uuid,
+    pub resource_id: Uuid,
     pub device_id: Uuid,
     pub role: String,
     pub name: String,
@@ -89,12 +91,12 @@ pub struct ToolModule {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A new tool module binding for insertion.
+/// A new device binding for insertion.
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
-#[diesel(table_name = tool_modules)]
+#[diesel(table_name = device_bindings)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct NewToolModule {
-    pub tool_id: Uuid,
+pub struct NewDeviceBinding {
+    pub resource_id: Uuid,
     pub device_id: Uuid,
     pub role: String,
     pub name: String,

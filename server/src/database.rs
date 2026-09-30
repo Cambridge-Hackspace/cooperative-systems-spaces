@@ -2954,16 +2954,17 @@ impl DatabaseManager {
         device_id: uuid::Uuid,
         tool_id: uuid::Uuid,
     ) -> Result<bool, DatabaseError> {
-        use crate::schema::tool_modules;
+        use crate::schema::device_bindings;
         use diesel::dsl::exists;
         use diesel::select;
 
         let mut conn = self.get_connection()?;
 
         select(exists(
-            tool_modules::table
-                .filter(tool_modules::device_id.eq(device_id))
-                .filter(tool_modules::tool_id.eq(tool_id)),
+            device_bindings::table
+                .filter(device_bindings::device_id.eq(device_id))
+                // A tool's id is its resource id, so the tool_id param matches here.
+                .filter(device_bindings::resource_id.eq(tool_id)),
         ))
         .get_result::<bool>(&mut conn)
         .map_err(DatabaseError::Diesel)
@@ -3079,10 +3080,10 @@ impl DatabaseManager {
         // from here: a user's authorized list is computed against these, and the
         // top-level tool list is built from those authorizations.
         let bound: Vec<uuid::Uuid> = {
-            use crate::schema::tool_modules;
-            tool_modules::table
-                .filter(tool_modules::device_id.eq(device_id))
-                .select(tool_modules::tool_id)
+            use crate::schema::device_bindings;
+            device_bindings::table
+                .filter(device_bindings::device_id.eq(device_id))
+                .select(device_bindings::resource_id)
                 .distinct()
                 .load(&mut conn)
                 .map_err(DatabaseError::Diesel)?
@@ -6011,12 +6012,12 @@ impl DatabaseManager {
 // ── Tool module bindings + interlocks (#83) ───────────────────────────────────
 
 impl DatabaseManager {
-    pub fn list_tool_modules(&self) -> Result<Vec<crate::models::ToolModule>, DatabaseError> {
-        use crate::schema::tool_modules::dsl::*;
+    pub fn list_tool_modules(&self) -> Result<Vec<crate::models::DeviceBinding>, DatabaseError> {
+        use crate::schema::device_bindings::dsl::*;
         let mut conn = self.get_connection()?;
-        tool_modules
-            .order((tool_id.asc(), role.asc(), name.asc()))
-            .select(crate::models::ToolModule::as_select())
+        device_bindings
+            .order((resource_id.asc(), role.asc(), name.asc()))
+            .select(crate::models::DeviceBinding::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -6024,26 +6025,26 @@ impl DatabaseManager {
     pub fn list_tool_modules_for_tool(
         &self,
         tid: uuid::Uuid,
-    ) -> Result<Vec<crate::models::ToolModule>, DatabaseError> {
-        use crate::schema::tool_modules::dsl::*;
+    ) -> Result<Vec<crate::models::DeviceBinding>, DatabaseError> {
+        use crate::schema::device_bindings::dsl::*;
         let mut conn = self.get_connection()?;
-        tool_modules
-            .filter(tool_id.eq(tid))
+        device_bindings
+            .filter(resource_id.eq(tid))
             .order((role.asc(), name.asc()))
-            .select(crate::models::ToolModule::as_select())
+            .select(crate::models::DeviceBinding::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
     pub fn create_tool_module(
         &self,
-        new_module: &crate::models::NewToolModule,
-    ) -> Result<crate::models::ToolModule, DatabaseError> {
-        use crate::schema::tool_modules;
+        new_module: &crate::models::NewDeviceBinding,
+    ) -> Result<crate::models::DeviceBinding, DatabaseError> {
+        use crate::schema::device_bindings;
         let mut conn = self.get_connection()?;
-        diesel::insert_into(tool_modules::table)
+        diesel::insert_into(device_bindings::table)
             .values(new_module)
-            .returning(crate::models::ToolModule::as_returning())
+            .returning(crate::models::DeviceBinding::as_returning())
             .get_result(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -6051,9 +6052,9 @@ impl DatabaseManager {
     /// Row count, not `()`: the caller answers 404 rather than 200 for an id
     /// that matched nothing (see `checks/tests/writes_report_what_they_changed.rs`).
     pub fn delete_tool_module(&self, mid: uuid::Uuid) -> Result<usize, DatabaseError> {
-        use crate::schema::tool_modules::dsl::*;
+        use crate::schema::device_bindings::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::delete(tool_modules.find(mid))
+        diesel::delete(device_bindings.find(mid))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -6133,16 +6134,16 @@ impl DatabaseManager {
         )>,
         DatabaseError,
     > {
-        use crate::schema::{space_devices, tool_modules};
+        use crate::schema::{device_bindings, space_devices};
         let mut conn = self.get_connection()?;
-        tool_modules::table
-            .inner_join(space_devices::table.on(space_devices::id.eq(tool_modules::device_id)))
+        device_bindings::table
+            .inner_join(space_devices::table.on(space_devices::id.eq(device_bindings::device_id)))
             .filter(space_devices::deleted_at.is_null())
             .select((
-                tool_modules::id,
-                tool_modules::name,
-                tool_modules::role,
-                tool_modules::device_id,
+                device_bindings::id,
+                device_bindings::name,
+                device_bindings::role,
+                device_bindings::device_id,
                 space_devices::last_seen_at,
             ))
             .load(&mut conn)
@@ -6159,10 +6160,10 @@ impl DatabaseManager {
         &self,
     ) -> Result<Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>, DatabaseError>
     {
-        use crate::schema::{space_devices, tool_modules};
+        use crate::schema::{device_bindings, space_devices};
         let mut conn = self.get_connection()?;
-        let bound: Vec<uuid::Uuid> = tool_modules::table
-            .select(tool_modules::device_id)
+        let bound: Vec<uuid::Uuid> = device_bindings::table
+            .select(device_bindings::device_id)
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)?;
         space_devices::table
@@ -6238,10 +6239,10 @@ impl DatabaseManager {
 
         for m in modules {
             by_tool
-                .entry(m.tool_id)
+                .entry(m.resource_id)
                 .or_insert_with(|| css_lib::wire::ToolModuleTool {
-                    tool_id: m.tool_id.to_string(),
-                    external_id: external.get(&m.tool_id).cloned().flatten(),
+                    tool_id: m.resource_id.to_string(),
+                    external_id: external.get(&m.resource_id).cloned().flatten(),
                     modules: Vec::new(),
                     interlocks: Vec::new(),
                     power_fails_safe: false,

@@ -848,9 +848,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    tool_modules (id) {
+    device_bindings (id) {
         id -> Uuid,
-        tool_id -> Uuid,
+        resource_id -> Uuid,
         device_id -> Uuid,
         role -> Text,
         name -> Text,
@@ -941,10 +941,10 @@ diesel::joinable!(power_outlets -> power_circuits (circuit_id));
 diesel::joinable!(power_outlets -> places (place_id));
 diesel::joinable!(power_receptacles -> power_outlets (outlet_id));
 diesel::joinable!(tools -> power_receptacles (receptacle_id));
-diesel::joinable!(tool_modules -> tools (tool_id));
-diesel::joinable!(tool_modules -> space_devices (device_id));
+diesel::joinable!(device_bindings -> resources (resource_id));
+diesel::joinable!(device_bindings -> space_devices (device_id));
 diesel::joinable!(tool_interlocks -> tools (tool_id));
-diesel::joinable!(tool_interlocks -> tool_modules (source_module_id));
+diesel::joinable!(tool_interlocks -> device_bindings (source_module_id));
 diesel::joinable!(tool_power_state -> tools (tool_id));
 diesel::joinable!(tool_rate_tiers -> tools (tool_id));
 diesel::joinable!(tool_tier_assignments -> tools (tool_id));
@@ -1005,7 +1005,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     tool_power_state,
     tool_rate_tiers,
     tool_tier_assignments,
-    tool_modules,
+    device_bindings,
     tool_interlocks,
     resources,
 );

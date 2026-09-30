@@ -27,7 +27,7 @@ use uuid::Uuid;
 use crate::auth::AdminUser;
 use crate::models::{
     enforcement, interlock_condition, interlock_kind, interlock_reset, module_role, on_disconnect,
-    AuditEventType, NewAuditLog, NewToolInterlock, NewToolModule, ToolInterlock, ToolModule,
+    AuditEventType, DeviceBinding, NewAuditLog, NewDeviceBinding, NewToolInterlock, ToolInterlock,
 };
 use crate::AppState;
 
@@ -100,7 +100,7 @@ pub struct DeletedResponse {
 async fn list_modules(
     State(state): State<AppState>,
     _admin: AdminUser,
-) -> Result<Json<ApiResponse<Vec<ToolModule>>>, ApiError> {
+) -> Result<Json<ApiResponse<Vec<DeviceBinding>>>, ApiError> {
     let modules = state.db.list_tool_modules()?;
     Ok(Json(ApiResponse::success(modules)))
 }
@@ -147,8 +147,8 @@ async fn create_module(
         )));
     }
 
-    let created = state.db.create_tool_module(&NewToolModule {
-        tool_id: req.tool_id,
+    let created = state.db.create_tool_module(&NewDeviceBinding {
+        resource_id: req.tool_id,
         device_id: req.device_id,
         role,
         name: req.name.trim().to_string(),
@@ -162,7 +162,7 @@ async fn create_module(
         Some(admin.0.id),
         serde_json::json!({
             "module_id": created.id,
-            "tool_id": created.tool_id,
+            "tool_id": created.resource_id,
             "device_id": created.device_id,
             "role": created.role,
             "name": created.name,
