@@ -19,8 +19,8 @@ use uuid::Uuid;
 use crate::auth::{AdminUser, AuthUser};
 use crate::doors::AccessDecision;
 use crate::models::{
-    AuditEventType, Door, DoorAccessEvent, DoorAccessMethod, DoorAccessRule, DoorRuleEffect,
-    DoorRuleKind, NewAuditLog, NewDoor, NewDoorAccessEvent, NewDoorAccessRule, NewDoorCheckin,
+    AccessRule, AuditEventType, Door, DoorAccessEvent, DoorAccessMethod, DoorRuleEffect,
+    DoorRuleKind, NewAccessRule, NewAuditLog, NewDoor, NewDoorAccessEvent, NewDoorCheckin,
     UpdateDoor,
 };
 use crate::AppState;
@@ -94,7 +94,7 @@ impl From<Door> for DoorSummary {
 pub struct DoorDetail {
     #[serde(flatten)]
     pub door: DoorSummary,
-    pub rules: Vec<DoorAccessRule>,
+    pub rules: Vec<AccessRule>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -664,8 +664,8 @@ async fn add_rule(
             req.value
         }
     };
-    let rule = state.db.insert_door_rule(&NewDoorAccessRule {
-        door_id: id,
+    let rule = state.db.insert_door_rule(&NewAccessRule {
+        resource_id: id,
         kind: req.kind.as_str().to_string(),
         value,
         effect: req.effect.as_str().to_string(),

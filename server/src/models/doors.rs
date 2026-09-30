@@ -3,7 +3,7 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::schema::{door_access_events, door_access_rules, door_checkins, doors};
+use crate::schema::{access_rules, door_access_events, door_checkins, doors};
 
 // ---------------------------------------------------------------------------
 // doors
@@ -63,10 +63,10 @@ pub struct UpdateDoor {
 }
 
 // ---------------------------------------------------------------------------
-// door_access_rules
+// access_rules (was door_access_rules, #101)
 // ---------------------------------------------------------------------------
 
-/// One of the legal values of `door_access_rules.kind`.
+/// One of the legal values of `access_rules.kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DoorRuleKind {
@@ -102,7 +102,7 @@ impl DoorRuleKind {
     }
 }
 
-/// One of the legal values of `door_access_rules.effect`.
+/// One of the legal values of `access_rules.effect`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DoorRuleEffect {
@@ -126,12 +126,14 @@ impl DoorRuleEffect {
     }
 }
 
+/// A rule attached to a resource (a door or a tool), #101. Was `DoorAccessRule`;
+/// now keyed on `resource_id` since a door and a tool are both resources.
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize)]
-#[diesel(table_name = door_access_rules)]
+#[diesel(table_name = access_rules)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct DoorAccessRule {
+pub struct AccessRule {
     pub id: Uuid,
-    pub door_id: Uuid,
+    pub resource_id: Uuid,
     pub kind: String,
     pub value: String,
     pub effect: String,
@@ -141,10 +143,10 @@ pub struct DoorAccessRule {
 }
 
 #[derive(Debug, Clone, Insertable)]
-#[diesel(table_name = door_access_rules)]
+#[diesel(table_name = access_rules)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct NewDoorAccessRule {
-    pub door_id: Uuid,
+pub struct NewAccessRule {
+    pub resource_id: Uuid,
     pub kind: String,
     pub value: String,
     pub effect: String,

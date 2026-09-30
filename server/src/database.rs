@@ -4715,26 +4715,26 @@ impl DatabaseManager {
     pub fn list_rules_for_door(
         &self,
         did: uuid::Uuid,
-    ) -> Result<Vec<crate::models::DoorAccessRule>, DatabaseError> {
-        use crate::schema::door_access_rules::dsl::*;
+    ) -> Result<Vec<crate::models::AccessRule>, DatabaseError> {
+        use crate::schema::access_rules::dsl::*;
         let mut conn = self.get_connection()?;
-        door_access_rules
-            .filter(door_id.eq(did))
+        access_rules
+            .filter(resource_id.eq(did))
             .order(created_at.asc())
-            .select(crate::models::DoorAccessRule::as_select())
+            .select(crate::models::AccessRule::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
     pub fn insert_door_rule(
         &self,
-        new_rule: &crate::models::NewDoorAccessRule,
-    ) -> Result<crate::models::DoorAccessRule, DatabaseError> {
-        use crate::schema::door_access_rules;
+        new_rule: &crate::models::NewAccessRule,
+    ) -> Result<crate::models::AccessRule, DatabaseError> {
+        use crate::schema::access_rules;
         let mut conn = self.get_connection()?;
-        diesel::insert_into(door_access_rules::table)
+        diesel::insert_into(access_rules::table)
             .values(new_rule)
-            .returning(crate::models::DoorAccessRule::as_returning())
+            .returning(crate::models::AccessRule::as_returning())
             .get_result(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -4744,9 +4744,9 @@ impl DatabaseManager {
         did: uuid::Uuid,
         rid: uuid::Uuid,
     ) -> Result<usize, DatabaseError> {
-        use crate::schema::door_access_rules::dsl::*;
+        use crate::schema::access_rules::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::delete(door_access_rules.filter(id.eq(rid)).filter(door_id.eq(did)))
+        diesel::delete(access_rules.filter(id.eq(rid)).filter(resource_id.eq(did)))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -4982,9 +4982,9 @@ impl DatabaseManager {
         &self,
         cipher: &css_lib::card_crypto::CardCipher,
     ) -> Result<usize, DatabaseError> {
-        use crate::schema::door_access_rules::dsl::*;
+        use crate::schema::access_rules::dsl::*;
         let mut conn = self.get_connection()?;
-        let card_rules: Vec<(uuid::Uuid, String)> = door_access_rules
+        let card_rules: Vec<(uuid::Uuid, String)> = access_rules
             .filter(kind.eq("card"))
             .select((id, value))
             .load::<(uuid::Uuid, String)>(&mut conn)
@@ -5000,7 +5000,7 @@ impl DatabaseManager {
                     .wire_digest(&v)
                     .map_err(|e| DatabaseError::Other(format!("digest door card rule: {e}")))?,
             );
-            diesel::update(door_access_rules.filter(id.eq(rid)))
+            diesel::update(access_rules.filter(id.eq(rid)))
                 .set(value.eq(digest))
                 .execute(&mut conn)
                 .map_err(DatabaseError::Diesel)?;
@@ -5017,10 +5017,10 @@ impl DatabaseManager {
     /// endpoint refuses when this is non-zero rather than widen access by side
     /// effect.
     pub fn schedule_reference_count(&self, sid: uuid::Uuid) -> Result<i64, DatabaseError> {
-        use crate::schema::{door_access_rules, tools};
+        use crate::schema::{access_rules, tools};
         let mut conn = self.get_connection()?;
-        let door_refs: i64 = door_access_rules::table
-            .filter(door_access_rules::schedule_id.eq(Some(sid)))
+        let door_refs: i64 = access_rules::table
+            .filter(access_rules::schedule_id.eq(Some(sid)))
             .count()
             .get_result(&mut conn)
             .map_err(DatabaseError::Diesel)?;

@@ -577,7 +577,7 @@ stage_schema() {
   # is a feature over `tools.external_id`, not a table -- so the stage reported
   # a missing table on every run and the report was the check's, not the
   # schema's.
-  for t in users doors door_access_rules door_access_events door_checkins \
+  for t in users resources doors access_rules door_access_events door_checkins \
     schedules tools space_devices space_device_auth space_device_auth_requests \
     profile_config_versions webhooks audit_logs audit_event_types places \
     home_links; do

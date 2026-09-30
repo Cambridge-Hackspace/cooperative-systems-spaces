@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 use crate::doors::{rule_fires, schedule_state_at};
-use crate::models::{DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule};
+use crate::models::{AccessRule, DoorRuleEffect, DoorRuleKind, Schedule};
 use crate::rbac::RoleGraph;
 
 /// What a principal is trying to do to a resource.
@@ -136,7 +136,7 @@ pub struct ResourcePolicy {
 pub fn may(
     principal: &Principal,
     policy: &ResourcePolicy,
-    rules: &[DoorAccessRule],
+    rules: &[AccessRule],
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
     now: DateTime<Utc>,
@@ -253,10 +253,10 @@ mod tests {
         RoleGraph::from_rows(&rows, &[], &[])
     }
 
-    fn rule(kind: &str, value: &str, effect: &str) -> DoorAccessRule {
-        DoorAccessRule {
+    fn rule(kind: &str, value: &str, effect: &str) -> AccessRule {
+        AccessRule {
             id: Uuid::new_v4(),
-            door_id: Uuid::nil(),
+            resource_id: Uuid::nil(),
             kind: kind.into(),
             value: value.into(),
             effect: effect.into(),
@@ -298,12 +298,7 @@ mod tests {
         }
     }
 
-    fn decide(
-        p: &Principal,
-        pol: &ResourcePolicy,
-        rules: &[DoorAccessRule],
-        a: Action,
-    ) -> Decision {
+    fn decide(p: &Principal, pol: &ResourcePolicy, rules: &[AccessRule], a: Action) -> Decision {
         may(p, pol, rules, &[], tz(), Utc::now(), &graph(), a)
     }
 

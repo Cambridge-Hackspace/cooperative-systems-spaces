@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use css_server::doors::{cards_in_profile, expand_rules_at, open_access_hold_until_at};
-use css_server::models::{DoorAccessRule, Schedule};
+use css_server::models::{AccessRule, Schedule};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -52,10 +52,10 @@ fn seed_graph() -> css_server::rbac::RoleGraph {
     css_server::rbac::RoleGraph::from_rows(&rows, &[], &[])
 }
 
-fn rule_from(v: &Value) -> DoorAccessRule {
-    DoorAccessRule {
+fn rule_from(v: &Value) -> AccessRule {
+    AccessRule {
         id: Uuid::new_v4(),
-        door_id: Uuid::nil(),
+        resource_id: Uuid::nil(),
         kind: v["kind"].as_str().expect("kind").to_string(),
         value: v["value"].as_str().expect("value").to_string(),
         effect: v["effect"].as_str().expect("effect").to_string(),
@@ -137,7 +137,7 @@ fn every_case_compiles_to_the_declared_card_sets() {
             })
             .collect();
 
-        let rules: Vec<DoorAccessRule> = case["rules"]
+        let rules: Vec<AccessRule> = case["rules"]
             .as_array()
             .expect("rules")
             .iter()
@@ -262,7 +262,7 @@ fn may_reproduces_the_per_principal_door_decision() {
             .parse()
             .expect("now rfc3339");
         let tz: chrono_tz::Tz = case["tz"].as_str().expect("tz").parse().expect("tz");
-        let rules: Vec<DoorAccessRule> = case["rules"]
+        let rules: Vec<AccessRule> = case["rules"]
             .as_array()
             .expect("rules")
             .iter()

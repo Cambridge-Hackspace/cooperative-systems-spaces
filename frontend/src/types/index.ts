@@ -224,7 +224,8 @@ export interface Door {
 
 export interface DoorAccessRule {
   id: string
-  door_id: string
+  /** #101: rules are now keyed on the resource (a door or a tool). */
+  resource_id: string
   kind: string
   value: string
   effect: string

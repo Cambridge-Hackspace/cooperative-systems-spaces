@@ -569,9 +569,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    door_access_rules (id) {
+    access_rules (id) {
         id -> Uuid,
-        door_id -> Uuid,
+        resource_id -> Uuid,
         kind -> Text,
         value -> Text,
         effect -> Text,
@@ -910,13 +910,13 @@ diesel::joinable!(doors -> users (created_by));
 // in the ancestor query helper.)
 diesel::joinable!(tools -> places (place_id));
 diesel::joinable!(space_devices -> places (place_id));
-diesel::joinable!(door_access_rules -> schedules (schedule_id));
+diesel::joinable!(access_rules -> schedules (schedule_id));
 diesel::joinable!(schedules -> users (created_by));
 diesel::joinable!(tools -> schedules (schedule_id));
 diesel::joinable!(tools -> resources (id));
 diesel::joinable!(doors -> resources (id));
 diesel::joinable!(home_links -> users (created_by));
-diesel::joinable!(door_access_rules -> doors (door_id));
+diesel::joinable!(access_rules -> resources (resource_id));
 diesel::joinable!(door_access_events -> doors (door_id));
 diesel::joinable!(door_access_events -> users (user_id));
 diesel::joinable!(door_checkins -> doors (door_id));
@@ -977,7 +977,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     training_waivers,
     doors,
     door_access_events,
-    door_access_rules,
+    access_rules,
     door_checkins,
     places,
     schedules,

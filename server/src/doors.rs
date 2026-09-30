@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::config::ConfigManager;
 use crate::database::{DatabaseError, DatabaseManager};
 use crate::devices_transport::DeviceTransport;
-use crate::models::{Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User};
+use crate::models::{AccessRule, Door, DoorRuleEffect, DoorRuleKind, Schedule, User};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompiledDoor {
@@ -143,7 +143,7 @@ impl DoorService {
 
     fn expand_rules(
         &self,
-        rules: &[DoorAccessRule],
+        rules: &[AccessRule],
         cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
@@ -502,7 +502,7 @@ pub fn cards_in_profile(profile: &Value, field: &str) -> Vec<String> {
 /// This is the door-level counterpart to `expand_rules_at`; both are pure so the
 /// `contracts/door_rules.json` vectors can drive them without a database.
 pub fn open_access_hold_until_at(
-    rules: &[DoorAccessRule],
+    rules: &[AccessRule],
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
     now: DateTime<Utc>,
@@ -548,7 +548,7 @@ pub fn open_access_hold_until_at(
 /// cipher: it routes opaque tokens, which is exactly what the golden vectors in
 /// `contracts/door_rules.json` pin.
 pub fn expand_rules_at(
-    rules: &[DoorAccessRule],
+    rules: &[AccessRule],
     cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
