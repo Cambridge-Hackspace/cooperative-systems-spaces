@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -1098,13 +1098,51 @@ stage_cookie() {
 }
 
 # ===========================================================================
+# doors -- door access policy (#101, folding #140)
+# ===========================================================================
+# The first behavioural oracle door policy has ever had. Until this stage, the
+# door module was switched OFF in stack-config.toml, so the only three handlers
+# that reach the access engine answered 403 and `DoorService::evaluate` /
+# `access_engine::may` were unreached at every tier -- while door CRUD and rule
+# authoring, which are not gated, worked and looked healthy.
+#
+# It drives the real handler, database and rule loader: a rule-less door refuses
+# (doors are Restricted), an allow rule grants, a deny rule beats that allow,
+# removing the deny restores it, a role rule gates by tier in both directions, a
+# disabled door refuses regardless of its rules, the check-in throttle refuses a
+# flood, and every decision lands in the access-event log with its reason.
+#
+# Deny-beats-allow is the point: `contracts/door_rules.json` asserted it of the
+# pure engine and nothing asserted it end-to-end.
+#
+# It asserts nothing about a strike opening -- these doors have no edge device,
+# so a grant is logged and published to nobody. The decision is the claim.
+stage_doors() {
+  cases_begin doors
+  stack_paths
+
+  if ! server_ready; then
+    record_case "doors/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit doors
+    return 1
+  fi
+  record_case "doors/stack-is-up" ok
+
+  run_node doors.mjs >"${OUT}/logs/doors.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit doors "driver=doors.mjs"
+}
+
+# ===========================================================================
 # toolmodules -- tool module bindings and safety interlocks (#83)
 # ===========================================================================
 # The reader, the power controller and the safety sensor are separate devices
 # bound to a tool in a role, and the interlocks that gate or cut it are data.
-# This stage exercises that authoring surface against a real stack: the module
-# device kinds register, the vocabularies are refused at the API rather than by
-# a column CHECK, an interlock cannot cite a sensor belonging to another tool,
+# This stage exercises that authoring surface against a real stack: the device
+# capability roles register, the vocabularies are refused at the API rather than
+# by a column CHECK, an interlock cannot cite a sensor belonging to another tool,
 # and the snapshot the edge coordinates from reflects exactly what was authored
 # (a disabled rule is not shipped).
 #
