@@ -74,9 +74,9 @@ main(async () => {
   const deviceId = reg.json?.data?.device_id ?? reg.json?.device_id
   ok('bypass/device-registered', !!deviceId, `register -> ${reg.status} ${reg.text.slice(0, 160)}`)
 
-  const binding = await POST('/api/admin/tool-modules', {
+  const binding = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: deviceId, role: 'power', name: `silent plug ${tag}` },
+    body: { resource_id: toolId, device_id: deviceId, role: 'power', name: `silent plug ${tag}` },
   })
   assertEq('bypass/module-bound', 201, binding.status)
   const moduleId = binding.json?.data?.id

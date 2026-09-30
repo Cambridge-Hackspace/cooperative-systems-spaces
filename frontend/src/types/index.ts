@@ -720,10 +720,11 @@ export interface UpdateRoleRequest {
 
 // ── Tool module bindings + safety interlocks (#83) ───────────────────────────
 
-/** A device filling one role in a tool's access chain. */
-export interface ToolModule {
+/** A device bound to a resource in one role (#101; was `ToolModule`). */
+export interface DeviceBinding {
   id: string
-  tool_id: string
+  /** #101: the resource (a tool, and from slice 4b a door) this binds to. */
+  resource_id: string
   device_id: string
   /** `reader` | `power` | `sensor` */
   role: string
@@ -735,8 +736,8 @@ export interface ToolModule {
   updated_at: string
 }
 
-export interface CreateToolModuleRequest {
-  tool_id: string
+export interface CreateDeviceBindingRequest {
+  resource_id: string
   device_id: string
   role: string
   name: string

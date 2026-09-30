@@ -66,7 +66,9 @@ pub fn admin_routes() -> Router<AppState> {
         .nest("/membership", crate::api::membership::admin_routes())
         .nest("/tool-billing", crate::api::tool_billing::admin_routes())
         .nest(
-            "/tool-modules",
+            // #101: the binding generalized from "tool module" to a device bound to
+            // a resource. Interlocks below stay tool-scoped and keep their path.
+            "/device-bindings",
             crate::api::tool_modules::admin_module_routes(),
         )
         .nest(

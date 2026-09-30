@@ -132,9 +132,9 @@ async function setup() {
   // default is `fail_off`, and testing against the default is the point: it is
   // what a real power module gets, and it is the policy whose liveness
   // requirement was unsatisfiable until the ingest existed.
-  const binding = await POST('/api/admin/tool-modules', {
+  const binding = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: plug.id, role: 'power', name: `lease plug ${tag}` },
+    body: { resource_id: toolId, device_id: plug.id, role: 'power', name: `lease plug ${tag}` },
   })
   assertEq('lease/module-bound', 201, binding.status)
   assertEq(

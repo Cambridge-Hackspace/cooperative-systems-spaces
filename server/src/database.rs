@@ -6248,7 +6248,7 @@ impl DatabaseManager {
                     power_fails_safe: false,
                 })
                 .modules
-                .push(css_lib::wire::ToolModuleBinding {
+                .push(css_lib::wire::DeviceBinding {
                     id: m.id.to_string(),
                     device_id: m.device_id.to_string(),
                     role: m.role,

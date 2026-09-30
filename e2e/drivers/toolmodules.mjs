@@ -46,28 +46,28 @@ main(async () => {
   // --- vocabulary is refused at the API, not by the column ------------------
   // These need no device: the handler validates the vocabulary, then the tool,
   // then the device, so a synthetic device id never gets that far.
-  const badRole = await POST('/api/admin/tool-modules', {
+  const badRole = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: ABSENT, role: 'nonsense', name: 'x' },
+    body: { resource_id: toolId, device_id: ABSENT, role: 'nonsense', name: 'x' },
   })
   assertEq('toolmodules/bad-role-is-400', 400, badRole.status)
 
-  const badTool = await POST('/api/admin/tool-modules', {
+  const badTool = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: ABSENT, device_id: ABSENT, role: 'power', name: 'x' },
+    body: { resource_id: ABSENT, device_id: ABSENT, role: 'power', name: 'x' },
   })
   assertEq('toolmodules/unknown-tool-is-400', 400, badTool.status)
 
-  const badDevice = await POST('/api/admin/tool-modules', {
+  const badDevice = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: ABSENT, role: 'power', name: 'x' },
+    body: { resource_id: toolId, device_id: ABSENT, role: 'power', name: 'x' },
   })
   assertEq('toolmodules/unknown-device-is-400', 400, badDevice.status)
 
-  const badDisconnect = await POST('/api/admin/tool-modules', {
+  const badDisconnect = await POST('/api/admin/device-bindings', {
     token: admin.token,
     body: {
-      tool_id: toolId,
+      resource_id: toolId,
       device_id: ABSENT,
       role: 'power',
       name: 'x',
@@ -167,9 +167,9 @@ main(async () => {
     const deviceId = reg.json?.data?.device_id ?? reg.json?.device_id
     ok('toolmodules/device-id', !!deviceId, `no device id in ${reg.text.slice(0, 200)}`)
 
-    const mod = await POST('/api/admin/tool-modules', {
+    const mod = await POST('/api/admin/device-bindings', {
       token: admin.token,
-      body: { tool_id: toolId, device_id: deviceId, role: 'power', name: 'main plug' },
+      body: { resource_id: toolId, device_id: deviceId, role: 'power', name: 'main plug' },
     })
     assertEq('toolmodules/create-binding', 201, mod.status)
     moduleId = mod.json?.data?.id
@@ -177,7 +177,7 @@ main(async () => {
     // Unstated policy must be the fail-safe one, not "hold whatever it had".
     assertEq('toolmodules/binding-defaults-fail-off', 'fail_off', mod.json?.data?.on_disconnect)
 
-    const list = await GET('/api/admin/tool-modules', T)
+    const list = await GET('/api/admin/device-bindings', T)
     assertEq('toolmodules/list-bindings', 200, list.status)
     ok('toolmodules/list-contains-binding',
       (list.json?.data ?? []).some((m) => m.id === moduleId), 'created binding missing from list')
@@ -256,9 +256,9 @@ main(async () => {
       const id = r.json?.data?.device_id ?? r.json?.device_id
       const token = r.json?.data?.auth_token ?? r.json?.auth_token
       if (boundToolId) {
-        await POST('/api/admin/tool-modules', {
+        await POST('/api/admin/device-bindings', {
           token: admin.token,
-          body: { tool_id: boundToolId, device_id: id, role: 'reader', name: `${name} reader` },
+          body: { resource_id: boundToolId, device_id: id, role: 'reader', name: `${name} reader` },
         })
       }
       const sync = await GET('/api/toolguard/sync', { token })
@@ -354,10 +354,10 @@ main(async () => {
       },
     })
     const capableDeviceId = capableReg.json?.data?.device_id ?? capableReg.json?.device_id
-    const capableBinding = await POST('/api/admin/tool-modules', {
+    const capableBinding = await POST('/api/admin/device-bindings', {
       token: admin.token,
       body: {
-        tool_id: wiredToolId,
+        resource_id: wiredToolId,
         device_id: capableDeviceId,
         role: 'power',
         name: 'integrated plug',
@@ -390,7 +390,7 @@ main(async () => {
     assertEq('toolmodules/firmware-tier-is-per-condition', 400, wrongCondition.status)
 
     // --- the fail-safe gap is reported, not assumed away --------------------
-    const snap2 = await GET('/api/admin/tool-modules/state', T)
+    const snap2 = await GET('/api/admin/device-bindings/state', T)
     const wiredEntry = (snap2.json?.data?.tools ?? []).find((t) => t.tool_id === wiredToolId)
     assertEq('toolmodules/capable-tool-fails-safe', true, wiredEntry?.power_fails_safe)
     // The first tool's plug declared no capabilities at all, so it is not
@@ -419,16 +419,16 @@ main(async () => {
       },
     })
     const readerOnlyId = readerOnlyReg.json?.data?.device_id ?? readerOnlyReg.json?.device_id
-    const wrongRoleBind = await POST('/api/admin/tool-modules', {
+    const wrongRoleBind = await POST('/api/admin/device-bindings', {
       token: admin.token,
-      body: { tool_id: wiredToolId, device_id: readerOnlyId, role: 'power', name: 'misbind' },
+      body: { resource_id: wiredToolId, device_id: readerOnlyId, role: 'power', name: 'misbind' },
     })
     assertEq('toolmodules/bind-in-undeclared-role-is-refused', 400, wrongRoleBind.status)
     // And the same device CAN be bound in the role it does declare, so the refusal
     // above is about the capability, not a blanket rejection of the device.
-    const rightRoleBind = await POST('/api/admin/tool-modules', {
+    const rightRoleBind = await POST('/api/admin/device-bindings', {
       token: admin.token,
-      body: { tool_id: wiredToolId, device_id: readerOnlyId, role: 'reader', name: 'reader ok' },
+      body: { resource_id: wiredToolId, device_id: readerOnlyId, role: 'reader', name: 'reader ok' },
     })
     assertEq('toolmodules/bind-in-declared-role-is-accepted', 201, rightRoleBind.status)
 
@@ -452,7 +452,7 @@ main(async () => {
   }
 
   // --- the snapshot the edge coordinates from -------------------------------
-  const snap = await GET('/api/admin/tool-modules/state', T)
+  const snap = await GET('/api/admin/device-bindings/state', T)
   assertEq('toolmodules/state', 200, snap.status)
   const entry = (snap.json?.data?.tools ?? []).find((t) => t.tool_id === toolId)
   ok('toolmodules/state-has-tool', !!entry,
@@ -478,9 +478,9 @@ main(async () => {
   assertEq('toolmodules/second-delete-is-404', 404, delAgain.status)
 
   if (moduleId) {
-    const delMod = await DELETE(`/api/admin/tool-modules/${moduleId}`, T)
+    const delMod = await DELETE(`/api/admin/device-bindings/${moduleId}`, T)
     assertEq('toolmodules/delete-binding', 200, delMod.status)
-    const delModAgain = await DELETE(`/api/admin/tool-modules/${moduleId}`, T)
+    const delModAgain = await DELETE(`/api/admin/device-bindings/${moduleId}`, T)
     assertEq('toolmodules/second-binding-delete-is-404', 404, delModAgain.status)
   }
 

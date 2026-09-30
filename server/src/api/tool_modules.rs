@@ -59,7 +59,9 @@ pub fn admin_interlock_routes() -> Router<AppState> {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateModuleRequest {
-    pub tool_id: Uuid,
+    /// #101: the resource to bind to. Only tools bind today (doors' coordinator
+    /// folds in with slice 4b), so this must resolve to a tool for now.
+    pub resource_id: Uuid,
     pub device_id: Uuid,
     pub role: String,
     pub name: String,
@@ -124,8 +126,10 @@ async fn create_module(
 
     // Resolve both FKs first so a missing tool or device is a 400 naming which
     // one, rather than a raw foreign-key 500 from the insert.
-    if state.db.get_tool_by_id(req.tool_id)?.is_none() {
-        return Err(ApiError::BadRequest("tool_id does not exist".to_string()));
+    if state.db.get_tool_by_id(req.resource_id)?.is_none() {
+        return Err(ApiError::BadRequest(
+            "resource_id does not exist".to_string(),
+        ));
     }
     // #101: the device must declare the role it is being bound in. Binding a
     // `power` role onto a device that only reads cards would produce a tool the
@@ -148,7 +152,7 @@ async fn create_module(
     }
 
     let created = state.db.create_tool_module(&NewDeviceBinding {
-        resource_id: req.tool_id,
+        resource_id: req.resource_id,
         device_id: req.device_id,
         role,
         name: req.name.trim().to_string(),
@@ -162,7 +166,7 @@ async fn create_module(
         Some(admin.0.id),
         serde_json::json!({
             "module_id": created.id,
-            "tool_id": created.resource_id,
+            "resource_id": created.resource_id,
             "device_id": created.device_id,
             "role": created.role,
             "name": created.name,
