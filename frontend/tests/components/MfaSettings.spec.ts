@@ -58,12 +58,22 @@ function status(over: Partial<MfaStatus> = {}): MfaStatus {
   return {
     enabled: true,
     totp_enrolled: false,
+    totp_authenticators: [],
     webauthn_count: 0,
     recovery_codes_remaining: 0,
     must_enroll: false,
     ...over,
   }
 }
+
+/** One enrolled authenticator app (#118). */
+const APP = {
+  id: 't1',
+  label: 'Phone',
+  created_at: '2025-11-02T09:30:00Z',
+  confirmed_at: '2025-11-02T09:31:00Z',
+}
+const ENROLLED = { totp_enrolled: true, totp_authenticators: [APP] }
 
 const CRED: MfaWebauthnCredential = {
   id: 'c1',
@@ -208,7 +218,12 @@ describe('the fields a person types into', () => {
 })
 
 describe('setting up an authenticator', () => {
-  const SETUP = { secret_base32: 'JBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/css:me' }
+  const SETUP = {
+    id: 'pending-0',
+    label: 'Authenticator app',
+    secret_base32: 'JBSWY3DPEHPK3PXP',
+    otpauth_uri: 'otpauth://totp/css:me',
+  }
 
   it('shows the secret and a QR rendered from the otpauth URI', async () => {
     mocks.totpSetup.mockResolvedValue({ success: true, data: SETUP })
@@ -266,7 +281,7 @@ describe('setting up an authenticator', () => {
 
     // Trimmed on the way out, so a pasted code with surrounding whitespace is
     // not rejected by the server for a reason the user cannot see.
-    expect(mocks.totpConfirm).toHaveBeenCalledWith('123456')
+    expect(mocks.totpConfirm).toHaveBeenCalledWith('123456', 'pending-0')
     expect(w.text()).toContain('aaaa-1111')
     expect(w.text()).toContain('They will not be shown again')
     expect(flashText(w)).toContain('TOTP enabled')
@@ -300,19 +315,57 @@ describe('setting up an authenticator', () => {
     expect(w.find('img').exists()).toBe(false)
   })
 
-  it('offers to disable, not to set up, once TOTP is enrolled', async () => {
-    const w = await settings({ totp_enrolled: true })
-    expect(w.find('.badge-success').text()).toBe('Enrolled')
-    expect(w.findAll('button').map((b) => b.text().trim())).not.toContain('Set up authenticator')
+  it('lists each enrolled authenticator by label, and still offers to add another (#118)', async () => {
+    const w = await settings({
+      ...ENROLLED,
+      totp_authenticators: [APP, { ...APP, id: 't2', label: 'Desktop' }],
+    })
+    const rows = w.findAll('[data-totp-id]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Phone')
+    expect(rows[0].find('.badge-success').text()).toBe('Enrolled')
+    expect(rows[1].text()).toContain('Desktop')
+    // A second (or third) authenticator is a normal thing to want.
+    expect(w.findAll('button').map((b) => b.text().trim())).toContain('Set up authenticator')
   })
 
-  it('asks before disabling, and does nothing if the answer is no', async () => {
+  it('sends the label with the setup, and the setup id with the confirmation', async () => {
+    mocks.totpSetup.mockResolvedValue({ success: true, data: { ...SETUP, id: 'pending-1' } })
+    mocks.totpConfirm.mockResolvedValue({ success: true, data: { recovery_codes: [] } })
+    const w = await settings(ENROLLED)
+    await w.find('#mfa-totp-label').setValue(' Desktop ')
+    await buttonNamed(w, 'Set up authenticator').trigger('click')
+    await flushPromises()
+    expect(mocks.totpSetup).toHaveBeenCalledWith('Desktop')
+
+    await w.find('input[inputmode="numeric"]').setValue('123456')
+    await buttonNamed(w, 'Confirm').trigger('click')
+    await flushPromises()
+    expect(mocks.totpConfirm).toHaveBeenCalledWith('123456', 'pending-1')
+    // A second authenticator mints no recovery codes, so none are shown -- the
+    // sheet from the first enrollment still stands and must not look retired.
+    expect(w.text()).not.toContain('They will not be shown again')
+  })
+
+  it('asks before removing an authenticator, and does nothing if the answer is no', async () => {
     confirmResult = false
-    const w = await settings({ totp_enrolled: true })
-    await buttonNamed(w, 'Disable').trigger('click')
+    const w = await settings(ENROLLED)
+    await buttonNamed(w, 'Remove').trigger('click')
     await flushPromises()
 
     expect(mocks.totpDisable).not.toHaveBeenCalled()
+  })
+
+  it('removes the authenticator whose row was clicked', async () => {
+    mocks.totpDisable.mockResolvedValue({ success: true })
+    const w = await settings({
+      ...ENROLLED,
+      totp_authenticators: [APP, { ...APP, id: 't2', label: 'Desktop' }],
+    })
+    await w.find('[data-totp-id="t2"] button').trigger('click')
+    await flushPromises()
+
+    expect(mocks.totpDisable).toHaveBeenCalledWith('t2')
   })
 })
 
@@ -342,9 +395,9 @@ describe('security keys', () => {
   it('requires a label before a key can be added', async () => {
     const w = await settings()
     expect(buttonNamed(w, 'Add security key').attributes('disabled')).toBeDefined()
-    await w.find('input[type="text"]').setValue('   ')
+    await w.find('#mfa-key-label').setValue('   ')
     expect(buttonNamed(w, 'Add security key').attributes('disabled')).toBeDefined()
-    await w.find('input[type="text"]').setValue('Yubikey 5C')
+    await w.find('#mfa-key-label').setValue('Yubikey 5C')
     expect(buttonNamed(w, 'Add security key').attributes('disabled')).toBeUndefined()
   })
 
@@ -357,7 +410,7 @@ describe('security keys', () => {
     mocks.webauthnRegisterFinish.mockResolvedValue({ success: true })
 
     const w = await settings()
-    await w.find('input[type="text"]').setValue('  Yubikey 5C  ')
+    await w.find('#mfa-key-label').setValue('  Yubikey 5C  ')
     await buttonNamed(w, 'Add security key').trigger('click')
     await flushPromises()
 
@@ -365,7 +418,7 @@ describe('security keys', () => {
     expect(mocks.webauthnCreate).toHaveBeenCalledWith({ challenge: 'abc' })
     expect(mocks.webauthnRegisterFinish).toHaveBeenCalledWith('tok-1', { id: 'new-cred' })
     expect(flashText(w)).toContain('Security key added')
-    expect((w.find('input[type="text"]').element as HTMLInputElement).value).toBe('')
+    expect((w.find('#mfa-key-label').element as HTMLInputElement).value).toBe('')
   })
 
   it('reports a ceremony the authenticator refused, and frees the page again', async () => {
@@ -376,7 +429,7 @@ describe('security keys', () => {
     mocks.webauthnCreate.mockRejectedValue(new Error('The operation was not allowed'))
 
     const w = await settings()
-    await w.find('input[type="text"]').setValue('Yubikey 5C')
+    await w.find('#mfa-key-label').setValue('Yubikey 5C')
     await buttonNamed(w, 'Add security key').trigger('click')
     await flushPromises()
 
@@ -436,10 +489,10 @@ describe('recovery codes', () => {
 describe('the flash message', () => {
   it('clears itself after five seconds', async () => {
     mocks.totpDisable.mockResolvedValue({ success: true })
-    const w = await settings({ totp_enrolled: true })
-    await buttonNamed(w, 'Disable').trigger('click')
+    const w = await settings(ENROLLED)
+    await buttonNamed(w, 'Remove').trigger('click')
     await flushPromises()
-    expect(flashText(w)).toContain('TOTP disabled')
+    expect(flashText(w)).toContain('Authenticator removed')
 
     vi.advanceTimersByTime(5000)
     await nextTick()
@@ -448,8 +501,8 @@ describe('the flash message', () => {
 
   it('can be dismissed by hand', async () => {
     mocks.totpDisable.mockResolvedValue({ success: true })
-    const w = await settings({ totp_enrolled: true })
-    await buttonNamed(w, 'Disable').trigger('click')
+    const w = await settings(ENROLLED)
+    await buttonNamed(w, 'Remove').trigger('click')
     await flushPromises()
 
     await buttonNamed(w, '✕').trigger('click')

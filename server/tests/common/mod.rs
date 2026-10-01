@@ -154,6 +154,8 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::list_user_roles
     R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::assign_user_role
     R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles/00000000-0000-4000-8000-000000000001", Guard::Admin), // admin::unassign_user_role
+    R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/merge", Guard::Admin), // admin::merge_users
+    R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/merge/preview", Guard::Admin), // admin::merge_preview
     R("GET", "/api/admin/webhooks", Guard::Admin), // webhooks::list_webhooks
     R("POST", "/api/admin/webhooks", Guard::Admin), // webhooks::create_webhook
     R("DELETE", "/api/admin/webhooks/00000000-0000-4000-8000-000000000001", Guard::Admin), // webhooks::delete_webhook
@@ -173,7 +175,7 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/auth/me", Guard::Auth), // auth::me
     R("POST", "/api/auth/mfa/recovery-codes/regenerate", Guard::Auth), // mfa::recovery_regenerate
     R("GET", "/api/auth/mfa/status", Guard::Auth), // mfa::status
-    R("DELETE", "/api/auth/mfa/totp", Guard::Auth), // mfa::totp_disable
+    R("DELETE", "/api/auth/mfa/totp/00000000-0000-4000-8000-000000000001", Guard::Auth), // mfa::totp_disable
     R("POST", "/api/auth/mfa/totp/confirm", Guard::Auth), // mfa::totp_confirm
     R("POST", "/api/auth/mfa/totp/setup", Guard::Auth), // mfa::totp_setup
     R("POST", "/api/auth/mfa/verify", Guard::Public), // mfa::verify_login

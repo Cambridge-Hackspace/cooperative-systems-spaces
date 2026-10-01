@@ -42,20 +42,52 @@
             Use Aegis, 1Password, Google Authenticator, etc.
           </p>
 
-          <div v-if="status.totp_enrolled && !totpSetup" class="flex items-center gap-3">
-            <span class="badge badge-success">Enrolled</span>
-            <button class="btn btn-error btn-sm btn-outline" @click="disableTotp">Disable</button>
-          </div>
+          <table v-if="status.totp_authenticators.length" class="table table-sm mt-2">
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Added</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="a in status.totp_authenticators" :key="a.id" :data-totp-id="a.id">
+                <td class="font-medium">
+                  {{ a.label }}
+                  <span class="badge badge-success badge-sm ml-2">Enrolled</span>
+                </td>
+                <td class="text-xs">{{ fmt(a.created_at) }}</td>
+                <td class="text-right">
+                  <button class="btn btn-ghost btn-xs text-error" @click="disableTotp(a.id)">
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
 
-          <div v-else>
-            <button
-              v-if="!totpSetup"
-              class="btn btn-primary btn-sm w-fit"
-              :disabled="!status.enabled || busy"
-              @click="beginTotp"
-            >
-              Set up authenticator
-            </button>
+          <div>
+            <div v-if="!totpSetup" class="flex items-end gap-2 mt-3">
+              <div class="form-control flex-1">
+                <label class="label py-1" for="mfa-totp-label"
+                  ><span class="label-text">Label for this authenticator</span></label
+                >
+                <input
+                  id="mfa-totp-label"
+                  v-model="newTotpLabel"
+                  type="text"
+                  class="input input-bordered input-sm"
+                  placeholder="Phone"
+                />
+              </div>
+              <button
+                class="btn btn-primary btn-sm w-fit"
+                :disabled="!status.enabled || busy"
+                @click="beginTotp"
+              >
+                Set up authenticator
+              </button>
+            </div>
 
             <div v-else class="mt-2 space-y-3">
               <div class="flex flex-col items-center gap-2">
@@ -208,6 +240,7 @@ const flashOk = ref(true)
 
 const totpSetup = ref<MfaTotpSetup | null>(null)
 const totpConfirmCode = ref('')
+const newTotpLabel = ref('')
 const qrDataUrl = ref<string>('')
 
 const newKeyLabel = ref('')
@@ -254,7 +287,7 @@ watch(totpSetup, async (v) => {
 async function beginTotp() {
   busy.value = true
   try {
-    const r = await mfaApi.totpSetup()
+    const r = await mfaApi.totpSetup(newTotpLabel.value.trim() || undefined)
     if (r.success && r.data) {
       totpSetup.value = r.data
       totpConfirmCode.value = ''
@@ -269,11 +302,13 @@ async function beginTotp() {
 async function confirmTotp() {
   busy.value = true
   try {
-    const r = await mfaApi.totpConfirm(totpConfirmCode.value.trim())
+    const r = await mfaApi.totpConfirm(totpConfirmCode.value.trim(), totpSetup.value?.id)
     if (r.success && r.data) {
-      freshRecovery.value = r.data.recovery_codes
+      // Empty on a second authenticator: the first enrollment's codes stand.
+      if (r.data.recovery_codes.length) freshRecovery.value = r.data.recovery_codes
       totpSetup.value = null
       totpConfirmCode.value = ''
+      newTotpLabel.value = ''
       notify('TOTP enabled.')
       await loadAll()
     } else notify(r.error || 'Invalid code', false)
@@ -289,11 +324,11 @@ function cancelTotp() {
   totpConfirmCode.value = ''
 }
 
-async function disableTotp() {
-  if (!confirm('Disable authenticator-app login?')) return
-  const r = await mfaApi.totpDisable()
+async function disableTotp(id: string) {
+  if (!confirm('Remove this authenticator?')) return
+  const r = await mfaApi.totpDisable(id)
   if (r.success) {
-    notify('TOTP disabled.')
+    notify('Authenticator removed.')
     await loadAll()
   } else notify(r.error || 'Failed', false)
 }

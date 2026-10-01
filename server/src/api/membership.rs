@@ -102,7 +102,10 @@ async fn get_membership(
         balance: balance.with_scale(2).to_string(),
         currency: cfg.membership.currency.clone(),
         next_due_at: u.membership_next_due_at,
-        has_subscription: u.stripe_subscription_id.is_some(),
+        has_subscription: state
+            .db
+            .user_has_stripe_subscription(u.id)
+            .map_err(ApiError::from)?,
         plan_name: cfg.membership.plan_name.clone(),
     })))
 }

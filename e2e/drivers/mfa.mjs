@@ -555,23 +555,128 @@ main(async () => {
   )
 
   // -----------------------------------------------------------------------
+  // Several authenticators (#118)
+  // -----------------------------------------------------------------------
+  // A second app enrolls alongside the first; either code completes a login;
+  // the first enrollment's recovery codes are NOT retired by the second;
+  // removing one leaves the other working and its own codes refused; and an
+  // authenticator id belonging to someone else is a 404, not a deletion.
+  //
+  // Replay (#120/#12) is per authenticator and keyed on the 30-second step, so
+  // a second login with the same secret inside one step is a replay, and a
+  // code more than one step ahead is outside the server's skew window. The
+  // helper hands out, per secret, the lowest step that is both unused and
+  // inside the window -- waiting for the next boundary in the one case where
+  // nothing qualifies -- so every assertion below fails for its own reason
+  // and never for the clock's.
+  const stepNow = () => Math.floor(Date.now() / 1000 / 30)
+  const lastStep = new Map()
+  async function freshCode(secretB32) {
+    // Unknown history (the first app was used earlier in this run) is treated
+    // as "used in the current step", which the next step always clears.
+    const last = lastStep.get(secretB32) ?? stepNow()
+    let step = Math.max(stepNow(), last + 1)
+    while (step > stepNow() + 1) {
+      await new Promise((r) => setTimeout(r, 1000))
+      step = Math.max(stepNow(), last + 1)
+    }
+    lastStep.set(secretB32, step)
+    return totpCode(secretB32, step * 30)
+  }
+  const codesBefore = (await GET('/api/auth/mfa/status', { token: alice.token })).json?.data
+    ?.recovery_codes_remaining
+  const secondSetup = await POST('/api/auth/mfa/totp/setup', {
+    token: alice.token,
+    body: { label: 'Desktop' },
+  })
+  assertEq('mfa/second-authenticator-setup', 200, secondSetup.status, secondSetup.text.slice(0, 200))
+  const secret2 = secondSetup.json?.data?.secret_base32
+  const second = await POST('/api/auth/mfa/totp/confirm', {
+    token: alice.token,
+    body: { code: totpCode(secret2), id: secondSetup.json?.data?.id },
+  })
+  assertEq('mfa/second-authenticator-confirmed', 200, second.status, second.text.slice(0, 200))
+  assertEq(
+    'mfa/second-authenticator-mints-no-recovery-codes',
+    0,
+    (second.json?.data?.recovery_codes ?? []).length,
+    // The sheet printed for the first enrollment must still be the sheet.
+    'a second authenticator silently retired the existing recovery codes',
+  )
+  const twoApps = await GET('/api/auth/mfa/status', { token: alice.token })
+  const apps = twoApps.json?.data?.totp_authenticators ?? []
+  assertEq('mfa/status-lists-both-authenticators', 2, apps.length, JSON.stringify(apps))
+  ok('mfa/status-carries-the-label', apps.some((a) => a.label === 'Desktop'), JSON.stringify(apps))
+  assertEq(
+    'mfa/second-authenticator-leaves-recovery-count-alone',
+    codesBefore,
+    twoApps.json?.data?.recovery_codes_remaining,
+  )
+  // Both codes log in. Confirmation resets the second app's watermark, so its
+  // first login may use the current step.
+  const viaSecond = await verify({
+    challenge_token: await challengeFor(alice.username, 'second-app run'),
+    method: 'totp',
+    code: await freshCode(secret2),
+  })
+  assertEq('mfa/second-authenticator-completes-a-login', 200, viaSecond.status, viaSecond.text.slice(0, 200))
+  const viaFirst = await verify({
+    challenge_token: await challengeFor(alice.username, 'first-app-still-works run'),
+    method: 'totp',
+    code: await freshCode(secret),
+  })
+  assertEq('mfa/first-authenticator-still-completes-a-login', 200, viaFirst.status, viaFirst.text.slice(0, 200))
+
+  // Another member's authenticator id is not yours to remove.
+  const foreign = await DELETE(`/api/auth/mfa/totp/${bobEnrollment.setup.id}`, { token: alice.token })
+  assertEq('mfa/removing-another-members-authenticator-is-404', 404, foreign.status)
+  const bobStill = await verify({
+    challenge_token: await challengeFor(bob.username, 'bob-after-foreign-delete run'),
+    method: 'totp',
+    code: await freshCode(bobEnrollment.secret),
+  })
+  assertEq('mfa/foreign-delete-attempt-removed-nothing', 200, bobStill.status, bobStill.text.slice(0, 200))
+
+  // Remove the FIRST app: its codes stop working, the second still does.
+  const firstId = apps.find((a) => a.label !== 'Desktop')?.id
+  const removed = await DELETE(`/api/auth/mfa/totp/${firstId}`, { token: alice.token })
+  assertEq('mfa/first-authenticator-removed', 200, removed.status, removed.text.slice(0, 200))
+  const oneApp = await GET('/api/auth/mfa/status', { token: alice.token })
+  assertEq('mfa/status-lists-the-remaining-authenticator', 1, (oneApp.json?.data?.totp_authenticators ?? []).length)
+  assertEq('mfa/still-enrolled-with-one-left', true, oneApp.json?.data?.totp_enrolled)
+  // A code that WOULD have been valid (fresh step, inside the window), so the
+  // refusal is about the removal and not about a replay or the clock.
+  const removedCode = await verify({
+    challenge_token: await challengeFor(alice.username, 'removed-app run'),
+    method: 'totp',
+    code: await freshCode(secret),
+  })
+  assertEq('mfa/removed-authenticator-no-longer-logs-in', 401, removedCode.status)
+  const survivor = await verify({
+    challenge_token: await challengeFor(alice.username, 'surviving-app run'),
+    method: 'totp',
+    code: await freshCode(secret2),
+  })
+  assertEq('mfa/surviving-authenticator-still-logs-in', 200, survivor.status, survivor.text.slice(0, 200))
+
+  // -----------------------------------------------------------------------
   // Turning it off
   // -----------------------------------------------------------------------
   const finalChallenge = await challengeFor(alice.username, 'disable run')
-  // Use a NEXT-step code (now + one 30s period, accepted within the server's
-  // +/-1 skew): #120/#12 records the step of alice's earlier successful login
-  // (`good`), and this run is inside the same window, so re-using that step's
-  // code would now be refused as a replay. A distinct later step both proves
-  // TOTP still logs in and does not depend on wall-clock crossing a boundary.
+  // Alice's only remaining authenticator is the second one (#118 above
+  // removed the first). `freshCode` picks a step above the replay watermark
+  // (#120/#12) and inside the server's +/-1 skew, so this both proves TOTP
+  // still logs in and does not depend on wall-clock crossing a boundary.
   const finalVerify = await verify({
     challenge_token: finalChallenge,
     method: 'totp',
-    code: totpCode(secret, Math.floor(Date.now() / 1000) + 30),
+    code: await freshCode(secret2),
   })
   const liveToken = finalVerify.json?.data?.token
 
-  const disabled = await DELETE('/api/auth/mfa/totp', { token: liveToken })
-  assertEq('mfa/totp-can-be-disabled', 200, disabled.status)
+  const remainingId = oneApp.json?.data?.totp_authenticators?.[0]?.id
+  const disabled = await DELETE(`/api/auth/mfa/totp/${remainingId}`, { token: liveToken })
+  assertEq('mfa/totp-can-be-disabled', 200, disabled.status, disabled.text.slice(0, 200))
 
   const afterDisable = await passwordStep(alice.username)
   ok(

@@ -250,4 +250,80 @@ await main(async () => {
     balance: 0,
     nonNegative: true,
   })
+
+  // ---- I. one member, two Stripe customers (#118) ------------------------------
+  // A member who changed the email they gave Stripe, or who was merged out of a
+  // ToolPass record and a Stripe-only record, is known to Stripe by two
+  // customer ids. Money on EITHER must reach the ledger, and the member is "on
+  // a subscription" while ANY of them carries one. Before #118 the second
+  // checkout overwrote the first customer id and a payment on the old one found
+  // no account -- the webhook answered 200 (handled: false), which stops Stripe
+  // retrying, so the payment was simply never recorded.
+  const member3 = await account('stripe3')
+  const cusA = `cus_${member3.username}_a`
+  const cusB = `cus_${member3.username}_b`
+  for (const [cus, sub] of [[cusA, `sub_${member3.username}_a`], [cusB, `sub_${member3.username}_b`]]) {
+    const done = await webhook('checkout.session.completed', {
+      id: `cs_${cus}`,
+      client_reference_id: member3.user.id,
+      customer: cus,
+      subscription: sub,
+      mode: 'subscription',
+    })
+    assertEq(`stripe/second-customer-links/${cus}`, 200, done.status)
+  }
+  const ledgerBefore = await GET(`/api/admin/membership/users/${member3.user.id}/ledger`, { token: admin.token })
+  const stripeEntries = (r) => (r.json?.data ?? []).filter((e) => e.external_reference).map((e) => e.external_reference)
+  assertEq('stripe/two-customers-no-money-yet', 0, stripeEntries(ledgerBefore).length, JSON.stringify(ledgerBefore.json?.data))
+
+  // Money on the FIRST customer, after the second was linked: this is the
+  // payment that used to vanish.
+  const paidOnA = await webhook('invoice.paid', { id: 'in_a', customer: cusA, amount_paid: DUES_CENTS })
+  assertEq('stripe/payment-on-first-customer-accepted', 200, paidOnA.status)
+  ok('stripe/payment-on-first-customer-handled', paidOnA.json?.data?.handled === true, paidOnA.text.slice(0, 200))
+  const paidOnB = await webhook('invoice.paid', { id: 'in_b', customer: cusB, amount_paid: DUES_CENTS })
+  ok('stripe/payment-on-second-customer-handled', paidOnB.json?.data?.handled === true, paidOnB.text.slice(0, 200))
+  const ledgerAfter = await GET(`/api/admin/membership/users/${member3.user.id}/ledger`, { token: admin.token })
+  const refs = stripeEntries(ledgerAfter)
+  ok(
+    'stripe/ledger-records-both-customers',
+    refs.includes('in_a') && refs.includes('in_b'),
+    `ledger references: ${JSON.stringify(refs)}`
+  )
+  await assertMembership('stripe/two-customers-member-is-paid-up', member3, {
+    role: 'active',
+    enrolled: true,
+    // Two periods paid, one deducted on enrolment: one period in credit.
+    balance: DUES,
+    nonNegative: true,
+  })
+
+  // Only ONE subscription need be live. Cancel A: still subscribed through B.
+  // Cancel B too: no longer subscribed. Asserted from both sides so a
+  // has_subscription that ignored the table (always true, or always the
+  // first row) fails one of the two.
+  const viewBoth = await view(member3.token)
+  ok('stripe/two-customers-has-subscription', viewBoth.has_subscription === true, JSON.stringify(viewBoth))
+  const cancelA = await webhook('customer.subscription.deleted', { id: `sub_${member3.username}_a`, customer: cusA })
+  assertEq('stripe/cancel-first-accepted', 200, cancelA.status)
+  const viewOne = await view(member3.token)
+  ok('stripe/one-live-subscription-still-counts', viewOne.has_subscription === true, JSON.stringify(viewOne))
+  const cancelB = await webhook('customer.subscription.deleted', { id: `sub_${member3.username}_b`, customer: cusB })
+  assertEq('stripe/cancel-second-accepted', 200, cancelB.status)
+  const viewNone = await view(member3.token)
+  ok('stripe/no-live-subscription-after-both-cancel', viewNone.has_subscription === false, JSON.stringify(viewNone))
+
+  // A customer id already linked to someone else is never silently re-homed.
+  const intruder = await account('stripe4')
+  const steal = await webhook('checkout.session.completed', {
+    id: `cs_steal_${intruder.username}`,
+    client_reference_id: intruder.user.id,
+    customer: cusA,
+    subscription: `sub_steal`,
+    mode: 'subscription',
+  })
+  ok('stripe/foreign-customer-is-not-rehomed', steal.status !== 200 || steal.json?.data?.handled !== true, `steal -> ${steal.status} ${steal.text.slice(0, 200)}`)
+  const stillA = await webhook('invoice.paid', { id: 'in_a2', customer: cusA, amount_paid: DUES_CENTS })
+  const ledgerFinal = await GET(`/api/admin/membership/users/${member3.user.id}/ledger`, { token: admin.token })
+  ok('stripe/foreign-customer-money-stays-with-its-owner', stripeEntries(ledgerFinal).includes('in_a2'), `after steal attempt, in_a2 -> handled=${stillA.json?.data?.handled}; refs ${JSON.stringify(stripeEntries(ledgerFinal))}`)
 })

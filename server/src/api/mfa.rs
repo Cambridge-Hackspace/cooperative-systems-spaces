@@ -39,7 +39,7 @@ pub fn mfa_routes() -> Router<AppState> {
         .route("/status", get(status))
         .route("/totp/setup", post(totp_setup))
         .route("/totp/confirm", post(totp_confirm))
-        .route("/totp", delete(totp_disable))
+        .route("/totp/{id}", delete(totp_disable))
         .route("/webauthn", get(webauthn_list))
         .route("/webauthn/{id}", delete(webauthn_remove))
         .route("/webauthn/register/begin", post(webauthn_register_begin))
@@ -54,7 +54,10 @@ pub fn mfa_routes() -> Router<AppState> {
 #[derive(Debug, Serialize)]
 pub struct MfaStatusResponse {
     pub enabled: bool,
+    /// Any confirmed authenticator app. Kept for callers that only ask "is
+    /// TOTP on"; the list below is the per-authenticator view (#118).
     pub totp_enrolled: bool,
+    pub totp_authenticators: Vec<TotpAuthenticatorResponse>,
     pub webauthn_count: usize,
     pub recovery_codes_remaining: i64,
     /// `true` when the configured enforcement requires this user to enroll
@@ -64,13 +67,35 @@ pub struct MfaStatusResponse {
 
 #[derive(Debug, Serialize)]
 pub struct MfaTotpSetupResponse {
+    /// The unconfirmed row this setup created; pass it back to confirm.
+    pub id: Uuid,
+    pub label: String,
     pub secret_base32: String,
     pub otpauth_uri: String,
+}
+
+/// One authenticator app, as listed in the status. Never the secret.
+#[derive(Debug, Serialize)]
+pub struct TotpAuthenticatorResponse {
+    pub id: Uuid,
+    pub label: String,
+    pub created_at: chrono::DateTime<Utc>,
+    pub confirmed_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct MfaTotpSetupRequest {
+    /// What the member calls this authenticator. Defaults server-side.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MfaTotpConfirmRequest {
     pub code: String,
+    /// The setup to confirm (from `MfaTotpSetupResponse.id`). Optional while
+    /// only one setup is in flight -- which is always, since beginning a new
+    /// setup drops the previous unconfirmed one.
+    pub id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,10 +207,22 @@ async fn status(
     user: AuthUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let cfg = state.mfa_service.config().clone();
-    let totp = state.db.get_user_totp(user.0.id)?;
+    let totp = state.db.list_user_totp(user.0.id)?;
     let webauthn = state.db.list_user_webauthn(user.0.id)?;
     let recovery_remaining = state.db.count_unused_recovery_codes(user.0.id)?;
-    let totp_enrolled = totp.as_ref().and_then(|t| t.confirmed_at).is_some();
+    let totp_enrolled = totp.iter().any(|t| t.confirmed_at.is_some());
+    // Confirmed authenticators only: an in-flight setup is not a factor, and
+    // listing it would offer a "remove" for something that cannot log in.
+    let totp_authenticators = totp
+        .iter()
+        .filter(|t| t.confirmed_at.is_some())
+        .map(|t| TotpAuthenticatorResponse {
+            id: t.id,
+            label: t.label.clone(),
+            created_at: t.created_at,
+            confirmed_at: t.confirmed_at,
+        })
+        .collect();
     let webauthn_count = webauthn.len();
     let is_staff = state
         .db
@@ -195,6 +232,7 @@ async fn status(
     Ok(Json(ApiResponse::success(MfaStatusResponse {
         enabled: cfg.enabled,
         totp_enrolled,
+        totp_authenticators,
         webauthn_count,
         recovery_codes_remaining: recovery_remaining,
         must_enroll,
@@ -204,20 +242,35 @@ async fn status(
 async fn totp_setup(
     State(state): State<AppState>,
     user: AuthUser,
+    payload: Option<Json<MfaTotpSetupRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
     require_enabled(&state)?;
     if !state.mfa_service.config().allow_totp {
         return Err(ApiError::Forbidden("TOTP disabled".to_string()));
     }
+    let payload = payload.map(|Json(p)| p).unwrap_or_default();
+    let label = payload
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .unwrap_or("Authenticator app");
+    if label.chars().count() > 120 {
+        return Err(ApiError::BadRequest(
+            "label must be 120 characters or fewer".to_string(),
+        ));
+    }
     let secret = generate_totp_secret_base32();
-    // #120/#9: hold the new secret as pending if a confirmed factor exists, so
-    // an unconfirmed (or hijacked) setup cannot destroy the working one.
-    state.db.begin_totp_setup(user.0.id, &secret)?;
+    // #120/#9 by construction (#118): the setup is its own unconfirmed row, so
+    // it cannot overwrite a confirmed authenticator whatever happens to it.
+    let row = state.db.begin_totp_setup(user.0.id, &secret, label)?;
     let totp = state
         .mfa_service
         .totp(&secret, &user.0.email)
         .map_err(ApiError::InternalServerError)?;
     Ok(Json(ApiResponse::success(MfaTotpSetupResponse {
+        id: row.id,
+        label: row.label,
         secret_base32: secret,
         otpauth_uri: totp.get_url(),
     })))
@@ -229,48 +282,58 @@ async fn totp_confirm(
     Json(req): Json<MfaTotpConfirmRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     require_enabled(&state)?;
-    let stored = state
-        .db
-        .get_user_totp(user.0.id)?
+    // The setup in flight: the one unconfirmed row (or the one the client
+    // names, which must be unconfirmed and the caller's own).
+    let rows = state.db.list_user_totp(user.0.id)?;
+    let stored = rows
+        .iter()
+        .filter(|t| t.confirmed_at.is_none())
+        .find(|t| match req.id {
+            Some(wanted) => wanted == t.id,
+            None => true,
+        })
+        .cloned()
         .ok_or_else(|| ApiError::BadRequest("No TOTP setup in progress".to_string()))?;
-    // #120/#9: confirm against the pending secret when a setup is in progress
-    // over a live factor; otherwise the row's own (unconfirmed) secret. #120/#12:
-    // capture the matched step so the confirmation code cannot be replayed at the
-    // first login.
-    let verify_secret = stored
-        .pending_secret_base32
-        .as_deref()
-        .unwrap_or(&stored.secret_base32);
     if !state
         .mfa_service
-        .verify_totp(verify_secret, &user.0.email, req.code.trim())
+        .verify_totp(&stored.secret_base32, &user.0.email, req.code.trim())
     {
         return Err(ApiError::BadRequest("Invalid code".to_string()));
     }
-    state.db.finalize_totp_confirmation(user.0.id)?;
+    // Whether this is the user's FIRST factor is decided before the confirm
+    // lands, because the answer decides whether recovery codes are minted.
+    let first_factor = user.0.mfa_enrolled_at.is_none();
+    state.db.finalize_totp_confirmation(user.0.id, stored.id)?;
     state.db.recompute_user_mfa_enrolled(user.0.id)?;
 
-    // Generate recovery codes on first enrollment so the user has a fallback.
-    let count = state.mfa_service.config().recovery_code_count;
-    let codes = generate_recovery_codes(count);
-    let hashes: Vec<String> = codes
-        .iter()
-        .map(|c| hash_recovery_code(c))
-        .collect::<Result<_, _>>()
-        .map_err(ApiError::InternalServerError)?;
-    state.db.replace_user_recovery_codes(user.0.id, hashes)?;
+    // Recovery codes are minted on the FIRST enrollment only (#118). A second
+    // authenticator must not silently retire the sheet of codes the member
+    // printed for the first; regenerating is its own, explicit action.
+    let codes = if first_factor {
+        let count = state.mfa_service.config().recovery_code_count;
+        let codes = generate_recovery_codes(count);
+        let hashes: Vec<String> = codes
+            .iter()
+            .map(|c| hash_recovery_code(c))
+            .collect::<Result<_, _>>()
+            .map_err(ApiError::InternalServerError)?;
+        state.db.replace_user_recovery_codes(user.0.id, hashes)?;
+        audit(
+            &state,
+            AuditEventType::MfaRecoveryCodesRegenerated,
+            user.0.id,
+            serde_json::json!({ "count": count }),
+        );
+        codes
+    } else {
+        Vec::new()
+    };
 
     audit(
         &state,
         AuditEventType::MfaTotpEnrolled,
         user.0.id,
-        serde_json::json!({}),
-    );
-    audit(
-        &state,
-        AuditEventType::MfaRecoveryCodesRegenerated,
-        user.0.id,
-        serde_json::json!({ "count": count }),
+        serde_json::json!({ "totp_id": stored.id, "label": stored.label }),
     );
 
     Ok(Json(ApiResponse::success(MfaRecoveryCodesResponse {
@@ -281,14 +344,24 @@ async fn totp_confirm(
 async fn totp_disable(
     State(state): State<AppState>,
     user: AuthUser,
+    Path(totp_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    state.db.delete_user_totp(user.0.id)?;
+    // Scoped to the caller in the query: another user's row id is a 404 here,
+    // never a deletion.
+    let label = state
+        .db
+        .list_user_totp(user.0.id)?
+        .into_iter()
+        .find(|t| t.id == totp_id)
+        .map(|t| t.label)
+        .ok_or_else(|| ApiError::NotFound("No such authenticator".to_string()))?;
+    state.db.delete_user_totp(user.0.id, totp_id)?;
     state.db.recompute_user_mfa_enrolled(user.0.id)?;
     audit(
         &state,
         AuditEventType::MfaTotpDisabled,
         user.0.id,
-        serde_json::json!({}),
+        serde_json::json!({ "totp_id": totp_id, "label": label }),
     );
     Ok(Json(ApiResponse::<()> {
         success: true,
@@ -599,32 +672,51 @@ fn verify_totp_path(
         .map(str::trim)
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ApiError::BadRequest("code is required for TOTP".to_string()))?;
-    let stored = state
+    let confirmed: Vec<_> = state
         .db
-        .get_user_totp(user.id)
+        .list_user_totp(user.id)
         .map_err(ApiError::from)?
+        .into_iter()
         .filter(|t| t.confirmed_at.is_some())
-        .ok_or_else(|| ApiError::Unauthorized("No confirmed TOTP for user".to_string()))?;
-
-    // #120/#12: reject replay. verify_totp_step returns the matched time-step
-    // when a code is valid; a step at or below the last consumed one is the same
-    // code (or an older one still inside the window) being presented again.
-    let step = state
-        .mfa_service
-        .verify_totp_step(&stored.secret_base32, &user.email, code)
-        .ok_or_else(|| ApiError::Unauthorized("Invalid TOTP code".to_string()))?;
-    if let Some(last) = stored.last_used_step {
-        if (step as i64) <= last {
-            return Err(ApiError::Unauthorized(
-                "This TOTP code has already been used".to_string(),
-            ));
-        }
+        .collect();
+    if confirmed.is_empty() {
+        return Err(ApiError::Unauthorized(
+            "No confirmed TOTP for user".to_string(),
+        ));
     }
-    state
-        .db
-        .update_totp_last_used_step(user.id, step as i64)
-        .map_err(ApiError::from)?;
-    Ok(())
+
+    // #118: any of the user's authenticators may answer. #120/#12: reject
+    // replay PER AUTHENTICATOR -- verify_totp_step returns the matched
+    // time-step when a code is valid, and a step at or below that row's last
+    // consumed one is the same code (or an older one still inside the window)
+    // being presented again. Every row is tried before refusing, so a replayed
+    // code on one authenticator cannot be rescued by a different authenticator
+    // that happens to share the step (they have different secrets, so it
+    // would not verify there anyway).
+    let mut replayed = false;
+    for row in &confirmed {
+        let Some(step) = state
+            .mfa_service
+            .verify_totp_step(&row.secret_base32, &user.email, code)
+        else {
+            continue;
+        };
+        if row.last_used_step.is_some_and(|last| (step as i64) <= last) {
+            replayed = true;
+            continue;
+        }
+        state
+            .db
+            .update_totp_last_used_step(row.id, step as i64)
+            .map_err(ApiError::from)?;
+        return Ok(());
+    }
+    if replayed {
+        return Err(ApiError::Unauthorized(
+            "This TOTP code has already been used".to_string(),
+        ));
+    }
+    Err(ApiError::Unauthorized("Invalid TOTP code".to_string()))
 }
 
 async fn verify_webauthn_path(
@@ -705,9 +797,9 @@ pub fn build_login_challenge(
     let mut methods_v: Vec<&'static str> = Vec::new();
     if state
         .db
-        .get_user_totp(user.id)?
-        .and_then(|t| t.confirmed_at)
-        .is_some()
+        .list_user_totp(user.id)?
+        .iter()
+        .any(|t| t.confirmed_at.is_some())
     {
         methods_v.push(methods::TOTP);
     }

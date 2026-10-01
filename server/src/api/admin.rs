@@ -54,6 +54,8 @@ pub fn admin_routes() -> Router<AppState> {
             "/users/{user_id}/roles/{role_id}",
             axum::routing::delete(unassign_user_role),
         )
+        .route("/users/{user_id}/merge/preview", post(merge_preview))
+        .route("/users/{user_id}/merge", post(merge_users))
         .nest("/rbac", crate::api::rbac_admin::admin_routes())
         .route("/pages/wiki/refresh", post(refresh_wiki_pages))
         .route("/pages/site/refresh", post(refresh_site_pages))
@@ -677,5 +679,140 @@ async fn reset_user_mfa(
     Ok(Json(ApiResponse::success_with_message(
         serde_json::json!({ "user_id": user_id }),
         format!("MFA reset for user {}", target.username),
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// User merge (#118)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct MergeUsersRequest {
+    /// The account to fold into `{user_id}` (the survivor).
+    pub absorbed_id: Uuid,
+    /// The warning codes from the preview, every one of them. The commit
+    /// refuses with 409 unless this equals the plan's current warning set.
+    #[serde(default)]
+    pub acknowledged: Vec<String>,
+}
+
+/// Load and vet both parties. The actor must outrank BOTH (strictly, the
+/// #120/#1 rule), may not be either of them, and the two must differ.
+async fn merge_parties(
+    state: &AppState,
+    actor: &AdminUser,
+    survivor_id: Uuid,
+    absorbed_id: Uuid,
+) -> Result<(crate::models::User, crate::models::User), ApiError> {
+    if survivor_id == absorbed_id {
+        return Err(ApiError::BadRequest(
+            "an account cannot be merged into itself".to_string(),
+        ));
+    }
+    if actor.0.id == survivor_id || actor.0.id == absorbed_id {
+        return Err(ApiError::BadRequest(
+            "you cannot merge your own account; ask another administrator".to_string(),
+        ));
+    }
+    let survivor = state
+        .db
+        .find_user_by_id(survivor_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("survivor not found".to_string()))?;
+    let absorbed = state
+        .db
+        .find_user_by_id(absorbed_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("absorbed user not found".to_string()))?;
+    let caller_level = state
+        .db
+        .user_effective_level(actor.0.id)
+        .map_err(ApiError::from)?;
+    for (who, id) in [("survivor", survivor_id), ("absorbed user", absorbed_id)] {
+        let level = state.db.user_effective_level(id).map_err(ApiError::from)?;
+        if level >= caller_level {
+            return Err(ApiError::Forbidden(format!(
+                "the {who} is at or above your own access level"
+            )));
+        }
+    }
+    Ok((survivor, absorbed))
+}
+
+/// `POST /api/admin/users/{user_id}/merge/preview` -- what merging
+/// `absorbed_id` into `{user_id}` would move, and every warning to
+/// acknowledge. Changes nothing.
+async fn merge_preview(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<MergeUsersRequest>,
+) -> Result<Json<ApiResponse<crate::user_merge::MergePlan>>, ApiError> {
+    let (survivor, absorbed) =
+        merge_parties(&state, &admin_user, user_id, payload.absorbed_id).await?;
+    let plan = state
+        .db
+        .preview_user_merge(&survivor, &absorbed)
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::success(plan)))
+}
+
+/// `POST /api/admin/users/{user_id}/merge` -- fold `absorbed_id` into
+/// `{user_id}`. Every warning the preview listed must be acknowledged by
+/// code, and the plan is recomputed inside the transaction: 409 if the set
+/// has changed since the administrator looked.
+async fn merge_users(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<MergeUsersRequest>,
+) -> Result<Json<ApiResponse<crate::user_merge::MergeOutcome>>, ApiError> {
+    let (survivor, absorbed) =
+        merge_parties(&state, &admin_user, user_id, payload.absorbed_id).await?;
+    let acknowledged: std::collections::BTreeSet<String> =
+        payload.acknowledged.into_iter().collect();
+    let outcome = match state
+        .db
+        .merge_users(&survivor, &absorbed, &acknowledged, admin_user.0.id)
+        .map_err(ApiError::from)?
+    {
+        Ok(outcome) => outcome,
+        Err(plan) => {
+            let codes: Vec<String> = plan.warning_codes().into_iter().collect();
+            return Err(ApiError::Conflict(format!(
+                "every warning must be acknowledged before merging; the current set is: {}",
+                codes.join(", ")
+            )));
+        }
+    };
+
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::UserMerged,
+            Some(survivor.id),
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "merge_id": outcome.merge_id,
+                "absorbed_id": absorbed.id,
+                "absorbed_username": absorbed.username,
+                "absorbed_email": absorbed.email,
+                "moved": outcome.moved,
+                "acknowledged": outcome.warnings.iter().map(|w| w.code.clone()).collect::<Vec<_>>(),
+            }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("failed to log user merge: {e}");
+    }
+
+    // Cards, roles and training moved: the edge allow-lists must follow.
+    crate::api::toolguard::broadcast_toolguard_state(&state).await;
+
+    Ok(Json(ApiResponse::success_with_message(
+        outcome,
+        format!("{} merged into {}", absorbed.username, survivor.username),
     )))
 }

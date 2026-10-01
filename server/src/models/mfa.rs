@@ -19,15 +19,16 @@ pub struct UserMfaTotp {
     pub confirmed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// A new secret being set up while a confirmed one is still live (#120/#9).
-    /// `None` when no setup is in progress. Promoted into `secret_base32` on a
-    /// successful confirm, so an abandoned setup never destroys the working
-    /// factor. Last fields for the positional-Queryable reason the User model
-    /// documents.
-    pub pending_secret_base32: Option<String>,
-    /// The last TOTP time-step consumed (#120/#12). A code whose step is `<=`
-    /// this is a replay and is refused. `None` until the first code is spent.
+    /// The last TOTP time-step consumed on THIS authenticator (#120/#12). A
+    /// code whose step is `<=` this is a replay and is refused. `None` until
+    /// the first code is spent. Last fields for the positional-Queryable
+    /// reason the User model documents.
     pub last_used_step: Option<i64>,
+    /// What the member calls this authenticator (#118: several per user). A
+    /// row with `confirmed_at == None` is a setup in progress; the former
+    /// `pending_secret_base32` column is gone because a pending setup is now
+    /// simply its own unconfirmed row.
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -36,6 +37,7 @@ pub struct UserMfaTotp {
 pub struct NewUserMfaTotp {
     pub user_id: Uuid,
     pub secret_base32: String,
+    pub label: String,
 }
 
 // ---------------------------------------------------------------------------

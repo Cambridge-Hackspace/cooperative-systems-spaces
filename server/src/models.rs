@@ -16,6 +16,8 @@ mod tool_modules;
 mod tool_tiers;
 mod tools;
 mod user_emails;
+mod user_merges;
+mod user_stripe_customers;
 // `pub`, not `pub(crate)`: these types appear in the public signatures of
 // handlers and models reachable through AppState, and a public item exposing a
 // crate-private type trips `private_interfaces`, which is a hard error under
@@ -43,6 +45,8 @@ pub use tool_tiers::*;
 pub use tools::*;
 pub use training::*;
 pub use user_emails::*;
+pub use user_merges::*;
+pub use user_stripe_customers::*;
 pub use waivers::*;
 pub use webhooks::*;
 
@@ -133,15 +137,8 @@ pub struct User {
     /// Appended for the positional-`Queryable` reason above: new columns must be
     /// the last fields, in the same order as the migration's `ADD COLUMN`s.
     pub membership_next_due_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Stripe customer id, linking this user to the Billing Portal and mapping
-    /// inbound webhooks back to exactly one account. Not card data.
-    pub stripe_customer_id: Option<String>,
-    /// The user's current Stripe subscription id, when they have a recurring
-    /// membership. `None` for cash-only or one-shot members.
-    pub stripe_subscription_id: Option<String>,
-    /// Last-seen Stripe subscription status, kept for display only. The ledger
-    /// balance -- not this -- is the entitlement gate.
-    pub subscription_status: Option<String>,
+    // The Stripe customer / subscription columns that sat here moved to
+    // `user_stripe_customers` (#118: a user may be several customers).
     /// Session-revocation epoch (#120/M9). Every issued JWT carries this value;
     /// the auth extractor rejects a token whose version does not match, and a
     /// password change (self-service, admin reset, or reset token) bumps it,
@@ -445,6 +442,11 @@ pub enum AuditEventType {
     /// A secondary address was removed from an account (#118). The primary
     /// cannot be removed, only replaced, which is a `user_email_change`.
     UserEmailRemoved,
+    /// One user record was merged into another (#118). Recorded against the
+    /// survivor; the payload names the absorbed account, what moved, and the
+    /// warnings the administrator acknowledged. The full record is the
+    /// `user_merges` row.
+    UserMerged,
     // Membership billing (Stripe + dues ledger)
     //
     // Appended at the tail, like the groups above, so a concurrent branch adding
@@ -621,6 +623,7 @@ impl AuditEventType {
             Self::UserEmailChange => "user_email_change",
             Self::UserEmailAdded => "user_email_added",
             Self::UserEmailRemoved => "user_email_removed",
+            Self::UserMerged => "user_merged",
             Self::MembershipGranted => "membership_granted",
             Self::MembershipRevoked => "membership_revoked",
             Self::MembershipPaymentRecorded => "membership_payment_recorded",
@@ -767,6 +770,7 @@ impl AuditEventType {
             UserEmailChange,
             UserEmailAdded,
             UserEmailRemoved,
+            UserMerged,
             MembershipGranted,
             MembershipRevoked,
             MembershipPaymentRecorded,
@@ -822,9 +826,6 @@ mod user_serialization_tests {
             email_verified_at: None,
             mailing_list_opt_out_at: None,
             membership_next_due_at: None,
-            stripe_customer_id: None,
-            stripe_subscription_id: None,
-            subscription_status: None,
             token_version: 0,
         };
 

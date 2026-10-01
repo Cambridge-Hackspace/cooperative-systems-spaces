@@ -333,11 +333,9 @@ impl MembershipService {
         //    before the dues pass so a caught-up credit prevents a spurious lapse.
         if let Some(stripe) = &self.stripe {
             match self.db.users_with_stripe_customer() {
-                Ok(users) => {
-                    for user in users {
-                        let Some(customer) = user.stripe_customer_id.clone() else {
-                            continue;
-                        };
+                Ok(pairs) => {
+                    for (user, link) in pairs {
+                        let customer = link.customer_id.clone();
                         match stripe.list_paid_invoices(&customer).await {
                             Ok(invoices) => {
                                 for inv in invoices {

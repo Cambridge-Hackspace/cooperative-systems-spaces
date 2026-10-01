@@ -233,7 +233,7 @@ describe('the event-type filter', () => {
   // transactional-email options came with six, so the ratchet there still reads
   // 57. An option added without a server variant would be caught by the other
   // file's first test instead.
-  it('offers twenty-seven of the event types the server can write', async () => {
+  it('offers twenty-eight of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -255,8 +255,10 @@ describe('the event-type filter', () => {
         'bypass event this year" is the question that category exists to answer. ' +
         'To twenty-seven with user_email_added / user_email_removed (#118): an ' +
         'address is where reset links go, so attaching one to an account is an ' +
-        'access-control signal an operator must be able to isolate.'
-    ).toHaveLength(27)
+        'access-control signal an operator must be able to isolate. To ' +
+        'twenty-eight with user_merged (#118): a merge moves every record one ' +
+        'account held onto another, which is the kind of thing an audit is for.'
+    ).toHaveLength(28)
   })
 
   it('titles every option it does offer', async () => {
