@@ -2970,6 +2970,35 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    /// Whether a device is bound to a tool in a SPECIFIC role.
+    ///
+    /// #101 slice 6: metered billing needs more than "this device serves that
+    /// tool" -- a billable report must come from the thing that actually switches
+    /// the tool, so it demands the `power` role. This replaces the per-tool
+    /// `external_api_key` that used to bind a charge to a tool: the binding
+    /// provides the same per-tool scoping, and the device's secret is hashed at
+    /// rest where the key was a plaintext column.
+    pub fn device_is_bound_to_tool_in_role(
+        &self,
+        device_id: uuid::Uuid,
+        tool_id: uuid::Uuid,
+        role: &str,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::device_bindings;
+        use diesel::dsl::exists;
+        use diesel::select;
+
+        let mut conn = self.get_connection()?;
+        select(exists(
+            device_bindings::table
+                .filter(device_bindings::device_id.eq(device_id))
+                .filter(device_bindings::resource_id.eq(tool_id))
+                .filter(device_bindings::role.eq(role.to_string())),
+        ))
+        .get_result::<bool>(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
     /// The `kind` of a resource ("door" or "tool"), or `None` if there is no such
     /// resource. #101: a binding may name any resource, so the endpoint needs to
     /// know one exists without caring which subtype it is.

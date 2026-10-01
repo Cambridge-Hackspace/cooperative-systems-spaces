@@ -2389,7 +2389,6 @@ INVENTORY
   # into a device config; a fresh random id on every bring-up would mean editing
   # that file every morning. See FIRMWARE.md.
   local fw_external_id="dev-tool-01"
-  local fw_tool_key="dev-tool-key"
   local fw_card="DEVCARD01"
   local fw_user="devmember"
   local fw_mail="devmember@example.invalid"
@@ -2398,7 +2397,7 @@ INVENTORY
   fw_tool_id="$(curl -s -X POST "${base}/api/tools" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${token}" \
-    -d "{\"name\":\"Firmware Test Rig\",\"category\":\"other\",\"location\":\"Bench\",\"requires_training\":false,\"external_id\":\"${fw_external_id}\",\"external_api_key\":\"${fw_tool_key}\"}" \
+    -d "{\"name\":\"Firmware Test Rig\",\"category\":\"other\",\"location\":\"Bench\",\"requires_training\":false,\"external_id\":\"${fw_external_id}\"}" \
     | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
   if [[ -n ${fw_tool_id} ]]; then
     record_case "devseed/firmware-tool" ok "${fw_external_id}"
@@ -2478,9 +2477,46 @@ INVENTORY
   # This doubles as a live check that the protocol behaves the way FIRMWARE.md
   # says it does: a denial is a 200 carrying tool_on false, so asserting on the
   # body rather than the status code is the assertion that means anything.
+  # #101 slice 6: a tool operation authenticates as a device BOUND to that tool.
+  # The seed registers its own device for this -- a second invite, so the one
+  # logged for a firmware developer below stays unspent -- and binds it in the
+  # `power` role, which is what a metered tool would additionally require.
+  local fw_seed_code fw_dev_id fw_dev_token
+  fw_seed_code="$(curl -s -X POST "${base}/api/admin/devices/invite" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d '{"expires_in_hours":24}' \
+    | grep -o '"device_code":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
+  curl -s -o "${OUT}/devseed-device.json" \
+    -X POST -H 'Content-Type: application/json' \
+    -d "{\"device_code\":\"${fw_seed_code}\",\"name\":\"devseed-rig-plug\",\"capabilities\":{\"roles\":[\"power\"]},\"mac_address\":\"02:00:00:00:de:01\",\"software_version\":\"0.0.0-devseed\",\"platform\":\"linux\"}" \
+    "${base}/api/devices/register" >/dev/null 2>&1
+  fw_dev_id="$(grep -o '"device_id":"[^"]*"' "${OUT}/devseed-device.json" | head -1 | sed 's/.*:"//; s/"$//')"
+  fw_dev_token="$(grep -o '"auth_token":"[^"]*"' "${OUT}/devseed-device.json" | head -1 | sed 's/.*:"//; s/"$//')"
+  if [[ -z ${fw_dev_token} ]]; then
+    record_case "devseed/firmware-device" fail \
+      "could not register the fixture's device: $(head -c 300 "${OUT}/devseed-device.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+  curl -s -o "${OUT}/devseed-binding.json" \
+    -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"resource_id\":\"${fw_tool_id}\",\"device_id\":\"${fw_dev_id}\",\"role\":\"power\",\"name\":\"devseed rig plug\"}" \
+    "${base}/api/admin/device-bindings" >/dev/null 2>&1
+  if grep -q '"success":true' "${OUT}/devseed-binding.json" 2>/dev/null; then
+    record_case "devseed/firmware-device" ok "${fw_dev_id}"
+  else
+    record_case "devseed/firmware-device" fail \
+      "could not bind the fixture's device to the tool: $(head -c 300 "${OUT}/devseed-binding.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
   curl -s -o "${OUT}/devseed-toolon.json" \
     -X POST -H "Content-Type: application/json" \
-    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\",\"api_key\":\"${fw_tool_key}\"}" \
+    -H "Authorization: Bearer ${fw_dev_token}" \
+    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\"}" \
     "${base}/api/toolguard/tool-on" >/dev/null 2>&1
   if grep -q '"tool_on":true' "${OUT}/devseed-toolon.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-on-works" ok
@@ -2495,7 +2531,8 @@ INVENTORY
   # in use by the seed that was meant to make it usable.
   curl -s -o "${OUT}/devseed-tooloff.json" \
     -X POST -H "Content-Type: application/json" \
-    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\",\"api_key\":\"${fw_tool_key}\"}" \
+    -H "Authorization: Bearer ${fw_dev_token}" \
+    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\"}" \
     "${base}/api/toolguard/tool-off" >/dev/null 2>&1
   if grep -q '"tool_off":true' "${OUT}/devseed-tooloff.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-off-works" ok
@@ -2513,7 +2550,7 @@ INVENTORY
   log ""
   log "  firmware fixture (see FIRMWARE.md):"
   log "    tool_id:           ${fw_external_id}"
-  log "    api_key:           ${fw_tool_key}"
+  log "    device token:      ${fw_dev_token}"
   log "    card:              ${fw_card}"
   log "    member sign-in:    ${fw_user} / ${pass}"
   log "    device invite:     ${fw_invite:-<none: this cluster cannot store one>}"

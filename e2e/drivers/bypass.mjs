@@ -21,7 +21,7 @@
 // and matched as hex, so none reaches the database -- and the guard outlived its
 // reason, skipping this stage entirely on the default cluster. Removed.
 
-import { GET, POST, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { GET, POST, adminAccount, assertEq, ok, record, main, boundDevice } from './lib.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -118,15 +118,24 @@ main(async () => {
       name: `Side Button ${tag}`,
       category: 'other',
       external_id: `bp-power-${tag}`,
-      external_api_key: `bp-key-${tag}`,
     },
   })
   const powerToolId = powerTool.json?.data?.id
   ok('bypass/power-tool-created', !!powerToolId, `POST /api/tools -> ${powerTool.status}`)
 
+  // #101 slice 6: a power report authenticates as a device bound to the tool it
+  // names, not with the tool's own key.
+  const reporter = await boundDevice(admin.token, powerToolId, {
+    role: 'power',
+    name: `side-button-plug-${tag}`,
+    mac: '02:00:00:00:84:03',
+  })
+  ok('bypass/power-tool-device-bound', !!reporter.token && reporter.bindStatus === 201, reporter.text)
+
   const report = (body) =>
     POST('/api/toolguard/power-report', {
-      body: { tool_id: `bp-power-${tag}`, api_key: `bp-key-${tag}`, ...body },
+      token: reporter.token,
+      body: { tool_id: `bp-power-${tag}`, ...body },
     })
 
   // Two reports: the first starts the evidence clock, the second is past the

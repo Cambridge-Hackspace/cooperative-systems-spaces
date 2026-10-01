@@ -16,12 +16,17 @@ pub struct VirtualTool {
     pub name: String,
     /// The external_id sent as `tool_id` in MQTT messages
     pub id: String,
-    /// The tool's own `external_api_key`. A metered tool requires it: the server
-    /// accepts only the per-tool key (not the shared global key) on the money
-    /// path, so a metered tool driven without it is refused. Left unset for
-    /// free/non-metered tools, which authenticate via the edge's device token.
+    /// Whether this tool bills for usage, which is what decides if a scan should
+    /// also report elapsed on-time as usage (`tool-log`).
+    ///
+    /// #101 slice 6: this used to be inferred from the presence of the tool's own
+    /// `external_api_key`, because a metered tool had to authenticate with it. The
+    /// keys are retired -- a metered tool now needs a device bound to it in the
+    /// `power` role, and the simulator talks to the edge over the local broker
+    /// rather than holding a server credential at all -- so the intent is stated
+    /// directly instead of being smuggled in on a secret.
     #[serde(default)]
-    pub api_key: Option<String>,
+    pub metered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,15 +65,13 @@ impl Default for Config {
                 VirtualTool {
                     name: "Laser Cutter".to_string(),
                     id: "laser-01".to_string(),
-                    // A metered tool: give it its own key so the sample config
-                    // can drive the money path. Must match the tool's
-                    // external_api_key on the server.
-                    api_key: Some("laser-01-key".to_string()),
+                    // A metered tool, so a scan also reports usage.
+                    metered: true,
                 },
                 VirtualTool {
                     name: "3D Printer".to_string(),
                     id: "3dprinter-01".to_string(),
-                    api_key: None,
+                    metered: false,
                 },
             ],
         }

@@ -11,7 +11,7 @@
 //
 // What this does NOT prove: nothing here energizes hardware -- that is #44.
 
-import { GET, POST, PATCH, PUT, DELETE, adminAccount, account, assertEq, ok, main, METRICS_BASE } from './lib.mjs'
+import { GET, POST, PATCH, PUT, DELETE, adminAccount, account, assertEq, ok, main, METRICS_BASE, boundDevice } from './lib.mjs'
 
 main(async () => {
   const admin = await adminAccount('circuits_admin')
@@ -139,17 +139,25 @@ main(async () => {
   })
   const rec2Id = rec2.json?.data?.id
   const extId = `pw-${admin.username}`
-  const apiKey = `pw-secret-${admin.username}`
   const powerTool = await POST('/api/tools', {
     token: admin.token,
     body: {
       name: `PowerReportTool ${admin.username}`,
       category: 'safety',
       external_id: extId,
-      external_api_key: apiKey,
     },
   })
   const powerToolId = powerTool.json?.data?.id
+  // #101 slice 6: controller endpoints authenticate as a registered device. A
+  // power report names a tool, so the device must be bound to it; the device-wide
+  // calls further down (power-trip, power-state) accept any valid device token and
+  // reuse this one.
+  const controller = await boundDevice(admin.token, powerToolId, {
+    role: 'power',
+    name: `pw-plug-${admin.username}`,
+    mac: '02:00:00:00:88:01',
+  })
+  ok('report/device-bound', !!controller.token && controller.bindStatus === 201, controller.text)
   ok('report/tool-created', !!powerToolId, `POST /api/tools -> ${powerTool.status}`)
   assertEq(
     'report/assign-power-tool',
@@ -168,13 +176,13 @@ main(async () => {
 
   // A report authenticated by the tool's own key is accepted.
   const rep1 = await POST('/api/toolguard/power-report', {
+    token: controller.token,
     body: {
       tool_id: extId,
       draw_now: '5',
       voltage_now: '119.5',
       max_voltage: '125',
       amperage_limit: '15',
-      api_key: apiKey,
     },
   })
   assertEq('report/accepted', 200, rep1.status)
@@ -201,7 +209,8 @@ main(async () => {
     200,
     (
       await POST('/api/toolguard/power-report', {
-        body: { tool_id: extId, draw_now: '3', api_key: apiKey },
+        token: controller.token,
+        body: { tool_id: extId, draw_now: '3' },
       })
     ).status,
   )
@@ -244,9 +253,11 @@ main(async () => {
       : (a.json?.data?.logs ?? a.json?.data?.items ?? [])
     return new Set(rows.map((e) => e.event_type))
   }
-  const reportDraw = (extId, key, draw, extra = {}) =>
+  // #101 slice 6: the reporting credential is the bound device's token.
+  const reportDraw = (extId, token, draw, extra = {}) =>
     POST('/api/toolguard/power-report', {
-      body: { tool_id: extId, draw_now: String(draw), api_key: key, ...extra },
+      token,
+      body: { tool_id: extId, draw_now: String(draw), ...extra },
     })
   const mkPowerTool = async (tag, circuitLimit) => {
     const c = await POST('/api/admin/power/circuits', {
@@ -263,32 +274,40 @@ main(async () => {
       body: { outlet_id: o.json?.data?.id, label: `${tag}1` },
     })
     const ext = `pw-${tag}-${admin.username}`
-    const key = `secret-${tag}-${admin.username}`
     const t = await POST('/api/tools', {
       token: admin.token,
-      body: { name: `${tag}Tool ${admin.username}`, category: 'safety', external_id: ext, external_api_key: key },
+      body: { name: `${tag}Tool ${admin.username}`, category: 'safety', external_id: ext },
     })
     const tid = t.json?.data?.id
     await PUT(`/api/admin/power/tools/${tid}/receptacle`, {
       token: admin.token,
       body: { receptacle_id: rr.json?.data?.id },
     })
-    return { cid, tid, ext, key }
+    // Each tool gets its own bound device, because a binding is per-tool: one
+    // device reused across both would be refused for the tool it is not bound to,
+    // which is the scoping working rather than a fixture convenience.
+    const dev = await boundDevice(admin.token, tid, {
+      role: 'power',
+      name: `pw-${tag}-plug-${admin.username}`,
+      mac: `02:00:00:00:89:${tag.charCodeAt(0).toString(16).padStart(2, '0')}`,
+    })
+    ok(`report/device-bound-${tag}`, !!dev.token && dev.bindStatus === 201, dev.text)
+    return { cid, tid, ext, token: dev.token }
   }
 
   // Circuit L (limit 10) is the one we overload; circuit M (limit 20) is the
   // blast-radius control that must stay live.
   const L = await mkPowerTool('L', 10)
   const M = await mkPowerTool('M', 20)
-  await reportDraw(M.ext, M.key, 4)
+  await reportDraw(M.ext, M.token, 4)
 
   // Self-test the oracle: an UNDER-limit draw must NOT trip.
-  assertEq('trip/under-limit-accepted', 200, (await reportDraw(L.ext, L.key, 5)).status)
+  assertEq('trip/under-limit-accepted', 200, (await reportDraw(L.ext, L.token, 5)).status)
   assertEq('trip/under-limit-no-lock', false, await circuitLocked(L.cid))
   assertEq('trip/access-before', true, await accessOf(L.tid))
 
   // Overload: a draw over L's limit trips the whole circuit (server_aggregate).
-  assertEq('trip/overage-report-accepted', 200, (await reportDraw(L.ext, L.key, 15)).status)
+  assertEq('trip/overage-report-accepted', 200, (await reportDraw(L.ext, L.token, 15)).status)
   assertEq('trip/circuit-locked', true, await circuitLocked(L.cid))
   // Oracle A: the shared gate now denies the tool.
   assertEq('trip/access-denied-when-locked', false, await accessOf(L.tid))
@@ -320,7 +339,7 @@ main(async () => {
   assertEq(
     'selftrip/report-accepted',
     200,
-    (await reportDraw(L.ext, L.key, 2, { self_tripped: true })).status,
+    (await reportDraw(L.ext, L.token, 2, { self_tripped: true })).status,
   )
   assertEq('selftrip/tool-locked', true, await toolLockedState(L.tid))
   assertEq('selftrip/tool-access-denied', false, await accessOf(L.tid))
@@ -340,9 +359,10 @@ main(async () => {
   // --- #48: edge_fast_trip ingest + power-state snapshot -------------------
   // POST /power-trip is how a disconnected edge that tripped a circuit locally
   // reports it back; GET /power-state is the lockout+topology the edge caches.
-  // Both authenticate like the other controller endpoints (device token, or
-  // the shared global key we use here since the e2e has no device token).
-  const GLOBAL_KEY = 'e2e-global-key' // [toolguard].global_api_key
+  // Both authenticate like the other controller endpoints: a registered device's
+  // Bearer token. They are device-WIDE (they name no tool), so any valid device
+  // token satisfies them -- this reuses the controller bound above rather than
+  // the shared global key #101 slice 6 retired.
   const circuitSource = async (cid) =>
     ((await GET('/api/admin/power/circuits', T)).json?.data ?? []).find((c) => c.id === cid)
       ?.lockout_source
@@ -358,7 +378,7 @@ main(async () => {
   assertEq(
     'fasttrip/missing-circuit-400',
     400,
-    (await POST('/api/toolguard/power-trip', { body: { api_key: GLOBAL_KEY } })).status,
+    (await POST('/api/toolguard/power-trip', { token: controller.token, body: {} })).status,
   )
 
   // The edge_fast_trip itself: it engages a whole-circuit lockout recorded with
@@ -368,7 +388,8 @@ main(async () => {
     'fasttrip/accepted',
     200,
     (await POST('/api/toolguard/power-trip', {
-      body: { api_key: GLOBAL_KEY, circuit_id: L.cid, reason: 'edge summed over limit' },
+      token: controller.token,
+      body: { circuit_id: L.cid, reason: 'edge summed over limit' },
     })).status,
   )
   assertEq('fasttrip/circuit-locked', true, await circuitLocked(L.cid))
@@ -385,7 +406,7 @@ main(async () => {
   // GET /power-state must now report L's tool locked, with the topology the edge
   // needs to aggregate: the circuit (with its amperage limit) and the tool
   // resolved onto that circuit via the receptacle->outlet->circuit walk.
-  const psRes = await GET(`/api/toolguard/power-state?api_key=${GLOBAL_KEY}`)
+  const psRes = await GET('/api/toolguard/power-state', { token: controller.token })
   assertEq('powerstate/ok', 200, psRes.status)
   const ps = psRes.json
   ok(

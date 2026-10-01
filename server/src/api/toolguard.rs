@@ -85,7 +85,6 @@ impl ToolGuardResponse {
 pub struct ToolRequest {
     pub card: String,
     pub tool_id: String,
-    pub api_key: Option<String>,
 }
 
 /// What actually arrives on the wire, before anything is known to be present.
@@ -111,29 +110,21 @@ pub struct ToolRequestWire {
     pub card: Option<String>,
     #[serde(default)]
     pub tool_id: Option<String>,
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 impl ToolRequestWire {
-    /// `(api_key, tool_id)` as authentication needs them, before validation.
+    /// The tool id as authentication needs it, before validation.
     ///
-    /// An absent tool id reads as empty, which resolves to no tool and so
-    /// refuses a tool-specific key -- deny-biased, matching `power_trip`.
-    fn borrowed(&self) -> (Option<&str>, &str) {
-        (
-            self.api_key.as_deref(),
-            self.tool_id.as_deref().unwrap_or(""),
-        )
+    /// An absent tool id reads as empty, which `authorize_toolguard` treats as a
+    /// device-wide operation -- so a body with no tool_id can never authorize a
+    /// per-tool one.
+    fn borrowed(&self) -> &str {
+        self.tool_id.as_deref().unwrap_or("")
     }
 
     fn validated(self) -> Result<ToolRequest, ApiError> {
         match (self.card, self.tool_id) {
-            (Some(card), Some(tool_id)) => Ok(ToolRequest {
-                card,
-                tool_id,
-                api_key: self.api_key,
-            }),
+            (Some(card), Some(tool_id)) => Ok(ToolRequest { card, tool_id }),
             _ => Err(ApiError::BadRequest(
                 "card and tool_id are required".to_string(),
             )),
@@ -144,7 +135,7 @@ impl ToolRequestWire {
 /// A power reading from a tool's controller (#43). The tool is named by its
 /// toolguard/external id; every measurement is optional so an older or partial
 /// firmware still parses. Authenticated like the other controller endpoints: a
-/// device Bearer token, or the tool's `external_api_key` / the global key.
+/// registered device's Bearer token, bound to the tool it names (#101).
 #[derive(Debug, Deserialize)]
 pub struct PowerReportRequest {
     // Optional so an empty/partial body still deserializes: authentication (in
@@ -171,8 +162,6 @@ pub struct PowerReportRequest {
     /// as off, so a plug that cannot answer does not silently disarm it.
     #[serde(default)]
     pub relay_on: Option<bool>,
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 /// Request parameters for tool logging
@@ -182,7 +171,6 @@ pub struct ToolLogRequest {
     pub tool_id: String,
     pub seconds: f32,
     pub temperature: Option<f32>,
-    pub api_key: Option<String>,
 }
 
 /// The wire form of [`ToolLogRequest`]; see [`ToolRequestWire`] for why every
@@ -197,20 +185,13 @@ pub struct ToolLogRequestWire {
     pub seconds: Option<f32>,
     #[serde(default)]
     pub temperature: Option<f32>,
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 impl ToolLogRequestWire {
-    /// `(api_key, tool_id)` as authentication needs them, before validation.
-    ///
-    /// An absent tool id reads as empty, which resolves to no tool and so
-    /// refuses a tool-specific key -- deny-biased, matching `power_trip`.
-    fn borrowed(&self) -> (Option<&str>, &str) {
-        (
-            self.api_key.as_deref(),
-            self.tool_id.as_deref().unwrap_or(""),
-        )
+    /// The tool id as authentication needs it, before validation. See
+    /// [`ToolRequestWire::borrowed`].
+    fn borrowed(&self) -> &str {
+        self.tool_id.as_deref().unwrap_or("")
     }
 
     fn validated(self) -> Result<ToolLogRequest, ApiError> {
@@ -220,7 +201,6 @@ impl ToolLogRequestWire {
                 tool_id,
                 seconds,
                 temperature: self.temperature,
-                api_key: self.api_key,
             }),
             _ => Err(ApiError::BadRequest(
                 "card, tool_id and seconds are required".to_string(),
@@ -397,11 +377,8 @@ async fn tool_on(
     body: Bytes,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
-    let (api_key, tool_id) = parsed
-        .as_ref()
-        .map(ToolRequestWire::borrowed)
-        .unwrap_or((None, ""));
-    authorize_toolguard(&state, &headers, api_key, tool_id).await?;
+    let tool_id = parsed.as_ref().map(ToolRequestWire::borrowed).unwrap_or("");
+    let device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
         .validated()?;
@@ -411,13 +388,11 @@ async fn tool_on(
     // a CI artifact and readable by anyone who can reach the container host.
     tracing::info!("Tool on request: tool_id={}", req.tool_id);
 
-    // #120 (#14): authentication already happened in authorize_toolguard above
-    // (a device token bound to this tool, or a valid per-tool/global API key).
-    // The second validate_api_key gate that used to stand here was the dead
-    // double-auth the review flagged -- it demanded an API key even from a device
-    // that had already authenticated by bound Bearer token, so the device path
-    // could never succeed. Metered tools keep their own stricter key check
-    // (metered_key_ok) below.
+    // #120 (#14): authentication already happened in authorize_toolguard above --
+    // a device token bound to this tool. #101 slice 6 retired the API-key
+    // alternatives, so there is one credential and one place that checks it.
+    // Metered tools face a stricter, narrower gate below (metered_device_ok): the
+    // `power` binding, not merely any binding.
     let tool_lookup = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
 
     // The card's id travels with the user; its *code* does not. The id says
@@ -515,7 +490,7 @@ async fn tool_on(
     // every tool.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
-            if !metered_key_ok(req.api_key.as_deref(), &tool) {
+            if !metered_device_ok(&state, device_id, &tool).await? {
                 log_tool_access_denied(
                     &state,
                     Some(&user),
@@ -589,11 +564,8 @@ async fn tool_off(
     body: Bytes,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
-    let (api_key, tool_id) = parsed
-        .as_ref()
-        .map(ToolRequestWire::borrowed)
-        .unwrap_or((None, ""));
-    authorize_toolguard(&state, &headers, api_key, tool_id).await?;
+    let tool_id = parsed.as_ref().map(ToolRequestWire::borrowed).unwrap_or("");
+    let device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
         .validated()?;
@@ -639,7 +611,7 @@ async fn tool_off(
     // than trusting it.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
-            if metered_key_ok(req.api_key.as_deref(), &tool) {
+            if metered_device_ok(&state, device_id, &tool).await? {
                 if let Err(e) = billing.settle_open_session_for_tool(&tool, "settled") {
                     tracing::error!("tool billing: settle on tool-off failed: {e}");
                 }
@@ -688,11 +660,11 @@ async fn tool_log(
     body: Bytes,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     let parsed: Option<ToolLogRequestWire> = serde_json::from_slice(&body).ok();
-    let (api_key, tool_id) = parsed
+    let tool_id = parsed
         .as_ref()
         .map(ToolLogRequestWire::borrowed)
-        .unwrap_or((None, ""));
-    authorize_toolguard(&state, &headers, api_key, tool_id).await?;
+        .unwrap_or("");
+    let device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
         .validated()?;
@@ -735,7 +707,7 @@ async fn tool_log(
     // seconds are validated + capped inside record_usage / at settle.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
-            if !metered_key_ok(req.api_key.as_deref(), &tool) {
+            if !metered_device_ok(&state, device_id, &tool).await? {
                 log_tool_access_denied(
                     &state,
                     Some(&user),
@@ -837,7 +809,7 @@ async fn power_report(
     // Authenticate before validating the body, so a credential-less request is
     // refused with 401 rather than a 422 about the missing tool_id.
     let toolguard_id = req.tool_id.as_deref().unwrap_or("");
-    authorize_toolguard(&state, &headers, req.api_key.as_deref(), toolguard_id).await?;
+    authorize_toolguard(&state, &headers, toolguard_id).await?;
 
     if toolguard_id.is_empty() {
         return Err(ApiError::BadRequest("tool_id is required".to_string()));
@@ -957,22 +929,21 @@ async fn power_report(
     Ok(Json(ToolGuardResponse::ok_with_message("Power reported")))
 }
 
+/// No fields: the state polls authenticate by device Bearer token alone (#101
+/// slice 6 retired the API-key query parameter). Kept as a type so the handlers'
+/// signatures still document that a query string is accepted and ignored.
 #[derive(Debug, Deserialize)]
-pub struct PowerStateQuery {
-    #[serde(default)]
-    pub api_key: Option<String>,
-}
+pub struct PowerStateQuery {}
 
 /// GET /api/toolguard/power-state - the lockout + topology snapshot the edge
-/// caches (#48). Authenticated like the other controller endpoints (a device
-/// Bearer token, which the edge uses, or the global API key); the poll fallback
-/// for the MQTT `power/state` push.
+/// caches (#48). Authenticated like the other controller endpoints -- a registered
+/// device's Bearer token; the poll fallback for the MQTT `power/state` push.
 async fn power_state(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<PowerStateQuery>,
 ) -> Result<Json<css_lib::wire::PowerStatePayload>, ApiError> {
-    authorize_toolguard(&state, &headers, q.api_key.as_deref(), "").await?;
+    authorize_toolguard(&state, &headers, "").await?;
     let payload = state.db.power_state_snapshot().map_err(ApiError::from)?;
     Ok(Json(payload))
 }
@@ -985,7 +956,7 @@ async fn module_state(
     headers: HeaderMap,
     Query(q): Query<PowerStateQuery>,
 ) -> Result<Json<css_lib::wire::ToolModuleStatePayload>, ApiError> {
-    authorize_toolguard(&state, &headers, q.api_key.as_deref(), "").await?;
+    authorize_toolguard(&state, &headers, "").await?;
     let payload = state.db.module_state_snapshot().map_err(ApiError::from)?;
     Ok(Json(payload))
 }
@@ -998,8 +969,6 @@ pub struct PowerTripRequest {
     pub circuit_id: Option<Uuid>,
     #[serde(default)]
     pub reason: Option<String>,
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 /// POST /api/toolguard/power-trip - the edge_fast_trip ingest (#48). The edge
@@ -1011,7 +980,7 @@ async fn power_trip(
     headers: HeaderMap,
     Json(req): Json<PowerTripRequest>,
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
-    authorize_toolguard(&state, &headers, req.api_key.as_deref(), "").await?;
+    authorize_toolguard(&state, &headers, "").await?;
 
     let Some(circuit_id) = req.circuit_id else {
         return Err(ApiError::BadRequest("circuit_id is required".to_string()));
@@ -1335,120 +1304,97 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
 /// could turn a tool on for any card by visiting a link. `sync` and
 /// `boot_reset` beside them authenticated correctly; `tool_on`, `tool_off` and
 /// `tool_log` did not, and the mechanism meant to protect them —
-/// [`validate_api_key`], plus the `api_key` field on the request types — was
-/// fully written and called from nowhere.
+/// the `api_key` field on the request types — was fully written and called from
+/// nowhere.
 ///
-/// Two accepted credentials, in cost order:
+/// One credential: a registered device's Bearer token, stored hashed since
+/// #120/#14. For a per-tool operation the device must be *bound to that tool*
+/// (#104, now `device_bindings`): a reader wired to one tool cannot energise
+/// another with its own token. Device-wide operations (`sync`, `boot_reset` and
+/// the state polls, called with an empty `toolguard_id`) need only a valid token.
 ///
-/// 1. A registered device's Bearer token (stored hashed since #120/#14). For a
-///    per-tool operation the device must be *bound to that tool* through
-///    `tool_modules` (#104): a reader wired to one tool cannot energise another
-///    with its own token. Device-wide operations (`sync`, `boot_reset`, called
-///    with an empty `toolguard_id`) need only a valid token. The edge already
-///    sends `bearer_auth` on all three per-tool calls.
-/// 2. A per-tool `external_api_key` or the global `toolguard.global_api_key`,
-///    for controllers that authenticate that way instead (constant-time
-///    compared, #14/L1). Checked second because it needs a database round-trip
-///    to resolve the tool first.
+/// #101 slice 6 retired the two alternatives. `toolguard.global_api_key` was a
+/// single shared secret that opened every tool, and `tools.external_api_key` was
+/// a per-tool secret kept in a plaintext column; both were accepted here, so the
+/// weakest credential set the real bar. A device token is hashed at rest and
+/// scoped by an explicit binding an administrator made, which is what the rest of
+/// #101 made uniform.
 ///
-/// This is the single authentication point for these endpoints: the redundant
-/// second `validate_api_key` gate that `tool_on`/`tool_off`/`tool_log` used to
-/// run after calling this — which demanded an API key even from an
-/// already-authenticated bound device, making the device path dead — has been
-/// removed (#14). Metered tools additionally require their own key at report
-/// time via [`metered_key_ok`], a separate billing-integrity check.
+/// Returns the authenticated device id, because the metered-billing gate needs to
+/// know WHICH device asked -- see [`metered_device_ok`], which additionally
+/// requires the `power` binding before a charge may be posted.
 async fn authorize_toolguard(
     state: &AppState,
     headers: &HeaderMap,
-    api_key: Option<&str>,
     toolguard_id: &str,
-) -> Result<(), ApiError> {
-    match extract_device_auth(state, headers).await {
-        Ok((device_id, _)) => {
-            // #120 (#14): a device token authorizes device-wide operations
-            // (sync, boot-reset -- called with an empty toolguard_id)
-            // unconditionally, but a per-tool operation only for a tool this
-            // device is actually bound to (tool_modules, #104). A reader wired to
-            // one tool therefore cannot energise another with its own valid
-            // token. A non-bound device falls through to the API-key path below.
-            if toolguard_id.is_empty() {
-                return Ok(());
-            }
-            if let Some(tool) = find_tool_by_toolguard_id(state, toolguard_id).await? {
-                // `?` converts a DatabaseError through the classified
-                // From<DatabaseError> impl rather than a bare 500 -- a genuine DB
-                // fault here is ours (500), but the classification stays in the
-                // one place that owns it (api/errors.rs), per the blanket-500
-                // ratchet.
-                if state.db.device_is_bound_to_tool(device_id, tool.id)? {
-                    return Ok(());
-                }
-            }
-        }
+) -> Result<uuid::Uuid, ApiError> {
+    let device_id = match extract_device_auth(state, headers).await {
+        Ok((device_id, _)) => device_id,
         // A database fault must stay a database fault. Folding it into "not
         // authenticated" would report an outage as a credential problem and
         // send whoever is holding a dead tool looking in the wrong place.
         Err(e @ ApiError::InternalServerError(_)) => return Err(e),
-        Err(_) => {}
-    }
+        Err(_) => {
+            tracing::warn!(
+                "Rejected unauthenticated ToolGuard request for tool_id={}",
+                toolguard_id
+            );
+            return Err(ApiError::Unauthorized(
+                "ToolGuard operations require a registered device token".to_string(),
+            ));
+        }
+    };
 
-    if let Some(key) = api_key.filter(|k| !k.is_empty()) {
-        let tool = find_tool_by_toolguard_id(state, toolguard_id).await?;
-        if validate_api_key(state, key, tool.as_ref()).await? {
-            return Ok(());
+    // #120 (#14): a device token authorizes device-wide operations (sync,
+    // boot-reset, the state polls -- called with an empty toolguard_id)
+    // unconditionally, but a per-tool operation only for a tool this device is
+    // actually bound to (#104). A reader wired to one tool therefore cannot
+    // energise another with its own valid token.
+    if toolguard_id.is_empty() {
+        return Ok(device_id);
+    }
+    if let Some(tool) = find_tool_by_toolguard_id(state, toolguard_id).await? {
+        // `?` converts a DatabaseError through the classified From<DatabaseError>
+        // impl rather than a bare 500 -- a genuine DB fault here is ours (500),
+        // but the classification stays in the one place that owns it
+        // (api/errors.rs), per the blanket-500 ratchet.
+        if state.db.device_is_bound_to_tool(device_id, tool.id)? {
+            return Ok(device_id);
         }
     }
 
     tracing::warn!(
-        "Rejected unauthenticated ToolGuard request for tool_id={}",
+        "Rejected ToolGuard request from device {} for tool_id={}: not bound to it",
+        device_id,
         toolguard_id
     );
     Err(ApiError::Unauthorized(
-        "ToolGuard operations require a registered device token or a valid API key".to_string(),
+        "This device is not bound to that tool".to_string(),
     ))
 }
 
-/// Metered tools must authenticate with their OWN `external_api_key`, not the
-/// shared global key (and not a bare device token). This binds a billable report
-/// to the specific tool's secret, so one leaked global key cannot post charges
-/// for every tool. A metered tool with no key set can never satisfy this -- by
-/// design, an unbillable/forgeable metered tool is refused rather than trusted.
-fn metered_key_ok(api_key: Option<&str>, tool: &crate::models::Tool) -> bool {
-    match (api_key, tool.external_api_key.as_deref()) {
-        (Some(provided), Some(tool_key)) => {
-            // #120 (#14 / L1): constant-time compare so the check does not leak,
-            // through timing, how many leading bytes of a guessed key are right.
-            !tool_key.is_empty() && css_lib::ct::constant_time_str_eq(provided, tool_key)
-        }
-        _ => false,
-    }
-}
-
-async fn validate_api_key(
+/// A billable report must come from the thing that actually switches the tool: a
+/// device bound to it in the `power` role.
+///
+/// #101 slice 6: this replaces `metered_key_ok`, which demanded the tool's own
+/// `external_api_key` so that one leaked shared key could not post charges for
+/// every tool. The binding gives the same per-tool scoping -- a device bound to
+/// some *other* tool cannot post a charge here -- and it is the stronger of the
+/// two at rest, because a device token is stored hashed (#120/#14) where
+/// `external_api_key` was a plaintext column.
+///
+/// It is also narrower than entry auth on purpose. `authorize_toolguard` accepts
+/// any binding, so a `reader` may start a tool; only the `power` binding may put
+/// money on it.
+async fn metered_device_ok(
     state: &AppState,
-    api_key: &str,
-    tool: Option<&crate::models::Tool>,
+    device_id: uuid::Uuid,
+    tool: &crate::models::Tool,
 ) -> Result<bool, ApiError> {
-    let config = state.config_manager.get_config();
-    if api_key.is_empty() {
-        return Ok(false);
-    }
-    // #120 (#14 / L1): constant-time key comparisons (both the per-tool key and
-    // the shared global key), so a timing side-channel cannot recover either.
-    if let Some(tool) = tool {
-        if let Some(tool_api_key) = &tool.external_api_key {
-            if !tool_api_key.is_empty() && css_lib::ct::constant_time_str_eq(tool_api_key, api_key)
-            {
-                return Ok(true);
-            }
-        }
-    }
-    if let Some(global_key) = &config.toolguard.global_api_key {
-        if !global_key.is_empty() && css_lib::ct::constant_time_str_eq(global_key, api_key) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    state
+        .db
+        .device_is_bound_to_tool_in_role(device_id, tool.id, crate::models::binding_role::POWER)
+        .map_err(ApiError::from)
 }
 
 async fn resolve_card(

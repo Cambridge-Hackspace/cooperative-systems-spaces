@@ -11,8 +11,8 @@
 // It proves:
 //   * a metered activation places a hold (available drops by the max cost);
 //   * stop settles the actual charge and releases the hold -- never negative;
-//   * the tool's own key is required (a wrong key and the shared global key are
-//     both refused);
+//   * the `power` binding is required (an unrecognized credential is refused by
+//     entry auth, and a `reader`-bound device is refused by the metered gate);
 //   * insufficient balance and (separately) non-membership are refused;
 //   * a second stop does not double-charge (idempotent);
 //   * TRAINING is checked before any money moves: an untrained member is refused
@@ -21,22 +21,33 @@
 // WHAT THIS DOES NOT PROVE: postpaid dip-and-block or the per-time charge (both
 // unit-covered), nor the edge's online-sync behaviour (the edge's own tests).
 
-import { main, ok, assertEq, GET, POST, PUT, DELETE, account, adminAccount } from './lib.mjs'
+import { main, ok, assertEq, GET, POST, PUT, DELETE, account, adminAccount, boundDevice } from './lib.mjs'
 import { toolBillingHonored } from '../journeys/toolbilling-invariants.mjs'
 
-// MUST match e2e/stack-config.toml.
-const TOOL_KEY = 'e2e-tool-key'
-const GLOBAL_KEY = 'e2e-global-key' // [toolguard].global_api_key
+// #101 slice 6: the credentials are device tokens, not keys.
+//
+// `power` is the binding a billable report requires. `reader` is the control: it
+// is a VALID credential that entry auth accepts, but it must not be able to post a
+// charge -- the role the shared global key played before it was retired, and the
+// reason the two oracles below still test two different layers.
+//
+// Keyed by external id, because a binding is PER TOOL and this driver creates
+// several. A single shared token only ever matched the last tool created, and the
+// tiers section -- which drives a different one -- was refused with "not bound to
+// that tool". The scoping was right; the fixture was wrong.
+const powerTokens = {}
+const readerTokens = {}
+let macSeq = 0
 
 function q(path, params) {
   return `${path}?${new URLSearchParams(params).toString()}`
 }
-const toolOn = (card, tid, key) =>
-  POST('/api/toolguard/tool-on', { body: { card, tool_id: tid, api_key: key } })
-const toolOff = (card, tid, key) =>
-  POST('/api/toolguard/tool-off', { body: { card, tool_id: tid, api_key: key } })
-const toolLog = (card, tid, key, seconds) =>
-  POST('/api/toolguard/tool-log', { body: { card, tool_id: tid, api_key: key, seconds } })
+const toolOn = (card, tid, token) =>
+  POST('/api/toolguard/tool-on', { token, body: { card, tool_id: tid } })
+const toolOff = (card, tid, token) =>
+  POST('/api/toolguard/tool-off', { token, body: { card, tool_id: tid } })
+const toolLog = (card, tid, token, seconds) =>
+  POST('/api/toolguard/tool-log', { token, body: { card, tool_id: tid, seconds } })
 
 async function createMeteredTool(admin, { externalId, flatFee, maxMin, requiresTraining }) {
   const res = await POST('/api/tools', {
@@ -46,13 +57,32 @@ async function createMeteredTool(admin, { externalId, flatFee, maxMin, requiresT
       category: 'other',
       requires_training: !!requiresTraining,
       external_id: externalId,
-      external_api_key: TOOL_KEY,
       usage_flat_fee: flatFee,
       usage_rate_per_min: null,
       usage_max_session_minutes: maxMin,
     },
   })
   ok('toolbilling/tool-created', res.status === 200 || res.status === 201, res.text.slice(0, 200))
+
+  // Two devices per tool: the `power` one that may bill, and a `reader` one that
+  // may start the tool but must not be able to.
+  macSeq += 1
+  const seq = macSeq.toString(16).padStart(2, '0')
+  const power = await boundDevice(admin.token, res.json?.data?.id, {
+    role: 'power',
+    name: `billing-plug-${externalId}`,
+    mac: `02:00:00:00:8a:${seq}`,
+  })
+  const reader = await boundDevice(admin.token, res.json?.data?.id, {
+    role: 'reader',
+    name: `billing-reader-${externalId}`,
+    mac: `02:00:00:00:8b:${seq}`,
+  })
+  ok('toolbilling/power-device-bound', !!power.token && power.bindStatus === 201, power.text)
+  ok('toolbilling/reader-device-bound', !!reader.token && reader.bindStatus === 201, reader.text)
+  powerTokens[externalId] = power.token
+  readerTokens[externalId] = reader.token
+
   return res.json.data
 }
 async function setCard(member, card) {
@@ -96,29 +126,37 @@ await main(async () => {
     JSON.stringify(await view(member)),
   )
 
-  // The tool's own key is required: a wrong key and the shared global key are
-  // both refused, and neither places a hold -- but by DIFFERENT layers, and the
-  // two oracles below pin each one.
-  //   * An unrecognized key ('not-the-key') is neither this tool's key, nor the
-  //     global key, nor a device token, so entry auth (authorize_toolguard)
-  //     rejects it with 401 BEFORE the metered gate is reached -- a stronger
-  //     refusal than a tool_denied body, so there is no `tool_on` field to read.
-  //   * The global key DOES pass entry auth (it is a valid credential) and is
-  //     then refused by the per-tool metered gate (metered_key_ok) with
-  //     tool_on:false. This is the check that actually pins the per-tool-key
-  //     hardening: a valid-but-not-this-tool's key cannot post a charge.
-  const wrong = await toolOn('E2E-CARD-1', 'e2e-flat-tool', 'not-the-key')
-  ok('toolbilling/wrong-key-denied', wrong.status === 401, `${wrong.status} ${JSON.stringify(wrong.json)}`)
-  const glob = await toolOn('E2E-CARD-1', 'e2e-flat-tool', GLOBAL_KEY)
-  ok('toolbilling/global-key-denied', glob.json?.tool_on === false, JSON.stringify(glob.json))
+  // The `power` binding is required, and two DIFFERENT layers refuse anything
+  // less. Neither places a hold, and the two oracles below pin each layer --
+  // which is the same shape as before #101 slice 6, when the pair was "a wrong
+  // key" and "the shared global key".
+  //   * A credential that is not a credential at all is rejected by entry auth
+  //     (authorize_toolguard) with 401 BEFORE the metered gate is reached -- a
+  //     stronger refusal than a tool_denied body, so there is no `tool_on` field
+  //     to read. Retiring the API keys is what makes a bare string this, rather
+  //     than something the server would compare.
+  //   * A `reader`-bound device DOES pass entry auth -- it is a valid token bound
+  //     to this very tool -- and is then refused by the metered gate
+  //     (metered_device_ok) with tool_on:false. This is the oracle that pins the
+  //     billing hardening: being authorized to START a tool is not being
+  //     authorized to put money on it. It replaces the global-key case exactly,
+  //     and it is a sharper test, because a reader is bound to THIS tool rather
+  //     than being a credential for everything.
+  const wrong = await toolOn('E2E-CARD-1', 'e2e-flat-tool', 'not-a-real-token')
+  ok('toolbilling/unrecognized-credential-denied', wrong.status === 401,
+    `${wrong.status} ${JSON.stringify(wrong.json)}`)
+  const readerOnly = await toolOn('E2E-CARD-1', 'e2e-flat-tool', readerTokens['e2e-flat-tool'])
+  ok('toolbilling/reader-binding-cannot-post-a-charge', readerOnly.json?.tool_on === false,
+    `a device bound as reader passed entry auth and must still be refused by the ` +
+      `metered gate: ${JSON.stringify(readerOnly.json)}`)
   ok(
     'toolbilling/no-hold-after-denied',
     toolBillingHonored({ balance: 10, held: 0, available: 10 }, await view(member)) === null,
     JSON.stringify(await view(member)),
   )
 
-  // Activate with the tool's own key: a hold of the max session cost (1.50).
-  const on = await toolOn('E2E-CARD-1', 'e2e-flat-tool', TOOL_KEY)
+  // Activate with the tool's `power`-bound device: a hold of the max session cost (1.50).
+  const on = await toolOn('E2E-CARD-1', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
   ok('toolbilling/authorized', on.json?.tool_on === true, JSON.stringify(on.json))
   ok(
     'toolbilling/hold-placed',
@@ -127,7 +165,7 @@ await main(async () => {
   )
 
   // Stop: settle -> charge 1.50, release the hold, never negative.
-  const off = await toolOff('E2E-CARD-1', 'e2e-flat-tool', TOOL_KEY)
+  const off = await toolOff('E2E-CARD-1', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
   assertEq('toolbilling/off-accepted', 200, off.status)
   ok(
     'toolbilling/settled-never-negative',
@@ -147,7 +185,7 @@ await main(async () => {
   )
 
   // Idempotency: a second stop finds no open session -> no double charge.
-  const off2 = await toolOff('E2E-CARD-1', 'e2e-flat-tool', TOOL_KEY)
+  const off2 = await toolOff('E2E-CARD-1', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
   assertEq('toolbilling/second-off-accepted', 200, off2.status)
   ok(
     'toolbilling/idempotent-no-double-charge',
@@ -159,14 +197,14 @@ await main(async () => {
   const broke = await account('toolbilling_broke')
   await setCard(broke, 'E2E-CARD-2')
   await fund(admin, broke, '10.00') // -> member, balance 0
-  const brokeOn = await toolOn('E2E-CARD-2', 'e2e-flat-tool', TOOL_KEY)
+  const brokeOn = await toolOn('E2E-CARD-2', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
   ok('toolbilling/insufficient-balance-denied', brokeOn.json?.tool_on === false, JSON.stringify(brokeOn.json))
 
   // Membership required: a non-member with some balance is refused.
   const nonmember = await account('toolbilling_nonmember')
   await setCard(nonmember, 'E2E-CARD-3')
   await fund(admin, nonmember, '5.00') // < dues -> not enrolled, balance 5
-  const nmOn = await toolOn('E2E-CARD-3', 'e2e-flat-tool', TOOL_KEY)
+  const nmOn = await toolOn('E2E-CARD-3', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
   ok('toolbilling/membership-required-denied', nmOn.json?.tool_on === false, JSON.stringify(nmOn.json))
 
   // Training-before-money: a metered tool with a training step; an untrained
@@ -187,7 +225,7 @@ await main(async () => {
   await setCard(trainee, 'E2E-CARD-4')
   await fund(admin, trainee, '20.00') // member, balance 10
   const before = await view(trainee)
-  const tOn = await toolOn('E2E-CARD-4', 'e2e-trained-tool', TOOL_KEY)
+  const tOn = await toolOn('E2E-CARD-4', 'e2e-trained-tool', powerTokens['e2e-trained-tool'])
   ok('toolbilling/training-denied', tOn.json?.tool_on === false, JSON.stringify(tOn.json))
   ok('toolbilling/training-denied-reason', /training/i.test(tOn.json?.message ?? ''), JSON.stringify(tOn.json))
   const after = await view(trainee)
@@ -256,9 +294,9 @@ await main(async () => {
   // tier match the expectation (two oracles: the ledger charge AND the tier the
   // session locked in).
   const runTierCase = async (label, member, card, expectCharge, expectTierId) => {
-    const on = await toolOn(card, ext, TOOL_KEY)
+    const on = await toolOn(card, ext, powerTokens[ext])
     ok(`tiers/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
-    const off = await toolOff(card, ext, TOOL_KEY)
+    const off = await toolOff(card, ext, powerTokens[ext])
     assertEq(`tiers/${label}-off`, 200, off.status)
     const s = await lastSession(member)
     ok(
@@ -332,13 +370,13 @@ await main(async () => {
     const card = `M2-RACE-${r}`
     await setCard(racer, card)
     const [a, b] = await Promise.all([
-      toolOn(card, ext, TOOL_KEY),
-      toolOn(card, ext, TOOL_KEY),
+      toolOn(card, ext, powerTokens[ext]),
+      toolOn(card, ext, powerTokens[ext]),
     ])
     const wins = [a, b].filter((x) => x.json?.tool_on === true).length
     assertEq(`toolbilling/m2-one-activation-wins-r${r}`, 1, wins,
       `concurrent activations returned tool_on=${JSON.stringify([a.json?.tool_on, b.json?.tool_on])}; exactly one must win`)
-    await toolOff(card, ext, TOOL_KEY)
+    await toolOff(card, ext, powerTokens[ext])
   }
 
   // #120/M1: a billable usage report must come from the card that activated the
@@ -359,17 +397,17 @@ await main(async () => {
     const stranger = await account('tb_m1_stranger')
     await setCard(stranger, 'M1-STRANGER')
 
-    const on = await toolOn('M1-OWNER', ext, TOOL_KEY)
+    const on = await toolOn('M1-OWNER', ext, powerTokens[ext])
     ok('toolbilling/m1-owner-activated', on.json?.tool_on === true, JSON.stringify(on.json))
 
-    const strangerLog = await toolLog('M1-STRANGER', ext, TOOL_KEY, 30)
+    const strangerLog = await toolLog('M1-STRANGER', ext, powerTokens[ext], 30)
     assertEq('toolbilling/m1-stranger-report-refused', 'error', strangerLog.json?.status,
       `a stranger's card reported usage onto the owner's session: ${JSON.stringify(strangerLog.json)}`)
 
-    const ownerLog = await toolLog('M1-OWNER', ext, TOOL_KEY, 30)
+    const ownerLog = await toolLog('M1-OWNER', ext, powerTokens[ext], 30)
     assertEq('toolbilling/m1-owner-report-accepted', 'ok', ownerLog.json?.status,
       `the activating member's own report was refused: ${JSON.stringify(ownerLog.json)}`)
 
-    await toolOff('M1-OWNER', ext, TOOL_KEY)
+    await toolOff('M1-OWNER', ext, powerTokens[ext])
   }
 })

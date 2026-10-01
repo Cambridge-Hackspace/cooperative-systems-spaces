@@ -78,16 +78,15 @@ export async function main(body) {
 // interesting assertion in this tier is about a status code. `redirect: manual`
 // so a 302 stays a 302 rather than becoming whatever it points at.
 
-export async function req(method, path, { token, apiKey, body, headers } = {}) {
+export async function req(method, path, { token, body, headers } = {}) {
   const h = { ...(headers ?? {}) }
   if (token) h.Authorization = `Bearer ${token}`
   if (body !== undefined) h['Content-Type'] = 'application/json'
-  // The toolguard endpoints accept either a device Bearer token or an
-  // `api_key` query parameter, so both have to be expressible here -- a helper
-  // that could only send one of them would leave half of that surface
-  // untestable, which is how it came to be unauthenticated in the first place.
+  // #101 slice 6: there is one credential, a Bearer token. The `apiKey` option
+  // that used to set an `api_key` query parameter is gone with the mechanism it
+  // spoke to -- keeping it would let a driver believe it had authenticated when
+  // the server stopped reading that field.
   const url = new URL(path, BASE)
-  if (apiKey !== undefined) url.searchParams.set('api_key', apiKey)
   const res = await fetch(url, {
     method,
     headers: h,
@@ -155,6 +154,50 @@ export function tokenOf(res) {
 }
 
 /** Register-then-login, returning `{ username, email, token, user }`. */
+/**
+ * A registered device bound to `resourceId`, and the token it authenticates with.
+ *
+ * #101 slice 6: tool actuation authenticates as a device BOUND to that tool, so
+ * every driver that drives a toolguard endpoint needs one of these. Shared here
+ * rather than copied into each, because the order matters and the server checks
+ * it: a device may only be bound in a role it declared at registration, so the
+ * capability and the binding role have to agree. Getting that wrong in five
+ * places separately is how they would drift.
+ *
+ * `role` defaults to `power` because that is what a billable or switching
+ * operation needs -- entry auth accepts any binding, but the metered gate
+ * requires `power` specifically.
+ */
+export async function boundDevice(adminToken, resourceId, { role = 'power', name, mac }) {
+  const invite = await POST('/api/admin/devices/invite', {
+    token: adminToken,
+    body: { expires_in_hours: 1 },
+  })
+  const reg = await POST('/api/devices/register', {
+    body: {
+      device_code: invite.json?.data?.device_code,
+      name,
+      capabilities: { roles: [role] },
+      mac_address: mac,
+      software_version: '0.0.0-e2e',
+      platform: 'linux',
+    },
+  })
+  const id = reg.json?.data?.device_id ?? reg.json?.device_id
+  const token = reg.json?.data?.auth_token ?? reg.json?.auth_token
+  const bind = await POST('/api/admin/device-bindings', {
+    token: adminToken,
+    body: { resource_id: resourceId, device_id: id, role, name: name ?? `${role} device` },
+  })
+  return {
+    id,
+    token,
+    registerStatus: reg.status,
+    bindStatus: bind.status,
+    text: `register ${reg.status} ${reg.text.slice(0, 160)}; bind ${bind.status} ${bind.text.slice(0, 160)}`,
+  }
+}
+
 export async function account(kind, { email } = {}) {
   const username = `e2e_${kind}_${RUN_TAG}`
   const addr = email ?? `${username}@e2e.invalid`

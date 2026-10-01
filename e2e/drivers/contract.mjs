@@ -163,20 +163,24 @@ main(async () => {
   }
   assertEq('contract/device/all-deferred-pairs-asserted', 24, pairs)
 
-  // The toolguard `api_key` path is the other half of the credential the
-  // security fix accepts, and it has its own refusal to prove. A wrong key must
-  // be refused rather than ignored -- "ignored" is what the endpoints did
-  // before the fix, and it read identically from the outside until you noticed
-  // the door had opened.
+  // The toolguard `api_key` path was once the other half of the accepted
+  // credential, and "ignored rather than refused" is what these endpoints did
+  // before the security fix -- which read identically from the outside until you
+  // noticed the door had opened.
+  // #101 slice 6 retired the API-key credentials, so the claim here changed from
+  // "a wrong key is refused" to the stronger "a key is not a credential at all":
+  // a request carrying an `api_key` and no Bearer token is refused. That is the
+  // regression to fear -- someone re-reading the field would make this pass
+  // silently while widening what may energise a machine, and a key is neither
+  // hashed at rest nor scoped by a binding.
   for (const [path, extra] of [
     ['/api/toolguard/tool-on', {}],
     ['/api/toolguard/tool-off', {}],
     ['/api/toolguard/tool-log', { seconds: 1 }],
   ]) {
-    assertEq(`contract/toolguard/${path} refuses a wrong api_key`, 401,
+    assertEq(`contract/toolguard/${path} does not honour an api_key`, 401,
       (await POST(path, {
-        apiKey: 'not-a-real-key',
-        body: { card: 'AA11', tool_id: 't1', ...extra },
+        body: { card: 'AA11', tool_id: 't1', api_key: 'not-a-real-key', ...extra },
       })).status)
   }
 

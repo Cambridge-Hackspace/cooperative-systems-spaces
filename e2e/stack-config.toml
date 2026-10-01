@@ -286,9 +286,11 @@ label = "Other"
 [toolguard]
 enabled = true
 profile_field = "card_id"
-# A shared global key exists so the toolbilling stage can prove it is REJECTED
-# for a metered tool (which must use its own per-tool key).
-global_api_key = "e2e-global-key"
+# `global_api_key` is gone (#101 slice 6). It was a single shared secret that
+# opened every tool, and it existed here so the toolbilling stage could prove it
+# was REJECTED for a metered tool. Tool auth is now a registered device's Bearer
+# token bound to the tool, and the claim that survived -- a valid credential that
+# is not this tool's cannot post a charge -- is asserted through bindings instead.
 
 # Card encryption at rest (#108), ON in the suite on purpose.
 #

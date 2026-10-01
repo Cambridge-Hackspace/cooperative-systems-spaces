@@ -469,7 +469,6 @@ fn load(
                     requires_training: Some(true),
                     created_by: mig_id,
                     external_id: t.external_id.clone(),
-                    external_api_key: None,
                     place_id: None,
                     schedule_id: None,
                     usage_flat_fee: None,
