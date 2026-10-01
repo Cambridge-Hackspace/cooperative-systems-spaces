@@ -311,6 +311,11 @@
                         View Profile
                       </router-link>
                     </li>
+                    <li v-if="user.id !== authStore.user?.id">
+                      <a href="#" :data-merge-user="user.id" @click.prevent="openMerge(user)">
+                        Merge into…
+                      </a>
+                    </li>
                   </ul>
                 </div>
               </td>
@@ -319,6 +324,14 @@
         </table>
       </div>
     </div>
+
+    <UserMergeModal
+      v-if="mergeTarget"
+      :absorbed="mergeTarget"
+      :candidates="users"
+      @close="mergeTarget = null"
+      @merged="onMerged"
+    />
 
     <!-- Empty State -->
     <div v-else-if="!isLoading" class="text-center py-12">
@@ -370,7 +383,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { adminApi, rbacApi, userApi } from '@/utils/api'
-import type { User, UserRole, RbacRole, AssignedUserRole } from '@/types'
+import type { User, UserRole, RbacRole, AssignedUserRole, MergeOutcome } from '@/types'
+import UserMergeModal from '@/components/UserMergeModal.vue'
 import { UserRole as UserRoleEnum } from '@/types'
 
 // Props and Emits
@@ -384,6 +398,19 @@ const authStore = useAuthStore()
 
 // Reactive state
 const users = ref<User[]>([])
+/** The account being merged away (#118), while the merge dialog is open. */
+const mergeTarget = ref<User | null>(null)
+
+function openMerge(user: User) {
+  mergeTarget.value = user
+}
+
+async function onMerged(outcome: MergeOutcome) {
+  mergeTarget.value = null
+  await fetchUsers()
+  const survivor = users.value.find((u) => u.id === outcome.survivor_id)
+  if (survivor) emit('userUpdated', survivor)
+}
 const isLoading = ref(false)
 const error = ref<string | null>(null)
 const searchQuery = ref('')

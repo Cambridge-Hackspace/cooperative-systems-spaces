@@ -38,6 +38,14 @@
       <router-link to="/profile/password" class="btn btn-primary btn-sm">Change</router-link>
     </div>
 
+    <!-- Email addresses (#118): own profile, or a manager viewing someone else's -->
+    <EmailAddressesCard
+      v-if="userId && (isOwnProfile || canManageUsers)"
+      :user-id="userId"
+      :self="isOwnProfile"
+      class="mb-6"
+    />
+
     <!-- Transit card link (only when viewing own profile AND a card field is configured) -->
     <div
       v-if="isOwnProfile && cardFieldConfigured"
@@ -80,6 +88,7 @@ import MailingListCard from '@/components/MailingListCard.vue'
 import MembershipCard from '@/components/MembershipCard.vue'
 import ToolBillingCard from '@/components/ToolBillingCard.vue'
 import InstanceQrCard from '@/components/InstanceQrCard.vue'
+import EmailAddressesCard from '@/components/EmailAddressesCard.vue'
 import { apiClient, mfaApi } from '@/utils/api'
 import type { User } from '@/types'
 
@@ -107,6 +116,8 @@ const userId = computed(() => {
 })
 
 const isOwnProfile = computed(() => userId.value === authStore.user?.id)
+/** A users.manage holder may manage another user's addresses (the server applies the level rule). */
+const canManageUsers = computed(() => authStore.hasPermission('users.manage'))
 
 // Methods
 async function fetchUser() {

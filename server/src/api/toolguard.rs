@@ -941,7 +941,7 @@ pub struct PowerStateQuery {}
 async fn power_state(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PowerStateQuery>,
+    Query(_q): Query<PowerStateQuery>,
 ) -> Result<Json<css_lib::wire::PowerStatePayload>, ApiError> {
     authorize_toolguard(&state, &headers, "").await?;
     let payload = state.db.power_state_snapshot().map_err(ApiError::from)?;
@@ -954,7 +954,7 @@ async fn power_state(
 async fn module_state(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PowerStateQuery>,
+    Query(_q): Query<PowerStateQuery>,
 ) -> Result<Json<css_lib::wire::ToolModuleStatePayload>, ApiError> {
     authorize_toolguard(&state, &headers, "").await?;
     let payload = state.db.module_state_snapshot().map_err(ApiError::from)?;

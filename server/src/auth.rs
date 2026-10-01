@@ -565,9 +565,6 @@ mod token_ttl_tests {
             email_verified_at: None,
             mailing_list_opt_out_at: None,
             membership_next_due_at: None,
-            stripe_customer_id: None,
-            stripe_subscription_id: None,
-            subscription_status: None,
             token_version: 0,
         }
     }

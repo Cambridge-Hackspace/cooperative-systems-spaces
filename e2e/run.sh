@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -577,7 +577,7 @@ stage_schema() {
   # is a feature over `tools.external_id`, not a table -- so the stage reported
   # a missing table on every run and the report was the check's, not the
   # schema's.
-  for t in users resources doors access_rules device_bindings door_access_events door_checkins \
+  for t in users user_emails user_stripe_customers user_merges resources doors access_rules device_bindings door_access_events door_checkins \
     schedules tools space_devices space_device_auth space_device_auth_requests \
     profile_config_versions webhooks audit_logs audit_event_types places \
     home_links; do
@@ -842,6 +842,49 @@ stage_mail() {
   emit_junit mail "driver=mail.mjs"
 }
 
+# #118: a user's several addresses. Placed after mail because it reads the
+# confirmation links the smtp sink received -- which address a link went to is
+# the whole point (a secondary's link must reach the secondary, and a reset
+# requested through an unconfirmed secondary must reach nobody).
+stage_emails() {
+  cases_begin emails
+  stack_paths
+
+  if ! server_ready; then
+    record_case "emails/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit emails
+    return 1
+  fi
+  record_case "emails/stack-is-up" ok
+
+  if tcp_open "${SMTP_PORT}"; then
+    record_case "emails/sink-is-up" ok
+  else
+    record_case "emails/sink-is-up" fail "nothing is listening on ${SMTP_PORT}"
+    emit_junit emails
+    return 1
+  fi
+
+  run_node emails.mjs >"${OUT}/logs/emails.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  # Invariant, read straight from the database rather than through the API:
+  # users.email is a trigger-maintained mirror of the primary user_emails row,
+  # and a divergence would be invisible to every endpoint (they all read the
+  # mirror). Zero rows means the mirror held for every account the battery has
+  # created so far.
+  local diverged
+  diverged="$(sql_ro "SELECT count(*) FROM users u LEFT JOIN user_emails e ON e.user_id = u.id AND e.is_primary WHERE e.id IS NULL OR e.email IS DISTINCT FROM u.email OR e.verified_at IS DISTINCT FROM u.email_verified_at" | tr -d ' ')"
+  if [[ ${diverged} == "0" ]]; then
+    record_case "emails/users-email-mirrors-the-primary-row" ok
+  else
+    record_case "emails/users-email-mirrors-the-primary-row" fail "${diverged} user(s) whose users.email disagrees with their primary user_emails row"
+  fi
+
+  collect_server_log
+  emit_junit emails "driver=emails.mjs"
+}
+
 # The mailing-list sync against css-groupsio-sink, a simulated Groups.io. Placed
 # after mail because it reuses the running smtp sink to read a member's
 # confirmation token (verifying makes them intended). The reconcile/webhook
@@ -1017,6 +1060,44 @@ stage_cards() {
 # Drives tool-on to prove the shared rule: a requires_training tool with no
 # steps denies without a waiver, a granted waiver opens it, revoking re-closes
 # it, and a non-gated tool stays open. Runs against the same stack as cards.
+# #118: merging one member record into another. After cards so a card issued
+# to the absorbed account is something the merge has to carry across, and
+# after stripe so the membership ledger is live.
+stage_merge() {
+  cases_begin merge
+  stack_paths
+
+  if ! server_ready; then
+    record_case "merge/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit merge
+    return 1
+  fi
+  record_case "merge/stack-is-up" ok
+
+  run_node merge.mjs >"${OUT}/logs/merge.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  # Database-side, because every endpoint would answer "not found" for the
+  # absorbed id whether the row was deleted or merely hidden. The merge ledger
+  # names every absorbed id; none of them may still be a user.
+  local merges lingering
+  merges="$(sql_ro "SELECT count(*) FROM user_merges" | tr -d ' ')"
+  if [[ ${merges} =~ ^[0-9]+$ ]] && ((merges >= 1)); then
+    record_case "merge/ledger-records-the-merge" ok
+  else
+    record_case "merge/ledger-records-the-merge" fail "user_merges has ${merges} row(s); the driver's merge left no record"
+  fi
+  lingering="$(sql_ro "SELECT count(*) FROM users u WHERE EXISTS (SELECT 1 FROM user_merges m WHERE m.absorbed_id = u.id)" | tr -d ' ')"
+  if [[ ${lingering} == "0" ]]; then
+    record_case "merge/absorbed-rows-are-gone" ok
+  else
+    record_case "merge/absorbed-rows-are-gone" fail "${lingering} absorbed user(s) still exist after their merge"
+  fi
+
+  collect_server_log
+  emit_junit merge "driver=merge.mjs"
+}
+
 stage_waivers() {
   cases_begin waivers
   stack_paths

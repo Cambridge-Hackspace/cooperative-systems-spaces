@@ -43,8 +43,10 @@ use css_server::models::{
 };
 use css_server::schema::{
     membership_ledger, resources, roles, tool_rate_tiers, tool_tier_assignments,
-    tool_usage_sessions, tools, training_waivers, user_cards, user_roles, users,
+    tool_usage_sessions, tools, training_waivers, user_cards, user_emails, user_roles, users,
 };
+use diesel::dsl::sql;
+use diesel::sql_types::{Bool, Text};
 
 /// Insert shape for a migrated historical session. `status` is `settled` (a
 /// completed session) and `hold_amount` 0 -- the prepaid-hold concept does not
@@ -406,25 +408,39 @@ fn load(
 
     // Users — insert-if-absent by email, then resolve id (rebuilds the map on a
     // re-run too). Random password; members set a real one via the reset flow.
+    //
+    // #118: "absent" means no account holds the address under ANY of its
+    // addresses, not only as its primary -- a member merged under a new primary
+    // keeps their ToolPass address as a secondary, and re-running the loader
+    // must find them there rather than re-create them (which the global
+    // uniqueness on user_emails would refuse anyway, loudly, mid-load).
     let mut user_id: HashMap<String, Uuid> = HashMap::new();
     for u in &s.users {
-        let hash = PasswordHashUtil::hash(&Uuid::new_v4().to_string())
-            .map_err(|e| diesel::result::Error::QueryBuilderError(Box::new(e)))?;
-        let inserted = diesel::insert_into(users::table)
-            .values(&NewUser::new(
-                u.username.clone(),
-                u.email.clone(),
-                hash,
-                u.full_name.clone(),
-            ))
-            .on_conflict(users::email)
-            .do_nothing()
-            .execute(conn)?;
-        c.users += inserted;
-        let id: Uuid = users::table
-            .filter(users::email.eq(&u.email))
-            .select(users::id)
-            .first(conn)?;
+        let held: Option<Uuid> = user_emails::table
+            .filter(
+                sql::<Bool>("lower(user_emails.email) = ").bind::<Text, _>(u.email.to_lowercase()),
+            )
+            .select(user_emails::user_id)
+            .first(conn)
+            .optional()?;
+        let id: Uuid = match held {
+            Some(id) => id,
+            None => {
+                let hash = PasswordHashUtil::hash(&Uuid::new_v4().to_string())
+                    .map_err(|e| diesel::result::Error::QueryBuilderError(Box::new(e)))?;
+                let id = diesel::insert_into(users::table)
+                    .values(&NewUser::new(
+                        u.username.clone(),
+                        u.email.clone(),
+                        hash,
+                        u.full_name.clone(),
+                    ))
+                    .returning(users::id)
+                    .get_result(conn)?;
+                c.users += 1;
+                id
+            }
+        };
         assign_tier_role(conn, &role_id, id, &u.role)?;
         user_id.insert(u.tp.clone(), id);
     }

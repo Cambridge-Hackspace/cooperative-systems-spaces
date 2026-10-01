@@ -521,10 +521,34 @@ diesel::table! {
         email_verified_at -> Nullable<Timestamptz>,
         mailing_list_opt_out_at -> Nullable<Timestamptz>,
         membership_next_due_at -> Nullable<Timestamptz>,
-        stripe_customer_id -> Nullable<Text>,
-        stripe_subscription_id -> Nullable<Text>,
-        subscription_status -> Nullable<Text>,
         token_version -> Int4,
+    }
+}
+
+diesel::table! {
+    user_merges (id) {
+        id -> Uuid,
+        survivor_id -> Nullable<Uuid>,
+        absorbed_id -> Uuid,
+        absorbed_username -> Text,
+        absorbed_email -> Text,
+        absorbed_snapshot -> Jsonb,
+        moved -> Jsonb,
+        warnings -> Jsonb,
+        actor_id -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    user_stripe_customers (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        customer_id -> Text,
+        subscription_id -> Nullable<Text>,
+        subscription_status -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -642,8 +666,8 @@ diesel::table! {
         confirmed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
-        pending_secret_base32 -> Nullable<Text>,
         last_used_step -> Nullable<Int8>,
+        label -> Varchar,
     }
 }
 
@@ -699,6 +723,18 @@ diesel::table! {
         token_hash -> Text,
         expires_at -> Timestamptz,
         used_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        user_email_id -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    user_emails (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        email -> Varchar,
+        is_primary -> Bool,
+        verified_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
     }
 }
@@ -917,6 +953,10 @@ diesel::joinable!(door_checkins -> door_access_events (door_access_event_id));
 diesel::joinable!(profile_config_versions -> users (created_by));
 diesel::joinable!(password_reset_tokens -> users (user_id));
 diesel::joinable!(email_verification_tokens -> users (user_id));
+diesel::joinable!(email_verification_tokens -> user_emails (user_email_id));
+diesel::joinable!(user_emails -> users (user_id));
+diesel::joinable!(user_stripe_customers -> users (user_id));
+diesel::joinable!(user_merges -> users (survivor_id));
 
 diesel::joinable!(cmi5_courses -> users (imported_by));
 diesel::joinable!(cmi5_blocks -> cmi5_courses (course_id));
@@ -978,6 +1018,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_mfa_totp,
     user_cards,
     user_mfa_webauthn,
+    user_emails,
+    user_merges,
+    user_stripe_customers,
     user_tool_training,
     user_training_progress,
     users,

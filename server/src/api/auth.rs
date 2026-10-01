@@ -529,12 +529,30 @@ async fn password_reset_request(
         RESET_THROTTLE_SECONDS,
     );
 
+    // #118: the lookup is the address row, not the account. A reset link goes
+    // to the address that asked for it, and only if that address is the
+    // primary or a CONFIRMED secondary -- an unconfirmed secondary is a claim
+    // nobody has proven, and mailing a credential there would hand the
+    // account to whoever typed the address in. Same uniform response either
+    // way, as for an unknown address.
     let found = state
         .db
-        .find_user_by_email(&address)
-        .map_err(|e| ApiError::from_db("Failed to look up a reset address", e))?;
+        .find_user_email(&address)
+        .map_err(|e| ApiError::from_db("Failed to look up a reset address", e))?
+        .filter(|row| row.is_primary || row.verified_at.is_some());
 
-    if let Some(user) = found {
+    // An address row whose account vanished between the two reads is simply
+    // "not found": the uniform response must not change for it.
+    let found = match found {
+        Some(row) => state
+            .db
+            .find_user_by_id(row.user_id)
+            .map_err(|e| ApiError::from_db("Failed to load the reset account", e))?
+            .map(|user| (user, row)),
+        None => None,
+    };
+
+    if let Some((user, row)) = found {
         let (plaintext, digest) = generate_token();
         let expires_at = chrono::Utc::now() + chrono::Duration::minutes(RESET_TOKEN_TTL_MINUTES);
 
@@ -554,7 +572,7 @@ async fn password_reset_request(
         // the operator, not the requester.
         match state
             .mail_service
-            .send(&user.email, "Reset your password", &body)
+            .send(&row.email, "Reset your password", &body)
             .await
         {
             Ok(()) => {
@@ -734,6 +752,26 @@ async fn password_reset_consume(
 /// never going to send. Any real failure is audited as `EmailSendFailed`, which
 /// is how an operator finds out, since neither caller may vary its response.
 pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::models::User) {
+    issue_verification_mail_for(state, user.id, None, &user.email).await;
+}
+
+/// How long an unconfirmed address claim may stand before a competing add or
+/// registration may evict it (#118). The same number as the token lifetime:
+/// once the only link that could confirm the claim has expired, the claim is
+/// not protecting anyone.
+pub(crate) fn stale_claim_cutoff() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - chrono::Duration::hours(VERIFICATION_TOKEN_TTL_HOURS)
+}
+
+/// Send a confirmation link for ONE address (#118). `email_id` of `None` is
+/// the primary; a secondary names its `user_emails` row so the claim confirms
+/// that row and no other. The audit payload names the address either way.
+pub(crate) async fn issue_verification_mail_for(
+    state: &AppState,
+    user_id: uuid::Uuid,
+    email_id: Option<uuid::Uuid>,
+    address: &str,
+) {
     let config = state.config_manager.get_config();
     if !config.email.enabled {
         return;
@@ -744,7 +782,7 @@ pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::mode
 
     if let Err(e) = state
         .db
-        .create_email_verification_token(user.id, digest, expires_at)
+        .create_email_verification_token(user_id, email_id, digest, expires_at)
     {
         tracing::error!("could not store an email verification token: {e}");
         return;
@@ -759,7 +797,7 @@ pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::mode
 
     match state
         .mail_service
-        .send(&user.email, "Confirm your email address", &body)
+        .send(address, "Confirm your email address", &body)
         .await
     {
         Ok(()) => {
@@ -767,9 +805,9 @@ pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::mode
                 .audit_logger
                 .log_event(
                     AuditEventType::EmailVerificationSent,
-                    Some(user.id),
-                    Some(user.id),
-                    serde_json::json!({ "address": user.email }),
+                    Some(user_id),
+                    Some(user_id),
+                    serde_json::json!({ "address": address }),
                     None,
                     None,
                 )
@@ -781,8 +819,8 @@ pub(crate) async fn issue_verification_mail(state: &AppState, user: &crate::mode
                 .audit_logger
                 .log_event(
                     AuditEventType::EmailSendFailed,
-                    Some(user.id),
-                    Some(user.id),
+                    Some(user_id),
+                    Some(user_id),
                     serde_json::json!({
                         "purpose": "email_verification",
                         // Named `detail` rather than `error`: this is an audit payload,
@@ -818,7 +856,7 @@ async fn verify_email(
         .claim_email_verification_token(&hash_token(payload.token.trim()))
         .map_err(|e| ApiError::from_db("Failed to claim a verification token", e))?;
 
-    let Some(user_id) = claimed else {
+    let Some((user_id, email_id)) = claimed else {
         return Err(ApiError::BadRequest(
             "This confirmation link is invalid or has expired. Ask for a new one.".to_string(),
         ));
@@ -826,7 +864,7 @@ async fn verify_email(
 
     state
         .db
-        .mark_email_verified(user_id)
+        .mark_email_verified(user_id, email_id)
         .map_err(|e| ApiError::from_db("Failed to record a confirmed address", e))?;
 
     let _ = state
@@ -886,14 +924,17 @@ async fn resend_verification(
 
     let found = state
         .db
-        .find_user_by_email(&address)
+        .find_user_email(&address)
         .map_err(|e| ApiError::from_db("Failed to look up an address for confirmation", e))?;
 
-    // An already-confirmed account is deliberately not told apart from an
-    // unknown one, and neither is told apart from a fresh send.
-    if let Some(user) = found {
-        if user.email_verified_at.is_none() {
-            issue_verification_mail(&state, &user).await;
+    // An already-confirmed address is deliberately not told apart from an
+    // unknown one, and neither is told apart from a fresh send. #118: the
+    // lookup is the address row, so a resend for a secondary confirms that
+    // secondary, not the account's primary.
+    if let Some(row) = found {
+        if row.verified_at.is_none() {
+            let email_id = if row.is_primary { None } else { Some(row.id) };
+            issue_verification_mail_for(&state, row.user_id, email_id, &row.email).await;
         }
     }
 

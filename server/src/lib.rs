@@ -57,6 +57,7 @@ pub mod schema;
 pub mod shutdown;
 pub mod stripe;
 pub mod tool_billing;
+pub mod user_merge;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

@@ -61,6 +61,20 @@ export interface User {
   meta: Record<string, unknown>
 }
 
+/**
+ * One of a user's email addresses (#118). `email` on `User` is the row with
+ * `is_primary`; the others also sign in but receive no account mail.
+ */
+export interface UserEmail {
+  id: string
+  user_id: string
+  email: string
+  is_primary: boolean
+  /** When the owner confirmed it; null while unconfirmed. */
+  verified_at: string | null
+  created_at: string
+}
+
 /** Lifecycle state of a member access card (server `card_status` enum). */
 export enum CardStatus {
   /** Opens the member's tools/doors. */
@@ -174,13 +188,52 @@ export function isMfaChallenge(x: unknown): x is MfaChallenge {
 
 export interface MfaStatus {
   enabled: boolean
+  /** Any confirmed authenticator app. The list is the per-app view (#118). */
   totp_enrolled: boolean
+  totp_authenticators: MfaTotpAuthenticator[]
   webauthn_count: number
   recovery_codes_remaining: number
   must_enroll: boolean
 }
 
+/** A user merge (#118): what moving `absorbed` into `survivor` would do. */
+export interface MergeWarning {
+  code: string
+  detail: string
+}
+export interface MergeParty {
+  id: string
+  username: string
+  email: string
+  full_name: string
+}
+export interface MergePlan {
+  survivor: MergeParty
+  absorbed: MergeParty
+  /** Rows that would be re-pointed, keyed `table.column`. */
+  moves: Record<string, number>
+  warnings: MergeWarning[]
+}
+export interface MergeOutcome {
+  merge_id: string
+  survivor_id: string
+  absorbed_id: string
+  moved: Record<string, number>
+  warnings: MergeWarning[]
+}
+
+/** One enrolled authenticator app. Never carries the secret. */
+export interface MfaTotpAuthenticator {
+  id: string
+  label: string
+  created_at: string
+  confirmed_at: string | null
+}
+
 export interface MfaTotpSetup {
+  /** The pending setup; passed back on confirm. */
+  id: string
+  label: string
   secret_base32: string
   otpauth_uri: string
 }

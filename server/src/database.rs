@@ -12,7 +12,7 @@ use crate::models::{
     CardResolution, CardStatus, NewTrainingWaiver, NewUser, NewUserCard, TrainingWaiver,
     UpdateUser, User, UserCard,
 };
-use crate::schema::{training_waivers, user_cards, users};
+use crate::schema::{training_waivers, user_cards, user_emails, users};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -925,16 +925,240 @@ impl DatabaseManager {
         // Case-insensitive (#120/#3 + M8). This was `email = $1`, so a mixed-case
         // registrant could not be found by the lowercased reset/resend path, and
         // ADMIN@x resolved as a different account from admin@x. Compared as
-        // `lower(email) = $1` against the lower(email) functional index the
-        // migration adds; the needle is bound (via .bind), never interpolated.
+        // `lower(email) = $1` against the lower(email) functional index; the
+        // needle is bound (via .bind), never interpolated.
+        //
+        // #118: resolved through `user_emails`, so ANY of a user's addresses --
+        // primary or secondary, confirmed or not -- finds the account. The
+        // address is a lookup key here, not a proof: what an unconfirmed
+        // secondary may do is decided by the caller (login still requires the
+        // primary to be confirmed; reset mail only goes to a confirmed address).
         let needle = email.trim().to_lowercase();
         let user = users::table
+            .inner_join(user_emails::table)
             .select(User::as_select())
-            .filter(sql::<Bool>("lower(email) = ").bind::<Text, _>(needle))
+            .filter(sql::<Bool>("lower(user_emails.email) = ").bind::<Text, _>(needle))
             .first::<User>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)?;
         Ok(user)
+    }
+
+    // --- Email addresses (#118) -------------------------------------------
+    //
+    // `user_emails` is the source of truth; `users.email`/`email_verified_at`
+    // are a trigger-maintained mirror of the primary row. Nothing here writes
+    // the users columns -- the database refuses that (see the migration).
+
+    /// Every address a user holds, primary first, then oldest first.
+    pub fn list_user_emails(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::UserEmail>, DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_emails
+            .filter(user_id.eq(uid))
+            .order((is_primary.desc(), created_at.asc()))
+            .select(crate::models::UserEmail::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// One address row by its id, scoped to the user so a caller cannot act on
+    /// another account's address by guessing an id.
+    pub fn get_user_email(
+        &self,
+        uid: uuid::Uuid,
+        email_id: uuid::Uuid,
+    ) -> Result<Option<crate::models::UserEmail>, DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_emails
+            .filter(user_id.eq(uid))
+            .filter(id.eq(email_id))
+            .select(crate::models::UserEmail::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The row holding an address (any user's), compared case-insensitively.
+    pub fn find_user_email(
+        &self,
+        email_addr: &str,
+    ) -> Result<Option<crate::models::UserEmail>, DatabaseError> {
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Bool, Text};
+        let mut conn = self.get_connection()?;
+        let needle = email_addr.trim().to_lowercase();
+        user_emails::table
+            .select(crate::models::UserEmail::as_select())
+            .filter(sql::<Bool>("lower(user_emails.email) = ").bind::<Text, _>(needle))
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Add a secondary, unconfirmed address to a user.
+    ///
+    /// A claim is global: once a row exists nobody else can register or add
+    /// the same address. So an unconfirmed secondary that was never confirmed
+    /// must not squat the address forever -- a stale claim (unconfirmed,
+    /// non-primary, created before `stale_before`) held by ANY user is evicted
+    /// first, in the same transaction. The confirmation token's own lifetime
+    /// is the natural `stale_before`. A confirmed or primary claim is never
+    /// evicted; those surface as the unique-index conflict the caller maps to
+    /// 409.
+    pub fn add_user_email(
+        &self,
+        uid: uuid::Uuid,
+        email_addr: &str,
+        stale_before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::models::UserEmail, DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Bool, Text};
+        let mut conn = self.get_connection()?;
+        let needle = email_addr.trim().to_lowercase();
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(
+                user_emails
+                    .filter(sql::<Bool>("lower(user_emails.email) = ").bind::<Text, _>(needle))
+                    .filter(verified_at.is_null())
+                    .filter(is_primary.eq(false))
+                    .filter(created_at.lt(stale_before)),
+            )
+            .execute(conn)?;
+            diesel::insert_into(user_emails)
+                .values(crate::models::NewUserEmail {
+                    user_id: uid,
+                    email: email_addr.trim().to_string(),
+                    is_primary: false,
+                    verified_at: None,
+                })
+                .returning(crate::models::UserEmail::as_returning())
+                .get_result(conn)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Remove a secondary address. The primary is excluded by the filter, so a
+    /// request to remove it affects zero rows and is reported as NotFound
+    /// rather than leaving the account without an address.
+    pub fn remove_user_email(
+        &self,
+        uid: uuid::Uuid,
+        email_id: uuid::Uuid,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::delete(
+            user_emails
+                .filter(user_id.eq(uid))
+                .filter(id.eq(email_id))
+                .filter(is_primary.eq(false)),
+        )
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Make an existing (confirmed) address the primary. Returns the address
+    /// that was primary before, for the `user_email_change` audit payload the
+    /// mailing-list sync consumes. Demotes first, then promotes, because the
+    /// partial unique index allows one primary per user at any instant; the
+    /// mirror trigger then rewrites `users.email`.
+    pub fn set_primary_user_email(
+        &self,
+        uid: uuid::Uuid,
+        email_id: uuid::Uuid,
+    ) -> Result<String, DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let target: crate::models::UserEmail = user_emails
+                .filter(user_id.eq(uid))
+                .filter(id.eq(email_id))
+                .select(crate::models::UserEmail::as_select())
+                .first(conn)?;
+            if target.verified_at.is_none() {
+                // Refused at the storage layer too, not only by the handler: an
+                // unconfirmed primary would let an account be re-addressed to a
+                // mailbox nobody has proven they own.
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
+            let old: String = user_emails
+                .filter(user_id.eq(uid))
+                .filter(is_primary.eq(true))
+                .select(email)
+                .first(conn)?;
+            diesel::update(
+                user_emails
+                    .filter(user_id.eq(uid))
+                    .filter(is_primary.eq(true)),
+            )
+            .set(is_primary.eq(false))
+            .execute(conn)?;
+            let promoted = diesel::update(user_emails.filter(id.eq(email_id)))
+                .set(is_primary.eq(true))
+                .execute(conn)?;
+            if promoted != 1 {
+                return Err(diesel::result::Error::NotFound);
+            }
+            Ok(old)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Replace the primary address outright: the new address becomes the
+    /// primary, unconfirmed, and the old primary row is deleted. This is what
+    /// `PUT /api/users/{id}` with an `email` has always meant -- the old
+    /// address is gone, the new one must be confirmed -- now expressed on the
+    /// table that owns addresses. Returns the new row.
+    pub fn replace_primary_user_email(
+        &self,
+        uid: uuid::Uuid,
+        new_email: &str,
+        stale_before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::models::UserEmail, DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Bool, Text};
+        let mut conn = self.get_connection()?;
+        let needle = new_email.trim().to_lowercase();
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(
+                user_emails
+                    .filter(sql::<Bool>("lower(user_emails.email) = ").bind::<Text, _>(needle))
+                    .filter(verified_at.is_null())
+                    .filter(is_primary.eq(false))
+                    .filter(created_at.lt(stale_before)),
+            )
+            .execute(conn)?;
+            let removed = diesel::delete(
+                user_emails
+                    .filter(user_id.eq(uid))
+                    .filter(is_primary.eq(true)),
+            )
+            .execute(conn)?;
+            if removed != 1 {
+                return Err(diesel::result::Error::NotFound);
+            }
+            diesel::insert_into(user_emails)
+                .values(crate::models::NewUserEmail {
+                    user_id: uid,
+                    email: new_email.trim().to_string(),
+                    is_primary: true,
+                    verified_at: None,
+                })
+                .returning(crate::models::UserEmail::as_returning())
+                .get_result(conn)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Find a user by a value in their profile JSON field
@@ -1205,22 +1429,6 @@ impl DatabaseManager {
             Ok(user)
         })
         .map_err(DatabaseError::Diesel)
-    }
-
-    /// Clear a user's email-verified flag (#120/#2).
-    ///
-    /// Called when the address changes so `require_email_verification` re-gates
-    /// and a fresh confirmation is sent to the new address. Separate from
-    /// `update_user` because `UpdateUser` has no way to express "set this
-    /// nullable column back to NULL" without changing the changeset for every
-    /// other caller.
-    pub fn clear_email_verified_at(&self, user_id: uuid::Uuid) -> Result<(), DatabaseError> {
-        let mut conn = self.get_connection()?;
-        diesel::update(users::table.filter(users::id.eq(user_id)))
-            .set(users::email_verified_at.eq(None::<chrono::DateTime<chrono::Utc>>))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-        Ok(())
     }
 
     /// Update user profile only
@@ -3750,115 +3958,94 @@ impl DatabaseManager {
 
 impl DatabaseManager {
     // --- TOTP ------------------------------------------------------------
+    //
+    // #118: several authenticators per user. A row with `confirmed_at` NULL
+    // is a setup in progress; login tries every confirmed row, and each row
+    // keeps its own replay watermark.
 
-    pub fn get_user_totp(
+    /// Every TOTP row a user has, confirmed first, then oldest first.
+    pub fn list_user_totp(
         &self,
         uid: uuid::Uuid,
-    ) -> Result<Option<crate::models::UserMfaTotp>, DatabaseError> {
+    ) -> Result<Vec<crate::models::UserMfaTotp>, DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
         user_mfa_totp
             .filter(user_id.eq(uid))
+            .order((confirmed_at.is_not_null().desc(), created_at.asc()))
             .select(crate::models::UserMfaTotp::as_select())
-            .first(&mut conn)
-            .optional()
+            .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Replace any existing TOTP row for the user with a new unconfirmed one.
-    /// Returns the freshly-inserted row.
-    /// Begin a TOTP setup (#120/#9). If a *confirmed* factor already exists, the
-    /// new secret is stored as `pending_secret_base32`, leaving the working
-    /// secret and its `confirmed_at` untouched -- so an abandoned or hijacked
-    /// setup can no longer destroy a live factor. If there is no confirmed factor
-    /// (first enrollment, or an earlier unconfirmed attempt) the row is written
-    /// with the new secret, unconfirmed, clearing any stale pending/step.
+    /// Begin a TOTP setup: insert a NEW unconfirmed row for the secret and
+    /// drop any earlier unconfirmed row the user had (one setup in flight).
+    /// Confirmed rows are never touched -- this is the #120/#9 guarantee
+    /// (an abandoned or hijacked setup cannot destroy a live factor) with
+    /// the pending-secret column replaced by the row itself.
     pub fn begin_totp_setup(
         &self,
         uid: uuid::Uuid,
         new_secret_base32: &str,
+        new_label: &str,
+    ) -> Result<crate::models::UserMfaTotp, DatabaseError> {
+        use crate::schema::user_mfa_totp::dsl::*;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(
+                user_mfa_totp
+                    .filter(user_id.eq(uid))
+                    .filter(confirmed_at.is_null()),
+            )
+            .execute(conn)?;
+            diesel::insert_into(user_mfa_totp)
+                .values(crate::models::NewUserMfaTotp {
+                    user_id: uid,
+                    secret_base32: new_secret_base32.to_string(),
+                    label: new_label.to_string(),
+                })
+                .returning(crate::models::UserMfaTotp::as_returning())
+                .get_result(conn)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Confirm one row (#120/#9, #120/#12). `last_used_step` resets to NULL:
+    /// the replay watermark tracks *login* steps, and a freshly confirmed
+    /// factor has consumed none. Scoped to the user so a row id cannot confirm
+    /// another account's setup.
+    pub fn finalize_totp_confirmation(
+        &self,
+        uid: uuid::Uuid,
+        totp_id: uuid::Uuid,
     ) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
-        conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let existing: Option<crate::models::UserMfaTotp> = user_mfa_totp
-                .filter(user_id.eq(uid))
-                .select(crate::models::UserMfaTotp::as_select())
-                .first(conn)
-                .optional()?;
-            match existing {
-                Some(row) if row.confirmed_at.is_some() => {
-                    diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
-                        .set((
-                            pending_secret_base32.eq(Some(new_secret_base32.to_string())),
-                            updated_at.eq(chrono::Utc::now()),
-                        ))
-                        .execute(conn)?;
-                }
-                Some(_) => {
-                    diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
-                        .set((
-                            secret_base32.eq(new_secret_base32.to_string()),
-                            pending_secret_base32.eq(None::<String>),
-                            confirmed_at.eq(None::<chrono::DateTime<chrono::Utc>>),
-                            last_used_step.eq(None::<i64>),
-                            updated_at.eq(chrono::Utc::now()),
-                        ))
-                        .execute(conn)?;
-                }
-                None => {
-                    diesel::insert_into(user_mfa_totp)
-                        .values(crate::models::NewUserMfaTotp {
-                            user_id: uid,
-                            secret_base32: new_secret_base32.to_string(),
-                        })
-                        .execute(conn)?;
-                }
-            }
-            Ok(())
-        })
-        .map_err(DatabaseError::Diesel)
+        let affected = diesel::update(user_mfa_totp.filter(user_id.eq(uid)).filter(id.eq(totp_id)))
+            .set((
+                confirmed_at.eq(Some(chrono::Utc::now())),
+                last_used_step.eq(None::<i64>),
+                updated_at.eq(chrono::Utc::now()),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
     }
 
-    /// Promote a pending TOTP secret (if any) to the live secret and confirm it
-    /// (#120/#9). `last_used_step` resets to NULL: the replay watermark (#120/#12)
-    /// tracks *login* steps, and a freshly confirmed factor has consumed none.
-    pub fn finalize_totp_confirmation(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
-        use crate::schema::user_mfa_totp::dsl::*;
-        let mut conn = self.get_connection()?;
-        conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let row: crate::models::UserMfaTotp = user_mfa_totp
-                .filter(user_id.eq(uid))
-                .select(crate::models::UserMfaTotp::as_select())
-                .first(conn)?;
-            let effective = row
-                .pending_secret_base32
-                .clone()
-                .unwrap_or_else(|| row.secret_base32.clone());
-            diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
-                .set((
-                    secret_base32.eq(effective),
-                    pending_secret_base32.eq(None::<String>),
-                    confirmed_at.eq(Some(chrono::Utc::now())),
-                    last_used_step.eq(None::<i64>),
-                    updated_at.eq(chrono::Utc::now()),
-                ))
-                .execute(conn)?;
-            Ok(())
-        })
-        .map_err(DatabaseError::Diesel)
-    }
-
-    /// Advance the replay watermark after a login TOTP verify (#120/#12). Reads
-    /// the row count so a vanished row is a NotFound, not a silent success.
+    /// Advance ONE authenticator's replay watermark after a login verify
+    /// (#120/#12). Reads the row count so a vanished row is a NotFound, not a
+    /// silent success.
     pub fn update_totp_last_used_step(
         &self,
-        uid: uuid::Uuid,
+        totp_id: uuid::Uuid,
         step: i64,
     ) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
-        let affected = diesel::update(user_mfa_totp.filter(user_id.eq(uid)))
+        let affected = diesel::update(user_mfa_totp.filter(id.eq(totp_id)))
             .set((
                 last_used_step.eq(Some(step)),
                 updated_at.eq(chrono::Utc::now()),
@@ -3871,12 +4058,21 @@ impl DatabaseManager {
         Ok(())
     }
 
-    pub fn delete_user_totp(&self, uid: uuid::Uuid) -> Result<usize, DatabaseError> {
+    /// Remove one authenticator (scoped to the user). Zero rows is NotFound.
+    pub fn delete_user_totp(
+        &self,
+        uid: uuid::Uuid,
+        totp_id: uuid::Uuid,
+    ) -> Result<(), DatabaseError> {
         use crate::schema::user_mfa_totp::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::delete(user_mfa_totp.filter(user_id.eq(uid)))
+        let affected = diesel::delete(user_mfa_totp.filter(user_id.eq(uid)).filter(id.eq(totp_id)))
             .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)
+            .map_err(DatabaseError::Diesel)?;
+        if affected == 0 {
+            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
+        }
+        Ok(())
     }
 
     // --- WebAuthn --------------------------------------------------------
@@ -4097,10 +4293,14 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
-    /// Store an email confirmation token, invalidating any the user already had.
+    /// Store an email confirmation token for one address, invalidating any
+    /// live token the user already had FOR THAT ADDRESS (#118: a pending
+    /// confirmation of a secondary must not cancel the primary's, or vice
+    /// versa). `email_id` of `None` means the primary address.
     pub fn create_email_verification_token(
         &self,
         uid: uuid::Uuid,
+        email_id: Option<uuid::Uuid>,
         hash: String,
         expiry: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), DatabaseError> {
@@ -4110,6 +4310,7 @@ impl DatabaseManager {
             diesel::update(
                 email_verification_tokens
                     .filter(user_id.eq(uid))
+                    .filter(user_email_id.is_not_distinct_from(email_id))
                     .filter(used_at.is_null()),
             )
             .set(used_at.eq(Some(chrono::Utc::now())))
@@ -4120,6 +4321,7 @@ impl DatabaseManager {
                     user_id: uid,
                     token_hash: hash,
                     expires_at: expiry,
+                    user_email_id: email_id,
                 })
                 .execute(conn)?;
             Ok(())
@@ -4127,11 +4329,12 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
-    /// Spend an email confirmation token, returning the user it belonged to.
+    /// Spend an email confirmation token, returning the user it belonged to
+    /// and the address row it confirms (`None` = that user's primary).
     pub fn claim_email_verification_token(
         &self,
         hash: &str,
-    ) -> Result<Option<uuid::Uuid>, DatabaseError> {
+    ) -> Result<Option<(uuid::Uuid, Option<uuid::Uuid>)>, DatabaseError> {
         use crate::schema::email_verification_tokens::dsl::*;
         let mut conn = self.get_connection()?;
         diesel::update(
@@ -4141,23 +4344,40 @@ impl DatabaseManager {
                 .filter(expires_at.gt(chrono::Utc::now())),
         )
         .set(used_at.eq(Some(chrono::Utc::now())))
-        .returning(user_id)
-        .get_result::<uuid::Uuid>(&mut conn)
+        .returning((user_id, user_email_id))
+        .get_result::<(uuid::Uuid, Option<uuid::Uuid>)>(&mut conn)
         .optional()
         .map_err(DatabaseError::Diesel)
     }
 
-    /// Record that a user's address has been confirmed.
+    /// Record that one of a user's addresses has been confirmed. `email_id` of
+    /// `None` confirms the primary (a token issued before #118 names no row).
+    /// The mirror trigger carries a primary's confirmation onto
+    /// `users.email_verified_at`.
     ///
     /// Idempotent by construction: confirming twice is not an error, and the
     /// second call simply refreshes the timestamp.
-    pub fn mark_email_verified(&self, uid: uuid::Uuid) -> Result<(), DatabaseError> {
-        use crate::schema::users::dsl::*;
+    pub fn mark_email_verified(
+        &self,
+        uid: uuid::Uuid,
+        email_id: Option<uuid::Uuid>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
         let mut conn = self.get_connection()?;
-        let affected = diesel::update(users.filter(id.eq(uid)))
-            .set(email_verified_at.eq(Some(chrono::Utc::now())))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
+        let now = Some(chrono::Utc::now());
+        let affected = match email_id {
+            Some(eid) => diesel::update(user_emails.filter(user_id.eq(uid)).filter(id.eq(eid)))
+                .set(verified_at.eq(now))
+                .execute(&mut conn),
+            None => diesel::update(
+                user_emails
+                    .filter(user_id.eq(uid))
+                    .filter(is_primary.eq(true)),
+            )
+            .set(verified_at.eq(now))
+            .execute(&mut conn),
+        }
+        .map_err(DatabaseError::Diesel)?;
 
         if affected == 0 {
             // Reported rather than discarded, per
@@ -4369,32 +4589,91 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Every user linked to a Stripe customer, for the invoice-poll backbone
+    /// Every (user, Stripe customer) pair, for the invoice-poll backbone
     /// (which must re-credit even a lapsed, un-enrolled member whose renewal
     /// webhook was missed -- so this is not restricted to enrolled users).
-    pub fn users_with_stripe_customer(&self) -> Result<Vec<User>, DatabaseError> {
-        use crate::schema::users::dsl::*;
+    /// #118: one user may appear several times, once per customer id; every
+    /// one of them is polled, because a payment on any of them is real money.
+    pub fn users_with_stripe_customer(
+        &self,
+    ) -> Result<Vec<(User, crate::models::UserStripeCustomer)>, DatabaseError> {
+        use crate::schema::user_stripe_customers;
         let mut conn = self.get_connection()?;
-        users
-            .filter(stripe_customer_id.is_not_null())
-            .select(User::as_select())
-            .load(&mut conn)
+        user_stripe_customers::table
+            .inner_join(users::table)
+            .select((
+                User::as_select(),
+                crate::models::UserStripeCustomer::as_select(),
+            ))
+            .order(user_stripe_customers::created_at.asc())
+            .load::<(User, crate::models::UserStripeCustomer)>(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
     /// Map a Stripe customer id back to the platform user (webhook handling).
+    /// Any of a user's customer ids resolves to them (#118).
     pub fn find_user_by_stripe_customer_id(
         &self,
-        customer_id: &str,
+        customer: &str,
     ) -> Result<Option<User>, DatabaseError> {
-        use crate::schema::users::dsl::*;
+        use crate::schema::user_stripe_customers;
         let mut conn = self.get_connection()?;
-        users
-            .filter(stripe_customer_id.eq(customer_id))
+        user_stripe_customers::table
+            .inner_join(users::table)
+            .filter(user_stripe_customers::customer_id.eq(customer))
             .select(User::as_select())
             .first::<User>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every Stripe customer a user is known by, oldest first.
+    pub fn list_stripe_customers(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<Vec<crate::models::UserStripeCustomer>, DatabaseError> {
+        use crate::schema::user_stripe_customers::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_stripe_customers
+            .filter(user_id.eq(uid))
+            .order(created_at.asc())
+            .select(crate::models::UserStripeCustomer::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The customer checkout and the Billing Portal should use: the one with
+    /// a live subscription, else the most recently updated, else `None`
+    /// (first checkout -- Stripe will create one).
+    pub fn current_stripe_customer(
+        &self,
+        uid: uuid::Uuid,
+    ) -> Result<Option<crate::models::UserStripeCustomer>, DatabaseError> {
+        use crate::schema::user_stripe_customers::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_stripe_customers
+            .filter(user_id.eq(uid))
+            .order((subscription_id.is_not_null().desc(), updated_at.desc()))
+            .select(crate::models::UserStripeCustomer::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Whether any of the user's customers carries a live subscription. Only
+    /// one need be live for the member to be "on a subscription"; the ledger
+    /// still records payments from all of them.
+    pub fn user_has_stripe_subscription(&self, uid: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::user_stripe_customers::dsl::*;
+        use diesel::dsl::count_star;
+        let mut conn = self.get_connection()?;
+        let n: i64 = user_stripe_customers
+            .filter(user_id.eq(uid))
+            .filter(subscription_id.is_not_null())
+            .select(count_star())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(n > 0)
     }
 
     /// Set (or clear, with `None`) a member's next-due anniversary. Clearing it
@@ -4419,43 +4698,70 @@ impl DatabaseManager {
         Ok(())
     }
 
-    /// Record (or clear) the Stripe customer id for a user.
-    pub fn set_stripe_customer_id(
+    /// Link a Stripe customer to a user, carrying the subscription it was
+    /// completed with. Idempotent on the customer id: a redelivered
+    /// `checkout.session.completed` updates the row rather than failing the
+    /// unique index. A customer that already belongs to a DIFFERENT account
+    /// is never re-homed: that is reported as NotFound-shaped (zero rows the
+    /// caller may write) and surfaced by the caller, not absorbed.
+    pub fn link_stripe_customer(
         &self,
         uid: uuid::Uuid,
-        customer_id: Option<&str>,
-    ) -> Result<(), DatabaseError> {
-        use crate::schema::users::dsl::*;
-        let mut conn = self.get_connection()?;
-        let affected = diesel::update(users.filter(id.eq(uid)))
-            .set((
-                stripe_customer_id.eq(customer_id),
-                updated_at.eq(chrono::Utc::now().naive_utc()),
-            ))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-        if affected == 0 {
-            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
-        }
-        Ok(())
-    }
-
-    /// Record the user's Stripe subscription id and last-seen status together.
-    /// Both are set each call (either may be `None`), so a cancellation clears
-    /// the id while stamping the status.
-    pub fn set_stripe_subscription(
-        &self,
-        uid: uuid::Uuid,
-        subscription_id: Option<&str>,
+        customer: &str,
+        subscription: Option<&str>,
         status: Option<&str>,
     ) -> Result<(), DatabaseError> {
-        use crate::schema::users::dsl::*;
+        use crate::schema::user_stripe_customers::dsl::*;
         let mut conn = self.get_connection()?;
-        let affected = diesel::update(users.filter(id.eq(uid)))
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let owner: Option<uuid::Uuid> = user_stripe_customers
+                .filter(customer_id.eq(customer))
+                .select(user_id)
+                .first(conn)
+                .optional()?;
+            let affected = match owner {
+                Some(existing) if existing != uid => 0,
+                Some(_) => diesel::update(user_stripe_customers.filter(customer_id.eq(customer)))
+                    .set((
+                        subscription_id.eq(subscription),
+                        subscription_status.eq(status),
+                        updated_at.eq(chrono::Utc::now()),
+                    ))
+                    .execute(conn)?,
+                None => diesel::insert_into(user_stripe_customers)
+                    .values(crate::models::NewUserStripeCustomer {
+                        user_id: uid,
+                        customer_id: customer.to_string(),
+                        subscription_id: subscription.map(|s| s.to_string()),
+                        subscription_status: status.map(|s| s.to_string()),
+                    })
+                    .execute(conn)?,
+            };
+            if affected == 0 {
+                return Err(diesel::result::Error::NotFound);
+            }
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Record a customer's subscription id and last-seen status together.
+    /// Both are set each call (either may be `None`), so a cancellation clears
+    /// the id while stamping the status. Keyed on the CUSTOMER (#118): the
+    /// event names a customer, and the user may have several.
+    pub fn set_stripe_subscription(
+        &self,
+        customer: &str,
+        subscription: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::user_stripe_customers::dsl::*;
+        let mut conn = self.get_connection()?;
+        let affected = diesel::update(user_stripe_customers.filter(customer_id.eq(customer)))
             .set((
-                stripe_subscription_id.eq(subscription_id),
+                subscription_id.eq(subscription),
                 subscription_status.eq(status),
-                updated_at.eq(chrono::Utc::now().naive_utc()),
+                updated_at.eq(chrono::Utc::now()),
             ))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
@@ -6022,9 +6328,9 @@ impl DatabaseManager {
     /// confirmed method exists. Call after add/remove operations.
     pub fn recompute_user_mfa_enrolled(&self, uid: uuid::Uuid) -> Result<bool, DatabaseError> {
         let has_totp = self
-            .get_user_totp(uid)?
-            .map(|t| t.confirmed_at.is_some())
-            .unwrap_or(false);
+            .list_user_totp(uid)?
+            .iter()
+            .any(|t| t.confirmed_at.is_some());
         let has_webauthn = !self.list_user_webauthn(uid)?.is_empty();
         let enrolled = has_totp || has_webauthn;
         self.set_user_mfa_enrolled(

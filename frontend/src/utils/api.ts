@@ -342,6 +342,20 @@ export const adminApi = {
   resetUserMfa(userId: string): Promise<ApiResponse<{ user_id: string }>> {
     return apiClient.delete<{ user_id: string }>(`/admin/users/${userId}/mfa`)
   },
+
+  /** What merging `absorbedId` into `survivorId` would do (#118). Changes nothing. */
+  previewMerge(survivorId: string, absorbedId: string) {
+    return apiClient.post<import('@/types').MergePlan>(`/admin/users/${survivorId}/merge/preview`, {
+      absorbed_id: absorbedId,
+    })
+  },
+  /** Commit a merge. `acknowledged` must carry every warning code the preview listed. */
+  mergeUsers(survivorId: string, absorbedId: string, acknowledged: string[]) {
+    return apiClient.post<import('@/types').MergeOutcome>(`/admin/users/${survivorId}/merge`, {
+      absorbed_id: absorbedId,
+      acknowledged,
+    })
+  },
 }
 
 // Home links API (admin CRUD + public list)
@@ -682,14 +696,17 @@ export const mfaApi = {
   status() {
     return apiClient.get<import('@/types').MfaStatus>('/auth/mfa/status')
   },
-  totpSetup() {
-    return apiClient.post<import('@/types').MfaTotpSetup>('/auth/mfa/totp/setup')
+  totpSetup(label?: string) {
+    return apiClient.post<import('@/types').MfaTotpSetup>('/auth/mfa/totp/setup', { label })
   },
-  totpConfirm(code: string) {
-    return apiClient.post<import('@/types').MfaRecoveryCodes>('/auth/mfa/totp/confirm', { code })
+  totpConfirm(code: string, id?: string) {
+    return apiClient.post<import('@/types').MfaRecoveryCodes>('/auth/mfa/totp/confirm', {
+      code,
+      id,
+    })
   },
-  totpDisable() {
-    return apiClient.delete<void>('/auth/mfa/totp')
+  totpDisable(id: string) {
+    return apiClient.delete<void>(`/auth/mfa/totp/${id}`)
   },
   listWebauthn() {
     return apiClient.get<import('@/types').MfaWebauthnCredential[]>('/auth/mfa/webauthn')

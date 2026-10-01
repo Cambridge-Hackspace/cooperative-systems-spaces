@@ -375,9 +375,13 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // 202 = 195 + 7 tool module wiring (#83, all Admin): module list / create /
     // delete + the state snapshot, and interlock list / create / delete. The
     // matching device-facing module-state poll is InlineAuth and counted above.
-    assert_eq!(jwt_routes, 202, "JWT-authenticated routes");
+    // 207 = 202 + 5 email-address management routes (#118, all Auth): list /
+    // add / remove / set-primary / resend under /api/users/{id}/emails.
+    // 209 = 207 + 2 user-merge routes (#118, Admin): preview and commit under
+    // /api/admin/users/{id}/merge.
+    assert_eq!(jwt_routes, 209, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 202 * 7 + (10 + 6) * 3);
+    assert_eq!(asserted_pairs(), 209 * 7 + (10 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected

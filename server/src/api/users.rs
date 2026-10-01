@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{delete, get, patch, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use chrono::Utc;
@@ -29,6 +29,14 @@ pub fn user_routes() -> Router<AppState> {
         .route("/{id}", put(update_user))
         .route("/{id}", delete(delete_user))
         .route("/{id}/theme", patch(update_user_theme))
+        .route("/{id}/emails", get(list_user_emails))
+        .route("/{id}/emails", post(add_user_email))
+        .route("/{id}/emails/{email_id}", delete(remove_user_email))
+        .route(
+            "/{id}/emails/{email_id}/primary",
+            put(set_primary_user_email),
+        )
+        .route("/{id}/emails/{email_id}/resend", post(resend_user_email))
 }
 
 fn audit(state: &AppState, event: AuditEventType, actor: Uuid, data: serde_json::Value) {
@@ -253,16 +261,20 @@ async fn update_user(
         update_data.password_hash = Some(password_hash);
     }
 
-    // Validate email uniqueness if email is being changed
-    if let Some(ref email) = update_data.email {
-        if email != &existing_user.email {
-            if !email.contains('@') {
-                return Err(ApiError::BadRequest("Invalid email format".to_string()));
-            }
-
-            if let Ok(Some(_)) = state.db.find_user_by_email(email) {
-                return Err(ApiError::Conflict("Email already exists".to_string()));
-            }
+    // #118: the address is not a users column any more -- it is the primary
+    // row of user_emails, mirrored onto users.email by trigger (a direct write
+    // is refused by the database). Validate here; the replacement itself
+    // happens after the row update, below.
+    let new_primary = update_data
+        .email
+        .take()
+        .filter(|e| e != &existing_user.email);
+    if let Some(ref email) = new_primary {
+        if !email.contains('@') {
+            return Err(ApiError::BadRequest("Invalid email format".to_string()));
+        }
+        if let Ok(Some(_)) = state.db.find_user_by_email(email) {
+            return Err(ApiError::Conflict("Email already exists".to_string()));
         }
     }
 
@@ -280,21 +292,34 @@ async fn update_user(
     }
 
     // Update user
-    let updated_user = state
+    let mut updated_user = state
         .db
         .update_user(user_id, &update_data)
         .map_err(ApiError::from)?;
 
-    // #120/#2: a changed address is no longer proven. Clear its verified flag so
-    // require_email_verification re-gates, and send a fresh confirmation to the
-    // NEW address. Applies to an admin-set email too: whoever set it, the new
-    // address has not demonstrated ownership.
-    if email_changing {
-        state
+    // #120/#2: a changed address is no longer proven. The replacement row is
+    // created unconfirmed -- so require_email_verification re-gates -- and a
+    // fresh confirmation goes to the NEW address. Applies to an admin-set
+    // email too: whoever set it, the new address has not demonstrated
+    // ownership. The old primary row is deleted, which is what this endpoint
+    // has always meant by "change the email": the old address is gone.
+    if let Some(ref email) = new_primary {
+        let row = state
             .db
-            .clear_email_verified_at(user_id)
-            .map_err(ApiError::from)?;
-        crate::api::auth::issue_verification_mail(&state, &updated_user).await;
+            .replace_primary_user_email(user_id, email, crate::api::auth::stale_claim_cutoff())
+            .map_err(|e| match e {
+                crate::database::DatabaseError::Diesel(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => ApiError::Conflict("Email already exists".to_string()),
+                other => ApiError::from(other),
+            })?;
+        updated_user = state
+            .db
+            .find_user_by_id(user_id)
+            .map_err(ApiError::from)?
+            .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+        crate::api::auth::issue_verification_mail_for(&state, user_id, None, &row.email).await;
     }
 
     // Apply a requested tier-role change through user_roles (validated above).
@@ -314,8 +339,8 @@ async fn update_user(
     // otherwise emits no audit event, so without this a changed address would
     // stay on the Groups.io list under the old value until the next full
     // reconciliation -- the sync consumes UserEmailChange to move it at once.
-    if let Some(ref new_email) = update_data.email {
-        if new_email != &existing_user.email {
+    if let Some(ref new_email) = new_primary {
+        {
             if let Err(e) = state
                 .audit_logger
                 .log_event(
@@ -575,4 +600,295 @@ async fn update_user_theme(
         updated_user,
         role,
     ))))
+}
+
+// ---------------------------------------------------------------------------
+// Email addresses (#118)
+// ---------------------------------------------------------------------------
+
+/// Who may manage a user's addresses: the user themself, or a `users.manage`
+/// holder acting on a user strictly below their own level (the #120/#1 rule
+/// `update_user` applies). Returns whether the caller IS the user, because a
+/// self-service change to an address is a credential change and requires the
+/// current password (#120/#2), while the manager path supplies none.
+async fn email_manager(
+    state: &AppState,
+    auth_user: &AuthUser,
+    user_id: Uuid,
+) -> Result<bool, ApiError> {
+    if auth_user.0.id == user_id {
+        return Ok(true);
+    }
+    if !state
+        .db
+        .user_has_permission(auth_user.0.id, "users.manage")
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::Forbidden(
+            "You can only manage your own email addresses".to_string(),
+        ));
+    }
+    let caller_level = state
+        .db
+        .user_effective_level(auth_user.0.id)
+        .map_err(ApiError::from)?;
+    let target_level = state
+        .db
+        .user_effective_level(user_id)
+        .map_err(ApiError::from)?;
+    if target_level >= caller_level {
+        return Err(ApiError::Forbidden(
+            "You cannot modify a user at or above your own access level".to_string(),
+        ));
+    }
+    Ok(false)
+}
+
+fn require_current_password(
+    is_self: bool,
+    auth_user: &AuthUser,
+    current_password: Option<&str>,
+) -> Result<(), ApiError> {
+    if !is_self {
+        return Ok(());
+    }
+    let ok = current_password
+        .map(|c| PasswordHashUtil::verify(c, &auth_user.0.password_hash).unwrap_or(false))
+        .unwrap_or(false);
+    if !ok {
+        return Err(ApiError::BadRequest(
+            "Current password is incorrect".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// `GET /api/users/{id}/emails` -- every address the user holds, primary first.
+async fn list_user_emails(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<Vec<crate::models::UserEmail>>>, ApiError> {
+    // Viewing follows the profile rule: self, or anyone with users.manage.
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .user_has_permission(auth_user.0.id, "users.manage")
+            .map_err(ApiError::from)?
+    {
+        return Err(ApiError::Forbidden(
+            "You can only view your own email addresses".to_string(),
+        ));
+    }
+    let rows = state.db.list_user_emails(user_id).map_err(ApiError::from)?;
+    if rows.is_empty() {
+        // Every account has a primary row (the users INSERT trigger seeds it),
+        // so an empty list means the user does not exist.
+        return Err(ApiError::NotFound("User not found".to_string()));
+    }
+    Ok(Json(ApiResponse::success(rows)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddUserEmailRequest {
+    pub email: String,
+    /// Required when a user adds an address to their OWN account (#120/#2):
+    /// an address is a credential (reset links go to it), so a stolen token
+    /// must not be able to attach one.
+    pub current_password: Option<String>,
+}
+
+/// `POST /api/users/{id}/emails` -- add an unconfirmed secondary address and
+/// send it a confirmation link. 409 if any account already holds it.
+async fn add_user_email(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<AddUserEmailRequest>,
+) -> Result<Json<ApiResponse<crate::models::UserEmail>>, ApiError> {
+    let is_self = email_manager(&state, &auth_user, user_id).await?;
+    require_current_password(is_self, &auth_user, payload.current_password.as_deref())?;
+
+    let address = payload.email.trim().to_string();
+    if !address.contains('@') {
+        return Err(ApiError::BadRequest("Invalid email format".to_string()));
+    }
+    // The unique index is the authority; this pre-check only turns the common
+    // case into a clear 409 instead of a mapped constraint error.
+    if let Ok(Some(_)) = state.db.find_user_by_email(&address) {
+        return Err(ApiError::Conflict("Email already exists".to_string()));
+    }
+
+    let row = state
+        .db
+        .add_user_email(user_id, &address, crate::api::auth::stale_claim_cutoff())
+        .map_err(|e| match e {
+            crate::database::DatabaseError::Diesel(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UniqueViolation,
+                _,
+            )) => ApiError::Conflict("Email already exists".to_string()),
+            crate::database::DatabaseError::Diesel(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                _,
+            )) => ApiError::NotFound("User not found".to_string()),
+            other => ApiError::from(other),
+        })?;
+
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            AuditEventType::UserEmailAdded,
+            Some(user_id),
+            Some(auth_user.0.id),
+            serde_json::json!({ "address": row.email, "email_id": row.id }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("Failed to log user email add: {}", e);
+    }
+
+    crate::api::auth::issue_verification_mail_for(&state, user_id, Some(row.id), &row.email).await;
+
+    Ok(Json(ApiResponse::success_with_message(
+        row,
+        "Address added; a confirmation link has been sent to it".to_string(),
+    )))
+}
+
+/// `DELETE /api/users/{id}/emails/{email_id}` -- remove a secondary address.
+/// The primary cannot be removed, only replaced (`PUT /api/users/{id}` with
+/// `email`, or promote another confirmed address first).
+async fn remove_user_email(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path((user_id, email_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    email_manager(&state, &auth_user, user_id).await?;
+    let row = state
+        .db
+        .get_user_email(user_id, email_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("Email address not found".to_string()))?;
+    if row.is_primary {
+        return Err(ApiError::BadRequest(
+            "The primary address cannot be removed; make another address primary first".to_string(),
+        ));
+    }
+    state
+        .db
+        .remove_user_email(user_id, email_id)
+        .map_err(ApiError::from)?;
+
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            AuditEventType::UserEmailRemoved,
+            Some(user_id),
+            Some(auth_user.0.id),
+            serde_json::json!({ "address": row.email, "email_id": row.id }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("Failed to log user email removal: {}", e);
+    }
+
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        "Address removed".to_string(),
+    )))
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct SetPrimaryEmailRequest {
+    /// Required for a self-service change (#120/#2): the primary is where
+    /// reset links and every other credential-bearing mail go.
+    pub current_password: Option<String>,
+}
+
+/// `PUT /api/users/{id}/emails/{email_id}/primary` -- make a CONFIRMED address
+/// the primary. Emits `user_email_change` (old -> new) so the mailing-list sync
+/// moves the subscription exactly as it does for a replaced address.
+async fn set_primary_user_email(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path((user_id, email_id)): Path<(Uuid, Uuid)>,
+    payload: Option<Json<SetPrimaryEmailRequest>>,
+) -> Result<Json<ApiResponse<Vec<crate::models::UserEmail>>>, ApiError> {
+    let payload = payload.map(|Json(p)| p).unwrap_or_default();
+    let is_self = email_manager(&state, &auth_user, user_id).await?;
+    require_current_password(is_self, &auth_user, payload.current_password.as_deref())?;
+
+    let row = state
+        .db
+        .get_user_email(user_id, email_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("Email address not found".to_string()))?;
+    if row.is_primary {
+        return Err(ApiError::BadRequest(
+            "That address is already the primary".to_string(),
+        ));
+    }
+    if row.verified_at.is_none() {
+        return Err(ApiError::BadRequest(
+            "An address must be confirmed before it can become the primary".to_string(),
+        ));
+    }
+
+    let old = state
+        .db
+        .set_primary_user_email(user_id, email_id)
+        .map_err(ApiError::from)?;
+
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            AuditEventType::UserEmailChange,
+            Some(user_id),
+            Some(auth_user.0.id),
+            serde_json::json!({ "old_email": old, "new_email": row.email }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("Failed to log user email change: {}", e);
+    }
+
+    let rows = state.db.list_user_emails(user_id).map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::success_with_message(
+        rows,
+        "Primary address updated".to_string(),
+    )))
+}
+
+/// `POST /api/users/{id}/emails/{email_id}/resend` -- send a fresh
+/// confirmation link to an unconfirmed address. Unlike the public
+/// `/api/auth/email/resend` this is authenticated and scoped to the account,
+/// so it may say plainly whether the address is already confirmed.
+async fn resend_user_email(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path((user_id, email_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<()>>, ApiError> {
+    email_manager(&state, &auth_user, user_id).await?;
+    let row = state
+        .db
+        .get_user_email(user_id, email_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("Email address not found".to_string()))?;
+    if row.verified_at.is_some() {
+        return Err(ApiError::BadRequest(
+            "That address is already confirmed".to_string(),
+        ));
+    }
+    let email_id = if row.is_primary { None } else { Some(row.id) };
+    crate::api::auth::issue_verification_mail_for(&state, user_id, email_id, &row.email).await;
+    Ok(Json(ApiResponse::success_with_message(
+        (),
+        "Confirmation link sent".to_string(),
+    )))
 }

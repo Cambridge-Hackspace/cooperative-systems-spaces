@@ -101,12 +101,19 @@ async fn create_checkout(
         }
     };
 
+    // #118: a member may be several Stripe customers; reuse the one with a
+    // live subscription (else the most recent) so Stripe does not mint yet
+    // another. None on a first checkout -- Stripe creates the customer.
+    let current = state
+        .db
+        .current_stripe_customer(u.id)
+        .map_err(ApiError::from)?;
     let url = client
         .create_checkout_session(
             mode,
             &u.email,
             &u.id.to_string(),
-            u.stripe_customer_id.as_deref(),
+            current.as_ref().map(|c| c.customer_id.as_str()),
         )
         .await
         .map_err(|e| ApiError::InternalServerError(format!("Stripe checkout failed: {e}")))?;
@@ -121,11 +128,16 @@ async fn create_portal(
 ) -> Result<Json<ApiResponse<RedirectResponse>>, ApiError> {
     require_stripe_enabled(&state)?;
     let u = &user.0;
-    let customer = u.stripe_customer_id.clone().ok_or_else(|| {
-        ApiError::BadRequest(
-            "No Stripe customer for this account yet; start a membership first".to_string(),
-        )
-    })?;
+    let customer = state
+        .db
+        .current_stripe_customer(u.id)
+        .map_err(ApiError::from)?
+        .map(|c| c.customer_id)
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "No Stripe customer for this account yet; start a membership first".to_string(),
+            )
+        })?;
     let client = StripeClient::new(state.config_manager.clone());
     let url = client
         .create_billing_portal_session(&customer)
@@ -206,18 +218,36 @@ fn handle_checkout_completed(state: &AppState, obj: &serde_json::Value) -> Resul
     let Some(user) = user_from_client_reference(state, obj)? else {
         return Ok(false);
     };
+    // #118: link the customer as one of the user's (they may have several);
+    // the subscription it completed with rides on that row.
+    let subscription = str_field(obj, "subscription");
     if let Some(customer) = str_field(obj, "customer") {
         state
             .db
-            .set_stripe_customer_id(user.id, Some(customer.as_str()))
-            .map_err(ApiError::from)?;
+            .link_stripe_customer(
+                user.id,
+                &customer,
+                subscription.as_deref(),
+                subscription.as_deref().map(|_| "active"),
+            )
+            .map_err(|e| match e {
+                // Zero rows means the customer id is already linked to a
+                // DIFFERENT account. Never re-home it silently: answer 409 so
+                // the failure is visible in Stripe's webhook log, where an
+                // operator will see it, and log it here too.
+                crate::database::DatabaseError::Diesel(diesel::result::Error::NotFound) => {
+                    tracing::warn!(
+                        "stripe: customer {customer} completed checkout for user {} but is linked to another account",
+                        user.id
+                    );
+                    ApiError::Conflict(format!(
+                        "Stripe customer {customer} is already linked to a different account"
+                    ))
+                }
+                other => ApiError::from(other),
+            })?;
     }
-    let subscription = str_field(obj, "subscription");
-    if let Some(sub) = subscription.as_deref() {
-        state
-            .db
-            .set_stripe_subscription(user.id, Some(sub), Some("active"))
-            .map_err(ApiError::from)?;
+    if subscription.is_some() {
         audit(
             state,
             AuditEventType::SubscriptionStarted,
@@ -309,18 +339,21 @@ fn handle_subscription_updated(
     let Some(customer) = str_field(obj, "customer") else {
         return Ok(false);
     };
-    let Some(user) = state
+    // Only customers the platform knows are updated; the row is keyed on the
+    // customer, so the account lookup is a membership test, not a binding.
+    if state
         .db
         .find_user_by_stripe_customer_id(&customer)
         .map_err(ApiError::from)?
-    else {
+        .is_none()
+    {
         return Ok(false);
-    };
+    }
     let sub = str_field(obj, "id");
     let status = str_field(obj, "status");
     state
         .db
-        .set_stripe_subscription(user.id, sub.as_deref(), status.as_deref())
+        .set_stripe_subscription(&customer, sub.as_deref(), status.as_deref())
         .map_err(ApiError::from)?;
     Ok(true)
 }
@@ -343,7 +376,7 @@ fn handle_subscription_deleted(
     };
     state
         .db
-        .set_stripe_subscription(user.id, None, Some("canceled"))
+        .set_stripe_subscription(&customer, None, Some("canceled"))
         .map_err(ApiError::from)?;
     audit(
         state,
