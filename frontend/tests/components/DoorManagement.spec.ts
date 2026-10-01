@@ -258,9 +258,10 @@ describe('the door list', () => {
     const w = await page([door()])
     expect(w.find('tbody tr').text()).toContain('Edge A')
 
-    const unknown = await page([door()], [
-      { id: 'b9', resource_id: 'd1', device_id: 'dev-missing-9999', role: 'edge' },
-    ])
+    const unknown = await page(
+      [door()],
+      [{ id: 'b9', resource_id: 'd1', device_id: 'dev-missing-9999', role: 'edge' }]
+    )
     expect(unknown.find('tbody tr').text()).toContain('dev-miss')
   })
 
