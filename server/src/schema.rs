@@ -700,6 +700,18 @@ diesel::table! {
         expires_at -> Timestamptz,
         used_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
+        user_email_id -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    user_emails (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        email -> Varchar,
+        is_primary -> Bool,
+        verified_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -917,6 +929,8 @@ diesel::joinable!(door_checkins -> door_access_events (door_access_event_id));
 diesel::joinable!(profile_config_versions -> users (created_by));
 diesel::joinable!(password_reset_tokens -> users (user_id));
 diesel::joinable!(email_verification_tokens -> users (user_id));
+diesel::joinable!(email_verification_tokens -> user_emails (user_email_id));
+diesel::joinable!(user_emails -> users (user_id));
 
 diesel::joinable!(cmi5_courses -> users (imported_by));
 diesel::joinable!(cmi5_blocks -> cmi5_courses (course_id));
@@ -978,6 +992,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_mfa_totp,
     user_cards,
     user_mfa_webauthn,
+    user_emails,
     user_tool_training,
     user_training_progress,
     users,

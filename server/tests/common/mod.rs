@@ -307,4 +307,9 @@ pub const ROUTES: &[R] = &[
     R("PUT", "/api/users/00000000-0000-4000-8000-000000000001", Guard::Auth), // users::update_user
     R("PUT", "/api/users/me/password", Guard::Auth), // users::change_own_password
     R("PATCH", "/api/users/00000000-0000-4000-8000-000000000001/theme", Guard::Auth), // users::update_user_theme
+    R("GET", "/api/users/00000000-0000-4000-8000-000000000001/emails", Guard::Auth), // users::list_user_emails
+    R("POST", "/api/users/00000000-0000-4000-8000-000000000001/emails", Guard::Auth), // users::add_user_email
+    R("DELETE", "/api/users/00000000-0000-4000-8000-000000000001/emails/00000000-0000-4000-8000-000000000001", Guard::Auth), // users::remove_user_email
+    R("PUT", "/api/users/00000000-0000-4000-8000-000000000001/emails/00000000-0000-4000-8000-000000000001/primary", Guard::Auth), // users::set_primary_user_email
+    R("POST", "/api/users/00000000-0000-4000-8000-000000000001/emails/00000000-0000-4000-8000-000000000001/resend", Guard::Auth), // users::resend_user_email
 ];

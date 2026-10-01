@@ -15,6 +15,7 @@ mod tool_billing;
 mod tool_modules;
 mod tool_tiers;
 mod tools;
+mod user_emails;
 // `pub`, not `pub(crate)`: these types appear in the public signatures of
 // handlers and models reachable through AppState, and a public item exposing a
 // crate-private type trips `private_interfaces`, which is a hard error under
@@ -41,6 +42,7 @@ pub use tool_modules::*;
 pub use tool_tiers::*;
 pub use tools::*;
 pub use training::*;
+pub use user_emails::*;
 pub use waivers::*;
 pub use webhooks::*;
 
@@ -436,6 +438,13 @@ pub enum AuditEventType {
     /// which previously recorded nothing -- so a change there would silently
     /// desync the mailing list. The payload carries the old and new addresses.
     UserEmailChange,
+    /// A secondary address was added to an account (#118). Payload: the
+    /// address and the `user_emails` row id. Verification follows separately
+    /// (`email_verification_sent` / `email_verified` name the address).
+    UserEmailAdded,
+    /// A secondary address was removed from an account (#118). The primary
+    /// cannot be removed, only replaced, which is a `user_email_change`.
+    UserEmailRemoved,
     // Membership billing (Stripe + dues ledger)
     //
     // Appended at the tail, like the groups above, so a concurrent branch adding
@@ -610,6 +619,8 @@ impl AuditEventType {
             Self::MailingListSyncAdd => "mailing_list_sync_add",
             Self::MailingListSyncRemove => "mailing_list_sync_remove",
             Self::UserEmailChange => "user_email_change",
+            Self::UserEmailAdded => "user_email_added",
+            Self::UserEmailRemoved => "user_email_removed",
             Self::MembershipGranted => "membership_granted",
             Self::MembershipRevoked => "membership_revoked",
             Self::MembershipPaymentRecorded => "membership_payment_recorded",
@@ -754,6 +765,8 @@ impl AuditEventType {
             MailingListSyncAdd,
             MailingListSyncRemove,
             UserEmailChange,
+            UserEmailAdded,
+            UserEmailRemoved,
             MembershipGranted,
             MembershipRevoked,
             MembershipPaymentRecorded,

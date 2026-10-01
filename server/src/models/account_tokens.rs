@@ -48,6 +48,10 @@ pub struct EmailVerificationToken {
     pub expires_at: DateTime<Utc>,
     pub used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// The `user_emails` row this token confirms (#118). `None` is the
+    /// primary address -- what every token issued before the column meant.
+    /// Last field for the positional-Queryable reason the User model documents.
+    pub user_email_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -57,4 +61,5 @@ pub struct NewEmailVerificationToken {
     pub user_id: Uuid,
     pub token_hash: String,
     pub expires_at: DateTime<Utc>,
+    pub user_email_id: Option<Uuid>,
 }

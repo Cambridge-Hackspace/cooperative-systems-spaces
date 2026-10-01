@@ -61,6 +61,20 @@ export interface User {
   meta: Record<string, unknown>
 }
 
+/**
+ * One of a user's email addresses (#118). `email` on `User` is the row with
+ * `is_primary`; the others also sign in but receive no account mail.
+ */
+export interface UserEmail {
+  id: string
+  user_id: string
+  email: string
+  is_primary: boolean
+  /** When the owner confirmed it; null while unconfirmed. */
+  verified_at: string | null
+  created_at: string
+}
+
 /** Lifecycle state of a member access card (server `card_status` enum). */
 export enum CardStatus {
   /** Opens the member's tools/doors. */
