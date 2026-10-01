@@ -32,7 +32,7 @@ import DeviceManagement from '@/components/DeviceManagement.vue'
 interface Device {
   id: string
   name: string
-  kind: string
+  roles: string[]
   mac_address: string | null
   platform: string | null
   software_version: string | null
@@ -47,7 +47,7 @@ function device(over: Partial<Device> = {}): Device {
   return {
     id: 'dev-1',
     name: 'Front door edge',
-    kind: 'edge',
+    roles: ['edge'],
     mac_address: 'aa:bb:cc:dd:ee:ff',
     platform: 'linux',
     software_version: '0.4.1',

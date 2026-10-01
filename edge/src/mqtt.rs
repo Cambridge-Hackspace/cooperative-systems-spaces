@@ -393,12 +393,6 @@ struct LocalToolRequest {
     seconds: Option<f32>,
     #[serde(default)]
     temperature: Option<f32>,
-    /// The tool's own API key. Metered tools require it server-side (the global
-    /// key is rejected for them); the controller supplies it and the edge
-    /// forwards it. Absent for non-metered tools, which authenticate by the
-    /// edge's device token.
-    #[serde(default)]
-    api_key: Option<String>,
 }
 
 /// A firmware power reading on the local broker (#48). The edge records it for
@@ -427,8 +421,6 @@ struct LocalPowerRequest {
     amperage_limit: Option<f64>,
     #[serde(default)]
     self_tripped: Option<bool>,
-    #[serde(default)]
-    api_key: Option<String>,
 }
 
 pub struct LocalMqttClient {
@@ -748,17 +740,13 @@ impl LocalMqttClient {
             let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
             let card = req.card.clone();
             let tool_id = req.tool_id.clone();
-            let api_key = req.api_key.clone();
             let token = self.remote_auth_token.clone();
             let http = self.http_client.clone();
             tokio::spawn(async move {
                 // A JSON body, not a query string: the card identifies a
                 // person and a URL is written down by every proxy and access
                 // log it passes through (#107).
-                let mut body = serde_json::json!({ "card": card, "tool_id": tool_id });
-                if let Some(k) = api_key {
-                    body["api_key"] = serde_json::Value::String(k);
-                }
+                let body = serde_json::json!({ "card": card, "tool_id": tool_id });
                 if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                     warn!("Failed to forward tool-on to remote: {}", e);
                 }
@@ -847,7 +835,6 @@ impl LocalMqttClient {
             // None as null and the server's `Option<bool>` keeps the three-way
             // distinction the detector depends on.
             "relay_on": req.relay_on,
-            "api_key": req.api_key,
         });
         tokio::spawn(async move {
             if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
@@ -863,10 +850,7 @@ impl LocalMqttClient {
     /// -- fail closed.
     async fn remote_tool_on(&self, req: &LocalToolRequest) -> (bool, String) {
         let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
-        let mut body = serde_json::json!({ "card": req.card, "tool_id": req.tool_id });
-        if let Some(k) = &req.api_key {
-            body["api_key"] = serde_json::Value::String(k.clone());
-        }
+        let body = serde_json::json!({ "card": req.card, "tool_id": req.tool_id });
         match self
             .http_client
             .post(&url)
@@ -907,14 +891,10 @@ impl LocalMqttClient {
         let url = format!("{}/api/toolguard/tool-off", self.remote_instance_url);
         let card = req.card.clone();
         let tool_id = req.tool_id.clone();
-        let api_key = req.api_key.clone();
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         tokio::spawn(async move {
-            let mut body = serde_json::json!({ "card": card, "tool_id": tool_id });
-            if let Some(k) = api_key {
-                body["api_key"] = serde_json::Value::String(k);
-            }
+            let body = serde_json::json!({ "card": card, "tool_id": tool_id });
             if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                 warn!("Failed to forward tool-off to remote: {}", e);
             }
@@ -932,7 +912,6 @@ impl LocalMqttClient {
         let card = req.card.clone();
         let tool_id = req.tool_id.clone();
         let temperature = req.temperature;
-        let api_key = req.api_key.clone();
         tokio::spawn(async move {
             let mut body = serde_json::json!({
                 "card": card,
@@ -941,9 +920,6 @@ impl LocalMqttClient {
             });
             if let Some(t) = temperature {
                 body["temperature"] = serde_json::json!(t);
-            }
-            if let Some(k) = api_key {
-                body["api_key"] = serde_json::Value::String(k);
             }
             if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                 warn!("Failed to forward tool-log to remote: {}", e);

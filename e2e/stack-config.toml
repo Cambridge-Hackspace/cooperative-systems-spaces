@@ -286,9 +286,11 @@ label = "Other"
 [toolguard]
 enabled = true
 profile_field = "card_id"
-# A shared global key exists so the toolbilling stage can prove it is REJECTED
-# for a metered tool (which must use its own per-tool key).
-global_api_key = "e2e-global-key"
+# `global_api_key` is gone (#101 slice 6). It was a single shared secret that
+# opened every tool, and it existed here so the toolbilling stage could prove it
+# was REJECTED for a metered tool. Tool auth is now a registered device's Bearer
+# token bound to the tool, and the claim that survived -- a valid credential that
+# is not this tool's cannot post a charge -- is asserted through bindings instead.
 
 # Card encryption at rest (#108), ON in the suite on purpose.
 #
@@ -364,6 +366,29 @@ git_timeout_secs = 20
 [place]
 enabled = true
 types = ["Room", "Spot"]
+
+# DoorConfig::default() has `enabled = false`, and this file had no [door]
+# section at all -- so `require_enabled` refused the only three handlers that
+# reach the access engine (`door_info`, `door_checkin`, `admin_unlock`) with a
+# 403 on every run. Door CRUD and rule authoring are NOT gated, which is why the
+# journeys tier could create doors and add rules and nothing looked wrong: the
+# authoring surface worked while the *decision* -- all of
+# `DoorService::evaluate` / `access_engine::may` -- was unreachable. Door policy
+# therefore had no behavioural oracle at any tier until the `doors` stage.
+#
+# Exactly the failure the [place] note above records, one module over. Enabled
+# here so the doors stage judges door policy rather than a disabled module; that
+# stage fails loudly rather than skipping if this is ever turned back off.
+# All three fields are stated because DoorConfig's are not `serde(default)`:
+# declaring the section at all obliges this file to carry every field, which
+# server/tests/stack_config_parses.rs enforces by name. The two non-toggle values
+# are the same as DoorConfig::default(), written out rather than inherited so a
+# change to the default is a change to this file rather than a silent change to
+# what the suite exercises.
+[door]
+enabled = true
+default_unlock_duration_ms = 5000
+qr_url_template = "{site_url}/door/{door_id}/checkin"
 
 # PowerConfig::default() has `enabled = false`; enabled here so the `circuits`
 # stage can exercise the power-topology CRUD (#42). Same rationale as [place]

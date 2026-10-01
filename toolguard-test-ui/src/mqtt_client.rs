@@ -10,9 +10,6 @@ pub enum MqttCommand {
     ToolOn {
         card: String,
         tool_id: String,
-        /// The tool's own key, forwarded so the server will authorize a metered
-        /// tool (which rejects the shared global key on the money path).
-        api_key: Option<String>,
     },
     /// A usage report (`tool-log`) carrying elapsed seconds, so a per-minute
     /// metered tool accrues billable time before it is settled at tool-off.
@@ -20,12 +17,10 @@ pub enum MqttCommand {
         card: String,
         tool_id: String,
         seconds: f32,
-        api_key: Option<String>,
     },
     ToolOff {
         card: String,
         tool_id: String,
-        api_key: Option<String>,
     },
 }
 
@@ -93,7 +88,7 @@ use css_lib::wire::local::{
 pub fn spawn(
     broker_url: String,
     client_id: String,
-    startup_tool_offs: Vec<(String, String, Option<String>)>, // (card, tool_id, api_key)
+    startup_tool_offs: Vec<(String, String)>, // (card, tool_id)
 ) -> (Sender<MqttCommand>, Receiver<MqttEvent>) {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<MqttCommand>();
     let (evt_tx, evt_rx) = std::sync::mpsc::channel::<MqttEvent>();
@@ -110,7 +105,7 @@ pub fn spawn(
 fn run_loop(
     broker_url: String,
     client_id: String,
-    startup_tool_offs: Vec<(String, String, Option<String>)>,
+    startup_tool_offs: Vec<(String, String)>,
     cmd_rx: Receiver<MqttCommand>,
     evt_tx: Sender<MqttEvent>,
 ) {
@@ -148,8 +143,8 @@ fn run_loop(
     let _ = client.subscribe(STATE_TOPIC, 1);
 
     // Startup: publish tool-off for all known tools
-    for (card, tool_id, api_key) in startup_tool_offs {
-        publish_tool_off(&client, &card, &tool_id, api_key.as_deref());
+    for (card, tool_id) in startup_tool_offs {
+        publish_tool_off(&client, &card, &tool_id);
     }
 
     // Set up the receiver consumer
@@ -178,22 +173,17 @@ fn run_loop(
         // Drain any UI commands (non-blocking)
         loop {
             match cmd_rx.try_recv() {
-                Ok(MqttCommand::ToolOn {
-                    card,
-                    tool_id,
-                    api_key,
-                }) => publish_tool_on(&client, &card, &tool_id, api_key.as_deref()),
+                Ok(MqttCommand::ToolOn { card, tool_id }) => {
+                    publish_tool_on(&client, &card, &tool_id)
+                }
                 Ok(MqttCommand::ToolLog {
                     card,
                     tool_id,
                     seconds,
-                    api_key,
-                }) => publish_tool_log(&client, &card, &tool_id, seconds, api_key.as_deref()),
-                Ok(MqttCommand::ToolOff {
-                    card,
-                    tool_id,
-                    api_key,
-                }) => publish_tool_off(&client, &card, &tool_id, api_key.as_deref()),
+                }) => publish_tool_log(&client, &card, &tool_id, seconds),
+                Ok(MqttCommand::ToolOff { card, tool_id }) => {
+                    publish_tool_off(&client, &card, &tool_id)
+                }
                 Err(_) => break,
             }
         }
@@ -203,45 +193,36 @@ fn run_loop(
 }
 
 /// Build the local-MQTT request payload the edge expects (`LocalToolRequest`):
-/// `card` and `tool_id` always, `seconds` and `api_key` only when present, so a
+/// `card` and `tool_id` always, `seconds` only when present, so a
 /// non-metered tool still sends the same minimal `{card, tool_id}` as before.
-fn tool_payload(card: &str, tool_id: &str, seconds: Option<f32>, api_key: Option<&str>) -> String {
+fn tool_payload(card: &str, tool_id: &str, seconds: Option<f32>) -> String {
     let mut obj = serde_json::Map::new();
     obj.insert("card".to_string(), card.into());
     obj.insert("tool_id".to_string(), tool_id.into());
     if let Some(s) = seconds {
         obj.insert("seconds".to_string(), s.into());
     }
-    if let Some(k) = api_key {
-        obj.insert("api_key".to_string(), k.into());
-    }
     serde_json::Value::Object(obj).to_string()
 }
 
-fn publish_tool_on(client: &mqtt::Client, card: &str, tool_id: &str, api_key: Option<&str>) {
-    let payload = tool_payload(card, tool_id, None, api_key);
+fn publish_tool_on(client: &mqtt::Client, card: &str, tool_id: &str) {
+    let payload = tool_payload(card, tool_id, None);
     let msg = mqtt::Message::new(css_lib::wire::local::TOOL_ON_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
         eprintln!("Failed to publish tool-on: {e}");
     }
 }
 
-fn publish_tool_log(
-    client: &mqtt::Client,
-    card: &str,
-    tool_id: &str,
-    seconds: f32,
-    api_key: Option<&str>,
-) {
-    let payload = tool_payload(card, tool_id, Some(seconds), api_key);
+fn publish_tool_log(client: &mqtt::Client, card: &str, tool_id: &str, seconds: f32) {
+    let payload = tool_payload(card, tool_id, Some(seconds));
     let msg = mqtt::Message::new(css_lib::wire::local::TOOL_LOG_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
         eprintln!("Failed to publish tool-log: {e}");
     }
 }
 
-fn publish_tool_off(client: &mqtt::Client, card: &str, tool_id: &str, api_key: Option<&str>) {
-    let payload = tool_payload(card, tool_id, None, api_key);
+fn publish_tool_off(client: &mqtt::Client, card: &str, tool_id: &str) {
+    let payload = tool_payload(card, tool_id, None);
     let msg = mqtt::Message::new(css_lib::wire::local::TOOL_OFF_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
         eprintln!("Failed to publish tool-off: {e}");

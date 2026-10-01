@@ -479,7 +479,7 @@ impl ModuleState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use css_lib::wire::{ToolInterlockRule, ToolModuleBinding, ToolModuleTool};
+    use css_lib::wire::{DeviceBinding, ToolInterlockRule, ToolModuleTool};
 
     fn t0() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-09-15T12:00:00Z")
@@ -504,8 +504,8 @@ mod tests {
         }
     }
 
-    fn binding(id: &str, role: &str, on_disconnect: &str) -> ToolModuleBinding {
-        ToolModuleBinding {
+    fn binding(id: &str, role: &str, on_disconnect: &str) -> DeviceBinding {
+        DeviceBinding {
             id: id.to_string(),
             device_id: format!("dev-{id}"),
             role: role.to_string(),
@@ -515,10 +515,7 @@ mod tests {
         }
     }
 
-    fn state_with(
-        modules: Vec<ToolModuleBinding>,
-        interlocks: Vec<ToolInterlockRule>,
-    ) -> ModuleState {
+    fn state_with(modules: Vec<DeviceBinding>, interlocks: Vec<ToolInterlockRule>) -> ModuleState {
         let s = ModuleState::new();
         s.apply_state(ToolModuleStatePayload {
             as_of: t0().to_rfc3339(),

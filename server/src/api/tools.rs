@@ -29,7 +29,6 @@ pub struct CreateToolRequest {
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
     pub external_id: Option<String>,
-    pub external_api_key: Option<String>,
     pub place_id: Option<uuid::Uuid>,
     /// Optional usability window. When set and the schedule is closed,
     /// the tool is removed from every user's authorized list at sync time.
@@ -56,7 +55,6 @@ pub struct UpdateToolRequest {
     pub maintenance_notes: Option<String>,
     pub requires_training: Option<bool>,
     pub external_id: Option<String>,
-    pub external_api_key: Option<String>,
     pub place_id: Option<uuid::Uuid>,
     pub schedule_id: Option<uuid::Uuid>,
     pub usage_flat_fee: Option<bigdecimal::BigDecimal>,
@@ -161,7 +159,6 @@ async fn create_tool(
         requires_training: payload.requires_training,
         created_by: staff.0.id,
         external_id: payload.external_id,
-        external_api_key: payload.external_api_key,
         place_id: payload.place_id,
         schedule_id: payload.schedule_id,
         usage_flat_fee: payload.usage_flat_fee,

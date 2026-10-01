@@ -26,8 +26,8 @@ use uuid::Uuid;
 
 use crate::auth::AdminUser;
 use crate::models::{
-    enforcement, interlock_condition, interlock_kind, interlock_reset, module_role, on_disconnect,
-    AuditEventType, NewAuditLog, NewToolInterlock, NewToolModule, ToolInterlock, ToolModule,
+    binding_role, enforcement, interlock_condition, interlock_kind, interlock_reset, on_disconnect,
+    AuditEventType, DeviceBinding, NewAuditLog, NewDeviceBinding, NewToolInterlock, ToolInterlock,
 };
 use crate::AppState;
 
@@ -59,7 +59,9 @@ pub fn admin_interlock_routes() -> Router<AppState> {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateModuleRequest {
-    pub tool_id: Uuid,
+    /// #101: the resource to bind to -- a tool or a door. A door's coordinator is
+    /// bound here with role `edge`; a tool's chain with reader / power / sensor.
+    pub resource_id: Uuid,
     pub device_id: Uuid,
     pub role: String,
     pub name: String,
@@ -100,7 +102,7 @@ pub struct DeletedResponse {
 async fn list_modules(
     State(state): State<AppState>,
     _admin: AdminUser,
-) -> Result<Json<ApiResponse<Vec<ToolModule>>>, ApiError> {
+) -> Result<Json<ApiResponse<Vec<DeviceBinding>>>, ApiError> {
     let modules = state.db.list_tool_modules()?;
     Ok(Json(ApiResponse::success(modules)))
 }
@@ -110,7 +112,7 @@ async fn create_module(
     admin: AdminUser,
     Json(req): Json<CreateModuleRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let role = one_of(&req.role, &module_role::ALL, "role")?;
+    let role = one_of(&req.role, &binding_role::ALL, "role")?;
     let on_disc = match req.on_disconnect.as_deref() {
         Some(v) => one_of(v, &on_disconnect::ALL, "on_disconnect")?,
         // Deny-biased: an unstated policy is the fail-safe one, matching the
@@ -122,17 +124,40 @@ async fn create_module(
         return Err(ApiError::BadRequest("name is required".to_string()));
     }
 
-    // Resolve both FKs first so a missing tool or device is a 400 naming which
+    // Resolve both FKs first so a missing resource or device is a 400 naming which
     // one, rather than a raw foreign-key 500 from the insert.
-    if state.db.get_tool_by_id(req.tool_id)?.is_none() {
-        return Err(ApiError::BadRequest("tool_id does not exist".to_string()));
+    //
+    // #101: any resource may be bound, so this asks `resources` rather than
+    // `tools`. The role is deliberately NOT constrained by resource kind -- a door
+    // can legitimately have a `reader` -- so the guards that matter are that the
+    // resource exists and that the device declares the role.
+    if state.db.resource_kind(req.resource_id)?.is_none() {
+        return Err(ApiError::BadRequest(
+            "resource_id does not exist".to_string(),
+        ));
     }
-    if !state.db.space_device_exists(req.device_id)? {
-        return Err(ApiError::BadRequest("device_id does not exist".to_string()));
+    // #101: the device must declare the role it is being bound in. Binding a
+    // `power` role onto a device that only reads cards would produce a tool the
+    // system believes it can de-energize and cannot -- caught here as a 400
+    // rather than discovered in a workshop. (This also serves as the existence
+    // check: no capabilities means no device.)
+    let device_caps = match state.db.space_device_capabilities(req.device_id)? {
+        Some(v) => css_lib::capabilities::DeviceCapabilities::from_value(&v),
+        None => return Err(ApiError::BadRequest("device_id does not exist".to_string())),
+    };
+    if !device_caps.has_role(&role) {
+        return Err(ApiError::BadRequest(format!(
+            "device does not declare the '{role}' role (declares: {})",
+            if device_caps.roles.is_empty() {
+                "none".to_string()
+            } else {
+                device_caps.roles.join(", ")
+            }
+        )));
     }
 
-    let created = state.db.create_tool_module(&NewToolModule {
-        tool_id: req.tool_id,
+    let created = state.db.create_tool_module(&NewDeviceBinding {
+        resource_id: req.resource_id,
         device_id: req.device_id,
         role,
         name: req.name.trim().to_string(),
@@ -146,7 +171,7 @@ async fn create_module(
         Some(admin.0.id),
         serde_json::json!({
             "module_id": created.id,
-            "tool_id": created.tool_id,
+            "resource_id": created.resource_id,
             "device_id": created.device_id,
             "role": created.role,
             "name": created.name,
@@ -154,8 +179,30 @@ async fn create_module(
         }),
     );
     broadcast(&state).await;
+    // #101: binding an `edge` coordinator is how a door gets its strike driver
+    // now, so the door snapshot has to reach that device -- `broadcast` above only
+    // pushes tool module state. Harmless when the device coordinates no doors: the
+    // snapshot is then simply empty.
+    republish_doors_if_edge(&state, &created.role, created.device_id);
 
     Ok((StatusCode::CREATED, Json(ApiResponse::success(created))))
+}
+
+/// Push `doors/state` to a device when an `edge` binding appears or disappears.
+///
+/// Moving a door's coordinator is two calls -- delete the old binding, create the
+/// new one -- and each has to tell the device it affects, or the door lingers in
+/// the old device's snapshot and never reaches the new one.
+fn republish_doors_if_edge(state: &AppState, role: &str, device_id: Uuid) {
+    if role != binding_role::EDGE {
+        return;
+    }
+    if !state.config_manager.get_config().door.enabled {
+        return;
+    }
+    if let Err(e) = state.door_service.publish_state(device_id) {
+        tracing::warn!("Failed to republish doors/state to {}: {}", device_id, e);
+    }
 }
 
 async fn delete_module(
@@ -163,6 +210,9 @@ async fn delete_module(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<DeletedResponse>>, ApiError> {
+    // #101: read the binding before removing it -- afterwards there is no row to
+    // tell us which device to notify.
+    let removed = state.db.get_device_binding(id)?;
     // The row count decides the status: deleting an id that matched nothing is a
     // 404, not a 200 plus an audit entry claiming a deletion that never happened.
     let affected = state.db.delete_tool_module(id)?;
@@ -177,6 +227,9 @@ async fn delete_module(
         serde_json::json!({ "module_id": id }),
     );
     broadcast(&state).await;
+    if let Some(b) = removed {
+        republish_doors_if_edge(&state, &b.role, b.device_id);
+    }
 
     Ok(Json(ApiResponse::success(DeletedResponse {
         deleted: true,
@@ -254,10 +307,15 @@ async fn create_interlock(
     // what it says -- the worst outcome available for a safety interlock, and
     // exactly the kind of thing nobody discovers until the day it matters.
     if enforce == crate::models::enforcement::FIRMWARE {
-        let caps: Vec<css_lib::capabilities::ModuleCapabilities> = bound
-            .iter()
-            .map(|m| css_lib::capabilities::ModuleCapabilities::from_params(&m.params))
-            .collect();
+        // #101: capabilities are read off each bound module's DEVICE now, not the
+        // binding's `params`. A device we cannot load contributes nothing, which
+        // leaves the tier unachievable -- the deny-biased direction.
+        let mut caps: Vec<css_lib::capabilities::ModuleCapabilities> = Vec::new();
+        for m in &bound {
+            if let Some(v) = state.db.space_device_capabilities(m.device_id)? {
+                caps.push(css_lib::capabilities::DeviceCapabilities::from_value(&v).module);
+            }
+        }
         if let Err(e) = css_lib::capabilities::firmware_enforcement_achievable(&condition, &caps) {
             return Err(ApiError::BadRequest(e.reason));
         }

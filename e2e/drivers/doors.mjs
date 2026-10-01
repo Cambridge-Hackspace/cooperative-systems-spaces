@@ -1,0 +1,375 @@
+// Door access policy, exercised against a real stack (#101, folding #140).
+//
+// What this proves, and what nothing else did: that the door decision engine
+// reaches a runtime answer. Until this stage existed, door policy had no
+// behavioural oracle anywhere. `door_card_resolution.rs` is a *source* check,
+// the door MQTT path is shell-only, and -- worse than an absent stage -- the
+// door module itself was switched OFF in this suite's configuration, so
+// `POST /api/doors/{id}/checkin` answered 403 on every run and the whole of
+// `DoorService::evaluate` / `access_engine::may` was unreached. The `[door]`
+// section in stack-config.toml exists because of this file; see the note there.
+//
+// The claims, in the order they are asserted:
+//
+//   1. a door with no rules denies -- doors are `Restricted`, so "no matching
+//      rule" is a refusal rather than a default-open.
+//   2. an allow rule grants.
+//   3. a deny rule beats that allow. This is the runtime half of a safety claim
+//      that previously had only a unit/vector half: `contracts/door_rules.json`
+//      asserts deny-precedence in the pure engine, and nothing asserted it
+//      end-to-end through the real handler, database and rule loader.
+//   4. deleting the deny rule restores access -- revocation is not one-way.
+//   5. a role rule is a tier gate, proven in BOTH directions: a `staff` rule
+//      refuses a guest, a `guest` rule admits one. A role rule that matched
+//      everybody would pass assertion 2 and be a hole.
+//   6. a disabled door refuses regardless of its rules.
+//   7. the check-in rate limit refuses the 6th attempt in the window. It counts
+//      every attempt, granted or not, so a flood cannot be laundered through
+//      successful check-ins.
+//   8. every decision, granted and denied, is recorded as a door access event
+//      with its reason -- the audit trail is part of the behaviour.
+//
+// What this does NOT prove: that a strike physically opens. Nothing here
+// switches hardware, and these doors have no edge device bound, so a granted
+// check-in is logged and published to nobody. It proves the decision, not the
+// actuation. `admin_unlock` is deliberately not asserted here -- it bypasses the
+// engine today and becomes rule-subject in the same epic, so its assertions live
+// with that change rather than being written here and immediately flipped.
+//
+// Budget note: check-in is throttled to 5 attempts / 30s per (user, door), and
+// every attempt counts. Each scenario therefore gets its own door and member
+// rather than looping, and the counts below are deliberate.
+
+import { GET, POST, PATCH, DELETE, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+
+
+main(async () => {
+  const admin = await adminAccount('doors_admin')
+  const T = { token: admin.token }
+  const tag = admin.username
+
+  // --- two places, because every door connects two -------------------------
+  // `is_special` roots with a free-form type, so this stage does not depend on
+  // the deployment's configured place-type vocabulary or its ordering rules.
+  const mkPlace = async (name) => {
+    const res = await POST('/api/admin/places', {
+      token: admin.token,
+      body: { name: `${name}-${tag}`, place_type: 'Outside', is_special: true },
+    })
+    return { id: res.json?.data?.id, status: res.status, text: res.text }
+  }
+  const outside = await mkPlace('doors-outside')
+  const inside = await mkPlace('doors-inside')
+  ok('doors/places-created', !!outside.id && !!inside.id,
+    `places -> ${outside.status} ${inside.status}: ${outside.text.slice(0, 160)}`)
+  if (!outside.id || !inside.id) return
+
+  const mkDoor = async (name) => {
+    const res = await POST('/api/admin/doors', {
+      token: admin.token,
+      body: { name: `${name}-${tag}`, place_id_from: outside.id, place_id_to: inside.id },
+    })
+    return { id: res.json?.data?.id, status: res.status, text: res.text }
+  }
+  const addRule = (doorId, body) =>
+    POST(`/api/admin/doors/${doorId}/rules`, { token: admin.token, body })
+  const checkin = (doorId, token) => POST(`/api/doors/${doorId}/checkin`, { token })
+  /** A check-in's verdict. Denials are 200 + `unlocked: false`, not an error. */
+  const verdict = (res) => ({
+    status: res.status,
+    unlocked: res.json?.data?.unlocked,
+    reason: res.json?.data?.reason,
+  })
+
+  // --- 1-4: rule precedence on one door, one member ------------------------
+  const doorA = await mkDoor('doors-precedence')
+  ok('doors/door-created', !!doorA.id, `POST /api/admin/doors -> ${doorA.status} ${doorA.text.slice(0, 200)}`)
+  if (!doorA.id) return
+  const memberA = await account('doors_member_a')
+
+  // Anti-vacuity, and the reason this file can be trusted at all. A 403 here is
+  // the door module being disabled, which would make every assertion below pass
+  // on a server that never evaluated a rule.
+  const first = verdict(await checkin(doorA.id, memberA.token))
+  if (first.status === 403) {
+    record('doors/module-is-enabled', 'fail',
+      `POST /api/doors/{id}/checkin answered 403, which means [door] enabled is false in ` +
+      `the stack config. Every assertion in this stage would then be judging a disabled ` +
+      `module rather than door policy. Set [door] enabled = true.`)
+    return
+  }
+  record('doors/module-is-enabled', 'ok')
+
+  // The door carries only the seeded standing staff grant, which a guest does not
+  // satisfy, so nothing matches this member. Doors are `Restricted`, so that is a
+  // refusal rather than a default-open.
+  assertEq('doors/no-rule-denies', false, first.unlocked,
+    'doors are Restricted: no MATCHING rule must refuse, not default open')
+  ok('doors/no-rule-denial-says-why', /no matching/i.test(String(first.reason ?? '')),
+    `expected a "no matching access rule" reason, got ${JSON.stringify(first.reason)}`)
+
+  const allowRule = await addRule(doorA.id, {
+    kind: 'user',
+    value: memberA.user.id,
+    effect: 'allow',
+  })
+  assertEq('doors/allow-rule-created', 201, allowRule.status)
+  const allowed = verdict(await checkin(doorA.id, memberA.token))
+  assertEq('doors/allow-rule-grants', true, allowed.unlocked,
+    `an allow rule naming this user must grant: ${JSON.stringify(allowed)}`)
+
+  // The precedence claim. A deny on top of a standing allow must win.
+  const denyRule = await addRule(doorA.id, {
+    kind: 'user',
+    value: memberA.user.id,
+    effect: 'deny',
+  })
+  assertEq('doors/deny-rule-created', 201, denyRule.status)
+  const denied = verdict(await checkin(doorA.id, memberA.token))
+  assertEq('doors/deny-beats-allow', false, denied.unlocked,
+    'an explicit deny must beat a standing allow -- this is the runtime half of a ' +
+    'claim the vector file only made about the pure engine')
+  ok('doors/deny-says-it-was-a-rule', /access rule/i.test(String(denied.reason ?? '')),
+    `expected a "denied by access rule" reason, got ${JSON.stringify(denied.reason)}`)
+
+  // And revocation is not one-way: removing the deny restores the allow.
+  const denyId = denyRule.json?.data?.id
+  const removed = await DELETE(`/api/admin/doors/${doorA.id}/rules/${denyId}`, T)
+  assertEq('doors/deny-rule-removed', 200, removed.status)
+  const restored = verdict(await checkin(doorA.id, memberA.token))
+  assertEq('doors/removing-the-deny-restores-access', true, restored.unlocked,
+    `deleting the deny rule must let the standing allow apply again: ${JSON.stringify(restored)}`)
+
+  // --- 5-6: role rules are a tier gate, and a disabled door refuses --------
+  const doorB = await mkDoor('doors-roles')
+  const memberB = await account('doors_member_b')
+  ok('doors/second-door-created', !!doorB.id, `-> ${doorB.status}`)
+  if (doorB.id) {
+    // A freshly registered account holds `guest` (level 1). An `admin` rule
+    // (level 5) must therefore refuse it: role rules compare tiers, and a rule
+    // that matched any authenticated user would be a hole this proves closed.
+    // (`admin` rather than `staff` because every door is seeded with a standing
+    // staff grant, and re-adding it would collide with the rules' UNIQUE key.)
+    const highTierRule = await addRule(doorB.id, { kind: 'role', value: 'admin', effect: 'allow' })
+    assertEq('doors/high-tier-role-rule-created', 201, highTierRule.status)
+    const belowTier = verdict(await checkin(doorB.id, memberB.token))
+    assertEq('doors/role-rule-refuses-a-lower-tier', false, belowTier.unlocked,
+      `a guest must not satisfy an admin rule: ${JSON.stringify(belowTier)}`)
+
+    // The same mechanism admits when the tier is met.
+    const guestRule = await addRule(doorB.id, { kind: 'role', value: 'guest', effect: 'allow' })
+    assertEq('doors/guest-role-rule-created', 201, guestRule.status)
+    const atTier = verdict(await checkin(doorB.id, memberB.token))
+    assertEq('doors/role-rule-admits-at-tier', true, atTier.unlocked,
+      `a guest must satisfy a guest rule: ${JSON.stringify(atTier)}`)
+
+    // A disabled door refuses whatever its rules say. Availability outranks any
+    // positive grant, so this is asserted with the grant still in place.
+    const disable = await PATCH(`/api/admin/doors/${doorB.id}`, {
+      token: admin.token,
+      body: { enabled: false },
+    })
+    assertEq('doors/door-disabled', 200, disable.status)
+    const whileDisabled = verdict(await checkin(doorB.id, memberB.token))
+    assertEq('doors/disabled-door-refuses', false, whileDisabled.unlocked,
+      `a disabled door must refuse even a granted member: ${JSON.stringify(whileDisabled)}`)
+    ok('doors/disabled-reason-names-the-door',
+      /disabled/i.test(String(whileDisabled.reason ?? '')),
+      `expected a "door is disabled" reason, got ${JSON.stringify(whileDisabled.reason)}`)
+  }
+
+  // --- 7: the throttle refuses a flood ------------------------------------
+  // Its own door and member, because the window is per (user, door) and the
+  // scenarios above deliberately stay under it.
+  const doorC = await mkDoor('doors-throttle')
+  const memberC = await account('doors_member_c')
+  if (doorC.id) {
+    // 5 are permitted per 30s. Every attempt counts toward the window whether it
+    // is granted or refused, so an attacker cannot launder a flood through
+    // successful check-ins -- which is why this door has no allow rule and the
+    // refusals below still consume the budget.
+    let last = null
+    for (let i = 0; i < 5; i += 1) {
+      last = await checkin(doorC.id, memberC.token)
+    }
+    assertEq('doors/attempts-within-the-window-are-answered', 200, last.status)
+    const flooded = await checkin(doorC.id, memberC.token)
+    assertEq('doors/sixth-checkin-in-the-window-is-throttled', 429, flooded.status,
+      `the 6th attempt in 30s must be refused: ${flooded.text.slice(0, 200)}`)
+  }
+
+  // --- 8: the decisions are on the record ---------------------------------
+  const events = await GET(`/api/admin/doors/${doorA.id}/events`, T)
+  assertEq('doors/events-listed', 200, events.status)
+  const rows = events.json?.data?.events ?? events.json?.data ?? []
+  ok('doors/every-decision-was-recorded', Array.isArray(rows) && rows.length >= 4,
+    `doorA saw 4 check-ins; the event log has ${Array.isArray(rows) ? rows.length : 'none'}: ` +
+    `${JSON.stringify(rows).slice(0, 300)}`)
+  ok('doors/the-log-holds-both-outcomes',
+    Array.isArray(rows) && rows.some((r) => r.granted === true) && rows.some((r) => r.granted === false),
+    `a log that only records grants (or only refusals) cannot be audited: ` +
+    `${JSON.stringify(rows.map?.((r) => r.granted)).slice(0, 200)}`)
+  ok('doors/a-refusal-carries-its-reason',
+    Array.isArray(rows) && rows.some((r) => r.granted === false && !!r.reason),
+    'a denied event with no reason tells an operator nothing about why')
+
+  // --- a remote unlock is subject to the door's rules (#101, folding #140) ---
+  // It used to publish on the strength of the AdminUser extractor alone: no rule,
+  // no schedule, `granted: true` unconditionally. Every admin therefore held an
+  // unconditional unlock on every door that could not be revoked for one door and
+  // was recorded nowhere as a grant. Now it composes with the rules, so the same
+  // capability is explicit, auditable and revocable -- and this proves revoking it
+  // actually takes effect.
+  //
+  // Deliberately needs no device: the rules are consulted BEFORE the coordinator
+  // is resolved, which makes the two refusals distinguishable -- 400 is
+  // "authorized, but nothing to drive", 403 is "not authorized". That ordering is
+  // what lets this run on every cluster instead of only where a device can be
+  // registered, which matters because this is the security-relevant claim of the
+  // slice.
+  const doorE = await mkDoor('doors-remote')
+  ok('doors/remote-door-created', !!doorE.id, `-> ${doorE.status}`)
+  if (doorE.id) {
+    const seeded = (await GET(`/api/admin/doors/${doorE.id}/rules`, T)).json?.data ?? []
+    const grantId = seeded.find(
+      (r) => r.kind === 'role' && r.value === 'staff' && r.effect === 'allow',
+    )?.id
+    ok('doors/a-new-door-is-seeded-with-a-staff-grant', !!grantId,
+      `a new door must carry a standing staff allow rule, or a Restricted door is ` +
+        `one nobody can open remotely: ${JSON.stringify(seeded).slice(0, 300)}`)
+
+    // With the grant in place an admin (a higher tier) is authorized, so the only
+    // thing left to refuse is the absent coordinator.
+    const authorized = await POST(`/api/admin/doors/${doorE.id}/unlock`, T)
+    assertEq('doors/remote-unlock-passes-the-rules-then-wants-a-coordinator', 400, authorized.status,
+      `the seeded staff grant should authorize an admin, leaving only the missing ` +
+        `coordinator to refuse: ${authorized.text.slice(0, 200)}`)
+
+    if (grantId) {
+      const revoked = await DELETE(`/api/admin/doors/${doorE.id}/rules/${grantId}`, T)
+      assertEq('doors/staff-grant-removed', 200, revoked.status)
+
+      const refused = await POST(`/api/admin/doors/${doorE.id}/unlock`, T)
+      assertEq('doors/remote-unlock-is-refused-without-a-grant', 403, refused.status,
+        `with its grant revoked the door must refuse an admin's remote unlock. A 400 ` +
+          `here means the rules were skipped and only the coordinator was missing; a ` +
+          `200 means the remote path still bypasses the rules entirely: ` +
+          `${refused.text.slice(0, 200)}`)
+
+      // The refusal is on the record, like every other denial.
+      const ev = await GET(`/api/admin/doors/${doorE.id}/events`, T)
+      const evRows = ev.json?.data?.events ?? ev.json?.data ?? []
+      ok('doors/a-refused-remote-unlock-is-recorded',
+        Array.isArray(evRows) &&
+          evRows.some((r) => r.method === 'admin_remote' && r.granted === false && !!r.reason),
+        `a denied remote unlock must leave an admin_remote event carrying its reason: ` +
+          `${JSON.stringify(evRows).slice(0, 300)}`)
+
+      // And restoring the grant restores the capability: the refusal was the rule
+      // doing its job, not the door becoming permanently unopenable.
+      const regrant = await addRule(doorE.id, { kind: 'role', value: 'staff', effect: 'allow' })
+      assertEq('doors/staff-grant-restored', 201, regrant.status)
+      const again = await POST(`/api/admin/doors/${doorE.id}/unlock`, T)
+      assertEq('doors/remote-unlock-is-authorized-again-once-regranted', 400, again.status,
+        `back to "authorized but no coordinator" -- not 403: ${again.text.slice(0, 200)}`)
+    }
+  }
+
+  // --- a door's coordinator is a device binding (#101) ----------------------
+  // The last ad-hoc device association: a tool named its devices through a
+  // binding row, a door named exactly one through `doors.edge_device_id`. Now
+  // both go through `device_bindings`, so this proves the binding endpoint
+  // accepts a DOOR as its resource and that the server drives the strike through
+  // whatever is bound in role `edge`.
+  const doorD = await mkDoor('doors-coordinator')
+  ok('doors/coordinator-door-created', !!doorD.id, `-> ${doorD.status}`)
+  if (!doorD.id) return
+
+  // `create_door` seeds a standing staff grant and an administrator outranks staff,
+  // so everything below is about the COORDINATOR rather than about authorization --
+  // the seeding itself is pinned above on `doors-remote`, which runs on every
+  // cluster. If the seed ever stopped happening these 400s would become 403s, and
+  // that assertion is what would catch it.
+
+  // With nothing bound there is no strike to drive, and the refusal says so.
+  const unboundUnlock = await POST(`/api/admin/doors/${doorD.id}/unlock`, T)
+  assertEq('doors/unlock-without-a-coordinator-is-refused', 400, unboundUnlock.status)
+
+  const mkDevice = async (name, roles, mac) => {
+    const inv = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const reg = await POST('/api/devices/register', {
+      body: {
+        device_code: inv.json?.data?.device_code,
+        name: `${name}-${tag}`,
+        capabilities: { roles },
+        mac_address: mac,
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    return {
+      id: reg.json?.data?.device_id ?? reg.json?.device_id,
+      token: reg.json?.data?.auth_token ?? reg.json?.auth_token,
+      status: reg.status,
+      text: reg.text,
+    }
+  }
+
+  const coordinator = await mkDevice('door-edge', ['edge'], '02:00:00:00:85:01')
+  ok('doors/edge-device-registered', !!coordinator.id,
+    `register -> ${coordinator.status} ${coordinator.text.slice(0, 160)}`)
+
+  // The unified model's point: the binding endpoint takes a door, not just a tool.
+  const bound = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: {
+      resource_id: doorD.id,
+      device_id: coordinator.id,
+      role: 'edge',
+      name: 'door coordinator',
+    },
+  })
+  assertEq('doors/a-door-can-be-bound-a-coordinator', 201, bound.status)
+
+  // And the server resolves the strike through that binding: the same unlock that
+  // had nothing to drive a moment ago is now accepted.
+  const boundUnlock = await POST(`/api/admin/doors/${doorD.id}/unlock`, T)
+  assertEq('doors/unlock-uses-the-bound-coordinator', 200, boundUnlock.status,
+    `after binding an edge device the remote unlock must resolve it: ${boundUnlock.text.slice(0, 200)}`)
+
+  // The capability check applies to a door exactly as it does to a tool: a device
+  // that only declares `reader` cannot be a coordinator.
+  const readerOnly = await mkDevice('door-reader', ['reader'], '02:00:00:00:85:02')
+  const wrongCap = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: {
+      resource_id: doorD.id,
+      device_id: readerOnly.id,
+      role: 'edge',
+      name: 'not a coordinator',
+    },
+  })
+  assertEq('doors/coordinator-must-declare-the-edge-role', 400, wrongCap.status)
+
+  // --- a door binding does not widen the TOOL sync scope (#101 slice 5) ------
+  // The toolguard payload hands a device the tools it may actuate and the card
+  // digests of the members authorized for them. Its scope is the device's
+  // bindings, and since #101 a binding can name any resource -- so a door
+  // coordinator's binding must not put it in scope for tools. Asserted from both
+  // sides, because either alone is satisfiable by an accident: no tools AND no
+  // member identifiers. This device is bound to a door and nothing else, so a
+  // non-empty answer here would mean a door coordinator had been handed the
+  // membership's identifiers.
+  const coordSync = await GET('/api/toolguard/sync', { token: coordinator.token })
+  const coordBody = coordSync.json?.data ?? coordSync.json
+  assertEq('doors/a-door-coordinator-receives-no-tools', 0, (coordBody?.tools ?? []).length,
+    `a device bound only to a door must be in scope for no tools: ` +
+      `${JSON.stringify(coordBody?.tools ?? []).slice(0, 200)}`)
+  assertEq('doors/a-door-coordinator-receives-no-member-identifiers', 0,
+    (coordBody?.users ?? []).length,
+    `and therefore for no member identifiers either: ` +
+      `${JSON.stringify(coordBody?.users ?? []).slice(0, 200)}`)
+})

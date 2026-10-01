@@ -182,14 +182,6 @@ pub struct Tool {
     pub updated_at: DateTime<Utc>,
     pub external_id: Option<String>,
     /// The tool's integration credential. Skipped in serialization (#120/CR2):
-    /// `Tool` is returned straight from member- *and* staff-facing list
-    /// endpoints, and any authenticated member could read every tool's key and
-    /// impersonate its integration. Nothing reads the key back out of a
-    /// serialized `Tool` -- the toolguard auth path takes it by field access
-    /// (`toolguard.rs`), and it is set through the `api::tools` request DTOs, not
-    /// this model -- so dropping it from the wire has no legitimate consumer.
-    #[serde(skip_serializing)]
-    pub external_api_key: Option<String>,
     pub place_id: Option<Uuid>,
     /// Optional usability window. When set and the schedule isn't currently
     /// open, the tool is effectively unavailable.
@@ -226,7 +218,6 @@ pub struct NewTool {
     pub requires_training: Option<bool>,
     pub created_by: Uuid,
     pub external_id: Option<String>,
-    pub external_api_key: Option<String>,
     pub place_id: Option<Uuid>,
     pub schedule_id: Option<Uuid>,
     pub usage_flat_fee: Option<BigDecimal>,
@@ -304,52 +295,18 @@ pub struct UserToolTraining {
 //     pub notes: Option<String>,
 // }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn external_api_key_is_never_serialized() {
-        // #120/CR2. `Tool` is returned straight from member-facing list
-        // endpoints (`api::tools::list_available_tools` / `list_visible_tools`),
-        // so the per-tool integration key must not travel in the body. Mutation
-        // check: delete `#[serde(skip_serializing)]` from the field and this
-        // fails on both the key's presence and the secret substring.
-        let tool = Tool {
-            id: uuid::Uuid::nil(),
-            name: "Laser".into(),
-            description: None,
-            category: ToolCategory::Other,
-            status: ToolStatus::Idle,
-            barcode: None,
-            serial_number: None,
-            location: None,
-            purchase_date: None,
-            purchase_price: None,
-            maintenance_notes: None,
-            requires_training: false,
-            created_by: uuid::Uuid::nil(),
-            created_at: chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
-            updated_at: chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
-            external_id: None,
-            external_api_key: Some("SUPER-SECRET-TOOL-KEY".into()),
-            place_id: None,
-            schedule_id: None,
-            usage_flat_fee: None,
-            usage_rate_per_min: None,
-            usage_max_session_minutes: None,
-            receptacle_id: None,
-        };
-
-        let value = serde_json::to_value(&tool).expect("Tool serializes");
-        assert!(
-            value.get("external_api_key").is_none(),
-            "external_api_key must not appear in a serialized Tool: {value}"
-        );
-        let text = serde_json::to_string(&tool).expect("Tool serializes");
-        assert!(
-            !text.contains("SUPER-SECRET-TOOL-KEY"),
-            "the tool's integration key leaked into the response body: {text}"
-        );
-    }
-}
+// This file had one test, `external_api_key_is_never_serialized` (#120/CR2).
+// `Tool` is returned straight from member-facing list endpoints
+// (`api::tools::list_available_tools` / `list_visible_tools`), so the per-tool
+// integration key must not travel in the body; the field carried
+// `#[serde(skip_serializing)]` and the test pinned that it worked.
+//
+// Deleted by #101 slice 6, which removed the column outright. The guarantee became
+// structural instead of asserted: there is no key on a `Tool` to leak, and tool
+// authentication is a device Bearer token that is hashed at rest rather than a
+// secret kept in a plaintext column. Keeping a test for a field that no longer
+// exists would be keeping a test that cannot fail -- and the empty `mod tests`
+// that held it went with it rather than being left as a stub.
+//
+// Named in the slice-6 summary too, per the rule that a removed check is reported
+// where the owner will see it rather than only in a comment.

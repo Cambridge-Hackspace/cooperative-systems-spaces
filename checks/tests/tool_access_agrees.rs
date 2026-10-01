@@ -180,6 +180,28 @@ fn both_access_paths_share_one_rule() {
     );
 }
 
+/// #101: the tool self-check and the door QR check-in must both resolve through
+/// the single decision engine `access_engine::may`, so there is exactly one place
+/// that decides access for every resource. The assertions above pin that the tool
+/// rule still GATHERS its inputs (lockout, waiver); this pins that it, and the
+/// door path, APPLY them through the one engine rather than a re-grown local copy.
+#[test]
+fn both_paths_resolve_through_the_one_engine() {
+    let tool_rule = method_body(&database_source(), "user_is_authorized_for_tool");
+    assert!(
+        tool_rule.contains("access_engine::may"),
+        "`user_is_authorized_for_tool` no longer delegates to `access_engine::may` \
+         -- the tool path has grown its own decision again, so it can diverge from \
+         the door path and the engine's own tests no longer cover it."
+    );
+    let evaluate = method_body(&read("server/src/doors.rs"), "evaluate");
+    assert!(
+        evaluate.contains("may("),
+        "`DoorService::evaluate` no longer delegates to `access_engine::may` -- the \
+         door path has grown its own decision again."
+    );
+}
+
 /// Phase 2 added a second access dimension -- metered-billing affordability --
 /// on top of training. It must hold on BOTH the web self-check and the physical
 /// guard's allow-list, exactly like training, or the two silently disagree: the

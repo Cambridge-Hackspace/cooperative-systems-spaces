@@ -1486,15 +1486,28 @@ impl DatabaseManager {
         &self,
         new_tool: &crate::models::NewTool,
     ) -> Result<crate::models::Tool, DatabaseError> {
-        use crate::schema::tools;
+        use crate::schema::{resources, tools};
 
         let mut conn = self.get_connection()?;
 
-        diesel::insert_into(tools::table)
-            .values(new_tool)
-            .returning(crate::models::Tool::as_returning())
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        // #101: every tool IS a resource. The tool row is inserted first (its id
+        // is generated here), then the parent `resources` row with the same id, in
+        // one transaction; the shared-PK FK is DEFERRABLE INITIALLY DEFERRED, so it
+        // is checked at commit rather than rejecting the tool insert.
+        conn.transaction(|conn| {
+            let created: crate::models::Tool = diesel::insert_into(tools::table)
+                .values(new_tool)
+                .returning(crate::models::Tool::as_returning())
+                .get_result(conn)?;
+            diesel::insert_into(resources::table)
+                .values(crate::models::NewResource {
+                    id: created.id,
+                    kind: crate::models::ResourceKind::Tool.as_str().to_string(),
+                })
+                .execute(conn)?;
+            Ok(created)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Get all tools with InUse status (for boot-reset)
@@ -1512,21 +1525,23 @@ impl DatabaseManager {
 
     /// Delete a tool
     pub fn delete_tool(&self, tool_id: uuid::Uuid) -> Result<(), DatabaseError> {
-        use crate::schema::tools::dsl::*;
+        use crate::schema::{resources, tools};
 
         let mut conn = self.get_connection()?;
 
-        // The row count is the answer, not a detail to discard.
-        // Deleting nothing reported success.
-        let affected = diesel::delete(tools.find(tool_id))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-
-        if affected == 0 {
-            return Err(DatabaseError::Diesel(diesel::result::Error::NotFound));
-        }
-
-        Ok(())
+        // #101: delete the tool (cascading to its dependents as before), then its
+        // parent `resources` row, in one transaction so no orphan resource is left.
+        conn.transaction(|conn| {
+            // The row count is the answer, not a detail to discard.
+            // Deleting nothing reported success.
+            let affected = diesel::delete(tools::table.find(tool_id)).execute(conn)?;
+            if affected == 0 {
+                return Err(diesel::result::Error::NotFound);
+            }
+            diesel::delete(resources::table.find(tool_id)).execute(conn)?;
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     /// Create a tool event
@@ -1721,21 +1736,58 @@ impl DatabaseManager {
         // including the free-tool early return below -- so a locked circuit's
         // step-less tool is still refused. Both the web self-check and the edge
         // allow-list resolve through this one rule, so they cannot disagree.
-        if self.tool_is_locked_out(tool_id)? {
-            return Ok(false);
-        }
+        // #101: the decision runs through the one access engine
+        // (`access_engine::may`) rather than a bespoke sequence, so the tool path
+        // and the door path (`DoorService::evaluate`) cannot diverge. The tool's
+        // lockout + training state is materialized here and handed to `may` as a
+        // resource policy; behaviour is identical to the previous inline sequence
+        // (lockout is a hard override; an ungated tool is open; otherwise a waiver
+        // or completed steps). Pinned by the door_vectors equivalence and
+        // tool_access_agrees oracles.
+        let locked_out = self.tool_is_locked_out(tool_id)?;
         let has_steps = self.tool_has_training_steps(tool_id)?;
-        if !has_steps && !requires_training {
-            return Ok(true);
-        }
-        if self.user_has_active_waiver(user_id, tool_id)? {
-            return Ok(true);
-        }
-        if has_steps {
-            return self.user_has_completed_all_training_steps(user_id, tool_id);
-        }
-        // requires_training, no steps, no waiver.
-        Ok(false)
+        let training_ok = if !has_steps && !requires_training {
+            true
+        } else if self.user_has_active_waiver(user_id, tool_id)? {
+            true
+        } else if has_steps {
+            self.user_has_completed_all_training_steps(user_id, tool_id)?
+        } else {
+            // requires_training, no steps, no waiver.
+            false
+        };
+
+        let policy = crate::access_engine::ResourcePolicy {
+            locked_out,
+            unavailable: None,
+            default_effect: crate::access_engine::DefaultEffect::Open,
+            // The online tool path does not schedule-gate today; #101 preserves
+            // that here (the schedule-asymmetry change is a separate, flag-gated
+            // step). Only the edge sync builder gates tools on a schedule.
+            schedule_id: None,
+            training_ok: Some(training_ok),
+            metered_ok: None,
+        };
+        let principal = crate::access_engine::Principal {
+            user_id: Some(user_id),
+            level: 0,
+            card_digests: std::collections::BTreeSet::new(),
+            is_active: true,
+        };
+        // No rules and no schedule for a tool decision, so the graph and tz are
+        // never consulted; an empty graph and UTC keep the call total.
+        let graph = crate::rbac::RoleGraph::from_rows(&[], &[], &[]);
+        let decision = crate::access_engine::may(
+            &principal,
+            &policy,
+            &[],
+            &[],
+            chrono_tz::UTC,
+            chrono::Utc::now(),
+            &graph,
+            crate::access_engine::Action::Use,
+        );
+        Ok(decision.is_allow())
     }
 
     /// Grant (or update, keyed on (user, tool)) a training waiver.
@@ -2902,19 +2954,107 @@ impl DatabaseManager {
         device_id: uuid::Uuid,
         tool_id: uuid::Uuid,
     ) -> Result<bool, DatabaseError> {
-        use crate::schema::tool_modules;
+        use crate::schema::device_bindings;
         use diesel::dsl::exists;
         use diesel::select;
 
         let mut conn = self.get_connection()?;
 
         select(exists(
-            tool_modules::table
-                .filter(tool_modules::device_id.eq(device_id))
-                .filter(tool_modules::tool_id.eq(tool_id)),
+            device_bindings::table
+                .filter(device_bindings::device_id.eq(device_id))
+                // A tool's id is its resource id, so the tool_id param matches here.
+                .filter(device_bindings::resource_id.eq(tool_id)),
         ))
         .get_result::<bool>(&mut conn)
         .map_err(DatabaseError::Diesel)
+    }
+
+    /// Whether a device is bound to a tool in a SPECIFIC role.
+    ///
+    /// #101 slice 6: metered billing needs more than "this device serves that
+    /// tool" -- a billable report must come from the thing that actually switches
+    /// the tool, so it demands the `power` role. This replaces the per-tool
+    /// `external_api_key` that used to bind a charge to a tool: the binding
+    /// provides the same per-tool scoping, and the device's secret is hashed at
+    /// rest where the key was a plaintext column.
+    pub fn device_is_bound_to_tool_in_role(
+        &self,
+        device_id: uuid::Uuid,
+        tool_id: uuid::Uuid,
+        role: &str,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::device_bindings;
+        use diesel::dsl::exists;
+        use diesel::select;
+
+        let mut conn = self.get_connection()?;
+        select(exists(
+            device_bindings::table
+                .filter(device_bindings::device_id.eq(device_id))
+                .filter(device_bindings::resource_id.eq(tool_id))
+                .filter(device_bindings::role.eq(role.to_string())),
+        ))
+        .get_result::<bool>(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// The `kind` of a resource ("door" or "tool"), or `None` if there is no such
+    /// resource. #101: a binding may name any resource, so the endpoint needs to
+    /// know one exists without caring which subtype it is.
+    pub fn resource_kind(&self, resource_id: uuid::Uuid) -> Result<Option<String>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        resources::table
+            .filter(resources::id.eq(resource_id))
+            .select(resources::kind)
+            .first::<String>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The device bound to this resource as its coordinator (role `edge`), or
+    /// `None` if nothing is bound.
+    ///
+    /// #101: replaces `doors.edge_device_id`. A partial unique index guarantees at
+    /// most one coordinator per resource, so there is no ambiguity to resolve here
+    /// -- a second one could not be inserted.
+    pub fn door_edge_device(
+        &self,
+        resource_id: uuid::Uuid,
+    ) -> Result<Option<uuid::Uuid>, DatabaseError> {
+        use crate::schema::device_bindings;
+
+        let mut conn = self.get_connection()?;
+        device_bindings::table
+            .filter(device_bindings::resource_id.eq(resource_id))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
+            .select(device_bindings::device_id)
+            .first::<uuid::Uuid>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// A device's declared `capabilities` blob, or `None` if no such device
+    /// exists. #101: the source for role-vs-capability checks at bind time and for
+    /// the firmware-enforcement descriptors that used to live on a binding's
+    /// `params`.
+    pub fn space_device_capabilities(
+        &self,
+        device_id: uuid::Uuid,
+    ) -> Result<Option<serde_json::Value>, DatabaseError> {
+        use crate::schema::space_devices;
+
+        let mut conn = self.get_connection()?;
+        space_devices::table
+            .filter(space_devices::id.eq(device_id))
+            // A soft-deleted device reads as absent, so a binding cannot name one.
+            .filter(space_devices::deleted_at.is_null())
+            .select(space_devices::capabilities)
+            .first::<serde_json::Value>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
     }
 
     /// The device's command-channel HMAC key (unsealed), or `None` if it has
@@ -3006,10 +3146,17 @@ impl DatabaseManager {
         // from here: a user's authorized list is computed against these, and the
         // top-level tool list is built from those authorizations.
         let bound: Vec<uuid::Uuid> = {
-            use crate::schema::tool_modules;
-            tool_modules::table
-                .filter(tool_modules::device_id.eq(device_id))
-                .select(tool_modules::tool_id)
+            use crate::schema::device_bindings;
+            // Joined to `tools` on purpose. This is the TOOLguard payload, and since
+            // #101 a binding can name any resource -- a device that coordinates a
+            // door has that door's id among its bindings. Filtering on device_id
+            // alone would carry a door id into the tool authorization scope; it
+            // matches no tool so nothing leaked, but the scope of a security-
+            // relevant query should not depend on a downstream lookup failing.
+            device_bindings::table
+                .inner_join(tools::table.on(tools::id.eq(device_bindings::resource_id)))
+                .filter(device_bindings::device_id.eq(device_id))
+                .select(device_bindings::resource_id)
                 .distinct()
                 .load(&mut conn)
                 .map_err(DatabaseError::Diesel)?
@@ -3019,7 +3166,7 @@ impl DatabaseManager {
             // look identical from the device's side: an empty allow-list. The
             // device will refuse every card and report nothing wrong.
             tracing::warn!(
-                "Device {} has no tool_modules bindings, so its sync payload is \
+                "Device {} has no tool bindings, so its sync payload is \
                  empty and it will authorize nobody. Bind it to the tools it \
                  serves.",
                 device_id
@@ -4587,13 +4734,59 @@ impl DatabaseManager {
         &self,
         new_door: &crate::models::NewDoor,
     ) -> Result<crate::models::Door, DatabaseError> {
-        use crate::schema::doors;
+        use crate::schema::{access_rules, doors, resources};
+
+        // #101: seed a standing staff grant unless the tier is missing from this
+        // deployment's RBAC. A `kind=role` rule is matched by NAME through
+        // `RoleGraph::level_of_name`, and an unresolvable name matches nobody -- so
+        // seeding one blindly could leave a dead rule on every door and a door
+        // nothing could open remotely. Resolved before the transaction opens.
+        let seed_staff = self
+            .rbac()
+            .level_of_name(crate::models::role::STAFF)
+            .is_some();
+
         let mut conn = self.get_connection()?;
-        diesel::insert_into(doors::table)
-            .values(new_door)
-            .returning(crate::models::Door::as_returning())
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        // #101: every door IS a resource -- insert the door then its parent
+        // `resources` row in one transaction (deferred shared-PK FK). See create_tool.
+        conn.transaction(|conn| {
+            let created: crate::models::Door = diesel::insert_into(doors::table)
+                .values(new_door)
+                .returning(crate::models::Door::as_returning())
+                .get_result(conn)?;
+            diesel::insert_into(resources::table)
+                .values(crate::models::NewResource {
+                    id: created.id,
+                    kind: crate::models::ResourceKind::Door.as_str().to_string(),
+                })
+                .execute(conn)?;
+
+            // A door is `Restricted`: with no rule at all it denies EVERYONE,
+            // administrators included. That used to be masked because a remote
+            // unlock skipped the engine; now that it composes with the rules, a
+            // freshly created door with no rules would be one nobody could open.
+            //
+            // So the capability every admin already had implicitly is written down
+            // explicitly, per door, where it can be audited and revoked. Matching is
+            // `principal.level >= level_of_name("staff")`, so one rule covers admin
+            // too. After the `resources` row, because the FK points at it;
+            // `on_conflict` because the UNIQUE(resource_id, kind, value, effect)
+            // makes re-seeding the same grant a no-op rather than an error.
+            if seed_staff {
+                diesel::insert_into(access_rules::table)
+                    .values(crate::models::NewAccessRule {
+                        resource_id: created.id,
+                        kind: crate::models::DoorRuleKind::Role.as_str().to_string(),
+                        value: crate::models::role::STAFF.to_string(),
+                        effect: crate::models::DoorRuleEffect::Allow.as_str().to_string(),
+                        schedule_id: None,
+                    })
+                    .on_conflict_do_nothing()
+                    .execute(conn)?;
+            }
+            Ok(created)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
     pub fn update_door(
@@ -4611,63 +4804,75 @@ impl DatabaseManager {
     }
 
     pub fn delete_door(&self, did: uuid::Uuid) -> Result<usize, DatabaseError> {
-        use crate::schema::doors::dsl::*;
+        use crate::schema::{doors, resources};
         let mut conn = self.get_connection()?;
-        diesel::delete(doors.find(did))
-            .execute(&mut conn)
-            .map_err(DatabaseError::Diesel)
+        // #101: remove the door and its parent `resources` row together.
+        conn.transaction(|conn| {
+            let affected = diesel::delete(doors::table.find(did)).execute(conn)?;
+            diesel::delete(resources::table.find(did)).execute(conn)?;
+            Ok(affected)
+        })
+        .map_err(DatabaseError::Diesel)
     }
 
-    /// Doors served by a specific edge device.
+    /// Doors served by a specific edge device (#101: through its `edge` binding,
+    /// which replaced `doors.edge_device_id`).
     pub fn list_doors_for_device(
         &self,
         edge_id: uuid::Uuid,
     ) -> Result<Vec<crate::models::Door>, DatabaseError> {
-        use crate::schema::doors::dsl::*;
+        use crate::schema::{device_bindings, doors};
         let mut conn = self.get_connection()?;
-        doors
-            .filter(edge_device_id.eq(edge_id))
+        doors::table
+            .inner_join(device_bindings::table.on(device_bindings::resource_id.eq(doors::id)))
+            .filter(device_bindings::device_id.eq(edge_id))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
             .select(crate::models::Door::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Distinct edge device IDs that have at least one door bound to them.
+    /// Distinct devices that coordinate at least one DOOR.
     /// Used for "republish to every device whose state might have changed".
+    ///
+    /// Joined to `doors` rather than reading every `edge` binding, so an `edge`
+    /// binding on some other kind of resource cannot pull a device into the door
+    /// republish set.
     pub fn list_door_device_ids(&self) -> Result<Vec<uuid::Uuid>, DatabaseError> {
-        use crate::schema::doors::dsl::*;
+        use crate::schema::{device_bindings, doors};
         let mut conn = self.get_connection()?;
-        let ids: Vec<Option<uuid::Uuid>> = doors
-            .select(edge_device_id)
+        device_bindings::table
+            .inner_join(doors::table.on(doors::id.eq(device_bindings::resource_id)))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
+            .select(device_bindings::device_id)
             .distinct()
-            .load(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-        Ok(ids.into_iter().flatten().collect())
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 
     pub fn list_rules_for_door(
         &self,
         did: uuid::Uuid,
-    ) -> Result<Vec<crate::models::DoorAccessRule>, DatabaseError> {
-        use crate::schema::door_access_rules::dsl::*;
+    ) -> Result<Vec<crate::models::AccessRule>, DatabaseError> {
+        use crate::schema::access_rules::dsl::*;
         let mut conn = self.get_connection()?;
-        door_access_rules
-            .filter(door_id.eq(did))
+        access_rules
+            .filter(resource_id.eq(did))
             .order(created_at.asc())
-            .select(crate::models::DoorAccessRule::as_select())
+            .select(crate::models::AccessRule::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
     pub fn insert_door_rule(
         &self,
-        new_rule: &crate::models::NewDoorAccessRule,
-    ) -> Result<crate::models::DoorAccessRule, DatabaseError> {
-        use crate::schema::door_access_rules;
+        new_rule: &crate::models::NewAccessRule,
+    ) -> Result<crate::models::AccessRule, DatabaseError> {
+        use crate::schema::access_rules;
         let mut conn = self.get_connection()?;
-        diesel::insert_into(door_access_rules::table)
+        diesel::insert_into(access_rules::table)
             .values(new_rule)
-            .returning(crate::models::DoorAccessRule::as_returning())
+            .returning(crate::models::AccessRule::as_returning())
             .get_result(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -4677,9 +4882,9 @@ impl DatabaseManager {
         did: uuid::Uuid,
         rid: uuid::Uuid,
     ) -> Result<usize, DatabaseError> {
-        use crate::schema::door_access_rules::dsl::*;
+        use crate::schema::access_rules::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::delete(door_access_rules.filter(id.eq(rid)).filter(door_id.eq(did)))
+        diesel::delete(access_rules.filter(id.eq(rid)).filter(resource_id.eq(did)))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -4915,9 +5120,9 @@ impl DatabaseManager {
         &self,
         cipher: &css_lib::card_crypto::CardCipher,
     ) -> Result<usize, DatabaseError> {
-        use crate::schema::door_access_rules::dsl::*;
+        use crate::schema::access_rules::dsl::*;
         let mut conn = self.get_connection()?;
-        let card_rules: Vec<(uuid::Uuid, String)> = door_access_rules
+        let card_rules: Vec<(uuid::Uuid, String)> = access_rules
             .filter(kind.eq("card"))
             .select((id, value))
             .load::<(uuid::Uuid, String)>(&mut conn)
@@ -4933,7 +5138,7 @@ impl DatabaseManager {
                     .wire_digest(&v)
                     .map_err(|e| DatabaseError::Other(format!("digest door card rule: {e}")))?,
             );
-            diesel::update(door_access_rules.filter(id.eq(rid)))
+            diesel::update(access_rules.filter(id.eq(rid)))
                 .set(value.eq(digest))
                 .execute(&mut conn)
                 .map_err(DatabaseError::Diesel)?;
@@ -4950,10 +5155,10 @@ impl DatabaseManager {
     /// endpoint refuses when this is non-zero rather than widen access by side
     /// effect.
     pub fn schedule_reference_count(&self, sid: uuid::Uuid) -> Result<i64, DatabaseError> {
-        use crate::schema::{door_access_rules, tools};
+        use crate::schema::{access_rules, tools};
         let mut conn = self.get_connection()?;
-        let door_refs: i64 = door_access_rules::table
-            .filter(door_access_rules::schedule_id.eq(Some(sid)))
+        let door_refs: i64 = access_rules::table
+            .filter(access_rules::schedule_id.eq(Some(sid)))
             .count()
             .get_result(&mut conn)
             .map_err(DatabaseError::Diesel)?;
@@ -5923,12 +6128,12 @@ impl DatabaseManager {
 // ── Tool module bindings + interlocks (#83) ───────────────────────────────────
 
 impl DatabaseManager {
-    pub fn list_tool_modules(&self) -> Result<Vec<crate::models::ToolModule>, DatabaseError> {
-        use crate::schema::tool_modules::dsl::*;
+    pub fn list_tool_modules(&self) -> Result<Vec<crate::models::DeviceBinding>, DatabaseError> {
+        use crate::schema::device_bindings::dsl::*;
         let mut conn = self.get_connection()?;
-        tool_modules
-            .order((tool_id.asc(), role.asc(), name.asc()))
-            .select(crate::models::ToolModule::as_select())
+        device_bindings
+            .order((resource_id.asc(), role.asc(), name.asc()))
+            .select(crate::models::DeviceBinding::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -5936,36 +6141,53 @@ impl DatabaseManager {
     pub fn list_tool_modules_for_tool(
         &self,
         tid: uuid::Uuid,
-    ) -> Result<Vec<crate::models::ToolModule>, DatabaseError> {
-        use crate::schema::tool_modules::dsl::*;
+    ) -> Result<Vec<crate::models::DeviceBinding>, DatabaseError> {
+        use crate::schema::device_bindings::dsl::*;
         let mut conn = self.get_connection()?;
-        tool_modules
-            .filter(tool_id.eq(tid))
+        device_bindings
+            .filter(resource_id.eq(tid))
             .order((role.asc(), name.asc()))
-            .select(crate::models::ToolModule::as_select())
+            .select(crate::models::DeviceBinding::as_select())
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
 
     pub fn create_tool_module(
         &self,
-        new_module: &crate::models::NewToolModule,
-    ) -> Result<crate::models::ToolModule, DatabaseError> {
-        use crate::schema::tool_modules;
+        new_module: &crate::models::NewDeviceBinding,
+    ) -> Result<crate::models::DeviceBinding, DatabaseError> {
+        use crate::schema::device_bindings;
         let mut conn = self.get_connection()?;
-        diesel::insert_into(tool_modules::table)
+        diesel::insert_into(device_bindings::table)
             .values(new_module)
-            .returning(crate::models::ToolModule::as_returning())
+            .returning(crate::models::DeviceBinding::as_returning())
             .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// One binding by id, or `None`. #101: the delete path needs the row *before*
+    /// it is removed, so it can tell the device that was bound that the resource
+    /// has left its snapshot.
+    pub fn get_device_binding(
+        &self,
+        binding_id: uuid::Uuid,
+    ) -> Result<Option<crate::models::DeviceBinding>, DatabaseError> {
+        use crate::schema::device_bindings::dsl::*;
+        let mut conn = self.get_connection()?;
+        device_bindings
+            .find(binding_id)
+            .select(crate::models::DeviceBinding::as_select())
+            .first(&mut conn)
+            .optional()
             .map_err(DatabaseError::Diesel)
     }
 
     /// Row count, not `()`: the caller answers 404 rather than 200 for an id
     /// that matched nothing (see `checks/tests/writes_report_what_they_changed.rs`).
     pub fn delete_tool_module(&self, mid: uuid::Uuid) -> Result<usize, DatabaseError> {
-        use crate::schema::tool_modules::dsl::*;
+        use crate::schema::device_bindings::dsl::*;
         let mut conn = self.get_connection()?;
-        diesel::delete(tool_modules.find(mid))
+        diesel::delete(device_bindings.find(mid))
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)
     }
@@ -6016,20 +6238,6 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
-    /// Whether a (not soft-deleted) device exists, for validating a binding's
-    /// `device_id` before the insert turns a bad id into a foreign-key 500.
-    pub fn space_device_exists(&self, did: uuid::Uuid) -> Result<bool, DatabaseError> {
-        use crate::schema::space_devices::dsl::*;
-        let mut conn = self.get_connection()?;
-        let found: i64 = space_devices
-            .filter(id.eq(did))
-            .filter(deleted_at.is_null())
-            .count()
-            .get_result(&mut conn)
-            .map_err(DatabaseError::Diesel)?;
-        Ok(found > 0)
-    }
-
     /// Every tool's `external_id`, for stringifying the module-state snapshot.
     pub fn tool_external_ids(&self) -> Result<Vec<(uuid::Uuid, Option<String>)>, DatabaseError> {
         use crate::schema::tools::dsl::*;
@@ -6059,16 +6267,16 @@ impl DatabaseManager {
         )>,
         DatabaseError,
     > {
-        use crate::schema::{space_devices, tool_modules};
+        use crate::schema::{device_bindings, space_devices};
         let mut conn = self.get_connection()?;
-        tool_modules::table
-            .inner_join(space_devices::table.on(space_devices::id.eq(tool_modules::device_id)))
+        device_bindings::table
+            .inner_join(space_devices::table.on(space_devices::id.eq(device_bindings::device_id)))
             .filter(space_devices::deleted_at.is_null())
             .select((
-                tool_modules::id,
-                tool_modules::name,
-                tool_modules::role,
-                tool_modules::device_id,
+                device_bindings::id,
+                device_bindings::name,
+                device_bindings::role,
+                device_bindings::device_id,
                 space_devices::last_seen_at,
             ))
             .load(&mut conn)
@@ -6085,10 +6293,10 @@ impl DatabaseManager {
         &self,
     ) -> Result<Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>, DatabaseError>
     {
-        use crate::schema::{space_devices, tool_modules};
+        use crate::schema::{device_bindings, space_devices};
         let mut conn = self.get_connection()?;
-        let bound: Vec<uuid::Uuid> = tool_modules::table
-            .select(tool_modules::device_id)
+        let bound: Vec<uuid::Uuid> = device_bindings::table
+            .select(device_bindings::device_id)
             .load(&mut conn)
             .map_err(DatabaseError::Diesel)?;
         space_devices::table
@@ -6163,17 +6371,26 @@ impl DatabaseManager {
         let mut by_tool: BTreeMap<uuid::Uuid, css_lib::wire::ToolModuleTool> = BTreeMap::new();
 
         for m in modules {
+            // #101: `device_bindings` now also holds a door's `edge` coordinator.
+            // This snapshot is the TOOL wiring, so a binding whose resource is not
+            // a tool is skipped -- otherwise doors would arrive in the edge's
+            // module-state payload as tools with no external_id, and the
+            // coordinator would try to interlock them. `external` is keyed by
+            // every tool id, so membership in it is exactly "this is a tool".
+            if !external.contains_key(&m.resource_id) {
+                continue;
+            }
             by_tool
-                .entry(m.tool_id)
+                .entry(m.resource_id)
                 .or_insert_with(|| css_lib::wire::ToolModuleTool {
-                    tool_id: m.tool_id.to_string(),
-                    external_id: external.get(&m.tool_id).cloned().flatten(),
+                    tool_id: m.resource_id.to_string(),
+                    external_id: external.get(&m.resource_id).cloned().flatten(),
                     modules: Vec::new(),
                     interlocks: Vec::new(),
                     power_fails_safe: false,
                 })
                 .modules
-                .push(css_lib::wire::ToolModuleBinding {
+                .push(css_lib::wire::DeviceBinding {
                     id: m.id.to_string(),
                     device_id: m.device_id.to_string(),
                     role: m.role,
@@ -6210,15 +6427,22 @@ impl DatabaseManager {
         }
 
         // Derived once the bindings are in place: whether the modules that
-        // actually switch this tool can reach a safe state unaided.
+        // actually switch this tool can reach a safe state unaided. #101: the
+        // enforcement descriptors are a property of the DEVICE now, so read them
+        // off each power binding's device rather than the binding's `params`. A
+        // device we cannot load contributes nothing -- the deny-biased default --
+        // and `power_can_fail_safe` treats an empty set as "not fail-safe".
         let mut tools: Vec<css_lib::wire::ToolModuleTool> = by_tool.into_values().collect();
         for t in tools.iter_mut() {
-            let power: Vec<css_lib::capabilities::ModuleCapabilities> = t
-                .modules
-                .iter()
-                .filter(|m| m.role == "power")
-                .map(|m| css_lib::capabilities::ModuleCapabilities::from_params(&m.params))
-                .collect();
+            let mut power: Vec<css_lib::capabilities::ModuleCapabilities> = Vec::new();
+            for m in t.modules.iter().filter(|m| m.role == "power") {
+                if let Ok(device_id) = uuid::Uuid::parse_str(&m.device_id) {
+                    if let Some(v) = self.space_device_capabilities(device_id)? {
+                        power
+                            .push(css_lib::capabilities::DeviceCapabilities::from_value(&v).module);
+                    }
+                }
+            }
             t.power_fails_safe = css_lib::capabilities::power_can_fail_safe(&power);
         }
 

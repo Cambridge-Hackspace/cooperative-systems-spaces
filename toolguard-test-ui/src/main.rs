@@ -85,9 +85,9 @@ impl ToolStatus {
 struct ToolStation {
     name: String,
     id: String,
-    /// The tool's own `external_api_key`, forwarded on the money path so a
+    /// Whether this tool bills for usage, so a scan also reports elapsed
     /// metered tool authorizes. `None` for free/non-metered tools.
-    api_key: Option<String>,
+    metered: bool,
     /// Server-reported tool status
     status: ToolStatus,
     /// Index into App::cards for the currently selected card
@@ -119,14 +119,14 @@ struct App {
 
 impl App {
     fn new(config: Config) -> Self {
-        let startup_tool_offs: Vec<(String, String, Option<String>)> = if config.cards.is_empty() {
+        let startup_tool_offs: Vec<(String, String)> = if config.cards.is_empty() {
             vec![]
         } else {
             let first_card = config.cards[0].value.clone();
             config
                 .tools
                 .iter()
-                .map(|t| (first_card.clone(), t.id.clone(), t.api_key.clone()))
+                .map(|t| (first_card.clone(), t.id.clone()))
                 .collect()
         };
 
@@ -142,7 +142,7 @@ impl App {
             .map(|t| ToolStation {
                 name: t.name.clone(),
                 id: t.id.clone(),
-                api_key: t.api_key.clone(),
+                metered: t.metered,
                 status: ToolStatus::Unknown,
                 selected_card: 0,
                 on_since: None,
@@ -259,7 +259,7 @@ impl App {
 
         let is_inuse = station.status == ToolStatus::InUse;
         let tool_id = station.id.clone();
-        let api_key = station.api_key.clone();
+        let metered = station.metered;
         let on_since = station.on_since;
         let card_value = card.value.clone();
         let card_name = card.name.clone();
@@ -277,7 +277,7 @@ impl App {
             // usage (tool-log) before the tool-off settles it, so a per-minute
             // tool accrues a realistic charge. Non-metered tools (no key) send
             // the same bare tool-off as before.
-            if let (Some(key), Some(since)) = (api_key.as_deref(), on_since) {
+            if let (true, Some(since)) = (metered, on_since) {
                 let seconds = since.elapsed().as_secs_f32();
                 if seconds > 0.0 {
                     self.push_log(format!("  usage: {seconds:.1}s"));
@@ -285,20 +285,17 @@ impl App {
                         card: card_value.clone(),
                         tool_id: tool_id.clone(),
                         seconds,
-                        api_key: Some(key.to_string()),
                     });
                 }
             }
             let _ = self.cmd_tx.send(MqttCommand::ToolOff {
                 card: card_value,
                 tool_id: tool_id.clone(),
-                api_key,
             });
         } else {
             let _ = self.cmd_tx.send(MqttCommand::ToolOn {
                 card: card_value,
                 tool_id: tool_id.clone(),
-                api_key,
             });
         }
 

@@ -93,10 +93,10 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/membership/users/00000000-0000-4000-8000-000000000001/next-due", Guard::Admin), // membership::admin_set_next_due
     R("GET", "/api/admin/tool-billing/status", Guard::Admin), // tool_billing::admin_status
     R("GET", "/api/admin/tool-billing/users/00000000-0000-4000-8000-000000000001/sessions", Guard::Admin), // tool_billing::admin_user_sessions
-    R("GET", "/api/admin/tool-modules", Guard::Admin), // tool_modules::list_modules
-    R("POST", "/api/admin/tool-modules", Guard::Admin), // tool_modules::create_module
-    R("GET", "/api/admin/tool-modules/state", Guard::Admin), // tool_modules::get_module_state
-    R("DELETE", "/api/admin/tool-modules/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_modules::delete_module
+    R("GET", "/api/admin/device-bindings", Guard::Admin), // tool_modules::list_modules
+    R("POST", "/api/admin/device-bindings", Guard::Admin), // tool_modules::create_module
+    R("GET", "/api/admin/device-bindings/state", Guard::Admin), // tool_modules::get_module_state
+    R("DELETE", "/api/admin/device-bindings/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_modules::delete_module
     R("GET", "/api/admin/tool-interlocks", Guard::Admin), // tool_modules::list_interlocks
     R("POST", "/api/admin/tool-interlocks", Guard::Admin), // tool_modules::create_interlock
     R("DELETE", "/api/admin/tool-interlocks/00000000-0000-4000-8000-000000000001", Guard::Admin), // tool_modules::delete_interlock

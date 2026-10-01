@@ -869,8 +869,6 @@ pub struct ToolGuardConfig {
     pub enabled: bool,
     /// what profile field we should pull this out of
     pub profile_field: String,
-    /// global-api-key
-    pub global_api_key: Option<String>,
 }
 
 /// Card encryption at rest (#108).
@@ -955,7 +953,6 @@ impl Default for ToolGuardConfig {
         Self {
             enabled: true,
             profile_field: "card_id".to_string(),
-            global_api_key: None,
         }
     }
 }

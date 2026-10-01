@@ -37,14 +37,37 @@ Two things you need, and this document covers both:
 
 ## Concepts
 
-**Device.** Anything that registers and holds a token. Five kinds, all
-registering through the same endpoint: `edge`, `kiosk`, `card_reader`,
-`power_controller`, `sensor`.
+**Device.** Anything that registers and holds a token. A device declares its
+**capabilities** rather than a single kind (#101): a `roles` array drawn from
+`reader`, `power`, `sensor` (the roles it can be *bound* to a tool as), plus
+`edge` (local coordinator) and `kiosk` (display). A device may declare several —
+one unit that both reads a card and switches power registers with
+`"roles": ["reader", "power"]`, which the old single `kind` could not express.
+The capabilities blob may also carry the firmware-enforcement descriptors
+(`local_inputs`, `local_inhibit`, `countdown`, `holds_last_on_disconnect`) that
+decide whether a safety interlock can be enforced in firmware.
+
+**Resource.** Anything the space controls access to: a **tool** or a **door**.
+They are one model (#101) — one set of access rules, one decision engine, and one
+kind of device binding — so what you learn about binding a tool applies to a door
+unchanged. Where this document says "bound to a tool", the mechanism is the same
+row that binds a device to a door.
 
 **Tool.** A machine the space controls access to. A tool has a UUID and,
 usually, an `external_id` — the short string your firmware is configured with
 and sends as `tool_id`. Both are accepted wherever a tool is named; the
 `external_id` is matched first.
+
+**Door.** A resource whose access is a strike rather than a relay. A door names
+two places (it connects them) and is driven by exactly one device bound to it in
+the **`edge`** role — its coordinator. That binding is how the server knows where
+to send `doors/unlock`; a door with no `edge` binding is authored but drives
+nothing, and an unlock for it is logged and published to nobody.
+
+A door decides access through the same rules a tool does, including the
+`open_access` latch that holds the strike released during a scheduled window. A
+remote unlock from an administrator is **not** a bypass: it composes with the
+door's rules, so revoking a door's grant revokes remote unlock for it too.
 
 **Card.** Whatever a reader reads. The server resolves it against a configurable
 user profile field (`toolguard.profile_field`, typically `card_id`), so "card"
@@ -63,32 +86,35 @@ edge is your counterparty as much as the server is.
 
 ## Authentication
 
-Every device-facing endpoint accepts **one of two** credentials.
-
-### 1. A device Bearer token
+There is **one** credential: a device Bearer token.
 
 ```http
 Authorization: Bearer <auth_token>
 ```
 
-Obtained once, at [registration](#registration). This is the preferred
-credential and the only one accepted by `sync` and `boot-reset`.
+Obtained once, at [registration](#registration).
 
-### 2. An API key
+**What authorizes what.** A token alone authorizes the *device-wide* calls —
+`sync`, `boot-reset`, `power-state`, `module-state` — which name no tool. A call
+that names a tool additionally requires that your device be **bound to that
+tool**: a reader wired to one machine cannot energize another with its own valid
+token. Binding is an explicit act an administrator performs, not something
+inferred from a place or from your capabilities.
 
-Passed as a query parameter or a body field named `api_key`, depending on the
-endpoint. Two keys are accepted:
+**Metered tools are stricter, and it matters.** A tool that bills for usage
+requires a device bound to it in the **`power`** role. Being authorized to
+*start* a tool is not being authorized to put money on it, so a `reader` binding
+is refused here even though it passes the checks above. This keeps a billable
+report attributable to the thing that actually switches the machine.
 
-- the tool's own `external_api_key`, or
-- the server's configured global key (`toolguard.global_api_key`).
-
-**Metered tools are the exception, and it matters.** A tool that bills for usage
-must authenticate with its **own** `external_api_key`. The global key is not
-accepted, and neither is a bare device token. This binds a billable report to
-that specific tool's secret, so one leaked global key cannot post charges for
-every tool in the building. A metered tool with no key configured can never
-satisfy this and is refused rather than trusted — an unbillable, forgeable
-metered tool is a worse outcome than an unusable one.
+> **Retired:** earlier firmware could authenticate with an `api_key` — either the
+> tool's own `external_api_key` or a shared `toolguard.global_api_key` — sent as a
+> query parameter or body field. **Both are gone, and the field is ignored.** The
+> shared key was one secret that opened every tool, so a single leak opened the
+> building; and the weakest accepted credential decided the real bar. A device
+> token is stored hashed on the server and is scoped by its bindings, which the
+> keys were not. If your firmware still sends `api_key`, it will be refused with
+> **401** — register the device and send its token instead.
 
 ### What the failures look like
 
@@ -118,7 +144,13 @@ Content-Type: application/json
 {
   "device_code": "<invite code from an administrator>",
   "name": "laser-cutter-guard",
-  "kind": "power_controller",
+  "capabilities": {
+    "roles": ["power"],
+    "local_inputs": ["door_open"],
+    "local_inhibit": true,
+    "countdown": false,
+    "holds_last_on_disconnect": false
+  },
   "mac_address": "02:00:00:00:00:01",
   "software_version": "1.2.3",
   "platform": "linux",
@@ -127,10 +159,12 @@ Content-Type: application/json
 }
 ```
 
-`kind` must be one of `edge`, `kiosk`, `card_reader`, `power_controller`,
-`sensor` (case-insensitive). `platform` must be one of `windows`, `linux`,
-`macos`, `other`. Anything else is a **400**, as is an expired or already-claimed
-code. `ipv4_address` and `ipv6_address` are optional.
+`capabilities.roles` must be a non-empty array, and every role must be one of
+`reader`, `power`, `sensor`, `edge`, `kiosk`. The enforcement descriptors
+(`local_inputs`, `local_inhibit`, `countdown`, `holds_last_on_disconnect`) are
+optional and each defaults to "cannot" when omitted. `platform` must be one of
+`windows`, `linux`, `macos`, `other`. Anything else is a **400**, as is an
+expired or already-claimed code. `ipv4_address` and `ipv6_address` are optional.
 
 The response is wrapped in the standard API envelope:
 
@@ -205,7 +239,7 @@ No authentication. Returns `{"status":"ok"}`. Use it for reachability checks.
 
 ### `POST /api/toolguard/tool-on`
 
-JSON body: `card`, `tool_id`, optional `api_key`.
+JSON body: `card`, `tool_id`. Requires a device token bound to this tool.
 
 Authorizes a card against a tool and, if allowed, marks the tool in use.
 
@@ -234,7 +268,7 @@ with `tool_on: false`:
 
 ### `POST /api/toolguard/tool-off`
 
-JSON body: `card`, `tool_id`, optional `api_key`.
+JSON body: `card`, `tool_id`. Requires a device token bound to this tool.
 
 Ends the session and returns the tool to Idle. Returns `tool_off: true`.
 
@@ -245,7 +279,8 @@ stop — an un-ended session leaves the tool unusable for the next member.
 ### `POST /api/toolguard/tool-log`
 
 JSON body: `card`, `tool_id`, `seconds` (float), optional `temperature`
-(float), optional `api_key`.
+(float). Requires a device token bound to this tool; for a metered tool that
+binding must be the `power` one.
 
 Reports usage. `message` is `Usage logged`. For metered tools this is what gets
 billed; send it before `tool-off`.
@@ -338,8 +373,7 @@ Body fields, all optional so that a partial or older firmware still parses:
   "max_voltage": "125",
   "amperage_limit": "15",
   "self_tripped": false,
-  "relay_on": true,
-  "api_key": "…"
+  "relay_on": true
 }
 ```
 
@@ -359,8 +393,8 @@ unknown one is a 404. `message` is `Power reported`.
 
 ### `GET /api/toolguard/power-state`
 
-Query: optional `api_key`. The lockout and circuit-topology snapshot, and the
-poll fallback for the MQTT `power/state` push:
+No parameters; a device token is the credential. The lockout and
+circuit-topology snapshot, and the poll fallback for the MQTT `power/state` push:
 
 ```json
 {
@@ -377,13 +411,15 @@ lapsed because the timestamp is stale. That bias is deliberate: fail secure.
 
 ### `GET /api/toolguard/module-state`
 
-Query: optional `api_key`. Module bindings and interlock rules; the poll fallback
+No parameters; a device token is the credential. Module bindings and interlock
+rules; the poll fallback
 for the MQTT `module/state` push. See [failure semantics](#failure-semantics) for
 what the fields oblige you to do.
 
 ### `POST /api/toolguard/power-trip`
 
-Body: `circuit_id` (UUID, required), optional `reason`, optional `api_key`.
+Body: `circuit_id` (UUID, required), optional `reason`. A device token is the
+credential; this call names no tool, so no binding is required.
 
 Report that you summed draw locally across a circuit and tripped it. The server
 records the lockout authoritatively with `lockout_source = edge_fast_trip` and
@@ -453,9 +489,9 @@ without the other.
 
 | topic | payload |
 |---|---|
-| `toolguard/request/tool-on` | `{ "card", "tool_id", "api_key"? }` |
-| `toolguard/request/tool-off` | `{ "card", "tool_id", "api_key"? }` |
-| `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "temperature"?, "api_key"? }` |
+| `toolguard/request/tool-on` | `{ "card", "tool_id" }` |
+| `toolguard/request/tool-off` | `{ "card", "tool_id" }` |
+| `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "temperature"? }` |
 | `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "self_tripped"?, … }` |
 | `door/request/scan` | `{ "door_id", "card_id" }` |
 | `kiosk/refresh` | *(none)* — ask the edge to re-push `toolguard/state` |
@@ -719,7 +755,7 @@ are fixed, so your device config does not need editing every morning:
 | | value |
 |---|---|
 | `tool_id` | `dev-tool-01` |
-| `api_key` | `dev-tool-key` |
+| device token | printed by `devseed` when the stack comes up |
 | card | `DEVCARD01` |
 | member sign-in | `devmember` / the seeded password |
 | device invite | printed at the end of the stage |

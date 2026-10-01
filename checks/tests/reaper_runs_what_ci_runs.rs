@@ -206,3 +206,63 @@ fn every_other_gate_ci_runs_is_also_run_before_a_push() {
          rejectable here first, or the loop is push-fail-fix-push."
     );
 }
+
+/// Being *invoked* is not the same as being *enforced*.
+///
+/// The parity check above says what it cannot see, and this is the gap it names:
+/// "that `e2e/build.sh` reaches the line". A failure that does not travel back to
+/// the caller is indistinguishable, from CI's point of view, from a step that was
+/// never run -- and it is worse than a missing step, because it reports success.
+///
+/// That gap was real. All five of `frontend_gate`'s npm scripts were present, so
+/// parity passed, while the gate returned 0 for a failing `format:check`: the
+/// invocations were a bare sequence inside a subshell -- whose status is its LAST
+/// command's, and `test:coverage` was last and passing -- and `soft` runs the
+/// function as `if "$@"; then`, which disables errexit for the whole dynamic
+/// extent of the call, so the first failure did not abort it either. The gate
+/// printed `[warn] Code style issues found` and passed. GitHub CI, which runs each
+/// script as its own step, rejected the push.
+///
+/// So every npm invocation here must check its own status. `|| rc=1` accumulates
+/// (every check still runs, and the gate still fails); `|| exit 1` fails fast where
+/// continuing would be meaningless. Either is explicit. A bare invocation is
+/// exactly the shape that passed silently.
+#[test]
+fn every_npm_invocation_before_a_push_propagates_its_failure() {
+    let build = read("e2e/build.sh");
+
+    let invocations: Vec<&str> = build
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| {
+            l.contains("npm run ") || l.starts_with("npm ci") || l.starts_with("npm install")
+        })
+        .collect();
+
+    // Anti-vacuity: a filter that matched nothing would make the assertion below
+    // pass over an empty set, which is the failure mode this whole file is about.
+    assert!(
+        invocations.len() >= 6,
+        "found only {} npm invocations in e2e/build.sh; the scan broke rather than \
+         the build getting smaller. Found: {invocations:?}",
+        invocations.len()
+    );
+
+    let unchecked: Vec<&&str> = invocations.iter().filter(|l| !l.contains("||")).collect();
+
+    assert!(
+        unchecked.is_empty(),
+        "these npm invocations in e2e/build.sh do not check their own status:\n  {}\n\n\
+         A bare invocation inside a subshell or a `soft`-called function does not \
+         fail the build: the subshell reports its LAST command's status, and \
+         errexit is suppressed for anything run as an `if` condition. Append \
+         `|| rc=1` to accumulate (preferred in a gate, so one push surfaces every \
+         problem) or `|| exit 1` to fail fast.",
+        unchecked
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}

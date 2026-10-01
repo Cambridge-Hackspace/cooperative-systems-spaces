@@ -1,4 +1,4 @@
-//! What a physical tool module can actually do, and what that permits (#83).
+//! What a physical device can actually do, and what that permits (#83, #101).
 //!
 //! An interlock's `enforcement` tier is not a free choice. A rule can only be
 //! enforced in firmware if some single module can *both* sense the condition and
@@ -7,25 +7,66 @@
 //! against the hardware produces a rule that silently does not do what it says,
 //! which for a safety interlock is the worst of the available outcomes.
 //!
-//! Capabilities are declared per binding, under `tool_modules.params`:
+//! Capabilities are a property of the **device** (#101), stored on
+//! `space_devices.capabilities`. Before #101 they were declared per binding under
+//! `tool_modules.params.capabilities`; they moved onto the device because the same
+//! hardware fills the same role on whatever tool it is bound to, and because a
+//! device now declares *which roles it can fill at all* rather than being a single
+//! `kind`. The blob:
 //!
 //! ```json
 //! {
-//!   "capabilities": {
-//!     "local_inputs": ["door_open"],
-//!     "local_inhibit": true,
-//!     "countdown": false,
-//!     "holds_last_on_disconnect": false
-//!   }
+//!   "roles": ["reader", "power"],
+//!   "local_inputs": ["door_open"],
+//!   "local_inhibit": true,
+//!   "countdown": false,
+//!   "holds_last_on_disconnect": false
 //! }
 //! ```
 //!
-//! Everything defaults to "cannot": an undeclared module is assumed to do
-//! nothing locally, so an unverified plug can never be the reason a `firmware`
-//! tier is accepted. Filling in the real descriptors for the hardware in use is
-//! a separate inventory task; this is the shape they take and the rule they feed.
+//! The enforcement descriptors all default to "cannot": an undeclared device is
+//! assumed to do nothing locally, so an unverified plug can never be the reason a
+//! `firmware` tier is accepted. `roles` defaults to empty -- a device that
+//! declares no role can be bound to nothing. Filling in the real descriptors for
+//! the hardware in use is a separate inventory task; this is the shape they take
+//! and the rule they feed.
 
 use serde::{Deserialize, Serialize};
+
+/// A device's full declared capability set, as stored on
+/// `space_devices.capabilities` (#101).
+///
+/// `roles` are the roles this device can be bound as (reader / power / sensor --
+/// a subset of a binding's `module_role`) or the coordinator / display roles it
+/// fills (edge / kiosk). A device may hold several: a unit that both reads a card
+/// and switches power declares `["reader", "power"]`, which the single-valued
+/// `kind` it replaced could not say. The remaining fields are the
+/// firmware-enforcement descriptors, flattened in so the stored blob stays flat.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceCapabilities {
+    /// Roles this device can fill. Empty means "bind to nothing".
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// The firmware-enforcement descriptors, flattened alongside `roles`.
+    #[serde(flatten)]
+    pub module: ModuleCapabilities,
+}
+
+impl DeviceCapabilities {
+    /// Parse a device's `capabilities` JSONB column. A missing or malformed blob
+    /// yields the no-roles / all-cannot default rather than an error -- the same
+    /// deny-biased reasoning the per-binding `params` reader used: the caller's
+    /// question is "may this device be relied on", and the answer for something
+    /// undeclared is no.
+    pub fn from_value(v: &serde_json::Value) -> Self {
+        serde_json::from_value::<Self>(v.clone()).unwrap_or_default()
+    }
+
+    /// Whether this device declares `role` among its capabilities.
+    pub fn has_role(&self, role: &str) -> bool {
+        self.roles.iter().any(|r| r == role)
+    }
+}
 
 /// A module's declared local abilities. Absent fields mean "cannot".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,18 +91,6 @@ pub struct ModuleCapabilities {
 }
 
 impl ModuleCapabilities {
-    /// Read a binding's declared capabilities out of its `params` blob.
-    ///
-    /// A missing or malformed `capabilities` object yields the all-cannot
-    /// default rather than an error: the caller's question is "may this module
-    /// be relied on", and the answer for something undeclared is no.
-    pub fn from_params(params: &serde_json::Value) -> Self {
-        params
-            .get("capabilities")
-            .and_then(|c| serde_json::from_value::<Self>(c.clone()).ok())
-            .unwrap_or_default()
-    }
-
     /// Whether this module alone can enforce `condition` in firmware: it senses
     /// the condition directly *and* can act on it without being told.
     pub fn can_enforce_locally(&self, condition: &str) -> bool {
@@ -134,36 +163,46 @@ mod tests {
     }
 
     #[test]
-    fn an_undeclared_module_can_do_nothing() {
-        let c = ModuleCapabilities::from_params(&json!({}));
-        assert_eq!(c, ModuleCapabilities::default());
-        assert!(!c.can_enforce_locally("door_open"));
+    fn an_undeclared_device_can_do_nothing() {
+        let d = DeviceCapabilities::from_value(&json!({}));
+        assert_eq!(d, DeviceCapabilities::default());
+        assert!(d.roles.is_empty());
+        assert!(!d.has_role("power"));
+        assert!(!d.module.can_enforce_locally("door_open"));
         // Nothing declared means it does not claim to hold last either, so it is
         // not assumed to strand a tool energized.
-        assert!(c.can_fail_safe());
+        assert!(d.module.can_fail_safe());
     }
 
     #[test]
     fn malformed_capabilities_do_not_grant_anything() {
         // A typo in the blob must not read as "yes it can".
-        let c = ModuleCapabilities::from_params(&json!({ "capabilities": "definitely" }));
-        assert!(!c.local_inhibit);
-        assert!(!c.can_enforce_locally("door_open"));
+        let d = DeviceCapabilities::from_value(&json!("definitely"));
+        assert!(d.roles.is_empty());
+        assert!(!d.module.local_inhibit);
+        assert!(!d.module.can_enforce_locally("door_open"));
+        // A blob whose `roles` is the wrong shape falls back to the deny-biased
+        // default rather than parsing partially -- roles is not a string.
+        let d = DeviceCapabilities::from_value(&json!({ "roles": "power" }));
+        assert!(d.roles.is_empty());
+        assert!(!d.has_role("power"));
     }
 
     #[test]
-    fn capabilities_round_trip_from_params() {
-        let c = ModuleCapabilities::from_params(&json!({
-            "capabilities": {
-                "local_inputs": ["door_open", "estop"],
-                "local_inhibit": true,
-                "countdown": false,
-                "holds_last_on_disconnect": true
-            }
+    fn capabilities_round_trip_from_the_device_blob() {
+        let d = DeviceCapabilities::from_value(&json!({
+            "roles": ["reader", "power"],
+            "local_inputs": ["door_open", "estop"],
+            "local_inhibit": true,
+            "countdown": false,
+            "holds_last_on_disconnect": true
         }));
-        assert!(c.can_enforce_locally("door_open"));
-        assert!(c.can_enforce_locally("estop"));
-        assert!(!c.can_enforce_locally("lid_open"));
+        assert!(d.has_role("reader"));
+        assert!(d.has_role("power"));
+        assert!(!d.has_role("sensor"));
+        assert!(d.module.can_enforce_locally("door_open"));
+        assert!(d.module.can_enforce_locally("estop"));
+        assert!(!d.module.can_enforce_locally("lid_open"));
     }
 
     #[test]

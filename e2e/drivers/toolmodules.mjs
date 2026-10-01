@@ -7,24 +7,24 @@
 // re-authorization unless told otherwise; the `module/state` snapshot the edge
 // coordinates from reflects what was authored and omits a disabled rule; a
 // delete that matched nothing is a 404 rather than a 200 claiming a deletion;
-// and every mutation lands an audit row. Where a device can be registered, it
-// also proves the new module device kinds (#83 increment 2) round-trip and that
-// a binding defaults to the fail-safe disconnect policy.
+// and every mutation lands an audit row. It also proves a device's declared
+// capability roles (#101) round-trip -- accepted, validated, stored as JSONB, read
+// back -- and that a binding defaults to the fail-safe disconnect policy and is
+// refused in a role the device does not declare.
 //
 // What this does NOT prove: that anything is actually energized, gated or cut.
 // Nothing here switches hardware -- the coordinator and its lease are a later
 // increment, and the firmware tier is outside this repository.
 //
-// Cluster encoding: registering a device needs a device invite, and an invite
-// code is eight emoji. On a cluster that cannot store one (LATIN1 and friends;
-// see the same branch in concurrency.mjs) the binding half cannot be set up at
-// all, so it is skipped with that reason rather than reported as a defect in
-// this feature. Everything that does not need a device still runs there.
+// Cluster encoding: the binding half used to be skipped on a non-UTF8 cluster,
+// because a device invite code is eight emoji and LATIN1 cannot store one. That
+// stopped being true when #120 (#137) made invite codes hex-at-rest -- the emoji
+// are generated, returned to the operator over HTTP, and matched as hex; none of
+// them ever reaches the database. The guard outlived its reason and was skipping
+// the entire binding half of this stage on the default cluster, which is the
+// coverage this suite exists to have. Removed; the stage now runs everywhere.
 
 import { GET, POST, DELETE, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
-
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
 
 // A syntactically valid id that exists in no table, for the validation paths.
 const ABSENT = '00000000-0000-4000-8000-0000000000ff'
@@ -45,28 +45,28 @@ main(async () => {
   // --- vocabulary is refused at the API, not by the column ------------------
   // These need no device: the handler validates the vocabulary, then the tool,
   // then the device, so a synthetic device id never gets that far.
-  const badRole = await POST('/api/admin/tool-modules', {
+  const badRole = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: ABSENT, role: 'nonsense', name: 'x' },
+    body: { resource_id: toolId, device_id: ABSENT, role: 'nonsense', name: 'x' },
   })
   assertEq('toolmodules/bad-role-is-400', 400, badRole.status)
 
-  const badTool = await POST('/api/admin/tool-modules', {
+  const badTool = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: ABSENT, device_id: ABSENT, role: 'power', name: 'x' },
+    body: { resource_id: ABSENT, device_id: ABSENT, role: 'power', name: 'x' },
   })
   assertEq('toolmodules/unknown-tool-is-400', 400, badTool.status)
 
-  const badDevice = await POST('/api/admin/tool-modules', {
+  const badDevice = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: ABSENT, role: 'power', name: 'x' },
+    body: { resource_id: toolId, device_id: ABSENT, role: 'power', name: 'x' },
   })
   assertEq('toolmodules/unknown-device-is-400', 400, badDevice.status)
 
-  const badDisconnect = await POST('/api/admin/tool-modules', {
+  const badDisconnect = await POST('/api/admin/device-bindings', {
     token: admin.token,
     body: {
-      tool_id: toolId,
+      resource_id: toolId,
       device_id: ABSENT,
       role: 'power',
       name: 'x',
@@ -131,14 +131,11 @@ main(async () => {
   assertEq('toolmodules/create-disabled-gate', 201, disabled.status)
   const disabledId = disabled.json?.data?.id
 
-  // --- the binding half, where a device can be registered -------------------
+  // --- the binding half ------------------------------------------------------
+  // A bare block, kept so the bindings below stay scoped together after the
+  // cluster-encoding guard that used to wrap them was retired.
   let moduleId = null
-  if (!CAN_REGISTER_DEVICE) {
-    record('toolmodules/bindings-not-run-on-this-cluster', 'skip',
-      `binding a module needs a registered device, a device needs an invite, and this ` +
-      `cluster (${ENCODING}) cannot store an eight-emoji invite code. The interlock and ` +
-      `snapshot assertions above and below still run.`)
-  } else {
+  {
     const invite = await POST('/api/admin/devices/invite', {
       token: admin.token,
       body: { expires_in_hours: 1 },
@@ -147,27 +144,28 @@ main(async () => {
     ok('toolmodules/invite-created', !!code,
       `POST /api/admin/devices/invite -> ${invite.status}`)
 
-    // Registering as `power_controller` is the end-to-end proof of the new enum
-    // values: the string is accepted by the API, stored by Postgres, and read
-    // back -- the four-way vocabulary the device_kinds_agree oracle pins.
+    // Registering with `capabilities.roles: ['power']` is the end-to-end proof of
+    // the #101 model: the roles array is accepted by the API, validated against
+    // the device_role vocabulary, stored as JSONB by Postgres, and read back --
+    // the vocabulary the device_capabilities_agree oracle pins.
     const reg = await POST('/api/devices/register', {
       body: {
         device_code: code,
         name: `plug-${tag}`,
-        kind: 'power_controller',
+        capabilities: { roles: ['power'] },
         mac_address: '02:00:00:00:83:01',
         software_version: '0.0.0-e2e',
         platform: 'linux',
       },
     })
-    ok('toolmodules/module-kind-registers', reg.status < 300,
-      `a power_controller must be registerable -> ${reg.status} ${reg.text.slice(0, 200)}`)
+    ok('toolmodules/module-role-registers', reg.status < 300,
+      `a power device must be registerable -> ${reg.status} ${reg.text.slice(0, 200)}`)
     const deviceId = reg.json?.data?.device_id ?? reg.json?.device_id
     ok('toolmodules/device-id', !!deviceId, `no device id in ${reg.text.slice(0, 200)}`)
 
-    const mod = await POST('/api/admin/tool-modules', {
+    const mod = await POST('/api/admin/device-bindings', {
       token: admin.token,
-      body: { tool_id: toolId, device_id: deviceId, role: 'power', name: 'main plug' },
+      body: { resource_id: toolId, device_id: deviceId, role: 'power', name: 'main plug' },
     })
     assertEq('toolmodules/create-binding', 201, mod.status)
     moduleId = mod.json?.data?.id
@@ -175,7 +173,7 @@ main(async () => {
     // Unstated policy must be the fail-safe one, not "hold whatever it had".
     assertEq('toolmodules/binding-defaults-fail-off', 'fail_off', mod.json?.data?.on_disconnect)
 
-    const list = await GET('/api/admin/tool-modules', T)
+    const list = await GET('/api/admin/device-bindings', T)
     assertEq('toolmodules/list-bindings', 200, list.status)
     ok('toolmodules/list-contains-binding',
       (list.json?.data ?? []).some((m) => m.id === moduleId), 'created binding missing from list')
@@ -245,7 +243,7 @@ main(async () => {
         body: {
           device_code: inv.json?.data?.device_code,
           name: `${name}-${tag}`,
-          kind: 'card_reader',
+          capabilities: { roles: ['reader'] },
           mac_address: mac,
           software_version: '0.0.0-e2e',
           platform: 'linux',
@@ -254,9 +252,9 @@ main(async () => {
       const id = r.json?.data?.device_id ?? r.json?.device_id
       const token = r.json?.data?.auth_token ?? r.json?.auth_token
       if (boundToolId) {
-        await POST('/api/admin/tool-modules', {
+        await POST('/api/admin/device-bindings', {
           token: admin.token,
-          body: { tool_id: boundToolId, device_id: id, role: 'reader', name: `${name} reader` },
+          body: { resource_id: boundToolId, device_id: id, role: 'reader', name: `${name} reader` },
         })
       }
       const sync = await GET('/api/toolguard/sync', { token })
@@ -332,32 +330,33 @@ main(async () => {
       token: admin.token,
       body: { expires_in_hours: 1 },
     })
+    // #101: the enforcement descriptors are declared on the DEVICE now, not on the
+    // binding. This integrated plug senses the reed and can cut its own relay, so
+    // it registers with the capabilities that make `firmware` genuinely achievable.
     const capableReg = await POST('/api/devices/register', {
       body: {
         device_code: capableInvite.json?.data?.device_code,
         name: `integrated-plug-${tag}`,
-        kind: 'power_controller',
+        capabilities: {
+          roles: ['power'],
+          local_inputs: ['door_open'],
+          local_inhibit: true,
+          countdown: false,
+          holds_last_on_disconnect: false,
+        },
         mac_address: '02:00:00:00:83:02',
         software_version: '0.0.0-e2e',
         platform: 'linux',
       },
     })
     const capableDeviceId = capableReg.json?.data?.device_id ?? capableReg.json?.device_id
-    const capableBinding = await POST('/api/admin/tool-modules', {
+    const capableBinding = await POST('/api/admin/device-bindings', {
       token: admin.token,
       body: {
-        tool_id: wiredToolId,
+        resource_id: wiredToolId,
         device_id: capableDeviceId,
         role: 'power',
         name: 'integrated plug',
-        params: {
-          capabilities: {
-            local_inputs: ['door_open'],
-            local_inhibit: true,
-            countdown: false,
-            holds_last_on_disconnect: false,
-          },
-        },
       },
     })
     assertEq('toolmodules/capable-binding-created', 201, capableBinding.status)
@@ -387,7 +386,7 @@ main(async () => {
     assertEq('toolmodules/firmware-tier-is-per-condition', 400, wrongCondition.status)
 
     // --- the fail-safe gap is reported, not assumed away --------------------
-    const snap2 = await GET('/api/admin/tool-modules/state', T)
+    const snap2 = await GET('/api/admin/device-bindings/state', T)
     const wiredEntry = (snap2.json?.data?.tools ?? []).find((t) => t.tool_id === wiredToolId)
     assertEq('toolmodules/capable-tool-fails-safe', true, wiredEntry?.power_fails_safe)
     // The first tool's plug declared no capabilities at all, so it is not
@@ -396,10 +395,60 @@ main(async () => {
     ok('toolmodules/undeclared-plug-is-not-claimed-fail-safe',
       wiredEntry?.power_fails_safe === true && plainEntry !== undefined,
       'both tools should appear in the snapshot with an explicit fail-safe verdict')
+
+    // --- a device may only be bound in a role it declares (#101) --------------
+    // A reader-only device bound as `power` would be a tool the system believes it
+    // can de-energize and cannot. The bind must be refused with a 400, not
+    // discovered when an interlock fails to cut power in a workshop.
+    const readerOnlyInvite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const readerOnlyReg = await POST('/api/devices/register', {
+      body: {
+        device_code: readerOnlyInvite.json?.data?.device_code,
+        name: `reader-only-${tag}`,
+        capabilities: { roles: ['reader'] },
+        mac_address: '02:00:00:00:83:03',
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    const readerOnlyId = readerOnlyReg.json?.data?.device_id ?? readerOnlyReg.json?.device_id
+    const wrongRoleBind = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: { resource_id: wiredToolId, device_id: readerOnlyId, role: 'power', name: 'misbind' },
+    })
+    assertEq('toolmodules/bind-in-undeclared-role-is-refused', 400, wrongRoleBind.status)
+    // And the same device CAN be bound in the role it does declare, so the refusal
+    // above is about the capability, not a blanket rejection of the device.
+    const rightRoleBind = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: { resource_id: wiredToolId, device_id: readerOnlyId, role: 'reader', name: 'reader ok' },
+    })
+    assertEq('toolmodules/bind-in-declared-role-is-accepted', 201, rightRoleBind.status)
+
+    // An unknown role at registration is rejected, so the vocabulary is enforced
+    // at the door rather than stored and tripped over later.
+    const badRoleInvite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const badRoleReg = await POST('/api/devices/register', {
+      body: {
+        device_code: badRoleInvite.json?.data?.device_code,
+        name: `bad-role-${tag}`,
+        capabilities: { roles: ['welder'] },
+        mac_address: '02:00:00:00:83:04',
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    assertEq('toolmodules/unknown-role-at-registration-is-refused', 400, badRoleReg.status)
   }
 
   // --- the snapshot the edge coordinates from -------------------------------
-  const snap = await GET('/api/admin/tool-modules/state', T)
+  const snap = await GET('/api/admin/device-bindings/state', T)
   assertEq('toolmodules/state', 200, snap.status)
   const entry = (snap.json?.data?.tools ?? []).find((t) => t.tool_id === toolId)
   ok('toolmodules/state-has-tool', !!entry,
@@ -425,9 +474,9 @@ main(async () => {
   assertEq('toolmodules/second-delete-is-404', 404, delAgain.status)
 
   if (moduleId) {
-    const delMod = await DELETE(`/api/admin/tool-modules/${moduleId}`, T)
+    const delMod = await DELETE(`/api/admin/device-bindings/${moduleId}`, T)
     assertEq('toolmodules/delete-binding', 200, delMod.status)
-    const delModAgain = await DELETE(`/api/admin/tool-modules/${moduleId}`, T)
+    const delModAgain = await DELETE(`/api/admin/device-bindings/${moduleId}`, T)
     assertEq('toolmodules/second-binding-delete-is-404', 404, delModAgain.status)
   }
 

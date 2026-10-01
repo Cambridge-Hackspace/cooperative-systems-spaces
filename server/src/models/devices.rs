@@ -5,52 +5,26 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use uuid::Uuid;
 
-/// Device kind: the coordinator/display roles, plus the tool access modules.
+/// The roles a device can declare in its `capabilities` (#101, replacing the old
+/// single-valued `SpaceDeviceKind`).
 ///
-/// `Edge` is the local coordinator and `Kiosk` a display. `CardReader`,
-/// `PowerController` and `Sensor` are tool access modules (#83) -- separate
-/// physical units bound to a tool through `tool_modules`, rather than
-/// peripherals of whichever edge happens to host them.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow,
-)]
-#[diesel(sql_type = sql_types::SpaceDeviceKind)]
-pub enum SpaceDeviceKind {
-    Edge,
-    Kiosk,
-    CardReader,
-    PowerController,
-    Sensor,
-}
-
-// Implement Diesel traits for SpaceDeviceKind enum
-impl diesel::serialize::ToSql<sql_types::SpaceDeviceKind, diesel::pg::Pg> for SpaceDeviceKind {
-    fn to_sql<'b>(
-        &'b self,
-        out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
-    ) -> diesel::serialize::Result {
-        match self {
-            SpaceDeviceKind::Edge => out.write_all(b"edge")?,
-            SpaceDeviceKind::Kiosk => out.write_all(b"kiosk")?,
-            SpaceDeviceKind::CardReader => out.write_all(b"card_reader")?,
-            SpaceDeviceKind::PowerController => out.write_all(b"power_controller")?,
-            SpaceDeviceKind::Sensor => out.write_all(b"sensor")?,
-        }
-        Ok(diesel::serialize::IsNull::No)
-    }
-}
-
-impl diesel::deserialize::FromSql<sql_types::SpaceDeviceKind, diesel::pg::Pg> for SpaceDeviceKind {
-    fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
-        match bytes.as_bytes() {
-            b"edge" => Ok(SpaceDeviceKind::Edge),
-            b"kiosk" => Ok(SpaceDeviceKind::Kiosk),
-            b"card_reader" => Ok(SpaceDeviceKind::CardReader),
-            b"power_controller" => Ok(SpaceDeviceKind::PowerController),
-            b"sensor" => Ok(SpaceDeviceKind::Sensor),
-            _ => Err("Unrecognized enum variant".into()),
-        }
-    }
+/// `reader` / `power` / `sensor` are a tool's access-chain roles and `edge` is a
+/// door's coordinator -- together the bindable `binding_role` set, which this
+/// vocabulary must contain, because a device cannot be bound in a role it does
+/// not declare. `kiosk` is a display and is bound to no resource. A device may
+/// declare several: the point of the move away from a single `kind` is that one
+/// unit can both read a card and switch power.
+///
+/// This is the Rust source of truth for the vocabulary; the SQL side is the
+/// `space_devices_roles_vocab` CHECK, and
+/// `checks/tests/device_capabilities_agree.rs` asserts the two agree.
+pub mod device_role {
+    pub const READER: &str = "reader";
+    pub const POWER: &str = "power";
+    pub const SENSOR: &str = "sensor";
+    pub const EDGE: &str = "edge";
+    pub const KIOSK: &str = "kiosk";
+    pub const ALL: [&str; 5] = [READER, POWER, SENSOR, EDGE, KIOSK];
 }
 
 /// Device platform enum
@@ -108,7 +82,6 @@ pub struct SpaceDevice {
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub last_seen_at: Option<DateTime<Utc>>,
-    pub kind: SpaceDeviceKind,
     pub mac_address: String,
     pub software_version: String,
     pub ipv4_address: Option<String>,
@@ -116,6 +89,10 @@ pub struct SpaceDevice {
     pub uptime: i64,
     pub platform: SpaceDevicePlatform,
     pub place_id: Option<Uuid>,
+    /// #101: the device's declared capabilities (roles it can fill + the
+    /// firmware-enforcement descriptors). Replaces the single-valued `kind`.
+    /// Positioned last to match the `ADD COLUMN` order the Queryable reads.
+    pub capabilities: serde_json::Value,
 }
 
 /// New device for insertion
@@ -124,7 +101,9 @@ pub struct SpaceDevice {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct NewSpaceDevice {
     pub name: String,
-    pub kind: SpaceDeviceKind,
+    /// #101: declared capabilities blob (roles + enforcement descriptors),
+    /// validated against `device_role` at the registration endpoint.
+    pub capabilities: serde_json::Value,
     pub mac_address: String,
     pub software_version: String,
     pub ipv4_address: Option<String>,

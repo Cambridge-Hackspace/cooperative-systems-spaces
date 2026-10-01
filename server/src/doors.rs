@@ -8,7 +8,7 @@
 //! "this role or higher" using the standard hierarchy
 //! Newbie < Member < Staff < Admin.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::config::ConfigManager;
 use crate::database::{DatabaseError, DatabaseManager};
 use crate::devices_transport::DeviceTransport;
-use crate::models::{Door, DoorAccessRule, DoorRuleEffect, DoorRuleKind, Schedule, User};
+use crate::models::{AccessRule, Door, DoorRuleEffect, DoorRuleKind, Schedule, User};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompiledDoor {
@@ -143,7 +143,7 @@ impl DoorService {
 
     fn expand_rules(
         &self,
-        rules: &[DoorAccessRule],
+        rules: &[AccessRule],
         cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
         schedules: &[Schedule],
         tz: chrono_tz::Tz,
@@ -242,23 +242,35 @@ impl DoorService {
     /// applied at edge for RFID scans, but operates on the user rather than
     /// a raw card ID so we can match `kind=user` rules even when the user
     /// has no card on file.
-    pub fn evaluate(&self, door: &Door, user: &User) -> Result<AccessDecision, DatabaseError> {
-        if !door.enabled {
-            return Ok(AccessDecision::Deny("Door is disabled".into()));
-        }
-        if !user.is_active {
-            return Ok(AccessDecision::Deny("Account inactive".into()));
-        }
+    /// `action` distinguishes an in-person check-in from a remote unlock. Both run
+    /// the same rules -- #101 decided that a remote unlock *composes with* a
+    /// resource's rules rather than bypassing them -- so this takes the action
+    /// rather than assuming one, and there is still exactly one decision path.
+    pub fn evaluate(
+        &self,
+        door: &Door,
+        user: &User,
+        action: crate::access_engine::Action,
+    ) -> Result<AccessDecision, DatabaseError> {
+        // #101: the QR check-in decision now runs through the one access engine
+        // (`access_engine::may`), the same engine the tool path resolves through,
+        // so the two cannot diverge. This method materializes the door's policy and
+        // this user's principal and delegates; the rule-matching semantics are
+        // unchanged (they moved into `may`, which reuses the same
+        // `schedule_state_at`/`rule_fires`/`DoorRuleKind` primitives), and the deny
+        // messages are preserved verbatim below. Pinned by contracts/door_rules.json
+        // (`may_reproduces_the_per_principal_door_decision`).
+        use crate::access_engine::{
+            may, Decision, DefaultEffect, DenyReason, Principal, ResourcePolicy,
+        };
+
         let rules = self.db.list_rules_for_door(door.id)?;
         let schedules = self.db.list_schedules()?;
         let tz = self.site_tz();
-        let mut allow = HashSet::<String>::new();
-        let mut deny = HashSet::<String>::new();
-        // #120 (#122/H3+H4): a kind=card rule stores a card wire-digest at rest,
-        // so match it against THIS user's card digests -- first-class cards
-        // unioned with digested legacy profile values, exactly as the compiled
-        // snapshot does.
-        let user_cards: HashSet<String> = self
+        // #120 (#122/H3+H4): a kind=card rule stores a card wire-digest at rest, so
+        // match it against THIS user's card digests -- first-class cards unioned
+        // with digested legacy profile values, exactly as the compiled snapshot does.
+        let card_digests: BTreeSet<String> = self
             .db
             .card_digests_by_user(
                 std::slice::from_ref(user),
@@ -269,63 +281,54 @@ impl DoorService {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        let user_id_str = user.id.to_string();
         let graph = self.db.rbac();
-        let user_level = Some(self.db.user_effective_level(user.id)?);
 
-        for rule in &rules {
-            // Parse the effect first: the schedule gate is fail-closed per effect
-            // (an unrecognized effect used to default to allow -- skipped now).
-            let effect = match DoorRuleEffect::parse(&rule.effect) {
-                Some(e) => e,
-                None => continue,
-            };
-            // Schedule-gated rules are silent when their window is closed; an
-            // unresolvable schedule keeps a deny but drops an allow (#122/#7).
-            if !rule_fires(
-                effect,
-                schedule_state_at(rule.schedule_id, &schedules, tz, Utc::now()),
-            ) {
-                continue;
-            }
-            let kind = match DoorRuleKind::parse(&rule.kind) {
-                Some(k) => k,
-                None => continue,
-            };
-            let matched = match kind {
-                DoorRuleKind::Card => user_cards.contains(&rule.value),
-                DoorRuleKind::User => rule.value == user_id_str,
-                DoorRuleKind::Role => match graph.level_of_name(&rule.value) {
-                    Some(required) => user_level.is_some_and(|ul| ul >= required),
-                    None => false,
-                },
-                // Open Access is a door-level held-unlock latch, not a per-user
-                // grant: it never participates in the QR check-in decision. When
-                // its window is open the strike is already held open (see
-                // `open_access_hold_until_at`), so a check-in is moot.
-                DoorRuleKind::OpenAccess => false,
-            };
-            if !matched {
-                continue;
-            }
-            match effect {
-                DoorRuleEffect::Allow => {
-                    allow.insert(rule.id.to_string());
-                }
-                DoorRuleEffect::Deny => {
-                    deny.insert(rule.id.to_string());
-                }
-            }
-        }
+        let principal = Principal {
+            user_id: Some(user.id),
+            level: self.db.user_effective_level(user.id)?,
+            card_digests,
+            is_active: user.is_active,
+        };
+        let policy = ResourcePolicy {
+            // Doors carry no lockout today; the disabled flag is availability.
+            locked_out: false,
+            unavailable: (!door.enabled).then(|| "Door is disabled".to_string()),
+            // A door is restricted: no matching allow rule -> denied.
+            default_effect: DefaultEffect::Restricted,
+            // Door schedules live on the rules, not the resource.
+            schedule_id: None,
+            training_ok: None,
+            metered_ok: None,
+        };
 
-        if !deny.is_empty() {
-            return Ok(AccessDecision::Deny("Denied by access rule".into()));
-        }
-        if !allow.is_empty() {
-            Ok(AccessDecision::Allow)
-        } else {
-            Ok(AccessDecision::Deny("No matching access rule".into()))
-        }
+        let decision = may(
+            &principal,
+            &policy,
+            &rules,
+            &schedules,
+            tz,
+            Utc::now(),
+            graph.as_ref(),
+            action,
+        );
+        Ok(match decision {
+            Decision::Allow => AccessDecision::Allow,
+            // Messages preserved verbatim from the previous inline evaluator.
+            Decision::Deny(DenyReason::Unavailable(m)) => AccessDecision::Deny(m),
+            Decision::Deny(DenyReason::Inactive) => AccessDecision::Deny("Account inactive".into()),
+            Decision::Deny(DenyReason::Rule) => {
+                AccessDecision::Deny("Denied by access rule".into())
+            }
+            Decision::Deny(DenyReason::NoMatch) => {
+                AccessDecision::Deny("No matching access rule".into())
+            }
+            // A door cannot produce these today (no lockout, no training/metering),
+            // but map them rather than panic if the policy ever carries them.
+            Decision::Deny(DenyReason::LockedOut) => AccessDecision::Deny("Locked out".into()),
+            Decision::Deny(DenyReason::Training | DenyReason::Billing) => {
+                AccessDecision::Deny("Denied".into())
+            }
+        })
     }
 
     // ----- schedules helpers + ticker ----------------------------------
@@ -408,7 +411,7 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 /// interval. Rules with no schedule are always active.
 /// Whether a rule's schedule window is open, shut, or cannot be resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScheduleState {
+pub(crate) enum ScheduleState {
     /// `now` falls inside the window (or the rule has no schedule).
     Active,
     /// `now` falls outside a well-defined window.
@@ -421,7 +424,7 @@ enum ScheduleState {
     Unresolvable,
 }
 
-fn schedule_state_at(
+pub(crate) fn schedule_state_at(
     schedule_id: Option<Uuid>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
@@ -457,7 +460,7 @@ fn schedule_state_at(
 
 /// Whether a rule of `effect` fires now, given its schedule's state. Fail-closed:
 /// an unresolvable schedule keeps a deny in force but drops an allow (#122/#7).
-fn rule_fires(effect: DoorRuleEffect, state: ScheduleState) -> bool {
+pub(crate) fn rule_fires(effect: DoorRuleEffect, state: ScheduleState) -> bool {
     match state {
         ScheduleState::Active => true,
         ScheduleState::Inactive => false,
@@ -508,7 +511,7 @@ pub fn cards_in_profile(profile: &Value, field: &str) -> Vec<String> {
 /// This is the door-level counterpart to `expand_rules_at`; both are pure so the
 /// `contracts/door_rules.json` vectors can drive them without a database.
 pub fn open_access_hold_until_at(
-    rules: &[DoorAccessRule],
+    rules: &[AccessRule],
     schedules: &[Schedule],
     tz: chrono_tz::Tz,
     now: DateTime<Utc>,
@@ -554,7 +557,7 @@ pub fn open_access_hold_until_at(
 /// cipher: it routes opaque tokens, which is exactly what the golden vectors in
 /// `contracts/door_rules.json` pin.
 pub fn expand_rules_at(
-    rules: &[DoorAccessRule],
+    rules: &[AccessRule],
     cards_by_user: &std::collections::HashMap<Uuid, Vec<String>>,
     schedules: &[Schedule],
     tz: chrono_tz::Tz,

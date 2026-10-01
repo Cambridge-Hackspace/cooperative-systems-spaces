@@ -457,16 +457,16 @@ export const placesApi = {
 // Guarded so every method resolves to an ApiResponse shape rather than throwing.
 export const toolModulesApi = withErrorGuard({
   listModules() {
-    return apiClient.get<import('@/types').ToolModule[]>('/admin/tool-modules')
+    return apiClient.get<import('@/types').DeviceBinding[]>('/admin/device-bindings')
   },
-  createModule(body: import('@/types').CreateToolModuleRequest) {
-    return apiClient.post<import('@/types').ToolModule>('/admin/tool-modules', body)
+  createModule(body: import('@/types').CreateDeviceBindingRequest) {
+    return apiClient.post<import('@/types').DeviceBinding>('/admin/device-bindings', body)
   },
   removeModule(id: string) {
-    return apiClient.delete<{ deleted: boolean }>(`/admin/tool-modules/${id}`)
+    return apiClient.delete<{ deleted: boolean }>(`/admin/device-bindings/${id}`)
   },
   state() {
-    return apiClient.get<import('@/types').ToolModuleStateSnapshot>('/admin/tool-modules/state')
+    return apiClient.get<import('@/types').ToolModuleStateSnapshot>('/admin/device-bindings/state')
   },
   listInterlocks() {
     return apiClient.get<import('@/types').ToolInterlock[]>('/admin/tool-interlocks')

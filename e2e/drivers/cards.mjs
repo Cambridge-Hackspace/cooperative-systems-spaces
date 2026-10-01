@@ -22,10 +22,15 @@
 // the card can be the reason a denial happens.
 
 import { appendFileSync, writeFileSync } from 'node:fs'
-import { main, ok, assertEq, GET, POST, account, adminAccount } from './lib.mjs'
+import { main, ok, assertEq, GET, POST, account, adminAccount, boundDevice } from './lib.mjs'
 
-const TOOL_KEY = 'e2e-card-tool-key'
 const EXTERNAL_ID = 'CARDS-TOOL-1'
+
+// #101 slice 6: a tool operation authenticates as a device BOUND to that tool,
+// so the swipe helpers below carry that device's Bearer token. Set by
+// `createFreeTool` once the tool (and therefore the resource) exists, because a
+// binding cannot be made before its resource.
+let deviceToken = null
 
 // Every plaintext code this driver issues, written to the shared stack dir so
 // the `logs` stage can grep the server log for it. The plaintext `user_cards.code`
@@ -42,9 +47,9 @@ function recordIssuedCode(code) {
 
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
 const toolOn = (card) =>
-  POST('/api/toolguard/tool-on', { body: { card, tool_id: EXTERNAL_ID, api_key: TOOL_KEY } })
+  POST('/api/toolguard/tool-on', { token: deviceToken, body: { card, tool_id: EXTERNAL_ID } })
 const toolOff = (card) =>
-  POST('/api/toolguard/tool-off', { body: { card, tool_id: EXTERNAL_ID, api_key: TOOL_KEY } })
+  POST('/api/toolguard/tool-off', { token: deviceToken, body: { card, tool_id: EXTERNAL_ID } })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function createFreeTool(admin) {
@@ -55,13 +60,21 @@ async function createFreeTool(admin) {
       category: 'other',
       requires_training: false,
       external_id: EXTERNAL_ID,
-      external_api_key: TOOL_KEY,
       usage_flat_fee: null,
       usage_rate_per_min: null,
       usage_max_session_minutes: null,
     },
   })
   ok('cards/tool-created', res.status === 200 || res.status === 201, res.text.slice(0, 200))
+
+  // The credential every swipe below uses: a device bound to this tool.
+  const dev = await boundDevice(admin.token, res.json?.data?.id, {
+    role: 'power',
+    name: `cards-plug-${EXTERNAL_ID}`,
+    mac: '02:00:00:00:86:01',
+  })
+  deviceToken = dev.token
+  ok('cards/tool-device-bound', !!dev.token && dev.bindStatus === 201, dev.text)
 }
 
 async function fund(admin, member, amount) {

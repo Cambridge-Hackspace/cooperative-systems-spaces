@@ -8,9 +8,12 @@
 //! `extract_device_auth` correctly.
 //!
 //! The mechanism intended to stop it was fully written and never wired in: the
-//! requests carry an `api_key` field that nothing read, and `validate_api_key`
-//! — which checks a tool's `external_api_key` and the global
-//! `toolguard.global_api_key` — was called from nowhere in the crate.
+//! requests carried an `api_key` field that nothing read, and `validate_api_key`
+//! — which checked a tool's `external_api_key` and the global
+//! `toolguard.global_api_key` — was called from nowhere in the crate. #101 slice 6
+//! deleted all three rather than wiring them in, so one credential remains: a
+//! registered device's Bearer token, scoped by an explicit binding. What this file
+//! now guards is that they stay gone.
 //!
 //! This is a text-level check on purpose. It needs no database, no `AppState`
 //! and no compiler, so it runs on the FreeBSD workstation where `css-server`
@@ -43,7 +46,7 @@ const EXPECTED: &[(&str, Auth)] = &[
     ("sync", Auth::Required),
     ("boot_reset", Auth::Required),
     // #43 power telemetry ingest: reports a tool's latest reading, authenticated
-    // like the other controller endpoints (device token or per-tool/global key).
+    // like the other controller endpoints (a device token bound to the tool).
     ("power_report", Auth::Required),
     // #48 edge power lockout: the edge polls the lockout+topology snapshot
     // (device-authed, like sync) and reports an edge_fast_trip.
@@ -146,28 +149,77 @@ fn every_toolguard_handler_authenticates_its_caller() {
         "these ToolGuard handlers accept a request without authenticating it: {unauthenticated:?}. \
          They control physical machinery and are reachable by URL, so an unauthenticated \
          one lets anybody who can reach the server energise or kill a tool. Authenticate \
-         with a registered device's Bearer token (extract_device_auth) or a valid API key."
+         with a registered device's Bearer token (extract_device_auth), bound to the tool."
     );
 }
 
+/// The retired credentials stay retired.
+///
+/// This replaces `the_api_key_mechanism_is_actually_wired_in`, which asserted the
+/// opposite: `validate_api_key` existed, was correct, and was called from nowhere,
+/// so that test demanded it be wired in *or* deleted. #101 slice 6 chose deletion
+/// -- the weakest accepted credential sets the real bar, and one of the two was a
+/// single shared secret that opened every tool.
+///
+/// The principle the old test encoded is the one kept here: dead or weak security
+/// machinery is worse than none, because its presence implies a check that is not
+/// happening. So this asserts ABSENCE, which is the direction that matters now --
+/// a reintroduced key path would be a silent widening of what may actuate a
+/// machine, and it would look like a convenience.
 #[test]
-fn the_api_key_mechanism_is_actually_wired_in() {
-    // `validate_api_key` existed, was correct, and was called from nowhere;
-    // the `api_key` request fields were parsed and never read. Dead security
-    // machinery is worse than none, because its presence implies a check that
-    // is not happening.
+fn the_retired_credentials_are_not_back() {
     let src = read("server/src/api/toolguard.rs");
-    let definition = src.matches("async fn validate_api_key").count();
-    let total = src.matches("validate_api_key").count();
+    let cfg = read("server/src/config.rs");
 
-    assert_eq!(
-        definition, 1,
-        "validate_api_key should be defined exactly once"
+    // Comments are stripped so the prose explaining the retirement -- which names
+    // all three by design -- cannot satisfy the assertions it is describing.
+    let code: String = src
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !code.contains("fn validate_api_key"),
+        "`validate_api_key` is back in toolguard.rs. Tool authentication is a \
+         registered device's Bearer token scoped by a `device_bindings` row; an \
+         API-key path alongside it means the weaker credential decides what can \
+         energise a machine."
     );
     assert!(
-        total > definition,
-        "validate_api_key is defined but never called. Either wire it in, or delete it \
-         together with the api_key request fields — leaving it implies a key check that \
-         does not happen."
+        !code.contains("api_key"),
+        "an `api_key` field or lookup is back on the ToolGuard surface. The \
+         request types carried one for a mechanism that was never wired in, and \
+         #101 slice 6 removed both; re-adding one reintroduces a credential that \
+         is not hashed at rest and is not scoped by a binding."
+    );
+    assert!(
+        !cfg.contains("global_api_key"),
+        "`toolguard.global_api_key` is back in the configuration. It was ONE \
+         shared secret that authenticated every tool, so a single leak opened the \
+         whole space -- which is why it went rather than being documented."
+    );
+}
+
+/// A billable report needs the `power` binding, not merely any binding.
+///
+/// Entry auth accepts any binding, so a `reader` may start a tool. Posting money
+/// against it is narrower on purpose: that is the property `metered_key_ok`
+/// provided by demanding the tool's own key, and it has to survive the move to
+/// device tokens rather than being quietly relaxed to "any authenticated device".
+#[test]
+fn the_metered_gate_requires_the_power_binding() {
+    let src = read("server/src/api/toolguard.rs");
+    let body = handler_body(&src, "metered_device_ok");
+
+    assert!(
+        body.contains("device_is_bound_to_tool_in_role"),
+        "the metered gate no longer asks for a ROLE-scoped binding. If it accepts \
+         any binding, a reader wired to a metered tool can post charges for it."
+    );
+    assert!(
+        body.contains("binding_role::POWER"),
+        "the metered gate no longer requires the `power` role specifically. A \
+         billable report must come from the thing that actually switches the tool."
     );
 }

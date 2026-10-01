@@ -11,7 +11,8 @@ use uuid::Uuid;
 struct RegisterDeviceRequest {
     device_code: String,
     name: String,
-    kind: String,
+    /// #101: the edge coordinator declares the `edge` role. Replaces `kind`.
+    capabilities: serde_json::Value,
     mac_address: String,
     software_version: String,
     ipv4_address: Option<String>,
@@ -68,7 +69,7 @@ pub async fn register_device(
     let request = RegisterDeviceRequest {
         device_code: device_code.to_string(),
         name: config.name.clone(),
-        kind: "Edge".to_string(),
+        capabilities: serde_json::json!({ "roles": ["edge"] }),
         mac_address: system_info.mac_address,
         software_version: env!("CARGO_PKG_VERSION").to_string(),
         ipv4_address: system_info.ipv4_address,

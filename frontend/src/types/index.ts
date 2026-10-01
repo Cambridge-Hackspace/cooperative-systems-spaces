@@ -213,7 +213,6 @@ export interface Door {
   name: string
   location: string | null
   description: string | null
-  edge_device_id: string | null
   unlock_duration_ms: number
   enabled: boolean
   created_at: string
@@ -224,7 +223,8 @@ export interface Door {
 
 export interface DoorAccessRule {
   id: string
-  door_id: string
+  /** #101: rules are now keyed on the resource (a door or a tool). */
+  resource_id: string
   kind: string
   value: string
   effect: string
@@ -254,7 +254,6 @@ export interface CreateDoorRequest {
   name: string
   location?: string | null
   description?: string | null
-  edge_device_id?: string | null
   unlock_duration_ms?: number
   enabled?: boolean
   /** Required. Use a special place (e.g. `Outside`) for exterior doors. */
@@ -268,7 +267,6 @@ export interface UpdateDoorRequest {
   /** Pass `null` to clear; omit to leave unchanged. */
   location?: string | null
   description?: string | null
-  edge_device_id?: string | null
   unlock_duration_ms?: number
   enabled?: boolean
   /** PATCH-style: set to a real place ID (special places included).
@@ -719,10 +717,11 @@ export interface UpdateRoleRequest {
 
 // ── Tool module bindings + safety interlocks (#83) ───────────────────────────
 
-/** A device filling one role in a tool's access chain. */
-export interface ToolModule {
+/** A device bound to a resource in one role (#101; was `ToolModule`). */
+export interface DeviceBinding {
   id: string
-  tool_id: string
+  /** #101: the resource (a tool, and from slice 4b a door) this binds to. */
+  resource_id: string
   device_id: string
   /** `reader` | `power` | `sensor` */
   role: string
@@ -734,8 +733,8 @@ export interface ToolModule {
   updated_at: string
 }
 
-export interface CreateToolModuleRequest {
-  tool_id: string
+export interface CreateDeviceBindingRequest {
+  resource_id: string
   device_id: string
   role: string
   name: string

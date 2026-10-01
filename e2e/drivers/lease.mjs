@@ -29,17 +29,17 @@
 // and correctly timed; what a module does with it is firmware's half of the
 // contract, and FIRMWARE.md is where that half is stated.
 //
-// Cluster encoding: binding a module needs a registered device, which needs an
-// invite code of eight emoji, so on a cluster that cannot store one the whole
-// stage skips -- as in toolmodules.mjs and bypass.mjs.
+// Cluster encoding: this stage used to skip on a non-UTF8 cluster, because a
+// device invite code is eight emoji and LATIN1 cannot store one. #120 (#137)
+// made invite codes hex-at-rest -- the emoji are generated, returned over HTTP
+// and matched as hex, so none reaches the database -- and the guard outlived its
+// reason, skipping this stage entirely on the default cluster. Removed.
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { GET, POST, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
 
 const FIXTURE = path.join(STACK_DIR, 'lease-fixture.json')
 const SKIPPED = path.join(STACK_DIR, 'lease-skipped')
@@ -70,17 +70,8 @@ function captured(name) {
 // ── setup ────────────────────────────────────────────────────────────────────
 
 async function setup() {
-  if (!CAN_REGISTER_DEVICE) {
-    fs.writeFileSync(SKIPPED, `${ENCODING}\n`)
-    record(
-      'lease/not-run-on-this-cluster',
-      'skip',
-      `the coordinator needs a module bound to a registered device, a device ` +
-        `needs an invite, and this cluster (${ENCODING}) cannot store an ` +
-        `eight-emoji invite code.`
-    )
-    return
-  }
+  // Clears a sentinel left by an older checkout: this stage used to skip on a
+  // non-UTF8 cluster, and the later phases read this file to know it had.
   if (fs.existsSync(SKIPPED)) fs.unlinkSync(SKIPPED)
 
   const admin = await adminAccount('lease_admin')
@@ -96,7 +87,7 @@ async function setup() {
   // Two devices, because that is the shape #83 exists for: the coordinator and
   // the thing it coordinates are separate hardware. Binding the edge to itself
   // would pass just as well and would quietly stop testing the decoupling.
-  const claim = async (name, kind, mac) => {
+  const claim = async (name, role, mac) => {
     const invite = await POST('/api/admin/devices/invite', {
       token: admin.token,
       body: { expires_in_hours: 1 },
@@ -105,7 +96,7 @@ async function setup() {
       body: {
         device_code: invite.json?.data?.device_code,
         name,
-        kind,
+        capabilities: { roles: [role] },
         mac_address: mac,
         software_version: '0.0.0-e2e',
         platform: 'linux',
@@ -123,7 +114,7 @@ async function setup() {
   ok('lease/edge-registered', !!edge.id, `register -> ${edge.status} ${edge.text.slice(0, 160)}`)
   ok('lease/edge-got-a-token', !!edge.token, 'registration must return an auth_token')
 
-  const plug = await claim(`lease-plug-${tag}`, 'power_controller', '02:00:00:00:83:02')
+  const plug = await claim(`lease-plug-${tag}`, 'power', '02:00:00:00:83:02')
   ok('lease/plug-registered', !!plug.id, `register -> ${plug.status} ${plug.text.slice(0, 160)}`)
 
   const authToken = edge.token
@@ -132,9 +123,9 @@ async function setup() {
   // default is `fail_off`, and testing against the default is the point: it is
   // what a real power module gets, and it is the policy whose liveness
   // requirement was unsatisfiable until the ingest existed.
-  const binding = await POST('/api/admin/tool-modules', {
+  const binding = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: plug.id, role: 'power', name: `lease plug ${tag}` },
+    body: { resource_id: toolId, device_id: plug.id, role: 'power', name: `lease plug ${tag}` },
   })
   assertEq('lease/module-bound', 201, binding.status)
   assertEq(

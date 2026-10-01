@@ -15,10 +15,6 @@ pub mod sql_types {
     pub struct CardStatus;
 
     #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "space_device_kind"))]
-    pub struct SpaceDeviceKind;
-
-    #[derive(serde::Serialize, serde::Deserialize, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "space_device_platform"))]
     pub struct SpaceDevicePlatform;
 
@@ -130,7 +126,6 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
-    use super::sql_types::SpaceDeviceKind;
     use super::sql_types::SpaceDevicePlatform;
 
     space_devices (id) {
@@ -141,7 +136,6 @@ diesel::table! {
         updated_at -> Timestamptz,
         deleted_at -> Nullable<Timestamptz>,
         last_seen_at -> Nullable<Timestamptz>,
-        kind -> SpaceDeviceKind,
         #[max_length = 17]
         mac_address -> Varchar,
         #[max_length = 50]
@@ -153,6 +147,7 @@ diesel::table! {
         uptime -> Int8,
         platform -> SpaceDevicePlatform,
         place_id -> Nullable<Uuid>,
+        capabilities -> Jsonb,
     }
 }
 
@@ -188,6 +183,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    resources (id) {
+        id -> Uuid,
+        kind -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ToolCategory;
     use super::sql_types::ToolStatus;
@@ -209,7 +213,6 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
         external_id -> Nullable<Varchar>,
-        external_api_key -> Nullable<Text>,
         place_id -> Nullable<Uuid>,
         schedule_id -> Nullable<Uuid>,
         usage_flat_fee -> Nullable<Numeric>,
@@ -548,7 +551,6 @@ diesel::table! {
         name -> Varchar,
         location -> Nullable<Text>,
         description -> Nullable<Text>,
-        edge_device_id -> Nullable<Uuid>,
         unlock_duration_ms -> Int4,
         enabled -> Bool,
         created_by -> Nullable<Uuid>,
@@ -560,9 +562,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    door_access_rules (id) {
+    access_rules (id) {
         id -> Uuid,
-        door_id -> Uuid,
+        resource_id -> Uuid,
         kind -> Text,
         value -> Text,
         effect -> Text,
@@ -844,9 +846,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    tool_modules (id) {
+    device_bindings (id) {
         id -> Uuid,
-        tool_id -> Uuid,
+        resource_id -> Uuid,
         device_id -> Uuid,
         role -> Text,
         name -> Text,
@@ -895,17 +897,18 @@ diesel::joinable!(webhook_deliveries -> audit_logs (audit_log_id));
 diesel::joinable!(user_mfa_totp -> users (user_id));
 diesel::joinable!(user_mfa_webauthn -> users (user_id));
 diesel::joinable!(user_mfa_recovery_codes -> users (user_id));
-diesel::joinable!(doors -> space_devices (edge_device_id));
 diesel::joinable!(doors -> users (created_by));
 // (places → places self-join not registered via `joinable!`; walked manually
 // in the ancestor query helper.)
 diesel::joinable!(tools -> places (place_id));
 diesel::joinable!(space_devices -> places (place_id));
-diesel::joinable!(door_access_rules -> schedules (schedule_id));
+diesel::joinable!(access_rules -> schedules (schedule_id));
 diesel::joinable!(schedules -> users (created_by));
 diesel::joinable!(tools -> schedules (schedule_id));
+diesel::joinable!(tools -> resources (id));
+diesel::joinable!(doors -> resources (id));
 diesel::joinable!(home_links -> users (created_by));
-diesel::joinable!(door_access_rules -> doors (door_id));
+diesel::joinable!(access_rules -> resources (resource_id));
 diesel::joinable!(door_access_events -> doors (door_id));
 diesel::joinable!(door_access_events -> users (user_id));
 diesel::joinable!(door_checkins -> doors (door_id));
@@ -935,10 +938,10 @@ diesel::joinable!(power_outlets -> power_circuits (circuit_id));
 diesel::joinable!(power_outlets -> places (place_id));
 diesel::joinable!(power_receptacles -> power_outlets (outlet_id));
 diesel::joinable!(tools -> power_receptacles (receptacle_id));
-diesel::joinable!(tool_modules -> tools (tool_id));
-diesel::joinable!(tool_modules -> space_devices (device_id));
+diesel::joinable!(device_bindings -> resources (resource_id));
+diesel::joinable!(device_bindings -> space_devices (device_id));
 diesel::joinable!(tool_interlocks -> tools (tool_id));
-diesel::joinable!(tool_interlocks -> tool_modules (source_module_id));
+diesel::joinable!(tool_interlocks -> device_bindings (source_module_id));
 diesel::joinable!(tool_power_state -> tools (tool_id));
 diesel::joinable!(tool_rate_tiers -> tools (tool_id));
 diesel::joinable!(tool_tier_assignments -> tools (tool_id));
@@ -966,7 +969,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     training_waivers,
     doors,
     door_access_events,
-    door_access_rules,
+    access_rules,
     door_checkins,
     places,
     schedules,
@@ -999,6 +1002,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     tool_power_state,
     tool_rate_tiers,
     tool_tier_assignments,
-    tool_modules,
+    device_bindings,
     tool_interlocks,
+    resources,
 );

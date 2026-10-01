@@ -15,15 +15,23 @@
 // A free tool isolates the training/waiver gate from billing; the member is
 // funded (and thus active/enrolled) and holds an active card so tool-on can run.
 
-import { main, ok, assertEq, GET, POST, DELETE, account, adminAccount } from './lib.mjs'
+import { main, ok, assertEq, GET, POST, DELETE, account, adminAccount, boundDevice } from './lib.mjs'
 
-const TOOL_KEY = 'e2e-waiver-tool-key'
 const GATED = 'WAIVER-GATED' // requires_training = true, no steps
 const OPEN = 'WAIVER-OPEN' // requires_training = false
 const CARD = 'WAIVER-CARD'
 
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
-const toolOn = (ext) => POST('/api/toolguard/tool-on', { body: { card: CARD, tool_id: ext, api_key: TOOL_KEY } })
+
+// #101 slice 6: a tool operation authenticates as a device BOUND to that tool, and
+// a binding is per-tool -- so each tool this driver creates gets its own device,
+// keyed here by external id. Using one device for both would only pass because
+// entry auth would accept it for the tool it was bound to and reject the other,
+// which is the scoping working, not a fixture convenience.
+const deviceTokens = {}
+let macSeq = 0
+const toolOn = (ext) =>
+  POST('/api/toolguard/tool-on', { token: deviceTokens[ext], body: { card: CARD, tool_id: ext } })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function createTool(admin, externalId, requiresTraining) {
@@ -34,13 +42,22 @@ async function createTool(admin, externalId, requiresTraining) {
       category: 'other',
       requires_training: requiresTraining,
       external_id: externalId,
-      external_api_key: TOOL_KEY,
       usage_flat_fee: null,
       usage_rate_per_min: null,
       usage_max_session_minutes: null,
     },
   })
   ok(`waivers/tool-created:${externalId}`, res.status === 200 || res.status === 201, res.text.slice(0, 200))
+
+  macSeq += 1
+  const dev = await boundDevice(admin.token, res.json?.data?.id, {
+    role: 'power',
+    name: `waiver-plug-${externalId}`,
+    mac: `02:00:00:00:87:${macSeq.toString(16).padStart(2, '0')}`,
+  })
+  deviceTokens[externalId] = dev.token
+  ok(`waivers/tool-device-bound:${externalId}`, !!dev.token && dev.bindStatus === 201, dev.text)
+
   return res.json.data // { id (uuid), external_id, ... }
 }
 

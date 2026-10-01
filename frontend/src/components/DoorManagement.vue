@@ -44,7 +44,7 @@
           <tr v-for="d in doors" :key="d.id">
             <td class="font-medium">{{ d.name }}</td>
             <td class="text-sm text-base-content/70">{{ d.location || '—' }}</td>
-            <td class="font-mono text-xs">{{ deviceLabel(d.edge_device_id) }}</td>
+            <td class="font-mono text-xs">{{ deviceLabel(edgeDeviceFor(d.id)) }}</td>
             <td>
               <span class="badge" :class="d.enabled ? 'badge-success' : 'badge-neutral'">
                 {{ d.enabled ? 'Enabled' : 'Disabled' }}
@@ -54,7 +54,7 @@
               <button class="btn btn-ghost btn-xs" @click="openDetail(d)">Manage</button>
               <button
                 class="btn btn-ghost btn-xs"
-                :disabled="!d.edge_device_id || unlockingId === d.id"
+                :disabled="!edgeDeviceFor(d.id) || unlockingId === d.id"
                 @click="adminUnlock(d)"
               >
                 <span v-if="unlockingId === d.id" class="loading loading-spinner loading-xs"></span>
@@ -189,7 +189,7 @@
         <div v-if="detailTab === 'settings'">
           <!-- Read-only summary -->
           <div v-if="!editingInline" class="space-y-2 text-sm">
-            <div><strong>Edge device:</strong> {{ deviceLabel(detail.edge_device_id) }}</div>
+            <div><strong>Edge device:</strong> {{ deviceLabel(edgeDeviceFor(detail.id)) }}</div>
             <div><strong>Unlock duration:</strong> {{ detail.unlock_duration_ms }} ms</div>
             <div><strong>Status:</strong> {{ detail.enabled ? 'Enabled' : 'Disabled' }}</div>
             <div>
@@ -441,7 +441,7 @@
 import { ref } from 'vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import QRCode from 'qrcode'
-import { doorsApi, placesApi, schedulesApi, apiClient } from '@/utils/api'
+import { doorsApi, placesApi, schedulesApi, toolModulesApi, apiClient } from '@/utils/api'
 import type {
   Door,
   DoorAccessEvent,
@@ -473,6 +473,13 @@ const flashOk = ref(true)
 
 const doors = ref<Door[]>([])
 const devices = ref<Array<{ id: string; name: string }>>([])
+/**
+ * #101: a door's coordinator is a device binding with role `edge`, not a column
+ * on the door. One list serves the whole screen -- the device column, whether
+ * Unlock is available, and the Settings picker -- so the door list stays a
+ * single request and the binding remains the single source of truth.
+ */
+const edgeBindings = ref<Array<{ id: string; resource_id: string; device_id: string }>>([])
 const users = ref<User[]>([])
 const places = ref<Place[]>([])
 
@@ -481,6 +488,10 @@ const editing = ref<Door | null>(null)
 const form = ref<{
   name: string
   location: string | null
+  /**
+   * #101: UI-only. The door API no longer carries a coordinator; this is the
+   * picker's selection, reconciled into an `edge` device binding on save.
+   */
   edge_device_id: string | null
   unlock_duration_ms: number
   enabled: boolean
@@ -536,6 +547,16 @@ function fmt(iso: string) {
 function shortId(id: string) {
   return id.slice(0, 8)
 }
+/** The device coordinating this door, via its `edge` binding. */
+function edgeDeviceFor(doorId: string): string | null {
+  return edgeBindings.value.find((b) => b.resource_id === doorId)?.device_id ?? null
+}
+
+/** The binding row itself, needed to move or remove a coordinator. */
+function edgeBindingIdFor(doorId: string): string | null {
+  return edgeBindings.value.find((b) => b.resource_id === doorId)?.id ?? null
+}
+
 function deviceLabel(id: string | null) {
   if (!id) return '—'
   const d = devices.value.find((x) => x.id === id)
@@ -583,6 +604,42 @@ async function loadDevices() {
   } catch {
     devices.value = []
   }
+}
+
+/** #101: the `edge` bindings that say which device coordinates which door. */
+async function loadEdgeBindings() {
+  try {
+    const r = await toolModulesApi.listModules()
+    const all = r.success && r.data ? r.data : []
+    edgeBindings.value = all
+      .filter((b) => b.role === 'edge')
+      .map((b) => ({ id: b.id, resource_id: b.resource_id, device_id: b.device_id }))
+  } catch {
+    edgeBindings.value = []
+  }
+}
+
+/**
+ * Make the door's `edge` binding match `deviceId` (`null` = no coordinator).
+ *
+ * Moving a coordinator is delete-then-create because a binding is identified by
+ * its row; the server republishes `doors/state` to each device it touches, so the
+ * door leaves the old device's snapshot and reaches the new one.
+ */
+async function reconcileEdgeBinding(doorId: string, doorName: string, deviceId: string | null) {
+  const currentDevice = edgeDeviceFor(doorId)
+  if (currentDevice === deviceId) return
+  const existing = edgeBindingIdFor(doorId)
+  if (existing) await toolModulesApi.removeModule(existing)
+  if (deviceId) {
+    await toolModulesApi.createModule({
+      resource_id: doorId,
+      device_id: deviceId,
+      role: 'edge',
+      name: `${doorName} coordinator`,
+    })
+  }
+  await loadEdgeBindings()
 }
 
 async function loadUsers() {
@@ -633,8 +690,20 @@ async function saveDoor() {
   form.value.location = formLocation.value.trim() || null
   saving.value = true
   try {
-    const r = await doorsApi.create(form.value)
+    // #101: the coordinator is not part of the door any more, so it is bound
+    // separately once the door (and therefore the resource) exists.
+    const r = await doorsApi.create({
+      name: form.value.name,
+      location: form.value.location,
+      unlock_duration_ms: form.value.unlock_duration_ms,
+      enabled: form.value.enabled,
+      place_id_from: form.value.place_id_from,
+      place_id_to: form.value.place_id_to,
+    })
     if (r.success) {
+      if (r.data) {
+        await reconcileEdgeBinding(r.data.id, r.data.name, form.value.edge_device_id)
+      }
       notify('Door created')
       showForm.value = false
       await loadDoors()
@@ -693,7 +762,7 @@ function beginInlineEdit() {
   form.value = {
     name: detail.value.name,
     location: detail.value.location,
-    edge_device_id: detail.value.edge_device_id,
+    edge_device_id: edgeDeviceFor(detail.value.id),
     unlock_duration_ms: detail.value.unlock_duration_ms,
     enabled: detail.value.enabled,
     place_id_from: detail.value.place_id_from ?? '',
@@ -720,8 +789,17 @@ async function saveInline() {
   form.value.location = formLocation.value.trim() || null
   saving.value = true
   try {
-    const r = await doorsApi.update(detail.value.id, form.value)
+    const r = await doorsApi.update(detail.value.id, {
+      name: form.value.name,
+      location: form.value.location,
+      unlock_duration_ms: form.value.unlock_duration_ms,
+      enabled: form.value.enabled,
+      place_id_from: form.value.place_id_from,
+      place_id_to: form.value.place_id_to,
+    })
     if (r.success) {
+      // #101: the coordinator moves through the bindings endpoint, not the door.
+      await reconcileEdgeBinding(detail.value.id, form.value.name, form.value.edge_device_id)
       notify('Door saved')
       editingInline.value = false
       await loadDoors()
@@ -801,6 +879,13 @@ async function removeRule(rule: DoorAccessRule) {
 // schedules are owned by sibling tabs, so anything added there is invisible
 // here until this runs again -- issue #11.
 useReloadOnReactivate(async () => {
-  await Promise.all([loadDoors(), loadDevices(), loadUsers(), loadPlaces(), loadSchedules()])
+  await Promise.all([
+    loadDoors(),
+    loadDevices(),
+    loadEdgeBindings(),
+    loadUsers(),
+    loadPlaces(),
+    loadSchedules(),
+  ])
 })
 </script>

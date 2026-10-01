@@ -226,18 +226,45 @@ npm --version
 frontend_gate() { # frontend_gate <dir>
   local dir="$1"
   (
-    cd "${dir}"
-    npm run format:check
-    npm run lint
-    npm run type-check
-    npm run type-check:strict
+    cd "${dir}" || exit 1
+
+    # Every check contributes to the status, explicitly. This was a bare sequence
+    # of `npm run` lines, and that is a false pass: a subshell exits with the
+    # status of its LAST command, so with `test:coverage` last and passing, a
+    # failing `format:check`, `lint` or `type-check` returned 0 and this gate
+    # reported success.
+    #
+    # `set -Eeuo pipefail` at the top of this file does not save it. `soft` runs
+    # this as `if "$@"; then`, and bash disables errexit for the whole dynamic
+    # extent of a command used as an `if` condition -- so the first failure does
+    # not abort the subshell either.
+    #
+    # Not hypothetical: it let a prettier violation through this tier into GitHub
+    # CI, which rejected it -- precisely the push-wait-fix loop the comment above
+    # says this gate exists to prevent. The gate SAW the failure and printed it;
+    # it just did not fail.
+    #
+    # All of them still run before returning, rather than stopping at the first,
+    # so one push surfaces every problem instead of one per round trip.
+    # Spelled out rather than looped over, deliberately.
+    # `checks/tests/reaper_runs_what_ci_runs.rs` greps this file for the literal
+    # `npm run <script>` CI invokes, so a loop over a variable hides every one of
+    # them from the parity check that exists to stop reaper drifting behind CI.
+    local rc=0
+    npm run format:check || rc=1
+    npm run lint || rc=1
+    npm run type-check || rc=1
+    npm run type-check:strict || rc=1
+
     # frontend_edge has no test suite yet. Asserted rather than assumed, so the
     # day it gets one this stops silently skipping it.
     if node -e 'process.exit(require("./package.json").scripts["test:coverage"] ? 0 : 1)'; then
-      npm run test:coverage
+      npm run test:coverage || rc=1
     else
       echo "  ${dir}: no test:coverage script -- nothing to run"
     fi
+
+    exit "${rc}"
   )
 }
 
@@ -247,13 +274,19 @@ frontend_gate() { # frontend_gate <dir>
 build_frontend() { # build_frontend <dir>
   local dir="$1"
   (
-    cd "${dir}"
+    # Fail-fast rather than accumulating, unlike `frontend_gate`: building after a
+    # failed install is meaningless, and the same `if "$@"` errexit suppression
+    # that broke the gate applies here, so the install's status has to be checked
+    # rather than relied on to abort. Without this, a failed `npm ci` fell through
+    # to `npm run build`, and the subshell reported the build's status -- which an
+    # existing stale `dist/` could satisfy.
+    cd "${dir}" || exit 1
     if [ -f package-lock.json ]; then
-      npm ci --no-audit --no-fund
+      npm ci --no-audit --no-fund || exit 1
     else
-      npm install --no-audit --no-fund
+      npm install --no-audit --no-fund || exit 1
     fi
-    npm run build
+    npm run build || exit 1
   )
   # An empty bundle compiles and serves 404 for the whole UI, so "the command
   # exited zero" is not the assertion worth making here.

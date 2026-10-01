@@ -73,7 +73,7 @@ pub struct ToolModuleStatePayload {
 pub struct ToolModuleTool {
     pub tool_id: String,
     pub external_id: Option<String>,
-    pub modules: Vec<ToolModuleBinding>,
+    pub modules: Vec<DeviceBinding>,
     pub interlocks: Vec<ToolInterlockRule>,
     /// Whether every power module bound to this tool reaches a safe state on its
     /// own when it stops hearing from the coordinator (#83).
@@ -86,9 +86,15 @@ pub struct ToolModuleTool {
     pub power_fails_safe: bool,
 }
 
-/// A device filling one role in a tool's access chain.
+/// A device bound to a resource in one role (#101). Was `ToolModuleBinding`; the
+/// binding generalized to resources when doors and tools became one model, so the
+/// wire struct follows the `device_bindings` table and the server model.
+///
+/// The enclosing snapshot is still tool-scoped (`ToolModuleStatePayload.tools`) --
+/// only tools appear in it -- so those types keep their names, and the serialized
+/// field names here are unchanged so the edge's deserialization is untouched.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolModuleBinding {
+pub struct DeviceBinding {
     pub id: String,
     pub device_id: String,
     /// `reader` | `power` | `sensor`.

@@ -9,6 +9,30 @@
       "params": 0
     },
     {
+      "method": "DELETE",
+      "template": "/api/admin/device-bindings/{id}",
+      "guard": "Admin",
+      "params": 1
+    },
+    {
+      "method": "GET",
+      "template": "/api/admin/device-bindings/state",
+      "guard": "Admin",
+      "params": 0
+    },
+    {
+      "method": "GET",
+      "template": "/api/admin/device-bindings",
+      "guard": "Admin",
+      "params": 0
+    },
+    {
+      "method": "POST",
+      "template": "/api/admin/device-bindings",
+      "guard": "Admin",
+      "params": 0
+    },
+    {
       "method": "PATCH",
       "template": "/api/admin/devices/{id}/name",
       "guard": "Admin",
@@ -467,30 +491,6 @@
     {
       "method": "POST",
       "template": "/api/admin/tool-interlocks",
-      "guard": "Admin",
-      "params": 0
-    },
-    {
-      "method": "DELETE",
-      "template": "/api/admin/tool-modules/{id}",
-      "guard": "Admin",
-      "params": 1
-    },
-    {
-      "method": "GET",
-      "template": "/api/admin/tool-modules/state",
-      "guard": "Admin",
-      "params": 0
-    },
-    {
-      "method": "GET",
-      "template": "/api/admin/tool-modules",
-      "guard": "Admin",
-      "params": 0
-    },
-    {
-      "method": "POST",
-      "template": "/api/admin/tool-modules",
       "guard": "Admin",
       "params": 0
     },

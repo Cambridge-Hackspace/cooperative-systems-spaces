@@ -15,14 +15,13 @@
 // detector cannot tell that apart from a module pulled off the wall -- which is
 // exactly the limit the event text states rather than papers over.
 //
-// Cluster encoding: binding a module needs a registered device, which needs an
-// invite code of eight emoji. On a cluster that cannot store one the whole
-// stage is skipped with that reason, as in toolmodules.mjs and concurrency.mjs.
+// Cluster encoding: this stage used to skip on a non-UTF8 cluster, because a
+// device invite code is eight emoji and LATIN1 cannot store one. #120 (#137)
+// made invite codes hex-at-rest -- the emoji are generated, returned over HTTP
+// and matched as hex, so none reaches the database -- and the guard outlived its
+// reason, skipping this stage entirely on the default cluster. Removed.
 
-import { GET, POST, adminAccount, assertEq, ok, record, main } from './lib.mjs'
-
-const ENCODING = process.env.CSS_DB_ENCODING ?? 'UTF8'
-const CAN_REGISTER_DEVICE = ENCODING === 'UTF8' || ENCODING === 'SQL_ASCII'
+import { GET, POST, adminAccount, assertEq, ok, record, main, boundDevice } from './lib.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -38,16 +37,6 @@ main(async () => {
   const admin = await adminAccount('bypass_admin')
   const T = { token: admin.token }
   const tag = admin.username
-
-  if (!CAN_REGISTER_DEVICE) {
-    record(
-      'bypass/not-run-on-this-cluster',
-      'skip',
-      `the liveness sweep needs a module bound to a registered device, a device needs an ` +
-        `invite, and this cluster (${ENCODING}) cannot store an eight-emoji invite code.`
-    )
-    return
-  }
 
   // --- a tool with a power module whose device has never reported ------------
   const tool = await POST('/api/tools', {
@@ -65,7 +54,7 @@ main(async () => {
     body: {
       device_code: invite.json?.data?.device_code,
       name: `silent-plug-${tag}`,
-      kind: 'power_controller',
+      capabilities: { roles: ['power'] },
       mac_address: '02:00:00:00:84:01',
       software_version: '0.0.0-e2e',
       platform: 'linux',
@@ -74,9 +63,9 @@ main(async () => {
   const deviceId = reg.json?.data?.device_id ?? reg.json?.device_id
   ok('bypass/device-registered', !!deviceId, `register -> ${reg.status} ${reg.text.slice(0, 160)}`)
 
-  const binding = await POST('/api/admin/tool-modules', {
+  const binding = await POST('/api/admin/device-bindings', {
     token: admin.token,
-    body: { tool_id: toolId, device_id: deviceId, role: 'power', name: `silent plug ${tag}` },
+    body: { resource_id: toolId, device_id: deviceId, role: 'power', name: `silent plug ${tag}` },
   })
   assertEq('bypass/module-bound', 201, binding.status)
   const moduleId = binding.json?.data?.id
@@ -129,15 +118,24 @@ main(async () => {
       name: `Side Button ${tag}`,
       category: 'other',
       external_id: `bp-power-${tag}`,
-      external_api_key: `bp-key-${tag}`,
     },
   })
   const powerToolId = powerTool.json?.data?.id
   ok('bypass/power-tool-created', !!powerToolId, `POST /api/tools -> ${powerTool.status}`)
 
+  // #101 slice 6: a power report authenticates as a device bound to the tool it
+  // names, not with the tool's own key.
+  const reporter = await boundDevice(admin.token, powerToolId, {
+    role: 'power',
+    name: `side-button-plug-${tag}`,
+    mac: '02:00:00:00:84:03',
+  })
+  ok('bypass/power-tool-device-bound', !!reporter.token && reporter.bindStatus === 201, reporter.text)
+
   const report = (body) =>
     POST('/api/toolguard/power-report', {
-      body: { tool_id: `bp-power-${tag}`, api_key: `bp-key-${tag}`, ...body },
+      token: reporter.token,
+      body: { tool_id: `bp-power-${tag}`, ...body },
     })
 
   // Two reports: the first starts the evidence clock, the second is past the
@@ -194,7 +192,7 @@ main(async () => {
     body: {
       device_code: edgeInvite.json?.data?.device_code,
       name: `dark-edge-${tag}`,
-      kind: 'edge',
+      capabilities: { roles: ['edge'] },
       mac_address: '02:00:00:00:84:02',
       software_version: '0.0.0-e2e',
       platform: 'linux',

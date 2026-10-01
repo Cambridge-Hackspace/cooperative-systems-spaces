@@ -91,7 +91,7 @@ async function inviteRedemption(admin) {
           body: {
             device_code: code,
             name: `${prefix}-${i}`,
-            kind: 'edge',
+            capabilities: { roles: ['edge'] },
             mac_address: `02:00:00:00:${round.toString(16).padStart(2, '0')}:${i.toString(16).padStart(2, '0')}`,
             software_version: '0.0.0-e2e',
             platform: 'linux',
@@ -164,7 +164,7 @@ function registerOne(code, name, mac) {
     body: {
       device_code: code,
       name,
-      kind: 'edge',
+      capabilities: { roles: ['edge'] },
       mac_address: mac,
       software_version: '0.0.0-e2e',
       platform: 'linux',

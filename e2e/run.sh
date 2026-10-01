@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,groupsio,stripe,toolbilling,cards,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -577,7 +577,7 @@ stage_schema() {
   # is a feature over `tools.external_id`, not a table -- so the stage reported
   # a missing table on every run and the report was the check's, not the
   # schema's.
-  for t in users doors door_access_rules door_access_events door_checkins \
+  for t in users resources doors access_rules device_bindings door_access_events door_checkins \
     schedules tools space_devices space_device_auth space_device_auth_requests \
     profile_config_versions webhooks audit_logs audit_event_types places \
     home_links; do
@@ -1098,13 +1098,51 @@ stage_cookie() {
 }
 
 # ===========================================================================
+# doors -- door access policy (#101, folding #140)
+# ===========================================================================
+# The first behavioural oracle door policy has ever had. Until this stage, the
+# door module was switched OFF in stack-config.toml, so the only three handlers
+# that reach the access engine answered 403 and `DoorService::evaluate` /
+# `access_engine::may` were unreached at every tier -- while door CRUD and rule
+# authoring, which are not gated, worked and looked healthy.
+#
+# It drives the real handler, database and rule loader: a rule-less door refuses
+# (doors are Restricted), an allow rule grants, a deny rule beats that allow,
+# removing the deny restores it, a role rule gates by tier in both directions, a
+# disabled door refuses regardless of its rules, the check-in throttle refuses a
+# flood, and every decision lands in the access-event log with its reason.
+#
+# Deny-beats-allow is the point: `contracts/door_rules.json` asserted it of the
+# pure engine and nothing asserted it end-to-end.
+#
+# It asserts nothing about a strike opening -- these doors have no edge device,
+# so a grant is logged and published to nobody. The decision is the claim.
+stage_doors() {
+  cases_begin doors
+  stack_paths
+
+  if ! server_ready; then
+    record_case "doors/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit doors
+    return 1
+  fi
+  record_case "doors/stack-is-up" ok
+
+  run_node doors.mjs >"${OUT}/logs/doors.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit doors "driver=doors.mjs"
+}
+
+# ===========================================================================
 # toolmodules -- tool module bindings and safety interlocks (#83)
 # ===========================================================================
 # The reader, the power controller and the safety sensor are separate devices
 # bound to a tool in a role, and the interlocks that gate or cut it are data.
-# This stage exercises that authoring surface against a real stack: the module
-# device kinds register, the vocabularies are refused at the API rather than by
-# a column CHECK, an interlock cannot cite a sensor belonging to another tool,
+# This stage exercises that authoring surface against a real stack: the device
+# capability roles register, the vocabularies are refused at the API rather than
+# by a column CHECK, an interlock cannot cite a sensor belonging to another tool,
 # and the snapshot the edge coordinates from reflects exactly what was authored
 # (a disabled rule is not shipped).
 #
@@ -2081,18 +2119,17 @@ stage_logs() {
   # which was the right fix, and is why they are deleted rather than kept as
   # permanent skips. An exemption nobody has to justify again is an exemption
   # that outlives its reason.
-  local expected=(
-    # A device invite code is eight emoji and this suite's cluster is LATIN1, so
-    # the row cannot be written at all. TESTING.md, "Known defects".
-    #
-    # ERROR is the right level and consistent with the rule `from_db` applies
-    # elsewhere, because this route answers 500. It answers 500 because the
-    # server generated the value that could not be stored -- the caller supplied
-    # nothing -- so it is genuinely the server's failure. The operator whose
-    # deployment cannot register any device is the person who needs to see it,
-    # and they are the only one who can fix it, by changing the encoding.
-    'Failed to insert device invite: character with byte sequence'
-  )
+  # Empty, and that is the point: the server is expected to log no ERROR at all,
+  # so any line here fails the stage.
+  #
+  # The last entry exempted 'Failed to insert device invite: character with byte
+  # sequence' -- a device invite code is eight emoji and this suite's cluster is
+  # LATIN1, so the row could not be written. #120 (#137) made invite codes
+  # hex-at-rest, so the emoji never reach the database and the message became
+  # impossible. The stage had been reporting it as a stale exemption on every run,
+  # which is what that check is for; deleted rather than left, like the two before
+  # it.
+  local expected=()
 
   local unexpected=0 sample=''
   local line
@@ -2352,7 +2389,6 @@ INVENTORY
   # into a device config; a fresh random id on every bring-up would mean editing
   # that file every morning. See FIRMWARE.md.
   local fw_external_id="dev-tool-01"
-  local fw_tool_key="dev-tool-key"
   local fw_card="DEVCARD01"
   local fw_user="devmember"
   local fw_mail="devmember@example.invalid"
@@ -2361,7 +2397,7 @@ INVENTORY
   fw_tool_id="$(curl -s -X POST "${base}/api/tools" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${token}" \
-    -d "{\"name\":\"Firmware Test Rig\",\"category\":\"other\",\"location\":\"Bench\",\"requires_training\":false,\"external_id\":\"${fw_external_id}\",\"external_api_key\":\"${fw_tool_key}\"}" \
+    -d "{\"name\":\"Firmware Test Rig\",\"category\":\"other\",\"location\":\"Bench\",\"requires_training\":false,\"external_id\":\"${fw_external_id}\"}" \
     | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
   if [[ -n ${fw_tool_id} ]]; then
     record_case "devseed/firmware-tool" ok "${fw_external_id}"
@@ -2414,9 +2450,10 @@ INVENTORY
   if [[ -n ${fw_invite} ]]; then
     record_case "devseed/firmware-invite" ok
   elif grep -q 'require a UTF-8 database' "${OUT}/devseed-invite.json" 2>/dev/null; then
-    # An invite code is eight emoji and this cluster cannot store one. The same
-    # constraint switches off cases in bypass.mjs, toolmodules.mjs and
-    # concurrency.mjs, and it says so there too rather than passing quietly.
+    # Defensive only: since #120 (#137) invite codes are stored hex-at-rest, so a
+    # non-Unicode cluster can hold one and this branch should be unreachable. Kept
+    # because reaching it would mean that regressed, and a skip naming the reason
+    # beats a bare empty response.
     #
     # The devlive profile sets CSS_E2E_DB_ENCODING=UTF8 precisely so this does
     # not happen on the instance firmware developers are told to use; reaching
@@ -2440,9 +2477,46 @@ INVENTORY
   # This doubles as a live check that the protocol behaves the way FIRMWARE.md
   # says it does: a denial is a 200 carrying tool_on false, so asserting on the
   # body rather than the status code is the assertion that means anything.
+  # #101 slice 6: a tool operation authenticates as a device BOUND to that tool.
+  # The seed registers its own device for this -- a second invite, so the one
+  # logged for a firmware developer below stays unspent -- and binds it in the
+  # `power` role, which is what a metered tool would additionally require.
+  local fw_seed_code fw_dev_id fw_dev_token
+  fw_seed_code="$(curl -s -X POST "${base}/api/admin/devices/invite" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d '{"expires_in_hours":24}' \
+    | grep -o '"device_code":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
+  curl -s -o "${OUT}/devseed-device.json" \
+    -X POST -H 'Content-Type: application/json' \
+    -d "{\"device_code\":\"${fw_seed_code}\",\"name\":\"devseed-rig-plug\",\"capabilities\":{\"roles\":[\"power\"]},\"mac_address\":\"02:00:00:00:de:01\",\"software_version\":\"0.0.0-devseed\",\"platform\":\"linux\"}" \
+    "${base}/api/devices/register" >/dev/null 2>&1
+  fw_dev_id="$(grep -o '"device_id":"[^"]*"' "${OUT}/devseed-device.json" | head -1 | sed 's/.*:"//; s/"$//')"
+  fw_dev_token="$(grep -o '"auth_token":"[^"]*"' "${OUT}/devseed-device.json" | head -1 | sed 's/.*:"//; s/"$//')"
+  if [[ -z ${fw_dev_token} ]]; then
+    record_case "devseed/firmware-device" fail \
+      "could not register the fixture's device: $(head -c 300 "${OUT}/devseed-device.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+  curl -s -o "${OUT}/devseed-binding.json" \
+    -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    -d "{\"resource_id\":\"${fw_tool_id}\",\"device_id\":\"${fw_dev_id}\",\"role\":\"power\",\"name\":\"devseed rig plug\"}" \
+    "${base}/api/admin/device-bindings" >/dev/null 2>&1
+  if grep -q '"success":true' "${OUT}/devseed-binding.json" 2>/dev/null; then
+    record_case "devseed/firmware-device" ok "${fw_dev_id}"
+  else
+    record_case "devseed/firmware-device" fail \
+      "could not bind the fixture's device to the tool: $(head -c 300 "${OUT}/devseed-binding.json" 2>/dev/null)"
+    emit_junit devseed
+    return 1
+  fi
+
   curl -s -o "${OUT}/devseed-toolon.json" \
     -X POST -H "Content-Type: application/json" \
-    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\",\"api_key\":\"${fw_tool_key}\"}" \
+    -H "Authorization: Bearer ${fw_dev_token}" \
+    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\"}" \
     "${base}/api/toolguard/tool-on" >/dev/null 2>&1
   if grep -q '"tool_on":true' "${OUT}/devseed-toolon.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-on-works" ok
@@ -2457,7 +2531,8 @@ INVENTORY
   # in use by the seed that was meant to make it usable.
   curl -s -o "${OUT}/devseed-tooloff.json" \
     -X POST -H "Content-Type: application/json" \
-    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\",\"api_key\":\"${fw_tool_key}\"}" \
+    -H "Authorization: Bearer ${fw_dev_token}" \
+    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\"}" \
     "${base}/api/toolguard/tool-off" >/dev/null 2>&1
   if grep -q '"tool_off":true' "${OUT}/devseed-tooloff.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-off-works" ok
@@ -2475,7 +2550,7 @@ INVENTORY
   log ""
   log "  firmware fixture (see FIRMWARE.md):"
   log "    tool_id:           ${fw_external_id}"
-  log "    api_key:           ${fw_tool_key}"
+  log "    device token:      ${fw_dev_token}"
   log "    card:              ${fw_card}"
   log "    member sign-in:    ${fw_user} / ${pass}"
   log "    device invite:     ${fw_invite:-<none: this cluster cannot store one>}"
