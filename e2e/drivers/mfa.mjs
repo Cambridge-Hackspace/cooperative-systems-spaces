@@ -555,6 +555,52 @@ main(async () => {
   )
 
   // -----------------------------------------------------------------------
+  // Per-factor admin removal (#151)
+  // -----------------------------------------------------------------------
+  // Dave has two authenticators. An admin sees both by label, removes ONE,
+  // and Dave's other still logs him in while the removed one is refused; the
+  // removal is audited with the label and attributed to the admin; a member
+  // cannot do any of it.
+  const dave = await account('mfa4')
+  const daveFirst = await enrollTotp(dave.token)
+  const daveSecondSetup = await POST('/api/auth/mfa/totp/setup', { token: dave.token, body: { label: 'Tablet' } })
+  const daveSecondSecret = daveSecondSetup.json?.data?.secret_base32
+  const daveSecondConfirm = await POST('/api/auth/mfa/totp/confirm', {
+    token: dave.token,
+    body: { code: totpCode(daveSecondSecret), id: daveSecondSetup.json?.data?.id },
+  })
+  assertEq('mfa/admin-fixture-second-authenticator', 200, daveSecondConfirm.status, daveSecondConfirm.text.slice(0, 200))
+
+  const peerView = await GET(`/api/admin/users/${dave.user.id}/mfa`, { token: alice.token })
+  assertEq('mfa/a-member-cannot-list-another-members-factors', 403, peerView.status)
+  const adminView = await GET(`/api/admin/users/${dave.user.id}/mfa`, { token: admin.token })
+  assertEq('mfa/an-admin-lists-factors', 200, adminView.status, adminView.text.slice(0, 200))
+  const factors = adminView.json?.data?.totp ?? []
+  assertEq('mfa/admin-sees-both-authenticators', 2, factors.length, JSON.stringify(factors))
+  ok('mfa/admin-sees-labels-not-secrets', factors.some((f) => f.label === 'Tablet') && !JSON.stringify(adminView.json?.data).includes(daveSecondSecret), 'the admin view leaked a secret or lost the label')
+  const tablet = factors.find((f) => f.label === 'Tablet')
+
+  const peerRemove = await DELETE(`/api/admin/users/${dave.user.id}/mfa/totp/${tablet?.id}`, { token: alice.token })
+  assertEq('mfa/a-member-cannot-remove-another-members-factor', 403, peerRemove.status)
+  const daveRemoved = await DELETE(`/api/admin/users/${dave.user.id}/mfa/totp/${tablet?.id}`, { token: admin.token })
+  assertEq('mfa/an-admin-removes-one-authenticator', 200, daveRemoved.status, daveRemoved.text.slice(0, 200))
+  assertEq('mfa/the-other-authenticator-remains', 1, (daveRemoved.json?.data?.totp ?? []).length)
+  ok('mfa/still-enrolled-after-removing-one', !!daveRemoved.json?.data?.mfa_enrolled_at, JSON.stringify(daveRemoved.json?.data))
+
+  const daveChallenge = await challengeFor(dave.username, 'after-admin-removal run')
+  const daveViaRemoved = await verify({ challenge_token: daveChallenge, method: 'totp', code: totpCode(daveSecondSecret, Math.floor(Date.now() / 1000) + 30) })
+  assertEq('mfa/the-removed-authenticator-no-longer-logs-in', 401, daveViaRemoved.status)
+  const daveChallenge2 = await challengeFor(dave.username, 'surviving-after-admin-removal run')
+  const daveViaFirst = await verify({ challenge_token: daveChallenge2, method: 'totp', code: totpCode(daveFirst.secret, Math.floor(Date.now() / 1000) + 30) })
+  assertEq('mfa/the-remaining-authenticator-still-logs-in', 200, daveViaFirst.status, daveViaFirst.text.slice(0, 200))
+
+  const removalAudit = await GET('/api/admin/audit-logs?event_type=mfa_totp_disabled&per_page=100', { token: admin.token })
+  const removalRow = (removalAudit.json?.data ?? []).find((e) => e.event_data?.totp_id === tablet?.id)
+  ok('mfa/admin-removal-is-audited-with-the-label', removalRow?.actor_id === admin.user.id && removalRow?.event_data?.label === 'Tablet' && removalRow?.event_data?.reason === 'admin_removed', JSON.stringify(removalRow))
+  const ghost = await DELETE(`/api/admin/users/${dave.user.id}/mfa/totp/${tablet?.id}`, { token: admin.token })
+  assertEq('mfa/removing-a-removed-authenticator-is-404', 404, ghost.status)
+
+  // -----------------------------------------------------------------------
   // Several authenticators (#118)
   // -----------------------------------------------------------------------
   // A second app enrolls alongside the first; either code completes a login;

@@ -173,10 +173,18 @@ impl WebhookDispatcher {
         }
 
         let payload = event_payload(&event);
+        let discord = discord_payload(&event);
         for webhook in webhooks {
+            // #87: the envelope is per webhook. Same event, same subscription
+            // match; only what the receiver sees differs.
+            let body = if webhook.format == crate::models::webhook_format::DISCORD {
+                &discord
+            } else {
+                &payload
+            };
             // Outcome is already logged and persisted by `deliver`.
             let _ = self
-                .deliver(&webhook, &payload, &event.event_type, Some(event.id))
+                .deliver(&webhook, body, &event.event_type, Some(event.id))
                 .await;
         }
     }
@@ -393,6 +401,59 @@ pub fn event_payload(event: &AuditLog) -> serde_json::Value {
         },
         "delivered_at": chrono::Utc::now(),
     })
+}
+
+/// Discord's incoming-webhook shape (#87): a one-line `content` and one
+/// embed carrying the classification and the event data. Discord refuses
+/// anything else, so a webhook pointed at Discord must use this envelope.
+/// The embed colour follows severity so a channel can be read at a glance.
+pub fn discord_payload(event: &AuditLog) -> serde_json::Value {
+    let (category, severity) = match AuditEventType::parse(&event.event_type) {
+        Some(t) => (
+            t.category().as_str().to_string(),
+            t.severity().as_str().to_string(),
+        ),
+        None => ("unknown".to_string(), "info".to_string()),
+    };
+    let color = match severity.as_str() {
+        "critical" => 0xE5_39_35,
+        "warning" => 0xFB_8C_00,
+        "notice" => 0x1E_88_E5,
+        _ => 0x9E_9E_9E,
+    };
+    // One line of detail, bounded: Discord caps a description at 4096 and a
+    // wall of JSON is not what a channel is for.
+    let mut detail = serde_json::to_string(&event.event_data).unwrap_or_default();
+    if detail.chars().count() > 900 {
+        detail = detail.chars().take(900).collect::<String>() + "…";
+    }
+    json!({
+        "content": format!("**{}** `{}` ({})", severity, event.event_type, category),
+        "embeds": [{
+            "title": event.event_type,
+            "description": format!("```json\n{detail}\n```"),
+            "color": color,
+            "timestamp": event.created_at,
+            "footer": { "text": format!("severity {severity} · category {category}") },
+        }],
+    })
+}
+
+/// The test payload in whichever envelope the webhook asked for.
+pub fn test_payload_for(format: &str) -> serde_json::Value {
+    if format == crate::models::webhook_format::DISCORD {
+        json!({
+            "content": "**test** `webhook_test` (webhook)",
+            "embeds": [{
+                "title": "webhook_test",
+                "description": "This is a test webhook delivery.",
+                "color": 0x9E_9E_9E,
+                "timestamp": chrono::Utc::now(),
+            }],
+        })
+    } else {
+        test_payload()
+    }
 }
 
 /// A synthetic payload used by the "test" endpoint.
@@ -636,5 +697,58 @@ mod tests {
             assert_eq!(host, "10.0.0.9");
             assert!(addrs.iter().all(|a| a.ip().to_string() == "10.0.0.9"));
         }
+    }
+}
+
+#[cfg(test)]
+mod discord_envelope_tests {
+    use super::*;
+
+    fn event(kind: &str, data: serde_json::Value) -> AuditLog {
+        AuditLog {
+            id: Uuid::nil(),
+            event_type: kind.to_string(),
+            user_id: None,
+            actor_id: None,
+            event_data: data,
+            ip_address: None,
+            user_agent: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn the_envelope_is_what_discord_accepts_and_names_the_class() {
+        let p = discord_payload(&event(
+            "unauthorized_power_detected",
+            json!({"tool_id": "t"}),
+        ));
+        let content = p["content"].as_str().unwrap();
+        assert!(content.contains("critical") && content.contains("unauthorized_power_detected"));
+        assert_eq!(p["embeds"][0]["color"], 0xE5_39_35);
+        assert!(
+            p.get("event").is_none(),
+            "the raw json envelope must not leak in"
+        );
+    }
+
+    #[test]
+    fn detail_is_bounded() {
+        let big = json!({ "note": "x".repeat(5000) });
+        let p = discord_payload(&event("failed_login_attempt", big));
+        let desc = p["embeds"][0]["description"].as_str().unwrap();
+        assert!(
+            desc.chars().count() < 1000,
+            "description was {} chars",
+            desc.chars().count()
+        );
+        assert!(desc.ends_with("…\n```"));
+    }
+
+    #[test]
+    fn an_unclassified_type_still_renders() {
+        let p = discord_payload(&event("not_a_real_type", json!({})));
+        assert_eq!(p["embeds"][0]["color"], 0x9E_9E_9E);
+        assert!(p["content"].as_str().unwrap().contains("unknown"));
     }
 }

@@ -65,6 +65,7 @@ function webhook(over: Partial<Webhook> = {}): Webhook {
     event_types: ['user_login'],
     class_subscriptions: [],
     auth_header_ids: [],
+    format: 'json',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     ...over,
@@ -296,6 +297,25 @@ describe('creating and editing a webhook', () => {
       class_subscriptions: { category: string | null; min_severity: string }[]
     }
     expect(sent.class_subscriptions).toEqual([{ category: 'bypass', min_severity: 'critical' }])
+  })
+
+  it('sends the chosen payload format, defaulting to the signed JSON', async () => {
+    const w = await page()
+    await openNewWebhook(w)
+    await modalInputs(w)[0].setValue('Discord alerts')
+    await modalInputs(w)[1].setValue('https://discord.com/api/webhooks/1/x')
+    await w.find('#webhook-format').setValue('discord')
+    await buttonNamed(w, 'Create').trigger('click')
+    await flushPromises()
+    expect((mocks.createWebhook.mock.calls[0][0] as { format: string }).format).toBe('discord')
+
+    const w2 = await page()
+    await openNewWebhook(w2)
+    await modalInputs(w2)[0].setValue('Plain')
+    await modalInputs(w2)[1].setValue('https://example.org/hook')
+    await buttonNamed(w2, 'Create').trigger('click')
+    await flushPromises()
+    expect((mocks.createWebhook.mock.calls[1][0] as { format: string }).format).toBe('json')
   })
 
   it('loads an existing webhook into the form and updates rather than creates', async () => {

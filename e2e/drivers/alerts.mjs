@@ -123,6 +123,14 @@ await main(async () => {
   }
   const hookA = await mk(`class-${RUN_TAG}`, { class_subscriptions: [{ category: null, min_severity: 'notice' }] })
   const hookB = await mk(`event-${RUN_TAG}`, { event_types: ['door_created'] })
+  // A Discord-shaped hook on the same subscription: what it is SENT must be
+  // Discord's envelope (content + embeds) and not the raw audit JSON, which
+  // Discord refuses. The delivery row keeps the request body, so an
+  // unreachable URL still shows exactly what would have been posted.
+  const hookD = await mk(`discord-${RUN_TAG}`, { format: 'discord', class_subscriptions: [{ category: null, min_severity: 'notice' }] })
+  assertEq('alerts/webhook-echoes-format', 'discord', hookD?.format)
+  const badFormat = await POST('/api/admin/webhooks', { token: admin.token, body: { name: `badfmt-${RUN_TAG}`, url: 'http://127.0.0.1:9/f', format: 'carrier-pigeon' } })
+  assertEq('alerts/unknown-format-is-400', 400, badFormat.status)
   assertEq('alerts/webhook-echoes-class-subscription', 'notice', hookA?.class_subscriptions?.[0]?.min_severity, JSON.stringify(hookA?.class_subscriptions))
   const badSub = await POST('/api/admin/webhooks', { token: admin.token, body: { name: `bad-${RUN_TAG}`, url: 'http://127.0.0.1:9/bad', class_subscriptions: [{ min_severity: 'loud' }] } })
   assertEq('alerts/unknown-class-severity-is-400', 400, badSub.status)
@@ -140,6 +148,20 @@ await main(async () => {
     rowsA = await deliveriesFor(hookA.id)
   }
   ok('alerts/class-subscribed-webhook-is-dispatched-a-notice-event', rowsA.length >= 1, 'no delivery row for the class-subscribed webhook within 10s')
+  const bodyA = rowsA[0]?.request_payload
+  ok('alerts/json-webhook-gets-the-signed-event-envelope', !!bodyA?.event && bodyA?.content === undefined, `json hook body keys: ${JSON.stringify(Object.keys(bodyA ?? {}))}`)
+  let rowsD = []
+  for (let i = 0; i < 40 && rowsD.length === 0; i++) {
+    await new Promise((r) => setTimeout(r, 250))
+    rowsD = await deliveriesFor(hookD.id)
+  }
+  const bodyD = rowsD[0]?.request_payload
+  ok(
+    'alerts/discord-webhook-gets-the-discord-envelope',
+    typeof bodyD?.content === 'string' && Array.isArray(bodyD?.embeds) && bodyD?.event === undefined,
+    `discord hook body keys: ${JSON.stringify(Object.keys(bodyD ?? {}))}`
+  )
+  ok('alerts/discord-envelope-names-severity-and-type', typeof bodyD?.content === 'string' && bodyD.content.includes('notice') && bodyD.content.includes('failed_login_attempt'), bodyD?.content)
   // Time allowed to pass after the precondition, then the absence.
   await new Promise((r) => setTimeout(r, 2000))
   const rowsB = await deliveriesFor(hookB.id)
@@ -182,7 +204,7 @@ await main(async () => {
   // (deleting a webhook cascades its delivery rows), and the dispatcher's
   // retries (1s + 2s backoff) must have settled so none is in flight.
   await new Promise((r) => setTimeout(r, 4000))
-  for (const h of [hookA, hookB]) {
+  for (const h of [hookA, hookB, hookD]) {
     const gone = await DELETE(`/api/admin/webhooks/${h.id}`, { token: admin.token })
     assertEq(`alerts/webhook-deleted/${h.name}`, 200, gone.status, gone.text.slice(0, 120))
   }

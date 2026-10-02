@@ -229,6 +229,20 @@
           >
         </div>
 
+        <div class="form-control mb-3">
+          <label class="label py-1" for="webhook-format"
+            ><span class="label-text">Payload</span></label
+          >
+          <select
+            id="webhook-format"
+            v-model="whForm.format"
+            class="select select-bordered select-sm"
+          >
+            <option value="json">JSON audit event, HMAC-signed (for your own receiver)</option>
+            <option value="discord">Discord message (for a Discord incoming webhook URL)</option>
+          </select>
+        </div>
+
         <div class="form-control mb-3" data-testid="class-subscriptions">
           <label class="label">
             <span class="label-text">By class ({{ whForm.class_subscriptions.length }})</span>
@@ -459,13 +473,23 @@ function switchToDeliveries() {
 // ----- Webhook modal -----
 const showWebhookModal = ref(false)
 const editingWebhook = ref<Webhook | null>(null)
-const whForm = ref({
+type WebhookForm = {
+  name: string
+  url: string
+  enabled: boolean
+  event_types: string[]
+  class_subscriptions: WebhookClassSubscription[]
+  auth_header_ids: string[]
+  format: 'json' | 'discord'
+}
+const whForm = ref<WebhookForm>({
   name: '',
   url: '',
   enabled: true,
-  event_types: [] as string[],
-  class_subscriptions: [] as WebhookClassSubscription[],
-  auth_header_ids: [] as string[],
+  event_types: [],
+  class_subscriptions: [],
+  auth_header_ids: [],
+  format: 'json',
 })
 
 // The class vocabularies come from the alert classification (#87).
@@ -506,6 +530,7 @@ function openWebhookModal(wh?: Webhook) {
         event_types: [...wh.event_types],
         class_subscriptions: (wh.class_subscriptions ?? []).map((c) => ({ ...c })),
         auth_header_ids: [...wh.auth_header_ids],
+        format: wh.format ?? 'json',
       }
     : {
         name: '',
@@ -514,6 +539,7 @@ function openWebhookModal(wh?: Webhook) {
         event_types: [],
         class_subscriptions: [],
         auth_header_ids: [],
+        format: 'json',
       }
   showWebhookModal.value = true
 }

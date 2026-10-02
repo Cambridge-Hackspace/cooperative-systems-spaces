@@ -92,3 +92,35 @@ fn the_oracle_discriminates() {
         ["a", "b"].into_iter().map(String::from).collect()
     );
 }
+
+/// `webhook_format::ALL` from `server/src/models/webhooks.rs`: the string
+/// constants inside the module block.
+fn rust_webhook_formats() -> BTreeSet<String> {
+    let src = read("server/src/models/webhooks.rs");
+    let start = src
+        .find("pub mod webhook_format {")
+        .expect("webhook_format module");
+    let body = &src[start..];
+    let end = body.find("\n}\n").expect("module closes");
+    body[..end]
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix("pub const ")?;
+            let (_, lit) = rest.split_once("&str = \"")?;
+            Some(lit[..lit.find('"')?].to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn the_webhook_format_check_and_the_constants_agree() {
+    let sql = migration_defining("ADD COLUMN format TEXT NOT NULL DEFAULT 'json'");
+    let check = check_values(&sql, "format");
+    let rust = rust_webhook_formats();
+    assert!(rust.len() >= 2, "parsed too few formats: {rust:?}");
+    assert_eq!(
+        check, rust,
+        "webhooks.format CHECK and webhook_format::ALL disagree"
+    );
+}

@@ -150,6 +150,9 @@ pub const ROUTES: &[R] = &[
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/activate", Guard::Admin), // admin::activate_user
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/deactivate", Guard::Admin), // admin::deactivate_user
     R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/mfa", Guard::Admin), // admin::reset_user_mfa
+    R("GET", "/api/admin/users/00000000-0000-4000-8000-000000000001/mfa", Guard::Admin), // admin::list_user_mfa
+    R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/mfa/totp/00000000-0000-4000-8000-000000000001", Guard::Admin), // admin::remove_user_totp
+    R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/mfa/webauthn/00000000-0000-4000-8000-000000000001", Guard::Admin), // admin::remove_user_webauthn
     R("PUT", "/api/admin/users/00000000-0000-4000-8000-000000000001/role", Guard::Admin), // admin::update_user_role
     R("GET", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::list_user_roles
     R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::assign_user_role
@@ -320,4 +323,5 @@ pub const ROUTES: &[R] = &[
     R("DELETE", "/api/users/00000000-0000-4000-8000-000000000001/emails/00000000-0000-4000-8000-000000000001", Guard::Auth), // users::remove_user_email
     R("PUT", "/api/users/00000000-0000-4000-8000-000000000001/emails/00000000-0000-4000-8000-000000000001/primary", Guard::Auth), // users::set_primary_user_email
     R("POST", "/api/users/00000000-0000-4000-8000-000000000001/emails/00000000-0000-4000-8000-000000000001/resend", Guard::Auth), // users::resend_user_email
+    R("GET", "/api/users/00000000-0000-4000-8000-000000000001/stripe-customers", Guard::Auth), // users::list_user_stripe_customers
 ];

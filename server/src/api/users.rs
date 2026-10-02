@@ -37,6 +37,7 @@ pub fn user_routes() -> Router<AppState> {
             put(set_primary_user_email),
         )
         .route("/{id}/emails/{email_id}/resend", post(resend_user_email))
+        .route("/{id}/stripe-customers", get(list_user_stripe_customers))
 }
 
 fn audit(state: &AppState, event: AuditEventType, actor: Uuid, data: serde_json::Value) {
@@ -891,4 +892,70 @@ async fn resend_user_email(
         (),
         "Confirmation link sent".to_string(),
     )))
+}
+
+// ---------------------------------------------------------------------------
+// Stripe customers (#150)
+// ---------------------------------------------------------------------------
+
+/// One Stripe customer a user is known by, with whether checkout and the
+/// Billing Portal would use it right now.
+#[derive(Debug, serde::Serialize)]
+pub struct StripeCustomerResponse {
+    pub id: Uuid,
+    pub customer_id: String,
+    pub subscription_id: Option<String>,
+    pub subscription_status: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// The one `current_stripe_customer` picks: a live subscription first,
+    /// else the most recently updated.
+    pub current: bool,
+}
+
+/// `GET /api/users/{id}/stripe-customers` -- every customer id the user is
+/// known by (#118 made this plural; #150 makes it visible). Self, or a
+/// `users.manage` holder. Read-only: a customer is unlinked on Stripe's side,
+/// and re-homing one is refused by design.
+async fn list_user_stripe_customers(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<Vec<StripeCustomerResponse>>>, ApiError> {
+    if auth_user.0.id != user_id
+        && !state
+            .db
+            .user_has_permission(auth_user.0.id, "users.manage")
+            .map_err(ApiError::from)?
+    {
+        return Err(ApiError::Forbidden(
+            "You can only view your own Stripe customers".to_string(),
+        ));
+    }
+    state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let current = state
+        .db
+        .current_stripe_customer(user_id)
+        .map_err(ApiError::from)?
+        .map(|c| c.id);
+    let rows = state
+        .db
+        .list_stripe_customers(user_id)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .map(|c| StripeCustomerResponse {
+            current: Some(c.id) == current,
+            id: c.id,
+            customer_id: c.customer_id,
+            subscription_id: c.subscription_id,
+            subscription_status: c.subscription_status,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+        })
+        .collect();
+    Ok(Json(ApiResponse::success(rows)))
 }
