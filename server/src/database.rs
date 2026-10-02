@@ -965,6 +965,17 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Every address of every user, in one pass (the duplicates report walks
+    /// the whole roster and must not issue one query per account).
+    pub fn list_all_user_emails(&self) -> Result<Vec<crate::models::UserEmail>, DatabaseError> {
+        use crate::schema::user_emails::dsl::*;
+        let mut conn = self.get_connection()?;
+        user_emails
+            .select(crate::models::UserEmail::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// One address row by its id, scoped to the user so a caller cannot act on
     /// another account's address by guessing an id.
     pub fn get_user_email(

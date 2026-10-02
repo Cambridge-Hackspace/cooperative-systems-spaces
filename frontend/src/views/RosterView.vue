@@ -245,6 +245,9 @@
         </div>
       </div>
 
+      <!-- Possible duplicates (#38/#118): pairs the merge tool should look at -->
+      <DuplicateCandidates class="mb-6" @merged="handleMerged" @error="handleError" />
+
       <!-- Roster Table -->
       <RosterTable ref="rosterTable" @user-updated="handleUserUpdated" @error="handleError" />
     </div>
@@ -256,6 +259,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { userApi } from '@/utils/api'
 import RosterTable from '@/components/RosterTable.vue'
+import DuplicateCandidates from '@/components/DuplicateCandidates.vue'
 import type { User } from '@/types'
 import { UserRole } from '@/types'
 
@@ -304,6 +308,12 @@ const clearError = () => {
 const handleUserUpdated = (user: User) => {
   showSuccess(`User ${user.username} has been updated successfully.`)
   void loadRoleStats()
+}
+
+const handleMerged = async (message: string) => {
+  showSuccess(message)
+  if (rosterTable.value) await rosterTable.value.fetchUsers()
+  await loadRoleStats()
 }
 
 const refreshRoster = async () => {

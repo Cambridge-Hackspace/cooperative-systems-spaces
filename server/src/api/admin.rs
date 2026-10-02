@@ -54,6 +54,7 @@ pub fn admin_routes() -> Router<AppState> {
             "/users/{user_id}/roles/{role_id}",
             axum::routing::delete(unassign_user_role),
         )
+        .route("/users/duplicates", get(list_duplicate_candidates))
         .route("/users/{user_id}/merge/preview", post(merge_preview))
         .route("/users/{user_id}/merge", post(merge_users))
         .nest("/rbac", crate::api::rbac_admin::admin_routes())
@@ -815,4 +816,41 @@ async fn merge_users(
         outcome,
         format!("{} merged into {}", absorbed.username, survivor.username),
     )))
+}
+
+/// `GET /api/admin/users/duplicates` -- pairs of accounts that may be one
+/// person (#38, #118), each with the reasons it was proposed. A report for an
+/// administrator to read before the merge preview; it changes nothing.
+async fn list_duplicate_candidates(
+    _admin_user: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<crate::duplicates::DuplicateCandidate>>>, ApiError> {
+    let users = state.db.get_all_users().map_err(ApiError::from)?;
+    let mut emails: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
+    for row in state.db.list_all_user_emails().map_err(ApiError::from)? {
+        emails.entry(row.user_id).or_default().push(row.email);
+    }
+    let profile_field = state
+        .config_manager
+        .get_config()
+        .toolguard
+        .profile_field
+        .clone();
+    let cipher = state.card_cipher.clone();
+    let db = state.db.clone();
+    let field = profile_field.clone();
+    let card_owner = move |code: &str| -> Option<Uuid> {
+        match db.resolve_card(&field, code, cipher.as_deref()) {
+            Ok(crate::models::CardResolution::Active { user, .. })
+            | Ok(crate::models::CardResolution::Revoked { user, .. }) => Some(user.id),
+            _ => None,
+        }
+    };
+    let out = crate::duplicates::candidates(
+        &users,
+        &profile_field,
+        |id| emails.get(&id).cloned().unwrap_or_default(),
+        card_owner,
+    );
+    Ok(Json(ApiResponse::success(out)))
 }
