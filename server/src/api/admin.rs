@@ -43,7 +43,15 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/users/{user_id}/deactivate", put(deactivate_user))
         .route(
             "/users/{user_id}/mfa",
-            axum::routing::delete(reset_user_mfa),
+            axum::routing::delete(reset_user_mfa).get(list_user_mfa),
+        )
+        .route(
+            "/users/{user_id}/mfa/totp/{factor_id}",
+            axum::routing::delete(remove_user_totp),
+        )
+        .route(
+            "/users/{user_id}/mfa/webauthn/{factor_id}",
+            axum::routing::delete(remove_user_webauthn),
         )
         .route("/audit-logs", get(get_audit_logs))
         .route(
@@ -865,4 +873,183 @@ async fn run_alert_heartbeat(
 ) -> Result<Json<ApiResponse<crate::alerts::HeartbeatOutcome>>, ApiError> {
     let outcome = state.alert_heartbeat.run().await;
     Ok(Json(ApiResponse::success(outcome)))
+}
+
+// ---------------------------------------------------------------------------
+// Per-factor MFA management (#151)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct AdminTotpFactor {
+    pub id: Uuid,
+    pub label: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub confirmed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminWebauthnFactor {
+    pub id: Uuid,
+    pub label: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// A user's second factors as an administrator sees them: labels and dates,
+/// never a secret or a credential.
+#[derive(Debug, Serialize)]
+pub struct AdminMfaView {
+    pub totp: Vec<AdminTotpFactor>,
+    pub webauthn: Vec<AdminWebauthnFactor>,
+    pub recovery_codes_remaining: i64,
+    pub mfa_enrolled_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// `GET /api/admin/users/{user_id}/mfa`
+async fn list_user_mfa(
+    _admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<AdminMfaView>>, ApiError> {
+    let target = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let totp = state
+        .db
+        .list_user_totp(user_id)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .filter(|t| t.confirmed_at.is_some())
+        .map(|t| AdminTotpFactor {
+            id: t.id,
+            label: t.label,
+            created_at: t.created_at,
+            confirmed_at: t.confirmed_at,
+        })
+        .collect();
+    let webauthn = state
+        .db
+        .list_user_webauthn(user_id)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .map(|c| AdminWebauthnFactor {
+            id: c.id,
+            label: c.label,
+            created_at: c.created_at,
+            last_used_at: c.last_used_at,
+        })
+        .collect();
+    let recovery_codes_remaining = state
+        .db
+        .count_unused_recovery_codes(user_id)
+        .map_err(ApiError::from)?;
+    Ok(Json(ApiResponse::success(AdminMfaView {
+        totp,
+        webauthn,
+        recovery_codes_remaining,
+        mfa_enrolled_at: target.mfa_enrolled_at,
+    })))
+}
+
+/// `DELETE /api/admin/users/{user_id}/mfa/totp/{factor_id}` -- remove ONE
+/// authenticator app. The member's other factors stay; `mfa_enrolled_at` is
+/// recomputed, as on the member's own path. Audited with the label.
+async fn remove_user_totp(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path((user_id, factor_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<AdminMfaView>>, ApiError> {
+    let target = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let label = state
+        .db
+        .list_user_totp(user_id)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .find(|t| t.id == factor_id)
+        .map(|t| t.label)
+        .ok_or_else(|| ApiError::NotFound("No such authenticator".to_string()))?;
+    state
+        .db
+        .delete_user_totp(user_id, factor_id)
+        .map_err(ApiError::from)?;
+    state
+        .db
+        .recompute_user_mfa_enrolled(user_id)
+        .map_err(ApiError::from)?;
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::MfaTotpDisabled,
+            Some(user_id),
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "reason": "admin_removed",
+                "totp_id": factor_id,
+                "label": label,
+                "target_username": target.username,
+            }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("Failed to log admin TOTP removal: {}", e);
+    }
+    list_user_mfa(admin_user, State(state), Path(user_id)).await
+}
+
+/// `DELETE /api/admin/users/{user_id}/mfa/webauthn/{factor_id}` -- remove
+/// ONE security key. Same shape as the authenticator removal.
+async fn remove_user_webauthn(
+    admin_user: AdminUser,
+    State(state): State<AppState>,
+    Path((user_id, factor_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<AdminMfaView>>, ApiError> {
+    let target = state
+        .db
+        .find_user_by_id(user_id)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let label = state
+        .db
+        .list_user_webauthn(user_id)
+        .map_err(ApiError::from)?
+        .into_iter()
+        .find(|c| c.id == factor_id)
+        .map(|c| c.label)
+        .ok_or_else(|| ApiError::NotFound("No such security key".to_string()))?;
+    state
+        .db
+        .delete_user_webauthn(user_id, factor_id)
+        .map_err(ApiError::from)?;
+    state
+        .db
+        .recompute_user_mfa_enrolled(user_id)
+        .map_err(ApiError::from)?;
+    if let Err(e) = state
+        .audit_logger
+        .log_event(
+            crate::models::AuditEventType::MfaWebauthnRemoved,
+            Some(user_id),
+            Some(admin_user.0.id),
+            serde_json::json!({
+                "reason": "admin_removed",
+                "credential_id": factor_id,
+                "label": label,
+                "target_username": target.username,
+            }),
+            None,
+            None,
+        )
+        .await
+    {
+        tracing::warn!("Failed to log admin security-key removal: {}", e);
+    }
+    list_user_mfa(admin_user, State(state), Path(user_id)).await
 }

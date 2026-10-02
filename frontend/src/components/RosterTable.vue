@@ -257,15 +257,11 @@
                   <button
                     v-if="canResetMfa && user.mfa_enrolled_at"
                     class="btn btn-ghost btn-xs"
-                    :disabled="resettingMfaFor === user.id"
-                    title="Reset MFA (lockout recovery)"
-                    @click="resetMfa(user)"
+                    title="Manage MFA (remove one factor, or reset everything)"
+                    :data-manage-mfa="user.id"
+                    @click="mfaTarget = user"
                   >
-                    <span
-                      v-if="resettingMfaFor === user.id"
-                      class="loading loading-spinner loading-xs"
-                    ></span>
-                    <span v-else>Reset</span>
+                    <span>Manage</span>
                   </button>
                 </div>
               </td>
@@ -325,6 +321,14 @@
       </div>
     </div>
 
+    <UserMfaModal
+      v-if="mfaTarget"
+      :user-id="mfaTarget.id"
+      :username="mfaTarget.username"
+      @close="mfaTarget = null"
+      @changed="onMfaChanged"
+    />
+
     <UserMergeModal
       v-if="mergeTarget"
       :absorbed="mergeTarget"
@@ -382,9 +386,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { adminApi, rbacApi, userApi } from '@/utils/api'
+import { rbacApi, userApi } from '@/utils/api'
 import type { User, UserRole, RbacRole, AssignedUserRole, MergeOutcome } from '@/types'
 import UserMergeModal from '@/components/UserMergeModal.vue'
+import UserMfaModal from '@/components/UserMfaModal.vue'
 import { UserRole as UserRoleEnum } from '@/types'
 
 // Props and Emits
@@ -400,6 +405,14 @@ const authStore = useAuthStore()
 const users = ref<User[]>([])
 /** The account being merged away (#118), while the merge dialog is open. */
 const mergeTarget = ref<User | null>(null)
+/** The account whose second factors are being managed (#151). */
+const mfaTarget = ref<User | null>(null)
+
+function onMfaChanged(enrolled: boolean) {
+  if (!mfaTarget.value) return
+  mfaTarget.value.mfa_enrolled_at = enrolled ? (mfaTarget.value.mfa_enrolled_at ?? 'x') : null
+  emit('userUpdated', mfaTarget.value)
+}
 
 function openMerge(user: User) {
   mergeTarget.value = user
@@ -451,33 +464,6 @@ const canToggleUserStatus = computed(() => authStore.isAdmin)
 const canResetMfa = computed(() => authStore.isAdmin)
 
 // MFA reset state
-const resettingMfaFor = ref<string | null>(null)
-
-async function resetMfa(user: User) {
-  if (
-    !confirm(
-      `Reset MFA for ${user.full_name} (@${user.username})? ` +
-        `Their authenticator app, security keys, and recovery codes will all be removed. ` +
-        `They will be able to sign in with just their password until they re-enroll.`
-    )
-  )
-    return
-  resettingMfaFor.value = user.id
-  try {
-    const resp = await adminApi.resetUserMfa(user.id)
-    if (resp.success) {
-      // Optimistically clear locally so the badge updates without a refetch.
-      user.mfa_enrolled_at = null
-      emit('userUpdated', user)
-    } else {
-      emit('error', resp.error || 'Failed to reset MFA')
-    }
-  } catch (e: any) {
-    emit('error', e?.response?.data?.error || 'Network error resetting MFA')
-  } finally {
-    resettingMfaFor.value = null
-  }
-}
 
 // Pagination helpers
 const visiblePages = computed(() => {

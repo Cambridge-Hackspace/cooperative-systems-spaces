@@ -214,6 +214,38 @@ export interface MergePlan {
   moves: Record<string, number>
   warnings: MergeWarning[]
 }
+/** One Stripe customer a user is known by (#150). */
+export interface StripeCustomerLink {
+  id: string
+  customer_id: string
+  subscription_id: string | null
+  subscription_status: string | null
+  created_at: string
+  updated_at: string
+  /** The one checkout and the Billing Portal would use. */
+  current: boolean
+}
+
+/** The administrator's view of a user's second factors (#151). Never a secret. */
+export interface AdminTotpFactor {
+  id: string
+  label: string
+  created_at: string
+  confirmed_at: string | null
+}
+export interface AdminWebauthnFactor {
+  id: string
+  label: string
+  created_at: string
+  last_used_at: string | null
+}
+export interface AdminMfaView {
+  totp: AdminTotpFactor[]
+  webauthn: AdminWebauthnFactor[]
+  recovery_codes_remaining: number
+  mfa_enrolled_at: string | null
+}
+
 /** An alert (#87): an audit event classified notice or above. */
 export interface AlertAcknowledgement {
   audit_log_id: string
@@ -739,6 +771,8 @@ export interface Webhook {
   event_types: string[]
   class_subscriptions: WebhookClassSubscription[]
   auth_header_ids: string[]
+  /** Delivery envelope: the signed audit JSON, or a Discord message. */
+  format: 'json' | 'discord'
   created_at: string
   updated_at: string
 }

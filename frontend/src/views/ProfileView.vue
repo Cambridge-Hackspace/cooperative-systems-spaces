@@ -46,6 +46,13 @@
       class="mb-6"
     />
 
+    <!-- Stripe customers (#150): own profile or a manager's view, when Stripe is on -->
+    <StripeCustomersCard
+      v-if="userId && stripeEnabled && (isOwnProfile || canManageUsers)"
+      :user-id="userId"
+      class="mb-6"
+    />
+
     <!-- Transit card link (only when viewing own profile AND a card field is configured) -->
     <div
       v-if="isOwnProfile && cardFieldConfigured"
@@ -89,6 +96,7 @@ import MembershipCard from '@/components/MembershipCard.vue'
 import ToolBillingCard from '@/components/ToolBillingCard.vue'
 import InstanceQrCard from '@/components/InstanceQrCard.vue'
 import EmailAddressesCard from '@/components/EmailAddressesCard.vue'
+import StripeCustomersCard from '@/components/StripeCustomersCard.vue'
 import { apiClient, mfaApi } from '@/utils/api'
 import type { User } from '@/types'
 
@@ -108,6 +116,7 @@ const cardFieldConfigured = computed(() => !!configStore.cardIdField())
 const groupsioEnabled = computed(() => configStore.groupsioEnabled())
 const membershipEnabled = computed(() => configStore.membershipEnabled())
 const toolBillingEnabled = computed(() => configStore.toolBillingEnabled())
+const stripeEnabled = computed(() => configStore.stripeEnabled())
 
 // Computed properties
 const userId = computed(() => {

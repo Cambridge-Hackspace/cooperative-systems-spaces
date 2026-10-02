@@ -383,9 +383,11 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // 214 = 210 + the alert feed (#87, Auth + alerts.view / alerts.acknowledge
     // checked in the handler): list, summary, classification, acknowledge.
     // 215 = 214 + the admin "heartbeat now" (#87).
-    assert_eq!(jwt_routes, 215, "JWT-authenticated routes");
+    // 219 = 215 + a user's Stripe customers (#150, Auth) + the admin per-factor
+    // MFA view and two removals (#151, Admin).
+    assert_eq!(jwt_routes, 219, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 215 * 7 + (10 + 6) * 3);
+    assert_eq!(asserted_pairs(), 219 * 7 + (10 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected

@@ -446,6 +446,7 @@ diesel::table! {
         created_by -> Nullable<Uuid>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        format -> Text,
     }
 }
 

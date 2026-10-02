@@ -310,6 +310,13 @@ export const userApi = {
     return apiClient.put(`/admin/users/${userId}/activate`)
   },
 
+  /** Every Stripe customer a user is known by (#150); self or users.manage. */
+  listStripeCustomers(userId: string) {
+    return apiClient.get<import('@/types').StripeCustomerLink[]>(
+      `/users/${userId}/stripe-customers`
+    )
+  },
+
   // Change your own password (requires current password)
   changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<void>> {
     return apiClient.put<void>('/users/me/password', {
@@ -349,6 +356,23 @@ export const adminApi = {
       absorbed_id: absorbedId,
     })
   },
+  /** A user's second factors as an admin sees them (#151): labels and dates only. */
+  listUserMfa(userId: string) {
+    return apiClient.get<import('@/types').AdminMfaView>(`/admin/users/${userId}/mfa`)
+  },
+  /** Remove one authenticator app; answers the updated view. */
+  removeUserTotp(userId: string, factorId: string) {
+    return apiClient.delete<import('@/types').AdminMfaView>(
+      `/admin/users/${userId}/mfa/totp/${factorId}`
+    )
+  },
+  /** Remove one security key; answers the updated view. */
+  removeUserWebauthn(userId: string, factorId: string) {
+    return apiClient.delete<import('@/types').AdminMfaView>(
+      `/admin/users/${userId}/mfa/webauthn/${factorId}`
+    )
+  },
+
   /** Pairs of accounts that may be one person, with reasons (#38/#118). */
   listDuplicateCandidates() {
     return apiClient.get<import('@/types').DuplicateCandidate[]>('/admin/users/duplicates')

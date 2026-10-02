@@ -304,10 +304,24 @@ await main(async () => {
   // first row) fails one of the two.
   const viewBoth = await view(member3.token)
   ok('stripe/two-customers-has-subscription', viewBoth.has_subscription === true, JSON.stringify(viewBoth))
+  // #150: the customers are visible, to the member and to an admin, with the
+  // one checkout would use marked -- and a plain other member cannot see them.
+  const customersOf = async (token) => (await GET(`/api/users/${member3.user.id}/stripe-customers`, { token })).json?.data ?? []
+  const asAdmin = await GET(`/api/users/${member3.user.id}/stripe-customers`, { token: admin.token })
+  assertEq('stripe/customers-visible-to-admin', 200, asAdmin.status, asAdmin.text.slice(0, 200))
+  assertEq('stripe/customers-lists-both', 2, (asAdmin.json?.data ?? []).length, JSON.stringify(asAdmin.json?.data))
+  const asSelf = await GET(`/api/users/${member3.user.id}/stripe-customers`, { token: member3.token })
+  assertEq('stripe/customers-visible-to-self', 200, asSelf.status)
+  const asOther = await GET(`/api/users/${member3.user.id}/stripe-customers`, { token: member2.token })
+  assertEq('stripe/customers-hidden-from-another-member', 403, asOther.status)
+  ok('stripe/exactly-one-customer-is-current', (await customersOf(admin.token)).filter((c) => c.current).length === 1, JSON.stringify(await customersOf(admin.token)))
   const cancelA = await webhook('customer.subscription.deleted', { id: `sub_${member3.username}_a`, customer: cusA })
   assertEq('stripe/cancel-first-accepted', 200, cancelA.status)
   const viewOne = await view(member3.token)
   ok('stripe/one-live-subscription-still-counts', viewOne.has_subscription === true, JSON.stringify(viewOne))
+  // After A's cancellation, B (the one still subscribed) is current.
+  const afterCancelA = await customersOf(admin.token)
+  assertEq('stripe/current-follows-the-live-subscription', cusB, afterCancelA.find((c) => c.current)?.customer_id, JSON.stringify(afterCancelA))
   const cancelB = await webhook('customer.subscription.deleted', { id: `sub_${member3.username}_b`, customer: cusB })
   assertEq('stripe/cancel-second-accepted', 200, cancelB.status)
   const viewNone = await view(member3.token)

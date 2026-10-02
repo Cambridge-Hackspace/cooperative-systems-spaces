@@ -65,6 +65,19 @@ pub struct Webhook {
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Delivery envelope (#87): one of [`webhook_format`]. Last field for
+    /// the positional-Queryable reason the User model documents.
+    pub format: String,
+}
+
+/// The delivery envelopes a webhook may ask for. Held to the `format` CHECK
+/// in the migration by `checks/tests/alert_severity_vocab_matches.rs`.
+pub mod webhook_format {
+    /// The audit event as JSON, HMAC-signed. The default.
+    pub const JSON: &str = "json";
+    /// A Discord incoming-webhook message: `content` plus one embed.
+    pub const DISCORD: &str = "discord";
+    pub const ALL: [&str; 2] = [JSON, DISCORD];
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -76,6 +89,7 @@ pub struct NewWebhook {
     pub enabled: bool,
     pub signing_secret: String,
     pub created_by: Option<Uuid>,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, AsChangeset)]
@@ -86,6 +100,7 @@ pub struct UpdateWebhook {
     pub url: Option<String>,
     pub enabled: Option<bool>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub format: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

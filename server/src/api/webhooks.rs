@@ -78,6 +78,8 @@ pub struct WebhookResponse {
     /// category. Matched against the event's classification at dispatch.
     pub class_subscriptions: Vec<ClassSubscription>,
     pub auth_header_ids: Vec<Uuid>,
+    /// Delivery envelope: `json` (the signed audit event) or `discord`.
+    pub format: String,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
 }
@@ -101,6 +103,8 @@ pub struct CreateWebhookRequest {
     pub class_subscriptions: Vec<ClassSubscription>,
     #[serde(default)]
     pub auth_header_ids: Vec<Uuid>,
+    /// `json` (default) or `discord`.
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,6 +118,8 @@ pub struct UpdateWebhookRequest {
     pub class_subscriptions: Option<Vec<ClassSubscription>>,
     /// When present, replaces the full set of linked auth headers.
     pub auth_header_ids: Option<Vec<Uuid>>,
+    /// `json` or `discord`.
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +203,20 @@ fn validate_class_subscriptions(
         ));
     }
     Ok(out)
+}
+
+/// The delivery envelope must be one the dispatcher can render.
+fn validate_format(format: Option<&str>) -> Result<String, ApiError> {
+    use crate::models::webhook_format;
+    let f = format.unwrap_or(webhook_format::JSON).trim();
+    if webhook_format::ALL.contains(&f) {
+        Ok(f.to_string())
+    } else {
+        Err(ApiError::BadRequest(format!(
+            "unknown format {f:?}; one of {}",
+            webhook_format::ALL.join(", ")
+        )))
+    }
 }
 
 fn validate_event_types(event_types: &[String]) -> Result<(), ApiError> {
@@ -318,6 +338,7 @@ fn to_webhook_response(state: &AppState, webhook: Webhook) -> Result<WebhookResp
         event_types,
         class_subscriptions,
         auth_header_ids,
+        format: webhook.format,
         created_at: webhook.created_at,
         updated_at: webhook.updated_at,
     })
@@ -488,6 +509,7 @@ async fn create_webhook(
     validate_url(&req.url)?;
     validate_event_types(&req.event_types)?;
     let class_subs = validate_class_subscriptions(&req.class_subscriptions)?;
+    let format = validate_format(req.format.as_deref())?;
 
     let new_webhook = NewWebhook {
         name: req.name,
@@ -495,6 +517,7 @@ async fn create_webhook(
         enabled: req.enabled.unwrap_or(true),
         signing_secret: generate_signing_secret(),
         created_by: Some(admin.0.id),
+        format,
     };
 
     let webhook = state
@@ -557,11 +580,16 @@ async fn update_webhook(
         None => None,
     };
 
+    let format = match req.format.as_deref() {
+        Some(f) => Some(validate_format(Some(f))?),
+        None => None,
+    };
     let changes = UpdateWebhook {
         name: req.name,
         url: req.url,
         enabled: req.enabled,
         updated_at: Some(Utc::now()),
+        format,
     };
 
     let webhook = state.db.update_webhook(
@@ -618,7 +646,7 @@ async fn test_webhook(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let webhook = state.db.get_webhook(id)?;
-    let payload = crate::webhooks::test_payload();
+    let payload = crate::webhooks::test_payload_for(&webhook.format);
 
     match state
         .webhook_dispatcher
