@@ -74,9 +74,20 @@ pub struct WebhookResponse {
     /// Per-webhook HMAC secret; shown to admins so they can verify signatures.
     pub signing_secret: String,
     pub event_types: Vec<String>,
+    /// Subscriptions by class (#87): a severity floor, optionally within one
+    /// category. Matched against the event's classification at dispatch.
+    pub class_subscriptions: Vec<ClassSubscription>,
     pub auth_header_ids: Vec<Uuid>,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
+}
+
+/// One class subscription on the wire. `category` absent = every category.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClassSubscription {
+    #[serde(default)]
+    pub category: Option<String>,
+    pub min_severity: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +97,8 @@ pub struct CreateWebhookRequest {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub event_types: Vec<String>,
+    #[serde(default)]
+    pub class_subscriptions: Vec<ClassSubscription>,
     #[serde(default)]
     pub auth_header_ids: Vec<Uuid>,
 }
@@ -97,6 +110,8 @@ pub struct UpdateWebhookRequest {
     pub enabled: Option<bool>,
     /// When present, replaces the full set of subscribed event types.
     pub event_types: Option<Vec<String>>,
+    /// When present, replaces the full set of class subscriptions.
+    pub class_subscriptions: Option<Vec<ClassSubscription>>,
     /// When present, replaces the full set of linked auth headers.
     pub auth_header_ids: Option<Vec<Uuid>>,
 }
@@ -153,6 +168,37 @@ fn valid_event_types() -> HashSet<&'static str> {
 
 /// Reject unknown event types so a webhook can't subscribe to something that
 /// will never fire.
+/// A class subscription must name a known severity and, if it names a
+/// category, a known one -- an unknown value would never match anything and
+/// the operator would believe they were subscribed.
+fn validate_class_subscriptions(
+    subs: &[ClassSubscription],
+) -> Result<Vec<(Option<String>, String)>, ApiError> {
+    let mut out = Vec::with_capacity(subs.len());
+    for s in subs {
+        let sev = crate::models::Severity::parse(&s.min_severity).ok_or_else(|| {
+            ApiError::BadRequest(format!("unknown min_severity: {}", s.min_severity))
+        })?;
+        let cat = match s
+            .category
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        {
+            None => None,
+            Some(c) => Some(
+                crate::models::Category::parse(c)
+                    .ok_or_else(|| ApiError::BadRequest(format!("unknown category: {c}")))?,
+            ),
+        };
+        out.push((
+            cat.map(|c| c.as_str().to_string()),
+            sev.as_str().to_string(),
+        ));
+    }
+    Ok(out)
+}
+
 fn validate_event_types(event_types: &[String]) -> Result<(), ApiError> {
     let valid = valid_event_types();
     for et in event_types {
@@ -253,6 +299,15 @@ fn humanize(value: &str) -> String {
 
 fn to_webhook_response(state: &AppState, webhook: Webhook) -> Result<WebhookResponse, ApiError> {
     let event_types = state.db.get_webhook_event_types(webhook.id)?;
+    let class_subscriptions = state
+        .db
+        .get_webhook_class_subscriptions(webhook.id)?
+        .into_iter()
+        .map(|c| ClassSubscription {
+            category: c.category,
+            min_severity: c.min_severity,
+        })
+        .collect();
     let auth_header_ids = state.db.get_webhook_auth_header_ids(webhook.id)?;
     Ok(WebhookResponse {
         id: webhook.id,
@@ -261,6 +316,7 @@ fn to_webhook_response(state: &AppState, webhook: Webhook) -> Result<WebhookResp
         enabled: webhook.enabled,
         signing_secret: webhook.signing_secret,
         event_types,
+        class_subscriptions,
         auth_header_ids,
         created_at: webhook.created_at,
         updated_at: webhook.updated_at,
@@ -431,6 +487,7 @@ async fn create_webhook(
     }
     validate_url(&req.url)?;
     validate_event_types(&req.event_types)?;
+    let class_subs = validate_class_subscriptions(&req.class_subscriptions)?;
 
     let new_webhook = NewWebhook {
         name: req.name,
@@ -443,6 +500,9 @@ async fn create_webhook(
     let webhook = state
         .db
         .create_webhook(&new_webhook, &req.event_types, &req.auth_header_ids)?;
+    state
+        .db
+        .replace_webhook_class_subscriptions(webhook.id, &class_subs)?;
 
     audit(
         &state,
@@ -492,6 +552,10 @@ async fn update_webhook(
     if let Some(events) = &req.event_types {
         validate_event_types(events)?;
     }
+    let class_subs = match &req.class_subscriptions {
+        Some(subs) => Some(validate_class_subscriptions(subs)?),
+        None => None,
+    };
 
     let changes = UpdateWebhook {
         name: req.name,
@@ -506,6 +570,9 @@ async fn update_webhook(
         req.event_types.as_deref(),
         req.auth_header_ids.as_deref(),
     )?;
+    if let Some(subs) = &class_subs {
+        state.db.replace_webhook_class_subscriptions(id, subs)?;
+    }
 
     audit(
         &state,

@@ -41,7 +41,11 @@ const mocks = vi.hoisted(() => ({
   updateAuthHeader: vi.fn(),
   deleteAuthHeader: vi.fn(),
 }))
-vi.mock('@/utils/api', () => ({ webhooksApi: mocks }))
+const classification = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/api', () => ({
+  webhooksApi: mocks,
+  alertsApi: { classification },
+}))
 
 import WebhookManagement from '@/components/WebhookManagement.vue'
 import type { Webhook, WebhookAuthHeader, WebhookDelivery, WebhookEventType } from '@/types'
@@ -59,6 +63,7 @@ function webhook(over: Partial<Webhook> = {}): Webhook {
     enabled: true,
     signing_secret: 'sec',
     event_types: ['user_login'],
+    class_subscriptions: [],
     auth_header_ids: [],
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
@@ -260,6 +265,37 @@ describe('creating and editing a webhook', () => {
     expect((mocks.createWebhook.mock.calls[0][0] as { event_types: string[] }).event_types).toEqual(
       EVENT_TYPES.map((e) => e.value)
     )
+  })
+
+  it('sends a class subscription alongside the event types (#87)', async () => {
+    classification.mockResolvedValue({
+      success: true,
+      data: {
+        categories: ['user', 'bypass'],
+        severities: ['info', 'notice', 'warning', 'critical'],
+        events: {},
+      },
+    })
+    const w = await page()
+    await openNewWebhook(w)
+    await w
+      .findAll('.modal-box a')
+      .find((a) => a.text() === 'Add')
+      ?.trigger('click')
+    await nextTick()
+    const row = w.find('[data-class-row="0"]')
+    expect(row.exists()).toBe(true)
+    await row.findAll('select')[0].setValue('bypass')
+    await row.findAll('select')[1].setValue('critical')
+    await modalInputs(w)[0].setValue('Pager')
+    await modalInputs(w)[1].setValue('https://example.org/page')
+    await buttonNamed(w, 'Create').trigger('click')
+    await flushPromises()
+
+    const sent = mocks.createWebhook.mock.calls[0][0] as {
+      class_subscriptions: { category: string | null; min_severity: string }[]
+    }
+    expect(sent.class_subscriptions).toEqual([{ category: 'bypass', min_severity: 'critical' }])
   })
 
   it('loads an existing webhook into the form and updates rather than creates', async () => {

@@ -187,6 +187,20 @@ async fn main() -> Result<(), anyhow::Error> {
     // finish is tracked so the stop path can wait for it (#102).
     let shutdown = css_server::shutdown::Shutdown::new();
 
+    // Alert heartbeat (#87): hourly check, beats when the last recorded beat
+    // is older than the configured interval. Persisted schedule, so restarts
+    // neither skip nor duplicate a beat.
+    let alert_heartbeat = Arc::new(css_server::alerts::HeartbeatService::new(
+        db_manager.clone(),
+        audit_logger.clone(),
+        app_config.alerts.heartbeat_interval_secs,
+    ));
+    tokio::spawn(alert_heartbeat.clone().ticker(shutdown.clone()));
+    info!(
+        "Alert heartbeat configured (every {}s; 0 = off)",
+        app_config.alerts.heartbeat_interval_secs
+    );
+
     // Initialize pages service
     info!("Initializing pages service...");
     let pages_service = Arc::new(tokio::sync::RwLock::new(
@@ -476,6 +490,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config_manager,
         db: db_manager,
         audit_logger,
+        alert_heartbeat,
         throttle_service,
         recaptcha_service,
         mail_service,

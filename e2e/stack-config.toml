@@ -427,6 +427,9 @@ session_ttl_secs = 14400
 # production defaults (90s silence, 30s sweep). A freshly registered device that
 # has never sent a heartbeat is silent by definition, which is what the stage
 # uses to provoke the sweep.
+[alerts]
+heartbeat_interval_secs = 604800
+
 [bypass]
 module_silence_secs = 1
 liveness_sweep_secs = 2

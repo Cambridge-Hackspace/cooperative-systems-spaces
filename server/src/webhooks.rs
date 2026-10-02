@@ -17,12 +17,14 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::json;
 use sha2::Sha256;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::config::ConfigManager;
 use crate::database::DatabaseManager;
-use crate::models::{AuditLog, NewWebhookDelivery, Webhook, WebhookAuthHeader};
+use crate::models::{
+    AuditEventType, AuditLog, NewWebhookDelivery, Severity, Webhook, WebhookAuthHeader,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -128,7 +130,7 @@ impl WebhookDispatcher {
 
     /// Look up matching webhooks for an audit event and deliver to each.
     async fn handle_event(&self, event: AuditLog) {
-        let webhooks = match self.db.get_enabled_webhooks_for_event(&event.event_type) {
+        let mut webhooks = match self.db.get_enabled_webhooks_for_event(&event.event_type) {
             Ok(w) => w,
             Err(e) => {
                 error!(
@@ -138,6 +140,33 @@ impl WebhookDispatcher {
                 return;
             }
         };
+        // #87: class subscriptions, matched against the Rust classification
+        // of THIS event, so a subscription to "critical" delivers a critical
+        // event type that did not exist when it was written. Deduplicated by
+        // webhook id so a hook subscribed both ways is delivered once.
+        if let Some(kind) = AuditEventType::parse(&event.event_type) {
+            let at_or_below: Vec<String> = Severity::ALL
+                .iter()
+                .filter(|s| **s <= kind.severity())
+                .map(|s| s.as_str().to_string())
+                .collect();
+            match self
+                .db
+                .get_enabled_webhooks_for_class(kind.category().as_str(), &at_or_below)
+            {
+                Ok(by_class) => {
+                    for wh in by_class {
+                        if !webhooks.iter().any(|w| w.id == wh.id) {
+                            webhooks.push(wh);
+                        }
+                    }
+                }
+                Err(e) => error!(
+                    "Failed to load class-subscribed webhooks for '{}': {}",
+                    event.event_type, e
+                ),
+            }
+        }
 
         if webhooks.is_empty() {
             return;
@@ -182,7 +211,7 @@ impl WebhookDispatcher {
         let (host, resolved) = match resolve_and_screen(&webhook.url).await {
             Ok(v) => v,
             Err(reason) => {
-                self.record(NewWebhookDelivery {
+                let _ = self.record(NewWebhookDelivery {
                     webhook_id: webhook.id,
                     audit_log_id,
                     event_type: event_type.to_string(),
@@ -240,7 +269,7 @@ impl WebhookDispatcher {
                 Err(e) => (false, None, None, Some(e.to_string())),
             };
 
-            self.record(NewWebhookDelivery {
+            let still_exists = self.record(NewWebhookDelivery {
                 webhook_id: webhook.id,
                 audit_log_id,
                 event_type: event_type.to_string(),
@@ -251,6 +280,9 @@ impl WebhookDispatcher {
                 error: error.clone(),
                 request_payload: Some(payload.clone()),
             });
+            if !still_exists {
+                return Err("webhook deleted while a delivery was in flight".to_string());
+            }
 
             if success {
                 return Ok(());
@@ -305,9 +337,27 @@ impl WebhookDispatcher {
         headers
     }
 
-    fn record(&self, delivery: NewWebhookDelivery) {
-        if let Err(e) = self.db.record_webhook_delivery(&delivery) {
-            error!("Failed to record webhook delivery: {}", e);
+    /// Persist one attempt. Returns `false` when the webhook no longer exists
+    /// -- an administrator deleted it while a retry was in flight, which the
+    /// foreign key reports -- so the caller stops retrying rather than
+    /// logging an error per attempt for a hook that is gone on purpose.
+    fn record(&self, delivery: NewWebhookDelivery) -> bool {
+        match self.db.record_webhook_delivery(&delivery) {
+            Ok(_) => true,
+            Err(crate::database::DatabaseError::Diesel(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::ForeignKeyViolation,
+                _,
+            ))) => {
+                info!(
+                    "webhook {} was deleted while a delivery was in flight; dropping it",
+                    delivery.webhook_id
+                );
+                false
+            }
+            Err(e) => {
+                error!("Failed to record webhook delivery: {}", e);
+                true
+            }
         }
     }
 }

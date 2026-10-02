@@ -41,6 +41,9 @@
             <li v-if="authStore.isAuthenticated && canAccessStaff">
               <router-link to="/users">Users</router-link>
             </li>
+            <li v-if="authStore.isAuthenticated && canSeeAlerts">
+              <router-link to="/alerts">Alerts</router-link>
+            </li>
             <li v-if="authStore.isAuthenticated && canAccessAdmin">
               <details>
                 <summary>Admin</summary>
@@ -115,6 +118,11 @@
           <li v-if="authStore.isAuthenticated && canAccessStaff">
             <router-link to="/users" :class="{ active: $route.name === 'users' }"
               >Users</router-link
+            >
+          </li>
+          <li v-if="authStore.isAuthenticated && canSeeAlerts">
+            <router-link to="/alerts" :class="{ active: $route.name === 'alerts' }"
+              >Alerts</router-link
             >
           </li>
           <li v-if="authStore.isAuthenticated && canAccessAdmin">
@@ -360,6 +368,9 @@ const canAccessAdmin = computed(() => {
   const user = authStore.user
   return user && user.role === UserRoleEnum.Admin
 })
+
+// A permission, not a role (#87): whoever holds alerts.view sees the feed.
+const canSeeAlerts = computed(() => authStore.hasPermission('alerts.view'))
 
 // Pages visibility
 // Restored after the merge: dev's nav rework dropped the Pages link and its

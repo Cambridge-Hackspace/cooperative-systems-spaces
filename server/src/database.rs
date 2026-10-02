@@ -3875,6 +3875,83 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// A webhook's class subscriptions (#87).
+    pub fn get_webhook_class_subscriptions(
+        &self,
+        webhook_id_arg: uuid::Uuid,
+    ) -> Result<Vec<crate::models::WebhookClassSubscription>, DatabaseError> {
+        use crate::schema::webhook_class_subscriptions::dsl::*;
+        let mut conn = self.get_connection()?;
+        webhook_class_subscriptions
+            .filter(webhook_id.eq(webhook_id_arg))
+            .order(created_at.asc())
+            .select(crate::models::WebhookClassSubscription::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Replace a webhook's class subscriptions (#87). `(category, min_severity)`
+    /// pairs, already validated against the Rust vocabularies by the caller.
+    pub fn replace_webhook_class_subscriptions(
+        &self,
+        webhook_id_arg: uuid::Uuid,
+        subs: &[(Option<String>, String)],
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::webhook_class_subscriptions;
+        let mut conn = self.get_connection()?;
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::delete(
+                webhook_class_subscriptions::table
+                    .filter(webhook_class_subscriptions::webhook_id.eq(webhook_id_arg)),
+            )
+            .execute(conn)?;
+            let rows: Vec<crate::models::NewWebhookClassSubscription> = subs
+                .iter()
+                .map(|(cat, sev)| crate::models::NewWebhookClassSubscription {
+                    webhook_id: webhook_id_arg,
+                    category: cat.clone(),
+                    min_severity: sev.clone(),
+                })
+                .collect();
+            if !rows.is_empty() {
+                diesel::insert_into(webhook_class_subscriptions::table)
+                    .values(&rows)
+                    .execute(conn)?;
+            }
+            Ok(())
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Enabled webhooks whose class subscriptions match an event of
+    /// `category_arg` whose severity is one of `at_or_below` -- the caller
+    /// passes every severity string at or below the event's, so the floor
+    /// comparison stays in Rust's vocabulary rather than in SQL ordering.
+    pub fn get_enabled_webhooks_for_class(
+        &self,
+        category_arg: &str,
+        at_or_below: &[String],
+    ) -> Result<Vec<crate::models::Webhook>, DatabaseError> {
+        use crate::schema::{webhook_class_subscriptions, webhooks};
+        let mut conn = self.get_connection()?;
+        webhooks::table
+            .inner_join(
+                webhook_class_subscriptions::table
+                    .on(webhook_class_subscriptions::webhook_id.eq(webhooks::id)),
+            )
+            .filter(webhooks::enabled.eq(true))
+            .filter(
+                webhook_class_subscriptions::category
+                    .is_null()
+                    .or(webhook_class_subscriptions::category.eq(category_arg)),
+            )
+            .filter(webhook_class_subscriptions::min_severity.eq_any(at_or_below))
+            .select(crate::models::Webhook::as_select())
+            .distinct()
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// IDs of auth headers linked to a webhook.
     pub fn get_webhook_auth_header_ids(
         &self,
@@ -6974,5 +7051,230 @@ mod profile_field_injection_tests {
             !matches!(ok_err, DatabaseError::Other(ref m) if m.contains("invalid profile field name")),
             "a valid identifier was wrongly rejected by the guard: {ok_err:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Alerts (#87): audit rows at a severity, with acknowledgements beside them
+// ---------------------------------------------------------------------------
+
+/// Filters for the alert feed. `types` is the set of event types at or above
+/// the requested severity (and, optionally, within one category), computed
+/// by the caller from the Rust classification -- the database holds no copy.
+#[derive(Debug, Clone)]
+pub struct AlertFilter {
+    pub types: Vec<String>,
+    /// `Some(false)` = unacknowledged only, `Some(true)` = acknowledged only.
+    pub acknowledged: Option<bool>,
+}
+
+impl DatabaseManager {
+    /// One page of alerts, newest first, each with its acknowledgement if any.
+    pub fn list_alerts(
+        &self,
+        filter: &AlertFilter,
+        limit: i64,
+        offset: i64,
+    ) -> Result<
+        Vec<(
+            crate::models::AuditLog,
+            Option<crate::models::AlertAcknowledgement>,
+        )>,
+        DatabaseError,
+    > {
+        use crate::schema::{alert_acknowledgements, audit_logs};
+        let mut conn = self.get_connection()?;
+        if filter.types.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut query = audit_logs::table
+            .left_join(alert_acknowledgements::table)
+            .filter(audit_logs::event_type.eq_any(&filter.types))
+            .into_boxed();
+        match filter.acknowledged {
+            Some(true) => query = query.filter(alert_acknowledgements::audit_log_id.is_not_null()),
+            Some(false) => query = query.filter(alert_acknowledgements::audit_log_id.is_null()),
+            None => {}
+        }
+        query
+            .order(audit_logs::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .select((
+                crate::models::AuditLog::as_select(),
+                Option::<crate::models::AlertAcknowledgement>::as_select(),
+            ))
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// How many alerts match the filter -- a real total for the page envelope.
+    pub fn count_alerts(&self, filter: &AlertFilter) -> Result<i64, DatabaseError> {
+        use crate::schema::{alert_acknowledgements, audit_logs};
+        let mut conn = self.get_connection()?;
+        if filter.types.is_empty() {
+            return Ok(0);
+        }
+        let mut query = audit_logs::table
+            .left_join(alert_acknowledgements::table)
+            .filter(audit_logs::event_type.eq_any(&filter.types))
+            .into_boxed();
+        match filter.acknowledged {
+            Some(true) => query = query.filter(alert_acknowledgements::audit_log_id.is_not_null()),
+            Some(false) => query = query.filter(alert_acknowledgements::audit_log_id.is_null()),
+            None => {}
+        }
+        query
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Unacknowledged alerts grouped by event type, for the summary by
+    /// severity (the caller folds types into severities).
+    pub fn unacknowledged_alert_counts(
+        &self,
+        types: &[String],
+    ) -> Result<Vec<(String, i64)>, DatabaseError> {
+        use crate::schema::{alert_acknowledgements, audit_logs};
+        use diesel::dsl::count_star;
+        let mut conn = self.get_connection()?;
+        if types.is_empty() {
+            return Ok(Vec::new());
+        }
+        audit_logs::table
+            .left_join(alert_acknowledgements::table)
+            .filter(audit_logs::event_type.eq_any(types))
+            .filter(alert_acknowledgements::audit_log_id.is_null())
+            .group_by(audit_logs::event_type)
+            .select((audit_logs::event_type, count_star()))
+            .load::<(String, i64)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_audit_log(
+        &self,
+        log_id: uuid::Uuid,
+    ) -> Result<Option<crate::models::AuditLog>, DatabaseError> {
+        use crate::schema::audit_logs;
+        let mut conn = self.get_connection()?;
+        audit_logs::table
+            .find(log_id)
+            .select(crate::models::AuditLog::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn get_alert_acknowledgement(
+        &self,
+        log_id: uuid::Uuid,
+    ) -> Result<Option<crate::models::AlertAcknowledgement>, DatabaseError> {
+        use crate::schema::alert_acknowledgements::dsl::*;
+        let mut conn = self.get_connection()?;
+        alert_acknowledgements
+            .find(log_id)
+            .select(crate::models::AlertAcknowledgement::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Acknowledge one alert. Idempotent: a second acknowledgement changes
+    /// nothing and reports `false`, so the caller can skip the audit event.
+    pub fn acknowledge_alert(
+        &self,
+        log_id: uuid::Uuid,
+        by: uuid::Uuid,
+        note_text: Option<&str>,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::alert_acknowledgements::dsl::*;
+        let mut conn = self.get_connection()?;
+        let inserted = diesel::insert_into(alert_acknowledgements)
+            .values(crate::models::NewAlertAcknowledgement {
+                audit_log_id: log_id,
+                user_id: Some(by),
+                note: note_text.map(|n| n.to_string()),
+            })
+            .on_conflict(audit_log_id)
+            .do_nothing()
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(inserted == 1)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Alert heartbeat runs (#87)
+// ---------------------------------------------------------------------------
+
+impl DatabaseManager {
+    pub fn latest_alert_heartbeat_run(
+        &self,
+    ) -> Result<Option<crate::models::AlertHeartbeatRun>, DatabaseError> {
+        use crate::schema::alert_heartbeat_runs::dsl::*;
+        let mut conn = self.get_connection()?;
+        alert_heartbeat_runs
+            .order(started_at.desc())
+            .select(crate::models::AlertHeartbeatRun::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn record_alert_heartbeat_run(
+        &self,
+        run: &crate::models::NewAlertHeartbeatRun,
+    ) -> Result<crate::models::AlertHeartbeatRun, DatabaseError> {
+        use crate::schema::alert_heartbeat_runs;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(alert_heartbeat_runs::table)
+            .values(run)
+            .returning(crate::models::AlertHeartbeatRun::as_returning())
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Audit rows of the given types created after `since` (all of them when
+    /// `since` is `None`).
+    pub fn count_audit_rows_since(
+        &self,
+        types: &[String],
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<i64, DatabaseError> {
+        use crate::schema::audit_logs;
+        let mut conn = self.get_connection()?;
+        if types.is_empty() {
+            return Ok(0);
+        }
+        let mut query = audit_logs::table
+            .filter(audit_logs::event_type.eq_any(types))
+            .into_boxed();
+        if let Some(t) = since {
+            query = query.filter(audit_logs::created_at.gt(t));
+        }
+        query
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Failed webhook delivery attempts after `since` (all when `None`).
+    pub fn count_failed_webhook_deliveries_since(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<i64, DatabaseError> {
+        use crate::schema::webhook_deliveries;
+        let mut conn = self.get_connection()?;
+        let mut query = webhook_deliveries::table
+            .filter(webhook_deliveries::success.eq(false))
+            .into_boxed();
+        if let Some(t) = since {
+            query = query.filter(webhook_deliveries::created_at.gt(t));
+        }
+        query
+            .count()
+            .get_result(&mut conn)
+            .map_err(DatabaseError::Diesel)
     }
 }

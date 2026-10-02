@@ -526,6 +526,39 @@ diesel::table! {
 }
 
 diesel::table! {
+    alert_heartbeat_runs (id) {
+        id -> Uuid,
+        started_at -> Timestamptz,
+        finished_at -> Timestamptz,
+        alerts_raised -> Int4,
+        unacknowledged -> Int4,
+        deliveries_failed -> Int4,
+        ok -> Bool,
+        error -> Nullable<Text>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    alert_acknowledgements (audit_log_id) {
+        audit_log_id -> Uuid,
+        user_id -> Nullable<Uuid>,
+        note -> Nullable<Text>,
+        acknowledged_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    webhook_class_subscriptions (id) {
+        id -> Uuid,
+        webhook_id -> Uuid,
+        category -> Nullable<Text>,
+        min_severity -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     user_merges (id) {
         id -> Uuid,
         survivor_id -> Nullable<Uuid>,
@@ -957,6 +990,9 @@ diesel::joinable!(email_verification_tokens -> user_emails (user_email_id));
 diesel::joinable!(user_emails -> users (user_id));
 diesel::joinable!(user_stripe_customers -> users (user_id));
 diesel::joinable!(user_merges -> users (survivor_id));
+diesel::joinable!(alert_acknowledgements -> audit_logs (audit_log_id));
+diesel::joinable!(alert_acknowledgements -> users (user_id));
+diesel::joinable!(webhook_class_subscriptions -> webhooks (webhook_id));
 
 diesel::joinable!(cmi5_courses -> users (imported_by));
 diesel::joinable!(cmi5_blocks -> cmi5_courses (course_id));
@@ -991,6 +1027,8 @@ diesel::joinable!(tool_usage_sessions -> tool_rate_tiers (tier_id));
 // manually in the ancestor helper, like places and cmi5_blocks.
 
 diesel::allow_tables_to_appear_in_same_query!(
+    alert_acknowledgements,
+    alert_heartbeat_runs,
     audit_event_types,
     audit_logs,
     groupsio_sync_runs,
@@ -1020,6 +1058,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_mfa_webauthn,
     user_emails,
     user_merges,
+    webhook_class_subscriptions,
     user_stripe_customers,
     user_tool_training,
     user_training_progress,

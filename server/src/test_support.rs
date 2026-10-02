@@ -109,6 +109,13 @@ pub async fn app_state() -> AppState {
         card_cipher: card_cipher.clone(),
         shutdown,
         audit_logger: AuditLogger::new(db.clone()),
+        // Interval 0: the ticker is never spawned here anyway, and `run` still
+        // works for a handler test that wants a beat.
+        alert_heartbeat: Arc::new(crate::alerts::HeartbeatService::new(
+            db.clone(),
+            AuditLogger::new(db.clone()),
+            0,
+        )),
         throttle_service: Arc::new(RegistrationThrottleService::new()),
         recaptcha_service: Arc::new(RecaptchaService::new(String::new())),
         // `test_config()` leaves `email.enabled` false, so no fixture can reach

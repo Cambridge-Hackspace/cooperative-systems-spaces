@@ -28,6 +28,7 @@
 use std::sync::Arc;
 
 pub mod access_engine;
+pub mod alerts;
 pub mod api;
 pub mod auth;
 pub mod bypass;
@@ -131,6 +132,9 @@ pub struct AppState {
     /// Metered tool-billing service (Phase 2). `None` when the module is
     /// disabled; the toolguard and admin paths check for it before running.
     pub tool_billing: Option<Arc<ToolBillingService>>,
+    /// The alert heartbeat (#87): always present; a zero interval only stops
+    /// the ticker, the admin "beat now" still works.
+    pub alert_heartbeat: Arc<crate::alerts::HeartbeatService>,
 }
 
 /// `GET /status` — the JSON liveness handler.

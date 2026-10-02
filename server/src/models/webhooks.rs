@@ -4,8 +4,8 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::schema::{
-    webhook_auth_headers, webhook_auth_links, webhook_deliveries, webhook_event_subscriptions,
-    webhooks,
+    webhook_auth_headers, webhook_auth_links, webhook_class_subscriptions, webhook_deliveries,
+    webhook_event_subscriptions, webhooks,
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +108,32 @@ pub struct WebhookEventSubscription {
 pub struct NewWebhookEventSubscription {
     pub webhook_id: Uuid,
     pub event_type: String,
+}
+
+// ---------------------------------------------------------------------------
+// webhook_class_subscriptions (#87)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Queryable, Selectable, Identifiable)]
+#[diesel(table_name = webhook_class_subscriptions)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct WebhookClassSubscription {
+    pub id: Uuid,
+    pub webhook_id: Uuid,
+    /// `None` = every category.
+    pub category: Option<String>,
+    /// A `Severity::as_str` value; the floor, inclusive.
+    pub min_severity: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = webhook_class_subscriptions)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewWebhookClassSubscription {
+    pub webhook_id: Uuid,
+    pub category: Option<String>,
+    pub min_severity: String,
 }
 
 // ---------------------------------------------------------------------------

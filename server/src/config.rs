@@ -286,6 +286,25 @@ pub struct MembershipConfig {
     pub plan_name: String,
 }
 
+/// `[alerts]` -- the alert feed (#87).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertsConfig {
+    /// How long between heartbeats, in seconds. A heartbeat is an
+    /// `alert_heartbeat` audit event (Notice) summarising the interval:
+    /// alerts raised, still unacknowledged, webhook deliveries failed. Its
+    /// absence is the signal that the detector is dead. 0 disables it.
+    /// Default one week.
+    pub heartbeat_interval_secs: u64,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_secs: 604_800,
+        }
+    }
+}
+
 impl Default for MembershipConfig {
     fn default() -> Self {
         Self {
@@ -1499,6 +1518,10 @@ pub struct AppConfig {
     /// Bypass detection thresholds (#84)
     #[serde(default)]
     pub bypass: BypassConfig,
+    /// Alert feed settings (#87). `#[serde(default)]` so a config predating
+    /// the section still parses with a weekly heartbeat.
+    #[serde(default)]
+    pub alerts: AlertsConfig,
     /// cmi5 training-module configuration
     #[serde(default)]
     pub cmi5: Cmi5Config,
@@ -1538,6 +1561,7 @@ impl Default for AppConfig {
             place: PlaceConfig::default(),
             power: PowerConfig::default(),
             bypass: BypassConfig::default(),
+            alerts: AlertsConfig::default(),
             cmi5: Cmi5Config::default(),
             groupsio: GroupsioConfig::default(),
             membership: MembershipConfig::default(),

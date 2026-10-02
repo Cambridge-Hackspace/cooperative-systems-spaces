@@ -362,6 +362,28 @@ export const adminApi = {
   },
 }
 
+// Alerts (#87): the audit feed at notice-and-above, permission-gated.
+export const alertsApi = {
+  list(params: {
+    page?: number
+    per_page?: number
+    min_severity?: string
+    category?: string
+    acknowledged?: boolean
+  }) {
+    return apiClient.get<import('@/types').Paginated<import('@/types').Alert>>('/alerts', params)
+  },
+  summary() {
+    return apiClient.get<import('@/types').AlertSummary>('/alerts/summary')
+  },
+  classification() {
+    return apiClient.get<import('@/types').AlertClassification>('/alerts/classification')
+  },
+  acknowledge(id: string, note?: string) {
+    return apiClient.post<import('@/types').Alert>(`/alerts/${id}/acknowledge`, { note })
+  },
+}
+
 // Home links API (admin CRUD + public list)
 export const homeLinksApi = {
   list() {

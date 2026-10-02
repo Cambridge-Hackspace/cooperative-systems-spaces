@@ -380,9 +380,12 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // 209 = 207 + 2 user-merge routes (#118, Admin): preview and commit under
     // /api/admin/users/{id}/merge.
     // 210 = 209 + the duplicate-candidates report (#38/#118, Admin).
-    assert_eq!(jwt_routes, 210, "JWT-authenticated routes");
+    // 214 = 210 + the alert feed (#87, Auth + alerts.view / alerts.acknowledge
+    // checked in the handler): list, summary, classification, acknowledge.
+    // 215 = 214 + the admin "heartbeat now" (#87).
+    assert_eq!(jwt_routes, 215, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 210 * 7 + (10 + 6) * 3);
+    assert_eq!(asserted_pairs(), 215 * 7 + (10 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
