@@ -44,6 +44,13 @@ export interface PublicDoorsConfig {
 
 export interface PublicCalendarConfig {
   enabled: boolean
+  /**
+   * The space's timezone, as an IANA name. Event times are rendered in it
+   * rather than in the viewer's own zone -- the events happen in one building.
+   * Optional because an older server does not send it; `siteTimezone()` falls
+   * back to the viewer's zone, which is what the page did before.
+   */
+  timezone?: string
 }
 
 export interface PublicToolGuardConfig {
@@ -208,6 +215,16 @@ export const useConfigStore = defineStore('config', () => {
     return !!config.value?.calendar?.enabled
   }
 
+  /**
+   * The timezone to render event times in: the space's own, or the viewer's
+   * when the server has not said (an older build, or config not loaded yet).
+   */
+  function siteTimezone(): string {
+    return (
+      config.value?.calendar?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    )
+  }
+
   function toolguardEnabled(): boolean {
     return !!config.value?.toolguard?.enabled
   }
@@ -264,6 +281,7 @@ export const useConfigStore = defineStore('config', () => {
     shouldShowSiteOnHomePage,
     doorsEnabled,
     calendarEnabled,
+    siteTimezone,
     toolguardEnabled,
     groupsioEnabled,
     membershipEnabled,

@@ -178,7 +178,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize calendar service
     info!("Initializing calendar service...");
     let calendar_service = Arc::new(tokio::sync::RwLock::new(CalendarService::new(
-        app_config.calendar.clone(),
+        config_manager.clone(),
     )));
     info!("Calendar service initialized");
 

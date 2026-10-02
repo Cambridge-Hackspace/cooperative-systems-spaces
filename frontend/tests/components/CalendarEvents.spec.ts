@@ -6,10 +6,22 @@
 // feeds — `server/src/calendar.rs` fetches whatever `source.ical_link` points
 // at. The description used to be rendered with `v-html`, which meant anybody
 // who could put an event in a subscribed calendar could put markup, and
-// therefore script, into every viewer's page. The fix was one attribute; the
-// test for it is the only thing that stops the attribute coming back, and it
-// asserts against the hostile corpus the rest of the suite uses rather than
-// against one hand-written payload.
+// therefore script, into every viewer's page.
+//
+// #96 split that field in two, because interpolating it was not free either:
+// Google Calendar puts HTML in a DESCRIPTION, so members were reading tags and
+// losing the links inside them. The component now renders `description_html`
+// — which the server built by reducing the feed's markup to Markdown and
+// re-rendering it with raw HTML off — and still never renders `description` as
+// markup. Both halves are asserted below, the second against the hostile
+// corpus the rest of the suite uses rather than one hand-written payload.
+//
+// WHAT THE FIRST HALF DOES NOT PROVE: that `description_html` is safe. It is
+// v-html'd here deliberately, so this component cannot be the thing that
+// decides. `server/src/calendar/description.rs` carries that claim, in tests
+// that feed it script tags and `javascript:` destinations, and
+// `tests/structure/markdown-rendering.spec.ts` asserts nobody has switched the
+// renderer's passthrough on.
 //
 // SECOND, IT HAS FOUR MUTUALLY EXCLUSIVE STATES chained on a v-if. Loading,
 // error, empty and populated. Three of the four are states a person only sees
@@ -31,6 +43,7 @@ import corpus from '../../../e2e/corpus/hostile.json'
 interface Event {
   title: string
   description?: string
+  description_html?: string
   start: string
   end?: string
   location?: string
@@ -52,7 +65,7 @@ function event(overrides: Partial<Event> = {}): Event {
 }
 
 /** Mount with `fetch` answering once with `events`, and wait for the render. */
-async function mountWith(events: Event[] | { status: number }) {
+async function mountWith(events: Event[] | { status: number }, timezone?: string) {
   // The parameter is declared even though the body ignores it: `vi.fn(async () => ..)`
   // gives the mock an empty argument tuple, so `calls[n][0]` is a type error --
   // and vue-tsc checks this directory as part of `npm run build`. Naming it also
@@ -69,7 +82,7 @@ async function mountWith(events: Event[] | { status: number }) {
   })
   vi.stubGlobal('fetch', fetchMock)
 
-  const wrapper = mount(CalendarEvents)
+  const wrapper = mount(CalendarEvents, { props: { timezone } })
   await flushPromises()
   return { wrapper, fetchMock }
 }
@@ -121,6 +134,31 @@ describe('the description is text, never markup', () => {
   it('renders no description element when the event has none', async () => {
     const { wrapper } = await mountWith([event()])
     expect(wrapper.find('.event-description').exists()).toBe(false)
+  })
+
+  it('prefers the rendered form and does not also show the raw one', async () => {
+    // Both fields arrive on every event the current server produces. Showing
+    // both would print the feed's tags underneath the rendered copy.
+    const { wrapper } = await mountWith([
+      event({
+        description: 'Review <a href="https://example.org/pre">the reading</a> first.',
+        description_html: '<p>Review <a href="https://example.org/pre">the reading</a> first.</p>',
+      }),
+    ])
+    const descriptions = wrapper.findAll('.event-description')
+    expect(descriptions).toHaveLength(1)
+    const link = descriptions[0]?.find('a')
+    expect(link?.attributes('href')).toBe('https://example.org/pre')
+    expect(descriptions[0]?.text()).not.toContain('<a href')
+  })
+
+  it('renders the markup in the rendered form, which is the point of it', async () => {
+    const { wrapper } = await mountWith([
+      event({ description_html: '<p>one<br>two</p><ul><li>bring wood</li></ul>' }),
+    ])
+    const description = wrapper.find('.event-description')
+    expect(description.find('li').text()).toBe('bring wood')
+    expect(description.findAll('br')).toHaveLength(1)
   })
 })
 
@@ -235,6 +273,47 @@ describe('the event list', () => {
     const { wrapper } = await mountWith([event({ location: 'Bay 3, behind the metal shop' })])
     const location = wrapper.find('.event-location')
     expect(location.attributes('title')).toBe('Bay 3, behind the metal shop')
+  })
+})
+
+describe("times are the space's, not the viewer's", () => {
+  // The live defect: `DTSTART;TZID=America/New_York:20261006T183000` was read
+  // as UTC by the server and then rendered in the browser's zone, so a 6:30pm
+  // class showed as 2:30pm. The server half is fixed in
+  // server/src/calendar/ics.rs; this is the other half.
+  const NY = 'America/New_York'
+
+  it('renders the clock time in the zone it is given', async () => {
+    const { wrapper } = await mountWith(
+      [event({ start: '2026-10-06T22:30:00Z', end: '2026-10-07T02:00:00Z' })],
+      NY
+    )
+    const time = wrapper.find('.event-time').text()
+    expect(time).toContain('6:30 PM')
+    expect(time).toContain('10:00 PM')
+    // And says which zone, because "6:30 PM" alone is ambiguous to the reader
+    // who is not in the building.
+    expect(time).toContain('EDT')
+  })
+
+  it('dates the card in that zone too', async () => {
+    // 03:00Z on the 7th is the evening of the 6th in New York. A card dated
+    // from the UTC instant puts the event on the wrong day of the month.
+    const { wrapper } = await mountWith([event({ start: '2026-10-07T03:00:00Z' })], NY)
+    expect(wrapper.find('.event-day').text()).toBe('6')
+    expect(wrapper.find('.event-month').text()).toBe('OCT')
+  })
+
+  it('dates an all-day event on its own day', async () => {
+    // An all-day event is local midnight: 2026-10-09T04:00Z is the 9th in New
+    // York and the 9th is what it must say. Pinned to UTC midnight -- what the
+    // server used to send -- this card read "8".
+    const { wrapper } = await mountWith(
+      [event({ start: '2026-10-09T04:00:00Z', end: '2026-10-10T04:00:00Z', all_day: true })],
+      NY
+    )
+    expect(wrapper.find('.event-day').text()).toBe('9')
+    expect(wrapper.find('.event-time').text()).toBe('🕐 All Day')
   })
 })
 

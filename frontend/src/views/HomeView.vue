@@ -224,7 +224,7 @@
 
     <!-- Calendar Events Section -->
     <div class="mt-16">
-      <CalendarEvents />
+      <CalendarEvents :timezone="siteTimezone" />
     </div>
   </div>
 </template>
@@ -240,6 +240,8 @@ import type { DayOfWeek, HomeLink, HomeLinkAudience, Schedule } from '@/types'
 const authStore = useAuthStore()
 const configStore = useConfigStore()
 const siteName = computed(() => configStore.siteName())
+/** Event times belong to the building, not to whoever is reading the page. */
+const siteTimezone = computed(() => configStore.siteTimezone())
 
 /** Public schedules drive the "Hours today" panel. */
 const publicSchedules = ref<Schedule[]>([])

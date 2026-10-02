@@ -66,8 +66,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,pages,calendar,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,pages,calendar,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -995,6 +995,27 @@ stage_pages() {
 
   collect_server_log
   emit_junit pages "driver=pages.mjs"
+}
+
+# #96: the calendar endpoint's window and the public config's timezone. The
+# stack subscribes to no feed, so this stage asserts the wiring and the refusals
+# rather than any event; the driver's header says what that leaves uncovered.
+stage_calendar() {
+  cases_begin calendar
+  stack_paths
+
+  if ! server_ready; then
+    record_case "calendar/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit calendar
+    return 1
+  fi
+  record_case "calendar/stack-is-up" ok
+
+  run_node calendar.mjs >"${OUT}/logs/calendar.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit calendar "driver=calendar.mjs"
 }
 
 stage_cards() {
