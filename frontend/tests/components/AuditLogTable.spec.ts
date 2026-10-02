@@ -24,8 +24,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-const mocks = vi.hoisted(() => ({ getAuditLogs: vi.fn() }))
-vi.mock('@/utils/api', () => ({ adminApi: mocks }))
+const mocks = vi.hoisted(() => ({ getAuditLogs: vi.fn(), classification: vi.fn() }))
+vi.mock('@/utils/api', () => ({
+  adminApi: { getAuditLogs: mocks.getAuditLogs },
+  alertsApi: { classification: mocks.classification },
+}))
 
 import AuditLogTable from '@/components/AuditLogTable.vue'
 import type { AuditLog } from '@/types'
@@ -49,6 +52,21 @@ const page = (n: number) => Array.from({ length: n }, (_, i) => log({ id: `a${i}
 beforeEach(() => {
   mocks.getAuditLogs.mockReset()
   mocks.getAuditLogs.mockResolvedValue({ success: true, data: [log()] })
+  mocks.classification.mockReset()
+  // The server's classification (#87) decides the colour; this is the shape
+  // GET /api/alerts/classification answers with.
+  mocks.classification.mockResolvedValue({
+    success: true,
+    data: {
+      categories: ['user', 'door'],
+      severities: ['info', 'notice', 'warning', 'critical'],
+      events: {
+        failed_login_attempt: { category: 'user', severity: 'notice' },
+        unauthorized_power_detected: { category: 'bypass', severity: 'critical' },
+        door_unlocked_card: { category: 'door', severity: 'info' },
+      },
+    },
+  })
 })
 
 async function table(rows: AuditLog[] = [log()]) {
@@ -115,18 +133,26 @@ describe('a row as rendered', () => {
     )
   })
 
-  it('titles the event type and colors it', async () => {
-    const w = await table([log({ event_type: 'failed_login_attempt' })])
-    const badge = w.find('tbody .badge')
-    expect(badge.text()).toBe('Failed Login Attempt')
-    expect(badge.classes()).toContain('badge-error')
+  it('titles the event type and colors it by the server severity', async () => {
+    const w = await table([
+      log({ id: 'a1', event_type: 'failed_login_attempt' }),
+      log({ id: 'a2', event_type: 'unauthorized_power_detected' }),
+    ])
+    const badges = w.findAll('tbody .badge')
+    expect(badges[0].text()).toBe('Failed Login Attempt')
+    expect(badges[0].classes()).toContain('badge-info')
+    expect(badges[1].classes()).toContain('badge-error')
   })
 
-  it('falls back to a neutral badge for a type it has no color for', async () => {
-    const w = await table([log({ event_type: 'door_unlocked_card' })])
-    const badge = w.find('tbody .badge')
-    expect(badge.text()).toBe('Door Unlocked Card')
-    expect(badge.classes()).toContain('badge-ghost')
+  it('falls back to a neutral badge for an info-level or unclassified type', async () => {
+    const w = await table([
+      log({ id: 'a1', event_type: 'door_unlocked_card' }),
+      log({ id: 'a2', event_type: 'not_in_the_classification' }),
+    ])
+    const badges = w.findAll('tbody .badge')
+    expect(badges[0].text()).toBe('Door Unlocked Card')
+    expect(badges[0].classes()).toContain('badge-ghost')
+    expect(badges[1].classes()).toContain('badge-ghost')
   })
 
   it('marks an absent actor as System and an absent user with a dash', async () => {
@@ -233,7 +259,7 @@ describe('the event-type filter', () => {
   // transactional-email options came with six, so the ratchet there still reads
   // 57. An option added without a server variant would be caught by the other
   // file's first test instead.
-  it('offers twenty-eight of the event types the server can write', async () => {
+  it('offers thirty of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -257,8 +283,11 @@ describe('the event-type filter', () => {
         'address is where reset links go, so attaching one to an account is an ' +
         'access-control signal an operator must be able to isolate. To ' +
         'twenty-eight with user_merged (#118): a merge moves every record one ' +
-        'account held onto another, which is the kind of thing an audit is for.'
-    ).toHaveLength(28)
+        'account held onto another, which is the kind of thing an audit is for. ' +
+        'To twenty-nine with alert_acknowledged (#87): who looked at an alert is ' +
+        'the question the feed exists to answer, so it must be isolable here too. ' +
+        'To thirty with alert_heartbeat: "when did it last beat" is the whole point of it.'
+    ).toHaveLength(30)
   })
 
   it('titles every option it does offer', async () => {

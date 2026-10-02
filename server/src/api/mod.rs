@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod alerts;
 pub mod auth;
 pub mod calendar;
 pub mod cards;
@@ -38,6 +39,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/auth", auth::auth_routes())
         .nest("/users", users::user_routes())
         .nest("/admin", admin::admin_routes())
+        .nest("/alerts", alerts::routes())
         .nest("/profiles", profiles::profile_routes())
         .nest("/tools", tools::tools_routes())
         .nest("/training", training::training_router())

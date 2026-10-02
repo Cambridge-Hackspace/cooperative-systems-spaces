@@ -229,6 +229,37 @@
           >
         </div>
 
+        <div class="form-control mb-3" data-testid="class-subscriptions">
+          <label class="label">
+            <span class="label-text">By class ({{ whForm.class_subscriptions.length }})</span>
+            <span class="label-text-alt">
+              <a class="link link-primary" @click="addClassSubscription">Add</a>
+            </span>
+          </label>
+          <p class="text-xs text-base-content/60 mb-1">
+            Deliver every event at or above a severity, optionally within one category. Unlike the
+            list below, this includes event types that do not exist yet.
+          </p>
+          <div
+            v-for="(cs, i) in whForm.class_subscriptions"
+            :key="i"
+            class="flex items-center gap-2 mb-1"
+            :data-class-row="i"
+          >
+            <select v-model="cs.category" class="select select-bordered select-sm">
+              <option :value="null">Every category</option>
+              <option v-for="c in classCategories" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <span class="text-xs">at least</span>
+            <select v-model="cs.min_severity" class="select select-bordered select-sm">
+              <option v-for="s in classSeverities" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <button class="btn btn-ghost btn-xs text-error" @click="removeClassSubscription(i)">
+              Remove
+            </button>
+          </div>
+        </div>
+
         <div class="form-control mb-3">
           <label class="label">
             <span class="label-text"
@@ -350,8 +381,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { webhooksApi } from '@/utils/api'
-import type { Webhook, WebhookAuthHeader, WebhookEventType, WebhookDelivery } from '@/types'
+import { alertsApi, webhooksApi } from '@/utils/api'
+import type {
+  Webhook,
+  WebhookAuthHeader,
+  WebhookClassSubscription,
+  WebhookEventType,
+  WebhookDelivery,
+} from '@/types'
 
 const tab = ref<'webhooks' | 'auth' | 'deliveries'>('webhooks')
 const loading = ref(false)
@@ -381,6 +418,7 @@ function webhookName(id: string) {
 }
 
 async function loadAll() {
+  void loadClassVocab()
   loading.value = true
   try {
     const [whRes, authRes, etRes] = await Promise.all([
@@ -426,8 +464,30 @@ const whForm = ref({
   url: '',
   enabled: true,
   event_types: [] as string[],
+  class_subscriptions: [] as WebhookClassSubscription[],
   auth_header_ids: [] as string[],
 })
+
+// The class vocabularies come from the alert classification (#87).
+const classCategories = ref<string[]>([])
+const classSeverities = ref<string[]>(['info', 'notice', 'warning', 'critical'])
+async function loadClassVocab() {
+  try {
+    const res = await alertsApi.classification()
+    if (res.success && res.data) {
+      classCategories.value = res.data.categories
+      classSeverities.value = res.data.severities
+    }
+  } catch {
+    /* the defaults stand */
+  }
+}
+function addClassSubscription() {
+  whForm.value.class_subscriptions.push({ category: null, min_severity: 'warning' })
+}
+function removeClassSubscription(i: number) {
+  whForm.value.class_subscriptions.splice(i, 1)
+}
 
 function selectAllEvents() {
   whForm.value.event_types = eventTypes.value.map((e) => e.value)
@@ -444,9 +504,17 @@ function openWebhookModal(wh?: Webhook) {
         url: wh.url,
         enabled: wh.enabled,
         event_types: [...wh.event_types],
+        class_subscriptions: (wh.class_subscriptions ?? []).map((c) => ({ ...c })),
         auth_header_ids: [...wh.auth_header_ids],
       }
-    : { name: '', url: '', enabled: true, event_types: [], auth_header_ids: [] }
+    : {
+        name: '',
+        url: '',
+        enabled: true,
+        event_types: [],
+        class_subscriptions: [],
+        auth_header_ids: [],
+      }
   showWebhookModal.value = true
 }
 

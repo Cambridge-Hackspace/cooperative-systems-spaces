@@ -1,4 +1,5 @@
 mod account_tokens;
+mod alerts;
 mod cards;
 mod cmi5;
 mod devices;
@@ -27,6 +28,7 @@ mod waivers;
 mod webhooks;
 
 pub use account_tokens::*;
+pub use alerts::*;
 pub use cards::*;
 pub use cmi5::*;
 pub use devices::*;
@@ -447,6 +449,14 @@ pub enum AuditEventType {
     /// warnings the administrator acknowledged. The full record is the
     /// `user_merges` row.
     UserMerged,
+    /// Someone acknowledged an alert (#87): looked at an audit event the
+    /// classification put at Notice or above and said so. Payload: the
+    /// acknowledged row's id and type, and the note.
+    AlertAcknowledged,
+    /// The weekly heartbeat (#87): what happened since the last one. Notice,
+    /// so it rides the alert feed and any webhook whose floor admits it; its
+    /// absence is the signal.
+    AlertHeartbeat,
     // Membership billing (Stripe + dues ledger)
     //
     // Appended at the tail, like the groups above, so a concurrent branch adding
@@ -624,6 +634,8 @@ impl AuditEventType {
             Self::UserEmailAdded => "user_email_added",
             Self::UserEmailRemoved => "user_email_removed",
             Self::UserMerged => "user_merged",
+            Self::AlertAcknowledged => "alert_acknowledged",
+            Self::AlertHeartbeat => "alert_heartbeat",
             Self::MembershipGranted => "membership_granted",
             Self::MembershipRevoked => "membership_revoked",
             Self::MembershipPaymentRecorded => "membership_payment_recorded",
@@ -771,6 +783,8 @@ impl AuditEventType {
             UserEmailAdded,
             UserEmailRemoved,
             UserMerged,
+            AlertAcknowledged,
+            AlertHeartbeat,
             MembershipGranted,
             MembershipRevoked,
             MembershipPaymentRecorded,
@@ -793,6 +807,298 @@ impl AuditEventType {
             UserRoleAssigned,
             UserRoleUnassigned,
         ]
+    }
+
+    /// What part of the system this event is about (#87). Exhaustive on
+    /// purpose: a new event type does not compile until it is filed. Placed
+    /// AFTER `all()`, and returning enums rather than strings, because two
+    /// oracles read this impl textually -- checks/tests/audit_event_types.rs
+    /// slices `as_str` .. `all()`, and the frontend structure spec scans the
+    /// whole impl for arrow-to-string-literal arms -- and either would mistake
+    /// a string arm here for an event type. (Even a comment showing that arm
+    /// shape would be counted, which is why this one does not.)
+    pub fn category(&self) -> Category {
+        use AuditEventType::*;
+        match self {
+            UserRegistration
+            | UserLogin
+            | UserLogout
+            | UserRoleChange
+            | UserProfileUpdate
+            | UserPasswordChange
+            | UserActivation
+            | UserDeactivation
+            | UserDeletion
+            | AdminConfigReload
+            | ProfileConfigUpdated
+            | ProfileConfigRolledBack
+            | FailedLoginAttempt
+            | UserEmailChange
+            | UserEmailAdded
+            | UserEmailRemoved
+            | UserMerged => Category::User,
+            TrainingSessionStarted
+            | TrainingSessionCompleted
+            | TrainingStepCreated
+            | TrainingStepUpdated
+            | TrainingStepDeleted
+            | TrainerAssigned
+            | TrainerRemoved
+            | InstructorCertified
+            | InstructorRevoked
+            | TrainingWaiverGranted
+            | TrainingWaiverRevoked
+            | TrainingDocumentationAcknowledged => Category::Training,
+            ToolAccessGranted | ToolAccessDenied | ToolActivated | ToolDeactivated
+            | ToolUsageLogged | ToolUsageCharged | ToolSessionAbandoned | ToolRateTierCreated
+            | ToolRateTierUpdated | ToolRateTierDeleted | ToolTierAssigned | ToolTierUnassigned => {
+                Category::Tool
+            }
+            RevokedCardPresented | CardIssued | CardDisabled | CardReleased => Category::Card,
+            DeviceInviteCreated | DeviceInviteUsed | DeviceInviteExpired | DeviceRegistered
+            | DeviceNameChanged | DeviceDeleted | DeviceVersionChanged => Category::Device,
+            WebhookCreated
+            | WebhookUpdated
+            | WebhookDeleted
+            | WebhookAuthHeaderCreated
+            | WebhookAuthHeaderUpdated
+            | WebhookAuthHeaderDeleted => Category::Webhook,
+            MfaTotpEnrolled
+            | MfaTotpDisabled
+            | MfaWebauthnRegistered
+            | MfaWebauthnRemoved
+            | MfaRecoveryCodesRegenerated
+            | MfaRecoveryCodeUsed
+            | MfaLoginPassed
+            | MfaLoginFailed => Category::Mfa,
+            DoorCreated | DoorUpdated | DoorDeleted | DoorRuleAdded | DoorRuleRemoved
+            | DoorUnlockedCard | DoorUnlockedQr | DoorUnlockedAdmin | DoorUnlockDenied
+            | DoorCheckinRecorded => Category::Door,
+            PlaceCreated | PlaceUpdated | PlaceMoved | PlaceDeleted => Category::Place,
+            ToolModuleCreated | ToolModuleDeleted | ToolInterlockCreated | ToolInterlockDeleted => {
+                Category::Module
+            }
+            ToolModuleSilent
+            | ToolModuleReturned
+            | UnauthorizedPowerDetected
+            | MqttBrokerLost
+            | MqttBrokerRestored
+            | EdgeIsolationReported => Category::Bypass,
+            PowerCircuitCreated
+            | PowerCircuitUpdated
+            | PowerCircuitDeleted
+            | PowerOutletCreated
+            | PowerOutletUpdated
+            | PowerOutletDeleted
+            | PowerReceptacleCreated
+            | PowerReceptacleUpdated
+            | PowerReceptacleDeleted
+            | CircuitOverageShutoff
+            | EmergencyLockoutEngaged
+            | EmergencyLockoutCleared
+            | FirmwareSelftripReported => Category::Power,
+            ScheduleCreated | ScheduleUpdated | ScheduleDeleted | HomeLinkCreated
+            | HomeLinkUpdated | HomeLinkDeleted => Category::Schedule,
+            PasswordResetRequested
+            | PasswordResetCompleted
+            | PasswordResetFailed
+            | EmailVerificationSent
+            | EmailVerified
+            | EmailSendFailed => Category::Mail,
+            Cmi5CoursePublished | Cmi5CourseDeleted | Cmi5AuAssignedToTool | Cmi5Launched
+            | Cmi5AuSatisfied | Cmi5CourseExported => Category::Cmi5,
+            MailingListSubscribe
+            | MailingListUnsubscribe
+            | MailingListSyncAdd
+            | MailingListSyncRemove => Category::Groupsio,
+            MembershipGranted
+            | MembershipRevoked
+            | MembershipPaymentRecorded
+            | MembershipLastAdminProtected
+            | SubscriptionStarted
+            | SubscriptionCanceled
+            | SubscriptionPaymentFailed => Category::Membership,
+            RoleCreated
+            | RoleUpdated
+            | RoleDeleted
+            | RolePermissionsChanged
+            | RoleInheritanceChanged
+            | UserRoleAssigned
+            | UserRoleUnassigned => Category::Rbac,
+            AlertAcknowledged | AlertHeartbeat => Category::Alerts,
+        }
+    }
+
+    /// How much a person should care (#87). `Notice` and above is the alert
+    /// feed; `Info` is the ordinary trail. Same placement rule as `category`.
+    pub fn severity(&self) -> Severity {
+        use AuditEventType::*;
+        match self {
+            // A safety event: power where it should not be, a trip, a lockout,
+            // a device that may have been cut off from the server on purpose.
+            UnauthorizedPowerDetected
+            | CircuitOverageShutoff
+            | EmergencyLockoutEngaged
+            | FirmwareSelftripReported
+            | EdgeIsolationReported => Severity::Critical,
+            // Wrong until someone looks.
+            ToolModuleSilent
+            | MqttBrokerLost
+            | RevokedCardPresented
+            | EmailSendFailed
+            | SubscriptionPaymentFailed
+            | MembershipLastAdminProtected => Severity::Warning,
+            // Refusals, recoveries, and changes to who may do what.
+            FailedLoginAttempt
+            | MfaLoginFailed
+            | ToolAccessDenied
+            | DoorUnlockDenied
+            | PasswordResetFailed
+            | ToolSessionAbandoned
+            | ToolModuleReturned
+            | MqttBrokerRestored
+            | EmergencyLockoutCleared
+            | DoorUnlockedAdmin
+            | UserRoleChange
+            | UserRoleAssigned
+            | UserRoleUnassigned
+            | RolePermissionsChanged
+            | RoleInheritanceChanged
+            | UserDeactivation
+            | UserDeletion
+            | UserMerged
+            | AdminConfigReload
+            | CardDisabled
+            | MembershipRevoked
+            | DeviceDeleted
+            | MfaTotpDisabled
+            | MfaWebauthnRemoved
+            | TrainingWaiverRevoked
+            | InstructorRevoked
+            | DoorRuleRemoved
+            | AlertHeartbeat => Severity::Notice,
+            // Records.
+            UserRegistration
+            | UserLogin
+            | UserLogout
+            | UserProfileUpdate
+            | UserPasswordChange
+            | UserActivation
+            | ProfileConfigUpdated
+            | ProfileConfigRolledBack
+            | UserEmailChange
+            | UserEmailAdded
+            | UserEmailRemoved
+            | TrainingSessionStarted
+            | TrainingSessionCompleted
+            | TrainingStepCreated
+            | TrainingStepUpdated
+            | TrainingStepDeleted
+            | TrainerAssigned
+            | TrainerRemoved
+            | InstructorCertified
+            | TrainingWaiverGranted
+            | TrainingDocumentationAcknowledged
+            | ToolAccessGranted
+            | ToolActivated
+            | ToolDeactivated
+            | ToolUsageLogged
+            | ToolUsageCharged
+            | ToolRateTierCreated
+            | ToolRateTierUpdated
+            | ToolRateTierDeleted
+            | ToolTierAssigned
+            | ToolTierUnassigned
+            | CardIssued
+            | CardReleased
+            | DeviceInviteCreated
+            | DeviceInviteUsed
+            | DeviceInviteExpired
+            | DeviceRegistered
+            | DeviceNameChanged
+            | DeviceVersionChanged
+            | WebhookCreated
+            | WebhookUpdated
+            | WebhookDeleted
+            | WebhookAuthHeaderCreated
+            | WebhookAuthHeaderUpdated
+            | WebhookAuthHeaderDeleted
+            | MfaTotpEnrolled
+            | MfaWebauthnRegistered
+            | MfaRecoveryCodesRegenerated
+            | MfaRecoveryCodeUsed
+            | MfaLoginPassed
+            | DoorCreated
+            | DoorUpdated
+            | DoorDeleted
+            | DoorRuleAdded
+            | DoorUnlockedCard
+            | DoorUnlockedQr
+            | DoorCheckinRecorded
+            | PlaceCreated
+            | PlaceUpdated
+            | PlaceMoved
+            | PlaceDeleted
+            | ToolModuleCreated
+            | ToolModuleDeleted
+            | ToolInterlockCreated
+            | ToolInterlockDeleted
+            | PowerCircuitCreated
+            | PowerCircuitUpdated
+            | PowerCircuitDeleted
+            | PowerOutletCreated
+            | PowerOutletUpdated
+            | PowerOutletDeleted
+            | PowerReceptacleCreated
+            | PowerReceptacleUpdated
+            | PowerReceptacleDeleted
+            | ScheduleCreated
+            | ScheduleUpdated
+            | ScheduleDeleted
+            | HomeLinkCreated
+            | HomeLinkUpdated
+            | HomeLinkDeleted
+            | PasswordResetRequested
+            | PasswordResetCompleted
+            | EmailVerificationSent
+            | EmailVerified
+            | Cmi5CoursePublished
+            | Cmi5CourseDeleted
+            | Cmi5AuAssignedToTool
+            | Cmi5Launched
+            | Cmi5AuSatisfied
+            | Cmi5CourseExported
+            | MailingListSubscribe
+            | MailingListUnsubscribe
+            | MailingListSyncAdd
+            | MailingListSyncRemove
+            | MembershipGranted
+            | MembershipPaymentRecorded
+            | SubscriptionStarted
+            | SubscriptionCanceled
+            | RoleCreated
+            | RoleUpdated
+            | RoleDeleted
+            | AlertAcknowledged => Severity::Info,
+        }
+    }
+
+    /// Every event type at or above `min`, as wire strings -- what the alert
+    /// feed and the webhook class matcher filter on.
+    pub fn at_least(min: Severity) -> Vec<&'static str> {
+        AuditEventType::all()
+            .iter()
+            .filter(|t| t.severity() >= min)
+            .map(|t| t.as_str())
+            .collect()
+    }
+
+    /// Parse a wire string back to the type, for classifying a stored row.
+    pub fn parse(s: &str) -> Option<AuditEventType> {
+        AuditEventType::all()
+            .iter()
+            .find(|t| t.as_str() == s)
+            .cloned()
     }
 }
 

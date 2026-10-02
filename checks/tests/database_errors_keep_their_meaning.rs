@@ -39,6 +39,9 @@ const BUDGET: &[(&str, usize)] = &[
     // now one `refresh_pages` with one. The copy is gone, so the budget for it
     // goes too.
     ("admin.rs", 2),
+    // #87: the alert feed maps every database error through `ApiError::from`
+    // and has no 500 of its own.
+    ("alerts.rs", 0),
     // 3 -> 4 with the arrival of password reset. The fourth is
     // `PasswordHashUtil::hash` failing while consuming a reset token, which is
     // not a DatabaseError at all -- an Argon2 failure is genuinely the server's

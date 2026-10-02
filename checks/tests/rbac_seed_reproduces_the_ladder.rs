@@ -514,6 +514,8 @@ fn granular_gate_permissions_reproduce_the_staff_override() {
         "profiles.manage",
         "training.certify",
         "trainers.manage",
+        "alerts.view",
+        "alerts.acknowledge",
     ];
     let roles = ["guest", "historical", "active", "staff", "admin"];
 

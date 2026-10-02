@@ -309,6 +309,25 @@ async fn login(
                     config.auth.login_throttle_seconds,
                 );
             }
+            // Recorded (#87). `failed_login_attempt` had been in the event
+            // vocabulary since the first migration and nothing ever wrote it:
+            // the alert feed's first Notice-level producer is the one every
+            // deployment has. Never the password; the identifier is what was
+            // typed, not a confirmed account, so no user_id either.
+            if let Err(log_err) = state
+                .audit_logger
+                .log_event(
+                    AuditEventType::FailedLoginAttempt,
+                    None,
+                    None,
+                    serde_json::json!({ "username_or_email": payload.username_or_email }),
+                    None,
+                    None,
+                )
+                .await
+            {
+                tracing::warn!("Failed to log failed login attempt: {log_err}");
+            }
             return Err(ApiError::from(e));
         }
     };

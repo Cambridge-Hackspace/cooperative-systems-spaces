@@ -55,6 +55,7 @@ pub fn admin_routes() -> Router<AppState> {
             axum::routing::delete(unassign_user_role),
         )
         .route("/users/duplicates", get(list_duplicate_candidates))
+        .route("/alerts/heartbeat", post(run_alert_heartbeat))
         .route("/users/{user_id}/merge/preview", post(merge_preview))
         .route("/users/{user_id}/merge", post(merge_users))
         .nest("/rbac", crate::api::rbac_admin::admin_routes())
@@ -853,4 +854,15 @@ async fn list_duplicate_candidates(
         card_owner,
     );
     Ok(Json(ApiResponse::success(out)))
+}
+
+/// `POST /api/admin/alerts/heartbeat` -- emit a heartbeat now (#87), whether
+/// or not one is due. For an operator checking the pipe end to end, and for
+/// the e2e stage.
+async fn run_alert_heartbeat(
+    _admin_user: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<crate::alerts::HeartbeatOutcome>>, ApiError> {
+    let outcome = state.alert_heartbeat.run().await;
+    Ok(Json(ApiResponse::success(outcome)))
 }

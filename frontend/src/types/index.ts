@@ -214,6 +214,41 @@ export interface MergePlan {
   moves: Record<string, number>
   warnings: MergeWarning[]
 }
+/** An alert (#87): an audit event classified notice or above. */
+export interface AlertAcknowledgement {
+  audit_log_id: string
+  user_id: string | null
+  note: string | null
+  acknowledged_at: string
+}
+export interface Alert {
+  id: string
+  event_type: string
+  category: string
+  severity: 'info' | 'notice' | 'warning' | 'critical'
+  user_id: string | null
+  actor_id: string | null
+  event_data: unknown
+  created_at: string
+  acknowledgement: AlertAcknowledgement | null
+}
+export interface AlertSummary {
+  unacknowledged: Record<string, number>
+  unacknowledged_total: number
+}
+export interface AlertClassification {
+  categories: string[]
+  severities: string[]
+  events: Record<string, { category: string; severity: string }>
+}
+export interface Paginated<T> {
+  items: T[]
+  page: number
+  per_page: number
+  total: number
+  total_pages: number
+}
+
 /** A pair of accounts that may be one person (#38/#118), with why. */
 export interface DuplicateCandidate {
   /** The older account. */
@@ -689,6 +724,12 @@ export interface UpdateAuthHeaderRequest {
   header_value?: string
 }
 
+/** A webhook subscription by class (#87): a severity floor, optionally within one category. */
+export interface WebhookClassSubscription {
+  category: string | null
+  min_severity: string
+}
+
 export interface Webhook {
   id: string
   name: string
@@ -696,6 +737,7 @@ export interface Webhook {
   enabled: boolean
   signing_secret: string
   event_types: string[]
+  class_subscriptions: WebhookClassSubscription[]
   auth_header_ids: string[]
   created_at: string
   updated_at: string

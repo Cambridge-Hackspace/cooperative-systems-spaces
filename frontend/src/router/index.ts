@@ -146,6 +146,16 @@ const router = createRouter({
       },
     },
     {
+      // Permission-gated (alerts.view), not role-gated: the view refuses on
+      // its own and the nav link follows the same key.
+      path: '/alerts',
+      name: 'alerts',
+      component: () => import('@/views/AlertFeedView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/admin/audit',
       name: 'admin-audit',
       component: () => import('@/views/AuditView.vue'),

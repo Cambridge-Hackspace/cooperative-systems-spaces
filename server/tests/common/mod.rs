@@ -155,6 +155,11 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles", Guard::Admin), // admin::assign_user_role
     R("DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001/roles/00000000-0000-4000-8000-000000000001", Guard::Admin), // admin::unassign_user_role
     R("GET", "/api/admin/users/duplicates", Guard::Admin), // admin::list_duplicate_candidates
+    R("POST", "/api/admin/alerts/heartbeat", Guard::Admin), // admin::run_alert_heartbeat
+    R("GET", "/api/alerts", Guard::Auth), // alerts::list_alerts
+    R("GET", "/api/alerts/classification", Guard::Auth), // alerts::classification
+    R("GET", "/api/alerts/summary", Guard::Auth), // alerts::summary
+    R("POST", "/api/alerts/00000000-0000-4000-8000-000000000001/acknowledge", Guard::Auth), // alerts::acknowledge
     R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/merge", Guard::Admin), // admin::merge_users
     R("POST", "/api/admin/users/00000000-0000-4000-8000-000000000001/merge/preview", Guard::Admin), // admin::merge_preview
     R("GET", "/api/admin/webhooks", Guard::Admin), // webhooks::list_webhooks

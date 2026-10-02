@@ -31,6 +31,8 @@
           <option value="user_email_added">Email Address Added</option>
           <option value="user_email_removed">Email Address Removed</option>
           <option value="user_merged">User Merged</option>
+          <option value="alert_acknowledged">Alert Acknowledged</option>
+          <option value="alert_heartbeat">Alert Heartbeat</option>
           <option value="email_send_failed">Email Send Failed</option>
           <option value="training_documentation_acknowledged">
             Safety Documentation Acknowledged
@@ -281,7 +283,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { adminApi } from '@/utils/api'
+import { adminApi, alertsApi } from '@/utils/api'
 import type { AuditLog } from '@/types'
 
 // Props and Emits
@@ -402,27 +404,16 @@ const formatEventType = (eventType: string): string => {
     .join(' ')
 }
 
+// Colour follows the server's classification (#87) rather than a map kept
+// here: the same judgement lived in three places before (this map, the Rust
+// enum's comments, the structure spec's prose) and drifted.
+const classification = ref<Record<string, { category: string; severity: string }>>({})
 const getEventBadgeClass = (eventType: string): string => {
-  const typeMap: Record<string, string> = {
-    user_login: 'badge-success',
-    user_logout: 'badge-info',
-    user_registration: 'badge-primary',
-    user_role_change: 'badge-warning',
-    user_activation: 'badge-success',
-    user_deactivation: 'badge-error',
-    user_profile_update: 'badge-info',
-    admin_config_reload: 'badge-secondary',
-    profile_config_updated: 'badge-secondary',
-    profile_config_rolled_back: 'badge-warning',
-    failed_login_attempt: 'badge-error',
-    password_reset_requested: 'badge-info',
-    password_reset_completed: 'badge-warning',
-    password_reset_failed: 'badge-error',
-    email_verification_sent: 'badge-info',
-    email_verified: 'badge-success',
-    email_send_failed: 'badge-error',
-  }
-  return typeMap[eventType] || 'badge-ghost'
+  const severity = classification.value[eventType]?.severity
+  return (
+    { critical: 'badge-error', warning: 'badge-warning', notice: 'badge-info' }[severity ?? ''] ??
+    'badge-ghost'
+  )
 }
 
 const formatEventData = (eventData: any): string => {
@@ -434,7 +425,19 @@ const formatEventData = (eventData: any): string => {
 }
 
 // Lifecycle
+const loadClassification = async () => {
+  try {
+    const res = await alertsApi.classification()
+    if (res.success && res.data) classification.value = res.data.events
+  } catch {
+    /* badges fall back to neutral */
+  }
+}
+
 onMounted(() => {
+  // Not awaited: the badge colours arrive when they arrive, and the log
+  // request (and its spinner) must not wait on them.
+  void loadClassification()
   void fetchAuditLogs()
 })
 </script>

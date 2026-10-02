@@ -33,6 +33,7 @@ use crate::rbac::RoleGraph;
 /// survivor WHERE col = absorbed`. Every FK to `users` that carries no
 /// uniqueness over the user, whatever its ON DELETE clause.
 pub const PLAIN: &[(&str, &str)] = &[
+    ("alert_acknowledgements", "user_id"),
     ("audit_logs", "user_id"),
     ("audit_logs", "actor_id"),
     ("cmi5_courses", "imported_by"),

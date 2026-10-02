@@ -509,6 +509,14 @@ protected_addresses = []
 # something. Both values are configuration because the right numbers depend on
 # the link -- a marginal wifi bridge wants a longer silence threshold than a
 # wired edge, and noise here lands in a table nothing prunes.
+[alerts]
+# The alert feed (#87): audit events classified notice or above, seen by
+# whoever holds the alerts.view permission. Once per interval the server emits
+# an alert_heartbeat event summarising what happened -- alerts raised, still
+# unacknowledged, webhook deliveries failed. Subscribe a webhook to it; its
+# ABSENCE is what tells you the detector is dead. Seconds; 0 disables.
+heartbeat_interval_secs = 604800
+
 [bypass]
 # Silence before a bound module is recorded as such. 90s = three missed 30s
 # MQTT keep-alives, so one dropped packet is not an incident.
