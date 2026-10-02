@@ -349,6 +349,10 @@ export const adminApi = {
       absorbed_id: absorbedId,
     })
   },
+  /** Pairs of accounts that may be one person, with reasons (#38/#118). */
+  listDuplicateCandidates() {
+    return apiClient.get<import('@/types').DuplicateCandidate[]>('/admin/users/duplicates')
+  },
   /** Commit a merge. `acknowledged` must carry every warning code the preview listed. */
   mergeUsers(survivorId: string, absorbedId: string, acknowledged: string[]) {
     return apiClient.post<import('@/types').MergeOutcome>(`/admin/users/${survivorId}/merge`, {

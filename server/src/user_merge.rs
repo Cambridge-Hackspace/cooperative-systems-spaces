@@ -133,7 +133,7 @@ impl MergeWarning {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MergeParty {
     pub id: Uuid,
     pub username: String,

@@ -39,6 +39,7 @@ pub mod database;
 pub mod devices_inbound;
 pub mod devices_transport;
 pub mod doors;
+pub mod duplicates;
 pub mod groupsio;
 pub mod groupsio_sync;
 pub mod mail;

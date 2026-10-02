@@ -26,6 +26,7 @@ import {
   POST,
   PUT,
   RUN_TAG,
+  PASSWORD,
   account,
   adminAccount,
   login,
@@ -61,6 +62,38 @@ await main(async () => {
   const extra = `extra.${RUN_TAG}@e2e.invalid`
   const added = await POST(`/api/users/${absorbed.user.id}/emails`, { token: admin.token, body: { email: extra } })
   assertEq('merge/fixture-secondary-added', 200, added.status, added.text.slice(0, 200))
+
+  // ---- the duplicates report (#38): the pair is there before, gone after ----------
+  // Two accounts with the same name whose addresses differ only by dots: the
+  // ToolPass-vs-Stripe shape. Registered directly so the full name is ours.
+  const dupName = `Dup Person ${RUN_TAG}`
+  const dupReg = async (username, email) =>
+    POST('/api/auth/register', { body: { username, email, password: PASSWORD, full_name: dupName } })
+  const dupA = await dupReg(`e2e_dupa_${RUN_TAG}`, `d.u.p.${RUN_TAG}@e2e.invalid`)
+  const dupB = await dupReg(`e2e_dupb_${RUN_TAG}`, `dup${RUN_TAG}@e2e.invalid`)
+  ok('merge/dup-fixture-registered', [dupA.status, dupB.status].every((c) => c === 200 || c === 201), `${dupA.status}/${dupB.status}`)
+  // Registration answers with the user itself, not a login envelope.
+  const dupAId = dupA.json?.data?.id
+  const dupBId = dupB.json?.data?.id
+  const report = await GET('/api/admin/users/duplicates', { token: admin.token })
+  assertEq('merge/duplicates-report-ok', 200, report.status, report.text.slice(0, 200))
+  const pair = (report.json?.data ?? []).find((c) => c.a.id === dupAId && c.b.id === dupBId)
+  ok('merge/duplicates-report-finds-the-pair', !!pair, `pairs: ${JSON.stringify((report.json?.data ?? []).map((c) => [c.a.username, c.b.username]))}`)
+  ok('merge/duplicates-report-gives-both-reasons', pair?.reasons?.includes('same_name') && pair?.reasons?.includes('email_alias'), JSON.stringify(pair?.reasons))
+  // Not for a non-admin.
+  const reportPeer = await GET('/api/admin/users/duplicates', { token: survivor.token })
+  assertEq('merge/duplicates-report-is-admin-only', 403, reportPeer.status)
+  // Merge the pair through the same preview/ack path, then it must be gone.
+  const dupPreview = await POST(`/api/admin/users/${dupAId}/merge/preview`, { token: admin.token, body: { absorbed_id: dupBId } })
+  const dupCodes = (dupPreview.json?.data?.warnings ?? []).map((w) => w.code)
+  const dupMerge = await POST(`/api/admin/users/${dupAId}/merge`, { token: admin.token, body: { absorbed_id: dupBId, acknowledged: dupCodes } })
+  assertEq('merge/dup-pair-merged', 200, dupMerge.status, dupMerge.text.slice(0, 200))
+  const reportAfter = await GET('/api/admin/users/duplicates', { token: admin.token })
+  ok(
+    'merge/duplicates-report-pair-gone-after-merge',
+    !(reportAfter.json?.data ?? []).some((c) => c.a.id === dupBId || c.b.id === dupBId),
+    'the absorbed account still appears in the duplicates report'
+  )
 
   // ---- the preview --------------------------------------------------------------
   const previewPath = `/api/admin/users/${survivor.user.id}/merge/preview`

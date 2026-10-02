@@ -214,6 +214,14 @@ export interface MergePlan {
   moves: Record<string, number>
   warnings: MergeWarning[]
 }
+/** A pair of accounts that may be one person (#38/#118), with why. */
+export interface DuplicateCandidate {
+  /** The older account. */
+  a: MergeParty
+  b: MergeParty
+  /** `same_name`, `email_alias`, `shared_card`. */
+  reasons: string[]
+}
 export interface MergeOutcome {
   merge_id: string
   survivor_id: string
