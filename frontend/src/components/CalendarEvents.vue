@@ -49,6 +49,7 @@
               <span v-else>
                 🕐 {{ formatTime(event.start) }}
                 <span v-if="event.end"> - {{ formatTime(event.end) }}</span>
+                <span class="event-zone">{{ zoneLabel(event.start, timezone) }}</span>
               </span>
             </span>
 
@@ -58,12 +59,29 @@
           </div>
 
           <!--
-            Interpolated, not v-html. This description comes from a third-party
-            iCal feed (server/src/calendar.rs fetches source.ical_link), so
-            rendering it as HTML let a feed the space does not control inject
-            markup into every viewer's page. An ICS DESCRIPTION is plain text.
+            `description_html` is rendered as markup; `description` never is.
+            The distinction is the whole of #96.
+
+            An ICS DESCRIPTION is nominally plain text, and Google Calendar
+            puts HTML in it anyway -- so interpolating it showed members
+            "<br><br><b>BEFORE YOU RSVP</b>" and swallowed the link to the
+            pre-reading. Rendering it with v-html instead would let anyone who
+            can edit a shared calendar put script on the public home page.
+
+            So the server reduces it to Markdown and re-renders it with
+            comrak's raw-HTML passthrough off (server/src/calendar/description.rs),
+            and that output -- and only that output -- is what v-html gets.
+            The raw field is still the fallback, interpolated, for a server
+            that does not send the rendered form.
           -->
-          <p v-if="event.description" class="event-description">{{ event.description }}</p>
+          <!-- eslint-disable vue/no-v-html -- see above; the server renders it -->
+          <p
+            v-if="event.description_html"
+            class="event-description"
+            v-html="event.description_html"
+          ></p>
+          <!-- eslint-enable vue/no-v-html -->
+          <p v-else-if="event.description" class="event-description">{{ event.description }}</p>
 
           <div class="event-calendar-tag" :style="{ backgroundColor: event.calendar_color }">
             {{ event.calendar_name }}
@@ -76,10 +94,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { clockTime, dayOfMonth, monthAbbreviation, zoneLabel } from '@/lib/event-times'
 
 interface CalendarEvent {
   title: string
   description?: string
+  /** The description rendered by the server; see the template's comment. */
+  description_html?: string
   start: string
   end?: string
   location?: string
@@ -87,6 +108,15 @@ interface CalendarEvent {
   calendar_color: string
   all_day: boolean
 }
+
+const props = defineProps<{
+  /**
+   * IANA zone to render event times in. The views pass the space's own
+   * (`configStore.siteTimezone()`); left out, times render in the viewer's
+   * zone, which is what this component did before #96.
+   */
+  timezone?: string
+}>()
 
 const events = ref<CalendarEvent[]>([])
 const loading = ref(true)
@@ -153,23 +183,19 @@ async function refreshEvents() {
   }
 }
 
-function formatDay(dateString: string): number {
-  const date = new Date(dateString)
-  return date.getDate()
+// Every one of these takes the zone from the prop. Reading an instant in the
+// viewer's zone is what put an all-day event on the wrong date for everyone
+// west of Greenwich and a 6:30pm class at 2:30pm for everyone.
+function formatDay(dateString: string): string {
+  return dayOfMonth(dateString, props.timezone)
 }
 
 function formatMonth(dateString: string): string {
-  const date = new Date(dateString)
-  return date.toLocaleDateString('en-US', { month: 'short' })
+  return monthAbbreviation(dateString, props.timezone)
 }
 
 function formatTime(dateString: string): string {
-  const date = new Date(dateString)
-  return date.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  })
+  return clockTime(dateString, props.timezone)
 }
 </script>
 
@@ -333,6 +359,30 @@ function formatTime(dateString: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.event-zone {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+/* The description is rendered Markdown, so it arrives as block elements. */
+.event-description :deep(p) {
+  margin: 0 0 0.5rem 0;
+}
+
+.event-description :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.event-description :deep(a) {
+  text-decoration: underline;
+}
+
+.event-description :deep(ul),
+.event-description :deep(ol) {
+  margin: 0.25rem 0 0.5rem 1.25rem;
+  list-style: disc;
 }
 
 .event-description {

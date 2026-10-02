@@ -819,6 +819,43 @@ mod scan_symlink_tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
+    /// `PageViewer.vue` renders `html_content` with `v-html`, on the strength
+    /// of comrak not passing raw HTML through. That was asserted only against
+    /// the source -- `frontend/tests/structure/markdown-rendering.spec.ts`
+    /// greps for the option being switched on -- and the option was *renamed*
+    /// upstream (`render.unsafe_` became `render.r#unsafe` in comrak 0.39), so
+    /// the grep had been searching for a string that can no longer appear.
+    /// A source check cannot notice that about itself; this one asks the
+    /// renderer instead, and would fail whatever the field is called.
+    #[test]
+    fn raw_html_in_a_wiki_page_never_reaches_the_rendered_page() {
+        let root = tempfile::tempdir().expect("a temp dir");
+        fs::write(
+            root.path().join("attack.md"),
+            "# Title\n\n<script>alert(document.cookie)</script>\n\n\
+             <img src=x onerror=\"alert(1)\">\n\n\
+             [click](javascript:alert(1))\n\n\
+             <a href=\"https://example.org/\" onmouseover=\"alert(1)\">link</a>\n",
+        )
+        .unwrap();
+
+        let pages = PagesService::build_pages_static(root.path(), PageType::Wiki, false)
+            .expect("scan succeeds");
+        let page = pages.get("attack").expect("the page publishes");
+        let html = &page.html_content;
+
+        // Anti-vacuity: the page rendered at all.
+        assert!(html.contains("<h1>"), "nothing rendered: {html}");
+
+        for forbidden in ["<script", "onerror", "onmouseover", "javascript:", "<img"] {
+            assert!(
+                !html.to_lowercase().contains(forbidden),
+                "`{forbidden}` reached the rendered page, which PageViewer.vue \
+                 hands to v-html:\n{html}"
+            );
+        }
+    }
+
     /// #120 (#5): a symlink committed into the wiki repo must not be followed.
     /// Before the fix, `path.is_file()` stat-ed the target, so `secrets.md ->
     /// /app/config/config.toml` was read and rendered into a public,

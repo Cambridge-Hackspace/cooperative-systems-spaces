@@ -68,6 +68,13 @@ pub struct PublicDoorsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicCalendarConfig {
     pub enabled: bool,
+    /// The space's timezone, as an IANA name.
+    ///
+    /// Event times are rendered in it rather than in the viewer's own zone:
+    /// the events happen in one building, and a member reading the page from a
+    /// hotel in Berlin wants to know when to turn up in Cambridge, not what
+    /// their phone would call that instant.
+    pub timezone: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +197,7 @@ fn build_public_config(state: &AppState) -> PublicConfig {
         },
         calendar: PublicCalendarConfig {
             enabled: config.calendar.enabled,
+            timezone: config.site.timezone.clone(),
         },
         toolguard: PublicToolGuardConfig {
             enabled: config.toolguard.enabled,

@@ -122,7 +122,7 @@ pub async fn app_state() -> AppState {
         // the network through this. Asserted below rather than assumed.
         mail_service: Arc::new(crate::mail::MailService::new(config_manager.clone())),
         calendar_service: Arc::new(tokio::sync::RwLock::new(CalendarService::new(
-            config.calendar.clone(),
+            config_manager.clone(),
         ))),
         pages_service: Arc::new(tokio::sync::RwLock::new(pages_service)),
         mqtt_service: None,

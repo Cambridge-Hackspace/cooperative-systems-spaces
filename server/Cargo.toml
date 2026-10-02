@@ -138,6 +138,7 @@ cmi5 = { path = "../cmi5" }
 # compression backends down to deflate (flate2 -> miniz_oxide, already in the
 # tree via reqwest); zstd/bzip2 are not needed for cmi5 packages.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+rrule = "0.14.0"
 
 [features]
 # Exposes DatabaseManager::disconnected(), the seam the server-contract tier
