@@ -12,20 +12,36 @@ Two things you need, and this document covers both:
   seeded with a tool, a card and an invite so you can swipe something on minute one.
 
 > **This document is checked against the code.**
-> `checks/tests/the_firmware_protocol_is_documented.rs` asserts that every
-> endpoint and every MQTT topic named here exists, **and** that every
-> device-facing route the server exposes is named here. It fails the build in
-> both directions, so this file cannot quietly become fiction and a new endpoint
-> cannot land undocumented. If something here looks wrong, it is a bug worth
-> reporting rather than a stale page to work around.
+> `checks/tests/the_firmware_protocol_is_documented.rs` fails the build when it
+> and the server disagree, in both directions, on:
+>
+> - every endpoint and MQTT topic — named here but gone, or exposed there and
+>   undocumented;
+> - every **field** of every payload that crosses the wire to or from a device,
+>   including the two declared inside their own handlers;
+> - every **enumerated value** the server accepts or sends — device and binding
+>   roles, `on_disconnect`, the interlock vocabulary, and the serialized
+>   spellings of tool status;
+> - every literal **denial message**, and that none of them names a credential
+>   this server no longer accepts;
+> - the byte layout of a **signed message**, which firmware computes a MAC over;
+> - every internal link in this file.
+>
+> So a new field cannot land here undescribed and a renamed one cannot leave a
+> description behind. What no check can prove is that the prose around a name is
+> *right* — if something here looks wrong, it is a bug worth reporting rather
+> than a stale page to work around.
 
 ---
 
 ## Contents
 
 - [Concepts](#concepts)
+- [Device classes](#device-classes) — what your hardware can and cannot do
+- [Walkthrough](#walkthrough) — the order to build it in
 - [Authentication](#authentication)
 - [Registration](#registration)
+- [Signed commands](#signed-commands)
 - [HTTP endpoints](#http-endpoints)
 - [MQTT](#mqtt)
 - [The lifecycle](#the-lifecycle)
@@ -81,6 +97,255 @@ other — the edge coordinator is what connects them.
 **Edge.** The coordinator. It holds the cached allow-list, evaluates interlocks
 across modules, and holds the lease. If you are writing module firmware, the
 edge is your counterparty as much as the server is.
+
+---
+
+## Device classes
+
+**Read this before you choose an architecture.** Most of this protocol runs on a
+microcontroller. One part of it does not, and finding that out after the
+hardware is in the wall is expensive.
+
+### What every class must do
+
+Registration, a heartbeat, the lifecycle calls, the local-broker topics, the
+lease watchdog, HMAC signing, and your own fail-safe behaviour. All of it fits
+comfortably on a microcontroller: the payloads are small, the decimal fields are
+strings (so you need no float formatting), and the lease is deliberately
+specified against a **monotonic** timer so you need no real-time clock.
+
+### The one thing that does not fit: matching a card offline
+
+Card identifiers never leave the server in the clear. What a device gets is
+`argon2id(device_pepper, card)`, and matching a swipe means computing that same
+digest from the card you just read. The server uses the argon2 crate's default
+parameters — **m = 19456 KiB (19 MiB), t = 2, p = 1** — and the memory-hardness
+is the whole point: it is what stops a stolen pepper from walking a 4-byte UID's
+2³² space in seconds (#109, and
+`checks/tests/a_device_cannot_reverse_a_card_digest.rs`).
+
+An ESP32-C3 has roughly **400 KB of SRAM and no PSRAM**. It is short by a factor
+of about fifty, and **the parameters must not be lowered to fit it** — that
+throws away exactly what the digest buys.
+
+This applies to **both** card lists, which is easy to miss because they arrive
+by different routes:
+
+| source | field | digest |
+|---|---|---|
+| `GET /api/toolguard/sync` | `users[].profile_field_digest` | hex `argon2id` |
+| `doors/state` | `doors[].allow_cards`, `doors[].deny_cards` | the same digest, hex |
+
+If you compare either list against the raw UID you read, you will match nothing,
+ever, and the symptom is a reader that refuses every card with no error
+anywhere.
+
+### Size, separately from the hashing
+
+`GET /api/toolguard/sync` narrows **tools** to the ones your device is bound to.
+It does **not** narrow users: every account comes down, because any of them might
+swipe. At the time of writing that is ~470 members at roughly 175–350 bytes of
+JSON each — call it **100 KB and growing with the membership** — on top of the
+~40 KB a TLS session wants. `doors/state` has the same shape: a flat card list
+per door.
+
+So even with the hashing solved, a cache-and-match design does not fit on a
+400 KB part, and it is not meant to.
+
+### The three shapes that work
+
+**1. Module behind an edge — the normal shape, and what a microcontroller is
+for.** You speak only the [local broker](#the-local-broker-edge--module). You
+read a card and publish it; the edge holds the pepper, calls `sync`, hashes,
+decides, and answers you. You never hash, never hold the pepper, never fetch the
+roster. An ESP32-C3 is comfortable here and this is what the reference reader
+hardware is.
+
+**2. Standalone and online.** No edge, and no local cache: treat every tool as
+`requires_online` and call the server per swipe. You need HTTPS and JSON and
+nothing else. The cost is that a dropped link means no tool starts; the benefit
+is that a part with 400 KB of RAM can do it.
+
+**3. Edge-class coordinator.** Only a device with the RAM to run `argon2id` —
+a Linux SBC, in practice — may hold the pepper and match from a cache. If you
+are building an edge, you are building class 3; if your part cannot run the KDF,
+you are building class 1 or 2 whatever else it can do.
+
+### Clocks
+
+The tool path needs **no** clock: the lease is measured from receipt on your own
+monotonic timer, and `as_of` on every snapshot is advisory.
+
+The **door** path is the exception. `doors[].hold_unlock_until` is an absolute
+instant you compare against your own wall clock, so a door controller needs
+SNTP or equivalent. A controller with a wrong clock either holds a door unlocked
+after the window closed or refuses to honour one that is open — so if you cannot
+keep time, do not implement the Open Access latch, and treat the door as
+card-gated always.
+
+---
+
+## Walkthrough
+
+The reference sections below specify every field. This one is the order to do
+things in, with the mistake that waits at each step. It assumes you are building
+the common case — a [class 1 module](#device-classes) that reads a card and
+switches a relay — and points out where a standalone device differs.
+
+### Step 0 — get a server before you write any firmware
+
+```sh
+reaper test --profile devlive
+```
+
+It prints a URL, an admin sign-in, and a **firmware fixture**: a tool that needs
+no training (`dev-tool-01`), a member holding card `DEVCARD01`, and an unclaimed
+device invite. See [a server to develop against](#a-server-to-develop-against).
+The fixture is exercised by the seed itself, so if `tool-on` does not work
+against it, the platform is broken rather than your code — which is worth
+knowing on day one rather than day three.
+
+### Step 1 — claim an invite and keep what you are given
+
+An administrator generates one at **`/admin/devices`** → *Generate Device
+Invite*. It is single-use and expires. Register with it:
+
+```sh
+curl -sX POST https://css.example/api/devices/register \
+  -H 'Content-Type: application/json' \
+  -d '{"device_code":"<invite>","name":"laser-guard-01",
+       "capabilities":{"roles":["power"],"local_inhibit":true},
+       "mac_address":"02:00:00:00:00:01","software_version":"0.1.0",
+       "platform":"other"}'
+```
+
+**Persist `device_id`, `auth_token`, the whole `mqtt_config`, and
+`mqtt_config.command_key`** to non-volatile storage before you do anything
+else. The invite is single-use: a device that loses its token needs a *new
+invite*, not a retry. See [registration](#registration) and
+[signed commands](#signed-commands).
+
+*The mistake here:* writing the token to RAM, testing happily all afternoon, and
+discovering after the first power cut that you cannot get back in.
+
+### Step 2 — have an administrator bind you to something
+
+Registration gets you a token. A token alone authorizes nothing that names a
+tool. At **`/admin/facility`** → *Tool Wiring*, an administrator binds your
+device to a tool **in a role** — `reader`, `power` or `sensor`. A door is bound
+the same way, in the `edge` role, at *Doors*.
+
+Until that happens, `tool-on` will refuse you, and the refusal looks exactly
+like a credential problem. If you are building for a metered tool, the binding
+must be `power`: see [authentication](#authentication).
+
+### Step 3 — boot in the right order
+
+```
+POST /api/toolguard/boot-reset     ← first, always
+GET  /api/toolguard/module-state   ← your wiring and interlocks
+GET  /api/toolguard/power-state    ← lockouts
+subscribe to the push topics
+start the heartbeat (15 s)
+```
+
+`boot-reset` is first because your reboot may have orphaned a session and left a
+tool permanently "in use" for the next member. A class 2 device also calls
+`GET /api/toolguard/sync`; a class 1 module does not — its edge does.
+
+*The mistake here:* skipping `boot-reset` because it worked in testing. It
+worked because you never crashed mid-session in testing.
+
+### Step 4 — one swipe, end to end
+
+As a module, you do not call the server. You publish to the **local** broker and
+wait:
+
+```
+publish  toolguard/request/tool-on   {"card":"DEVCARD01","tool_id":"dev-tool-01"}
+subscribe toolguard/response/tool-on
+```
+
+Then — and this is the single most common firmware defect in this protocol —
+**energize only if `tool_on` is exactly `true`**:
+
+```json
+{ "status": "error", "message": "Training required", "tool_on": false }
+```
+
+That is a *successful* request. Over HTTP it is **200**. Over MQTT there is no
+status code at all. A response arriving is not a yes, `status: "ok"` without
+`tool_on` is not a yes, and `message` is for humans — never branch on it. See
+[denials are 200, not 4xx](#denials-are-200-not-4xx).
+
+If nothing answers, fail closed. A timeout is a no.
+
+### Step 5 — stay energized only while permitted
+
+Authorization got the tool started. Staying on is a **lease**, renewed on
+`toolguard/lease`, and the renewals stopping *is* the instruction to stop:
+
+```json
+{ "tool_id":"dev-tool-01", "device_id":"…", "grant":true, "ttl_ms":3000 }
+```
+
+1. Filter on `device_id` — every module on the broker sees every lease.
+2. On each message with `grant: true`, restart a timer for `ttl_ms`
+   **from receipt, on a monotonic clock**. Do not read a timestamp; there isn't
+   one, deliberately.
+3. When the timer expires, de-energize. Nobody will tell you to.
+4. `grant: false` means de-energize now. It is a courtesy, not the mechanism.
+
+*The mistake here:* implementing `grant: false` and omitting the timer. That
+firmware stays on forever the moment the edge dies, which is the exact failure
+the design exists to prevent. See [the lease](#authorization-is-a-lease-not-a-command).
+
+### Step 6 — report, then stop
+
+```
+publish  toolguard/request/tool-log  {"card":…,"tool_id":…,"seconds":612.5}
+publish  toolguard/request/tool-off  {"card":…,"tool_id":…}
+```
+
+`tool-log` before `tool-off`: on a metered tool the log is what gets billed and
+the stop settles the session. Send `tool-off` on **every** stop, including the
+ugly ones — an un-ended session leaves the tool unusable for the next member.
+
+If you switch power, also publish `toolguard/request/power` periodically, and
+**always include `device_id`**: a module the coordinator has not heard from is a
+module it will not grant a lease to. A report carrying only `tool_id` and
+`device_id` is a valid heartbeat.
+
+### Step 7 — doors, if that is what you are building
+
+A door is the same model with a different output, and two differences that
+matter:
+
+- You publish `door/request/scan` `{"door_id","card_id"}` and act on
+  `door/response/unlock` `{"door_id","duration_ms"}` — a *momentary* release,
+  not a state.
+- A door's `doors/unlock` command from the server **may carry a `sig`**, and if
+  your device holds a `command_key` you must verify it and ignore the command if
+  it does not check out. See [signed commands](#signed-commands).
+
+### Step 8 — prove it fails safe before you fit it
+
+Bench tests that pass with everything working prove almost nothing here. Do
+these four, with a relay you can watch:
+
+1. **Pull the network mid-session.** The relay must open within `ttl_ms`
+   (3 s by default), with no command telling it to.
+2. **Kill the edge process mid-session.** Same outcome. If it stays on, your
+   lease timer is not armed.
+3. **Swipe an unknown card.** You should see `tool_on: false` and the relay must
+   not close for a moment, not even briefly.
+4. **Reboot mid-session, then swipe again.** The tool must be usable — which it
+   will not be unless step 3's `boot-reset` actually runs.
+
+If you can also inhibit your own relay from a directly-wired sensor, declare
+`local_inhibit` at registration and implement it: see
+[`enforcement: firmware`](#enforcement-firmware). That tier is faster than the
+network and survives the network being gone.
 
 ---
 
@@ -179,7 +444,8 @@ The response is wrapped in the standard API envelope:
       "mqtt_instance_url": "tcp://broker.example:1883",
       "mqtt_username": null,
       "mqtt_password": null,
-      "mqtt_namespace": "cs/spaces"
+      "mqtt_namespace": "cs/spaces",
+      "command_key": "4f3c…64 hex chars…"
     }
   },
   "error": null
@@ -191,8 +457,96 @@ storage.** The invite is single-use: a device that loses its token needs a new
 invite from an administrator, not a retry. `mqtt_config` may be `null` if the
 deployment does not use MQTT.
 
+`mqtt_config.command_key` is the per-device message-signing key, and it is
+**omitted** when the deployment cannot mint one. Persist it with the rest and
+read [signed commands](#signed-commands) before acting on anything that carries
+a `sig`: ignoring it means acting on unsigned unlock commands.
+
 The registration endpoint is public by design — the invite code is the
 credential. Treat the code as a secret in transit.
+
+---
+
+## Signed commands
+
+Registration may hand you a fifth field inside `mqtt_config`:
+
+```json
+"command_key": "4f3c…64 hex chars…"
+```
+
+It is a **per-device HMAC-SHA256 key**, issued once, and it authenticates
+individual messages on the command channel as defence in depth behind the
+broker's own authentication and topic ACLs. Even a compromised or misconfigured
+broker then cannot forge a command your device will act on, or an event the
+server will trust.
+
+**Persist it with the token.** If you were given one and you ignore it, two
+things go wrong, and both are quiet:
+
+- you will act on **unsigned** `doors/unlock` commands — which is to say,
+  anybody who can publish to the broker can open the door; and
+- every `doors/event` you publish will be **rejected by the server** and never
+  reach the audit trail, with nothing said on your side.
+
+`command_key` is absent when the deployment has no card cipher configured to
+mint one. A device with no key runs unsigned and the server accepts its events,
+which is what makes a rollout possible — but it is the weaker mode, not the
+intended one.
+
+### What is signed, and over what bytes
+
+The MAC is computed over a **canonical string**, never over re-serialized JSON,
+so it cannot depend on field order surviving a round-trip on either side. Build
+the string exactly as below, HMAC-SHA256 it with your key, hex-encode the
+result, and put it in the message's `sig` field.
+
+**`doors/unlock`** (server → device):
+
+```
+doors/unlock|{door_id}|{duration_ms}|{reason}
+```
+
+**`doors/event`** (device → server):
+
+```
+doors/event|{door_id}|{card_id}|{granted}|{source}
+```
+
+Pipe-separated, no spaces, no trailing separator. The values are the message's
+own fields as text: `door_id` is the UUID in its usual hyphenated form,
+`duration_ms` is the integer in decimal, `granted` is `true` or `false` in
+lower case, and an absent `card_id`, `reason` or `source` is the **empty
+string** — not the word `null`.
+
+Only round-trip-stable fields are covered. `occurred_at` and any human-readable
+`reason` on an event are deliberately **outside** the MAC, so no datetime or
+float formatting difference between two implementations can break verification.
+
+Verification is a constant-time comparison of the hex strings. A malformed or
+empty `sig` is simply invalid, never an error.
+
+### The rule, in one line each
+
+- **You hold a key and a command arrives unsigned or wrongly signed:** ignore
+  the command. Do not act, and do not fall back to acting.
+- **You hold no key:** act on the command as it stands. You are in the legacy
+  mode and the broker ACL is your only control.
+- **You hold a key and you publish an event:** sign it. An unsigned event from a
+  keyed device is dropped.
+
+### Worked example
+
+Key `0a0b0c…`, an unlock of door `6f1e…` for 4200 ms with reason `qr`:
+
+```
+message = "doors/unlock|6f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0|4200|qr"
+sig     = hex(hmac_sha256(key_bytes, message_bytes))
+```
+
+`key_bytes` is the key **decoded from hex**, not its ASCII. Getting that wrong
+produces a signature that is stable, plausible, and wrong on every message —
+test against the fixture server before you trust it.
 
 ---
 
@@ -263,7 +617,7 @@ with `tool_on: false`:
 | `Tool is in repair` | status is Repair |
 | `Tool is retired` | status is Retired |
 | `Training required` | the user is not authorized for this specific tool |
-| `Metered tool requires its own API key` | see [authentication](#authentication) |
+| `Metered tool requires a power-bound device` | the tool bills for usage and your device is not bound to it in the `power` role — see [authentication](#authentication) |
 | *(billing-specific text)* | metered tool, funds or holds unavailable |
 
 ### `POST /api/toolguard/tool-off`
@@ -285,6 +639,16 @@ binding must be the `power` one.
 Reports usage. `message` is `Usage logged`. For metered tools this is what gets
 billed; send it before `tool-off`.
 
+On a **metered** tool the report is checked against the session it belongs to,
+and two refusals are specific to this endpoint:
+
+| `message` | meaning |
+|---|---|
+| `No open session for this tool` | there is no open activation to bill against — `tool-on` never succeeded, or `tool-off` already settled it. Report usage *before* stopping |
+| `This card did not activate the tool` | the `card` in the report is not the card that started the session. Send the card that swiped, not the last card seen |
+
+Both come back as `status: "error"` with HTTP **200**, like every other refusal.
+
 ### `GET /api/toolguard/sync` — the allow-list
 
 **Device Bearer token only.** Returns the cached authorization state for this
@@ -296,7 +660,7 @@ device:
   "profile_field": "card_id",
   "tools": [
     { "id": "…uuid…", "external_id": "laser-01", "name": "CO₂ Laser",
-      "status": "Idle", "requires_online": false }
+      "status": "idle", "requires_online": false }
   ],
   "users": [
     { "profile_field_digest": "9f86d081…64 hex chars…", "full_name": "A Member",
@@ -304,6 +668,11 @@ device:
   ]
 }
 ```
+
+`status` is one of `idle`, `in_use`, `maintenance`, `broken`, `repair`,
+`retired` — lower case with underscores, exactly as written here. Only `idle`
+and `in_use` are workable states; the other four mean the tool is out of
+service and `tool-on` will refuse it.
 
 **`profile_field_digest` is not the card.** It is
 `argon2id(device_pepper, card)`, hex-encoded (#109). To match a swipe, hash the
@@ -399,11 +768,20 @@ circuit-topology snapshot, and the poll fallback for the MQTT `power/state` push
 ```json
 {
   "as_of": "2026-09-16T12:00:00Z",
-  "locked_tool_ids": ["laser-01"],
+  "locked_tool_ids": ["7c9e6679-7425-40de-944b-e07fc1f90ae7"],
   "circuits": [{ "id": "…uuid…", "amperage_limit": "20" }],
   "tools": [{ "id": "…uuid…", "external_id": "laser-01", "circuit_id": "…uuid…" }]
 }
 ```
+
+**`locked_tool_ids` holds UUIDs, not `external_id`s.** Everywhere else in this
+protocol a tool may be named either way, and this one list may not: it is the
+tool's UUID as a string. Resolve your configured `external_id` to a UUID through
+the `tools` array in this same payload and match on that.
+
+Getting this wrong fails **open**, which is why it is called out: firmware that
+compares `locked_tool_ids` against the `external_id` it was configured with
+never matches, so a locked-out tool reads as unlocked and energizes.
 
 **`as_of` is advisory.** Lockout is sticky and never expires on age. An old
 snapshot showing a tool locked still means locked — do not decide a lockout has
@@ -411,10 +789,72 @@ lapsed because the timestamp is stale. That bias is deliberate: fail secure.
 
 ### `GET /api/toolguard/module-state`
 
-No parameters; a device token is the credential. Module bindings and interlock
-rules; the poll fallback
-for the MQTT `module/state` push. See [failure semantics](#failure-semantics) for
-what the fields oblige you to do.
+No parameters; a device token is the credential. Your wiring and the rules that
+gate it; the poll fallback for the MQTT `module/state` push.
+
+```json
+{
+  "as_of": "2026-10-02T12:00:00Z",
+  "tools": [
+    {
+      "tool_id": "7c9e6679-…",
+      "external_id": "laser-01",
+      "power_fails_safe": true,
+      "modules": [
+        {
+          "id": "…uuid…",
+          "device_id": "…uuid…",
+          "role": "power",
+          "name": "laser-contactor",
+          "params": { "gpio": 7, "active_low": false },
+          "on_disconnect": "fail_off"
+        }
+      ],
+      "interlocks": [
+        {
+          "id": "…uuid…",
+          "kind": "trip",
+          "condition": "door_open",
+          "source_module_id": "…uuid…",
+          "debounce_ms": 250,
+          "latch": true,
+          "reset": "operator_ack",
+          "enforcement": "firmware"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Only tools with at least one module bound or one interlock defined appear. Every
+id is a **string**, including the UUIDs, and `tool_id` is the UUID while
+`external_id` is the short name — match the way you match elsewhere:
+`external_id` first, then the UUID string.
+
+**Find yourself by `device_id`.** The snapshot describes every module on every
+tool you coordinate, not just you; a module reads its own row and ignores the
+rest.
+
+Field by field:
+
+- **`role`** — `reader`, `power`, `sensor` or `edge`. The first three are a
+  module's place in a tool's chain; `edge` is the coordinator binding, and it is
+  what a **door** requires (a door with no `edge` binding drives nothing).
+- **`params`** — your role-specific configuration, authored by the
+  administrator: which GPIO drives the relay, which receptacle you are, which
+  input a sensor reads. The shape is deliberately open, because it belongs to
+  your hardware rather than to this protocol — read the keys you understand and
+  ignore the rest. This is the field that tells a generic build which pin to
+  switch, so it is usually the one you need first.
+- **`on_disconnect`** — what you must do when the link drops; see
+  [`on_disconnect`](#on_disconnect).
+- **`power_fails_safe`** — a property of the *tool*, not of you: whether every
+  power module bound to it reaches a safe state unaided. See
+  [`power_fails_safe`](#power_fails_safe).
+- **`interlocks`** — see [interlocks](#interlocks) for what the rules oblige
+  you to do, and note `enforcement: firmware` means the trip is **yours** to
+  execute.
 
 ### `POST /api/toolguard/power-trip`
 
@@ -473,6 +913,97 @@ does exactly this, for a reason worth repeating: with `clean_session(true)` the
 broker discards subscriptions when the link drops, so a client that reconnects
 without re-subscribing is *connected and deaf* — healthy from the outside, and
 silently receiving nothing.
+
+### Payloads: `data` (device → server)
+
+The `data` topic carries your system info. **Every field below except the
+addresses is required**: a payload missing one fails to parse, and the server
+drops it with a log line you cannot see. That is the whole failure — no error
+comes back, and your `last_seen` and version simply never update.
+
+```json
+{
+  "mac_address": "02:00:00:00:00:01",
+  "software_version": "1.2.3",
+  "platform": "other",
+  "uptime": 86400,
+  "ipv4_address": "192.168.1.50",
+  "ipv6_address": null
+}
+```
+
+`uptime` is seconds since your boot, as an integer. `platform` is matched
+case-insensitively against `windows`, `linux`, `macos`, and anything else is
+recorded as `other`.
+
+### Payloads: `doors/state` (server → device)
+
+The compiled door snapshot. One message carries every door this device
+coordinates.
+
+```json
+{
+  "snapshot_at": "2026-10-02T12:00:00Z",
+  "doors": [
+    {
+      "id": "6f1e2d3c-…",
+      "name": "Front door",
+      "enabled": true,
+      "unlock_duration_ms": 4200,
+      "allow_cards": ["9f86d081…", "…"],
+      "deny_cards": [],
+      "hold_unlock_until": null
+    }
+  ]
+}
+```
+
+- **`allow_cards` and `deny_cards` are `argon2id` digests, hex-encoded** — the
+  same digest as `profile_field_digest`, and the same reason you probably cannot
+  compute it on a microcontroller. See [device classes](#device-classes).
+- `deny_cards` wins over `allow_cards`.
+- `hold_unlock_until` is the **Open Access latch**: when set, the strike is held
+  released with no card required until that instant. It is an absolute time
+  compared against *your* clock, so the window self-expires even if the closing
+  push never arrives — which is the fail-secure behaviour, and the one place in
+  this protocol where you need real time.
+- `enabled: false` means the door is authored but must not open.
+
+### Payloads: `doors/unlock` (server → device)
+
+A remote unlock, from an administrator or the QR check-in flow. **Momentary:**
+release the strike for `duration_ms` and let it fall closed. It is not a state
+to hold.
+
+```json
+{ "door_id": "6f1e2d3c-…", "duration_ms": 4200, "reason": "qr", "sig": "…" }
+```
+
+`sig` is present when your device holds a `command_key`, and then it is
+mandatory: verify it and ignore the command if it does not check out. See
+[signed commands](#signed-commands).
+
+### Payloads: `doors/event` (device → server)
+
+What you publish after deciding a swipe locally. This is how a door entry
+reaches the audit trail, so it is the record of who went where.
+
+```json
+{
+  "door_id": "6f1e2d3c-…",
+  "card_id": "04A1B2C3",
+  "granted": true,
+  "reason": "allow_list",
+  "source": "reader-1",
+  "occurred_at": "2026-10-02T12:00:00Z",
+  "sig": "…"
+}
+```
+
+Only `door_id` and `granted` are required. `occurred_at` is optional and the
+server substitutes its own receipt time when you omit it — which is the right
+choice for a device with no clock. **If you hold a `command_key`, `sig` is
+mandatory and an unsigned event is dropped.**
 
 ### The local broker: edge ↔ module
 
@@ -677,9 +1208,23 @@ is the single highest-value thing you can do.
 - **`start_gate`** — AND-ed preconditions. Every one must be satisfied to start.
 - **`trip`** — OR-ed faults. Any one fires cuts the tool.
 
-Other fields: `condition` (`door_open`, `estop`, `flow_ok`, …), `debounce_ms`,
-`latch`, `reset` (`re_auth` | `operator_ack` | `auto`), and `enforcement`
+Other fields: `condition`, `debounce_ms`, `latch`, `reset`
+(`re_auth` | `operator_ack` | `auto`), and `enforcement`
 (`firmware` | `edge` | `server`) — where the trip actually executes.
+
+`condition` is one of eight, and which half it falls in decides what asserting
+it means:
+
+| condition | asserted means | half |
+|---|---|---|
+| `door_open` | a guard door is open | hazard |
+| `lid_open` | an enclosure lid is open | hazard |
+| `estop` | emergency stop is pressed | hazard |
+| `auth_expired` | the authorization behind this session has lapsed | hazard |
+| `draw_over` | measured draw is above the limit | hazard |
+| `module_offline` | a module in the chain has gone quiet | hazard |
+| `flow_ok` | coolant/extraction flow is present | requirement |
+| `authorized` | a current authorization exists | requirement |
 
 Two rules that are easy to get backwards:
 

@@ -485,9 +485,15 @@ async fn tool_on(
 
     // Metered tool billing (Phase 2). Money is the LAST gate: training passed
     // above, so a hold is never placed for a member who was not eligible to use
-    // the tool. A metered tool must also authenticate with its own per-tool key
-    // (not the shared global key), so one leaked key can't run up charges on
-    // every tool.
+    // the tool. A metered tool must additionally be addressed by a device bound
+    // to it in the `power` role, so that a charge is attributable to the thing
+    // that actually switches the machine rather than to anything holding a
+    // valid token.
+    //
+    // The denial text used to say "requires its own API key", which outlived the
+    // mechanism: per-tool and global API keys were retired in #101 and the field
+    // is ignored. A firmware author reading that message went looking for a
+    // credential that no longer exists, which is why it now names the binding.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
             if !metered_device_ok(&state, device_id, &tool).await? {
@@ -495,11 +501,11 @@ async fn tool_on(
                     &state,
                     Some(&user),
                     &req.tool_id,
-                    "Metered tool requires its own API key",
+                    "Metered tool requires a power-bound device",
                 )
                 .await?;
                 return Ok(Json(ToolGuardResponse::tool_denied(
-                    "Metered tool requires its own API key",
+                    "Metered tool requires a power-bound device",
                 )));
             }
             match billing.open_session(&user, &tool).map_err(ApiError::from)? {
@@ -701,10 +707,11 @@ async fn tool_log(
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
     };
 
-    // Metered tool billing (Phase 2): a billable report must use the tool's own
-    // key and correlate to an open activation session; a report with no open
-    // session (or a negative/absurd value) is rejected rather than billed. The
-    // seconds are validated + capped inside record_usage / at settle.
+    // Metered tool billing (Phase 2): a billable report must come from a device
+    // bound to this tool in the `power` role and correlate to an open activation
+    // session; a report with no open session (or a negative/absurd value) is
+    // rejected rather than billed. The seconds are validated + capped inside
+    // record_usage / at settle.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
             if !metered_device_ok(&state, device_id, &tool).await? {
@@ -712,11 +719,11 @@ async fn tool_log(
                     &state,
                     Some(&user),
                     &req.tool_id,
-                    "Metered tool requires its own API key",
+                    "Metered tool requires a power-bound device",
                 )
                 .await?;
                 return Ok(Json(ToolGuardResponse::error(
-                    "Metered tool requires its own API key",
+                    "Metered tool requires a power-bound device",
                 )));
             }
             // #120/M1: a billable usage report must come from the card of the
