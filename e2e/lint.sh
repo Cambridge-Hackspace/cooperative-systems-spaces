@@ -92,6 +92,52 @@ check_no_backdoors() {
 run "no-backdoors" check_no_backdoors
 
 # ---------------------------------------------------------------------------
+# ...and inside stack.sh, only the two functions that are allowed to
+# ---------------------------------------------------------------------------
+# The check above exempts e2e/stack.sh by file, which is the whole file. That was
+# sound while one function in it spoke to the database; it is not a rule any more
+# once there are two, because the next one costs nothing to add and the exemption
+# already covers it.
+#
+# So the permitted set is named. `sql_ro` takes a caller's SQL and is read-only by
+# construction (PGOPTIONS). `scratch_db_create` is read-write and therefore takes
+# a *name*, never SQL, and issues only DROP/CREATE DATABASE -- it hands back an
+# empty database for the one tier that tests a program whose job is writing to
+# one. A third name here means somebody has a write path into the database the
+# battery asserts over, and that is a decision to make deliberately rather than
+# to discover later in a stage that seeds its own rows.
+PERMITTED_DB_FUNCTIONS='scratch_db_create sql_ro'
+check_db_access_is_named() {
+  local fn='' found=''
+  while IFS= read -r line; do
+    case "${line}" in
+      *'() {') fn="${line%%(*}" ;;
+      '}') fn='' ;;
+    esac
+    case "${line}" in
+      *psql*)
+        # Comments explain the rule and must not be read as invocations.
+        [[ ${line} == *'#'*psql* ]] && continue
+        [[ -n ${fn} ]] || continue
+        found="${found}${fn}"$'\n'
+        ;;
+    esac
+  done <e2e/stack.sh
+
+  local actual
+  actual="$(printf '%s' "${found}" | sort -u | tr '\n' ' ' | sed -e 's/ *$//')"
+  if [[ ${actual} == "${PERMITTED_DB_FUNCTIONS}" ]]; then
+    echo "database access in e2e/stack.sh: ${actual}"
+    return 0
+  fi
+  echo "e2e/stack.sh's database access has changed shape."
+  echo "  permitted: ${PERMITTED_DB_FUNCTIONS}"
+  echo "  found:     ${actual:-<none>}"
+  return 1
+}
+run "database-access-is-named" check_db_access_is_named
+
+# ---------------------------------------------------------------------------
 # The drivers parse
 # ---------------------------------------------------------------------------
 # `node --check` is not a linter, but it is the difference between a syntax
