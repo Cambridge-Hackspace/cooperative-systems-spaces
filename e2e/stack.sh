@@ -611,15 +611,36 @@ write_stack_config() {
 # TOOLS/ has no TOOLS.md on purpose. That is the condition under which the old
 # builder dropped everything beneath it, so a fixture without it would pass on
 # the code that shipped the bug.
+# make_wiki_fixture [generation] -- the wiki repository the stack serves.
+#
+# `rm -rf` then `git init` gives a BRAND NEW history every call, which is not
+# incidental: it is what makes the second generation a force-push, a squash, or
+# a re-created repository as far as the server's checkout is concerned. #157 was
+# the service being unable to recover from exactly that, and `stage_pages` now
+# drives it on purpose rather than discovering it on a second run of the gate.
+#
+# Generation 1 is what bring-up builds and the pages tier's first phase asserts.
+# Generation 2 swaps one page for another and KEEPS THE PAGE COUNT, so that a
+# count cannot pass for a check -- it would have been satisfied on the defect,
+# where the refresh failed and the old four stayed served, and on an empty wiki
+# only by accident.
 make_wiki_fixture() {
+  local generation="${1:-1}"
   local repo="${STACK_DIR}/wiki-fixture"
   rm -rf "${repo}"
   mkdir -p "${repo}/TOOLS/LASERS"
 
   printf '# Wiki Index\n\nTop level.\n' >"${repo}/INDEX.md"
-  printf '# Lathe\n\nA lathe.\n' >"${repo}/TOOLS/LATHE.md"
   printf '# Muse\n\nA laser cutter.\n' >"${repo}/TOOLS/LASERS/MUSE.md"
   printf '# Lasers\n\nThe laser bay.\n' >"${repo}/TOOLS/LASERS/INDEX.md"
+  # The one page that differs between the generations. TOOLS/ still has no
+  # TOOLS.md either way, which is the condition #81's navigation builder
+  # dropped, so the second generation tests the same shape as the first.
+  if [[ ${generation} == "1" ]]; then
+    printf '# Lathe\n\nA lathe.\n' >"${repo}/TOOLS/LATHE.md"
+  else
+    printf '# Mill\n\nA mill.\n' >"${repo}/TOOLS/MILL.md"
+  fi
 
   # git is not guaranteed on the host. reaper's guest has none -- which is why
   # preflight's artifacts/commit-matches-tree skips there -- while CI's runner
@@ -653,7 +674,7 @@ make_wiki_fixture() {
   if [[ ! -e "${repo}/.git/HEAD" ]]; then
     die "the wiki fixture at ${repo} is not a git repository, so css-server cannot clone it"
   fi
-  log "built wiki fixture at ${repo} (4 pages, nested two deep)"
+  log "built wiki fixture at ${repo} (generation ${generation}, 4 pages, nested two deep)"
 }
 
 start_server() {

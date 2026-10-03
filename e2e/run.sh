@@ -66,8 +66,18 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # seconds against a nine-minute gate, and in exchange the firmware fixture it
 # seeds -- tool-on and tool-off against a seeded card, per FIRMWARE.md -- is
 # proved on every commit instead of whenever somebody happens to look.
-STAGES_ALL="preflight,up,schema,pages,calendar,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,pages,calendar,restart,contract,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+#
+# `pages` sits AFTER `contract`, which looks arbitrary and is not. There is one
+# address that grants admin, so only the first driver to REGISTER it observes
+# the grant -- which is `contract/initial-setup-grants-admin`, and `account()`
+# throws rather than adopting, by design. `pages` needs an administrator now
+# that it drives the refresh endpoint (#157), and a driver that needs one has to
+# run after the stage that asserts how one is minted. It used to run fourth,
+# where it claimed nothing; moving it is cheaper than giving the pages tier a
+# second stage, and three stages later is still early enough to fail fast on a
+# wiki fixture that did not build.
+STAGES_ALL="preflight,up,schema,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -993,8 +1003,29 @@ stage_pages() {
   run_node pages.mjs >"${OUT}/logs/pages.log" 2>&1 || true
   absorb_driver_cases || true
 
+  # --- and the upstream history, replaced under the service (#157) ----------
+  # `make_wiki_fixture 2` wipes the fixture and inits a fresh repository, so the
+  # checkout css-server cloned at bring-up now faces commits with no ancestor in
+  # common with its own. That is a force-push, a squash, a `filter-repo`, or the
+  # repository re-created -- and the service could not recover from any of them:
+  # it reset to its LOCAL HEAD and retried the identical pull, after which the
+  # wiki served zero pages and logged an error on every refresh.
+  #
+  # Driven here rather than left as a property of running the gate twice. The
+  # defect WAS reachable by a second run in one session -- the fixture is rebuilt
+  # every time -- which is how it was found, and that is a terrible oracle: it
+  # fails on the second run while blaming whatever change happens to be in the
+  # tree, and it cannot fail on a fresh session at all. One stage, every run.
+  #
+  # The fixture is left at generation 2. Nothing after this stage reads the wiki,
+  # and a later `up` in the same session rebuilds generation 1 -- which is one
+  # more replacement, so the property keeps being exercised rather than reset.
+  make_wiki_fixture 2
+  run_node pages.mjs replaced >"${OUT}/logs/pages-replaced.log" 2>&1 || true
+  absorb_driver_cases || true
+
   collect_server_log
-  emit_junit pages "driver=pages.mjs"
+  emit_junit pages "driver=pages.mjs" "generations=2"
 }
 
 # #96: the calendar endpoint's window and the public config's timezone. The

@@ -437,50 +437,79 @@ impl PagesService {
     ///
     /// Every call is bounded by `deadline`: an unreachable remote must fail the
     /// refresh, not hold the service open until the transport gives up.
+    ///
+    /// **A pages checkout is a mirror.** Nothing writes into it, it has no local
+    /// commits worth keeping, and there is no situation in which merging is the
+    /// right answer -- so this fetches and resets to the remote rather than
+    /// pulling. That makes a replaced upstream history a non-event, which is what
+    /// this function's previous recovery path was trying and failing to be (#157).
+    ///
+    /// It pulled, and on failure ran `reset --hard HEAD` and pulled again. That
+    /// discards local modifications, which is the case it was written for, and
+    /// does nothing whatever about the case that actually breaks a pull: the
+    /// remote's history having been *replaced*. `HEAD` is the local commit, so
+    /// the reset left the branches exactly as divergent as it found them, the
+    /// retry ran the identical `git pull`, and it failed identically -- after
+    /// which the service served zero pages and logged an error on every refresh.
+    /// Any history rewrite upstream reaches that: a force-push, a squash, a
+    /// `filter-repo`, a branch re-created, or the repository replaced wholesale.
+    ///
+    /// No `git clean` afterwards, deliberately: the index still describes the old
+    /// HEAD when the reset runs, so `reset --hard` removes the files that history
+    /// tracked and the new one does not. Nothing writes untracked files into a
+    /// pages checkout, so there is nothing else to remove, and a `clean -fd` here
+    /// would be a recursive delete aimed at a path that comes from configuration.
     async fn sync_repository_static(
         repo_url: &str,
         repo_path: &Path,
         deadline: Duration,
     ) -> Result<()> {
         if repo_path.exists() {
-            // Repository exists, pull latest changes
-            info!("Pulling updates from repository: {}", repo_url);
-            let mut pull = Command::new("git");
-            pull.arg("-C").arg(repo_path).arg("pull");
-            let output = Self::run_git(pull, "pull", deadline).await?;
+            info!("Fetching updates from repository: {}", repo_url);
+            // `--prune` so a branch deleted upstream stops being a candidate for
+            // the reset target below. The refspec a clone writes is
+            // `+refs/heads/*:refs/remotes/origin/*` -- forced -- so this updates
+            // the remote-tracking refs even when the new history is unrelated to
+            // what is on disk, which is the whole point.
+            let mut fetch = Command::new("git");
+            fetch
+                .arg("-C")
+                .arg(repo_path)
+                .arg("fetch")
+                .arg("--prune")
+                .arg("origin");
+            let output = Self::run_git(fetch, "fetch", deadline).await?;
 
             if !output.status.success() {
-                warn!(
-                    "Git pull failed: {}",
+                return Err(anyhow::anyhow!(
+                    "Git fetch failed: {}",
                     String::from_utf8_lossy(&output.stderr)
-                );
-                // Try to reset and pull again
-                let mut reset = Command::new("git");
-                reset
-                    .arg("-C")
-                    .arg(repo_path)
-                    .arg("reset")
-                    .arg("--hard")
-                    .arg("HEAD");
-                let reset_output = Self::run_git(reset, "reset", deadline).await?;
+                ));
+            }
 
-                if !reset_output.status.success() {
-                    return Err(anyhow::anyhow!(
-                        "Git reset failed: {}",
-                        String::from_utf8_lossy(&reset_output.stderr)
-                    ));
-                }
+            // Resolved after the fetch, not before: on a repository whose
+            // history has just been replaced, this is the step that says which
+            // ref the new history arrived on.
+            let branch = Self::get_default_branch_static(repo_path, deadline).await?;
+            let target = format!("origin/{branch}");
 
-                let mut retry = Command::new("git");
-                retry.arg("-C").arg(repo_path).arg("pull");
-                let retry_output = Self::run_git(retry, "pull after reset", deadline).await?;
+            let mut reset = Command::new("git");
+            reset
+                .arg("-C")
+                .arg(repo_path)
+                .arg("reset")
+                .arg("--hard")
+                .arg(&target);
+            let reset_output = Self::run_git(reset, "reset", deadline).await?;
 
-                if !retry_output.status.success() {
-                    return Err(anyhow::anyhow!(
-                        "Git pull failed even after reset: {}",
-                        String::from_utf8_lossy(&retry_output.stderr)
-                    ));
-                }
+            if !reset_output.status.success() {
+                // Named with its target. "Git reset failed" over a stale
+                // `origin/HEAD` pointing at a branch the remote no longer has
+                // reads as a broken checkout rather than as a renamed branch.
+                return Err(anyhow::anyhow!(
+                    "Git reset to {target} failed: {}",
+                    String::from_utf8_lossy(&reset_output.stderr)
+                ));
             }
         } else {
             // Repository doesn't exist, clone it
@@ -991,5 +1020,198 @@ impl PagesConfig {
 
     pub fn site_repo_exists(&self) -> bool {
         self.site_repo.is_some()
+    }
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+
+    /// How long a git call in these tests may take. Local repositories, so the
+    /// number only matters on a machine under extreme load.
+    const DEADLINE: Duration = Duration::from_secs(60);
+
+    /// Run one git command in `cwd`, failing the test with git's own words.
+    ///
+    /// Through [`PagesService::run_git`] rather than spawning directly, for the
+    /// reason `checks/tests/pages_git_never_blocks_the_runtime.rs` enforces:
+    /// this file is allowed exactly one `.output()` site, so that "every git
+    /// call here has a deadline" is a property of the code and not of whoever
+    /// last added a call. A test helper with its own spawn would be the second,
+    /// and the check cannot tell a helper from a handler -- nor should it have
+    /// to.
+    ///
+    /// `git` is a runtime dependency of this service: it shells out to it, and
+    /// both the shipping image and the stack's runtime image install it for that
+    /// reason. So a test that needs it asks for nothing the deployment does not
+    /// already require, and if it is missing the right outcome is a failure
+    /// naming it rather than a skip.
+    async fn git(cwd: &Path, args: &[&str]) {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(cwd).args(args);
+        let out = PagesService::run_git(cmd, "test fixture", DEADLINE)
+            .await
+            .expect("git on PATH; the pages service shells out to it at runtime");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {cwd:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Stage and commit whatever is in `path`. `init` also creates the
+    /// repository; `init.defaultBranch` is set on the command rather than
+    /// assumed, so the branch name does not depend on the machine's git
+    /// configuration.
+    async fn commit_everything(path: &Path, message: &str, init: bool) {
+        if init {
+            git(path, &["-c", "init.defaultBranch=main", "init", "-q"]).await;
+            git(path, &["config", "user.email", "pages@test.invalid"]).await;
+            git(path, &["config", "user.name", "Pages Test"]).await;
+        }
+        git(path, &["add", "-A"]).await;
+        git(
+            path,
+            &["-c", "commit.gpgsign=false", "commit", "-q", "-m", message],
+        )
+        .await;
+    }
+
+    /// Build a repository at `path` holding exactly `files`, with a **brand new
+    /// history** every time.
+    ///
+    /// The `remove_dir_all` is not a convenience, it is the subject: wiping the
+    /// directory and running `git init` again produces exactly what a
+    /// force-push, a squash, a `filter-repo` or a re-created repository leaves
+    /// upstream -- commits with no ancestor in common with the ones a checkout
+    /// holds. That is the state #157's `reset --hard HEAD` recovery could not
+    /// leave, because it reset to the *local* commit and then ran the identical
+    /// failing pull.
+    async fn rebuild_repo(path: &Path, files: &[(&str, &str)]) {
+        if path.exists() {
+            fs::remove_dir_all(path).expect("clear the previous history");
+        }
+        fs::create_dir_all(path).expect("create the repository directory");
+        for (name, body) in files {
+            let file = path.join(name);
+            if let Some(parent) = file.parent() {
+                fs::create_dir_all(parent).expect("create the subdirectory");
+            }
+            fs::write(file, body).expect("write the fixture file");
+        }
+        commit_everything(path, "fixture", true).await;
+    }
+
+    /// #157: a checkout whose upstream history has been **replaced** must sync.
+    ///
+    /// The service pulled, and on failure ran `reset --hard HEAD` and pulled
+    /// again. `HEAD` is the *local* commit, so after a history replacement the
+    /// branches were left exactly as divergent as they were found, the retry ran
+    /// the identical `git pull`, and it failed identically -- leaving the service
+    /// serving zero pages and logging `Git pull failed even after reset: hint:
+    /// You have divergent branches` on every refresh. Nothing in the repository
+    /// noticed, because nothing had ever replaced a history under a checkout.
+    #[tokio::test]
+    async fn a_replaced_upstream_history_still_syncs() {
+        let tmp = tempfile::tempdir().expect("a temp dir");
+        let origin = tmp.path().join("origin");
+        let checkout = tmp.path().join("checkout");
+        let url = origin.to_str().expect("a utf-8 path").to_string();
+
+        rebuild_repo(&origin, &[("A.md", "# A\n")]).await;
+        PagesService::sync_repository_static(&url, &checkout, DEADLINE)
+            .await
+            .expect("the first sync clones");
+
+        // Anti-vacuity. Without it every assertion below would also pass over a
+        // checkout that never received the first history at all.
+        assert!(
+            checkout.join("A.md").exists(),
+            "the clone did not land, so this test proves nothing about a replacement"
+        );
+
+        rebuild_repo(&origin, &[("B.md", "# B\n")]).await;
+        PagesService::sync_repository_static(&url, &checkout, DEADLINE)
+            .await
+            .expect("a replaced history is a non-event for a mirror");
+
+        // Asserted from both sides, because neither alone is enough: a sync that
+        // succeeded and moved nothing passes the first, and one that emptied the
+        // checkout passes the second.
+        assert!(
+            checkout.join("B.md").exists(),
+            "the replacement history's page never arrived"
+        );
+        assert!(
+            !checkout.join("A.md").exists(),
+            "the replaced history is still checked out, so the working tree did not move"
+        );
+    }
+
+    /// The ordinary case, which is every refresh that has ever worked. A fix for
+    /// the rare one is worth nothing if it costs this.
+    #[tokio::test]
+    async fn an_ordinary_commit_still_arrives() {
+        let tmp = tempfile::tempdir().expect("a temp dir");
+        let origin = tmp.path().join("origin");
+        let checkout = tmp.path().join("checkout");
+        let url = origin.to_str().expect("a utf-8 path").to_string();
+
+        rebuild_repo(&origin, &[("A.md", "# A\n")]).await;
+        PagesService::sync_repository_static(&url, &checkout, DEADLINE)
+            .await
+            .expect("the first sync clones");
+        assert!(checkout.join("A.md").exists(), "the clone did not land");
+
+        // A fast-forward: the same history, one commit on top of it.
+        fs::write(origin.join("C.md"), "# C\n").expect("write the new page");
+        commit_everything(&origin, "a new page", false).await;
+
+        PagesService::sync_repository_static(&url, &checkout, DEADLINE)
+            .await
+            .expect("an ordinary update syncs");
+
+        assert!(
+            checkout.join("C.md").exists(),
+            "the new page did not arrive on a plain fast-forward"
+        );
+        assert!(
+            checkout.join("A.md").exists(),
+            "an unrelated page vanished on a fast-forward"
+        );
+    }
+
+    /// The case the old recovery path *was* written for, which must not be
+    /// traded away: a checkout somebody has edited by hand still syncs, and the
+    /// edit does not survive. `reset --hard` to the remote covers it for the
+    /// same reason it covers a replaced history -- the checkout is a mirror and
+    /// holds nothing worth keeping.
+    #[tokio::test]
+    async fn a_locally_modified_checkout_is_overwritten() {
+        let tmp = tempfile::tempdir().expect("a temp dir");
+        let origin = tmp.path().join("origin");
+        let checkout = tmp.path().join("checkout");
+        let url = origin.to_str().expect("a utf-8 path").to_string();
+
+        rebuild_repo(&origin, &[("A.md", "# A\n")]).await;
+        PagesService::sync_repository_static(&url, &checkout, DEADLINE)
+            .await
+            .expect("the first sync clones");
+
+        fs::write(checkout.join("A.md"), "# edited in the checkout\n")
+            .expect("scribble on the mirror");
+
+        fs::write(origin.join("A.md"), "# A, revised upstream\n").expect("revise upstream");
+        commit_everything(&origin, "revise A", false).await;
+
+        PagesService::sync_repository_static(&url, &checkout, DEADLINE)
+            .await
+            .expect("a dirty mirror syncs");
+
+        let served = fs::read_to_string(checkout.join("A.md")).expect("the page is readable");
+        assert_eq!(
+            served, "# A, revised upstream\n",
+            "the checkout kept a local edit instead of the upstream content"
+        );
     }
 }
