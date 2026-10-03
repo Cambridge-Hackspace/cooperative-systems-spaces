@@ -485,3 +485,676 @@ mod the_checks_reject_what_they_are_for {
         );
     }
 }
+
+// ── Accuracy, not just enumeration ───────────────────────────────────────────
+//
+// Everything above proves the *surface* is listed. The header of this file says
+// plainly that it cannot prove the document is accurate -- "a payload field
+// described with the wrong type, or a status code that is simply wrong, passes
+// here" -- and an audit against the code in October 2026 found eight places
+// where it had drifted, every one of them the kind a firmware author cannot
+// discover without the source:
+//
+//   * `locked_tool_ids` was illustrated with an `external_id`; the server sends
+//     UUIDs, so firmware matching its configured id found no lockout and
+//     energized a locked-out tool. Fails open.
+//   * tool `status` was illustrated as `Idle`; the enum serializes snake_case.
+//   * the registration response had grown `command_key` -- an entire HMAC
+//     command channel -- and the document never mentioned it, so firmware built
+//     from it acts on unsigned unlock commands.
+//   * `module/state` had no payload at all, so `params` (which GPIO to switch)
+//     was undiscoverable.
+//   * the `data` topic's required `uptime` and `platform` were unlisted, and a
+//     payload missing them is dropped with only a server-side log.
+//
+// None of that is catchable by listing endpoints. What *is* mechanically
+// checkable is that every name the wire carries appears in the document: field
+// names, enumerated values, denial strings, and the byte layout of a signed
+// message. These checks do that, code -> document, which is the direction that
+// rots: a field is added to a struct and the prose is not told.
+//
+// They do not prove the prose around a name is *right*. Nothing can. They
+// prove the name is there to be described, which is what makes a wrong
+// description something a reader can notice.
+
+/// Sources holding the vocabularies and payloads the wire carries.
+const MODELS_MODULES: &str = "server/src/models/tool_modules.rs";
+const MODELS_DEVICES: &str = "server/src/models/devices.rs";
+const MODELS_TOOLS: &str = "server/src/models/tools.rs";
+const TOOLGUARD: &str = "server/src/api/toolguard.rs";
+const DEVICES_API: &str = "server/src/api/devices.rs";
+const DEVICES_INBOUND: &str = "server/src/devices_inbound.rs";
+const DOORS: &str = "server/src/doors.rs";
+const SIG: &str = "css_lib/src/sig.rs";
+
+/// Is this field name written down as a field, rather than merely occurring?
+///
+/// Either a backtick span that *is* the name, or a JSON key `"name"`. A bare
+/// substring test would be satisfied by prose for every short field --
+/// `id`, `name`, `role`, `status`, `grant` -- and report the most easily
+/// forgotten fields as the ones that can never fail.
+fn field_is_documented(doc: &str, spans: &[String], field: &str) -> bool {
+    spans.iter().any(|s| s == field) || doc.contains(&format!("\"{field}\""))
+}
+
+/// Field names of one struct, `pub` or private, by text.
+///
+/// Private too, because two payloads this document is answerable for are local
+/// structs inside their handlers -- `DeviceDataPayload` and `DoorEventIn` --
+/// and those are precisely the two whose required fields were missing.
+fn struct_fields(src: &str, name: &str) -> Vec<String> {
+    // The declaration line, and the indentation it sits at. A struct declared
+    // inside a handler closes at `        }`, not in column zero -- and scanning
+    // past it swallows the rest of the function, which reads as a dozen phantom
+    // fields from whatever locals follow.
+    let (decl_line, indent) = src
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim_start();
+            let matches = trimmed == format!("pub struct {name} {{")
+                || trimmed == format!("struct {name} {{");
+            matches.then(|| {
+                (
+                    line.to_string(),
+                    line[..line.len() - trimmed.len()].to_string(),
+                )
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no `struct {name}` declaration found. It was renamed or moved, \
+                 and this check silently stopped covering it"
+            )
+        });
+
+    let mut fields = Vec::new();
+    let mut inside = false;
+    let closing = format!("{indent}}}");
+    for line in src.lines() {
+        if !inside {
+            inside = line == decl_line;
+            continue;
+        }
+        if line == closing {
+            break;
+        }
+        let trimmed = line.trim();
+        let decl = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
+        if decl.starts_with("//") || decl.starts_with('#') {
+            continue;
+        }
+        if let Some(colon) = decl.find(':') {
+            let ident = decl[..colon].trim();
+            if !ident.is_empty()
+                && ident
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                fields.push(ident.to_string());
+            }
+        }
+    }
+    assert!(
+        !fields.is_empty(),
+        "`struct {name}` yielded no fields; the extraction broke and this check \
+         is now passing vacuously"
+    );
+    fields
+}
+
+/// Serialized variant names of a `#[serde(rename_all = "snake_case")]` enum.
+fn snake_case_enum_values(src: &str, name: &str) -> Vec<String> {
+    let at = src
+        .find(&format!("pub enum {name} {{"))
+        .unwrap_or_else(|| panic!("no `pub enum {name}` found in the expected file"));
+    // Anti-vacuity, and the reason this check exists at all: the conversion
+    // below is only correct while the enum really is renamed snake_case. If the
+    // attribute goes, the documented values change and this must fail rather
+    // than keep asserting the old spelling.
+    let before = &src[..at];
+    assert!(
+        before.contains(r#"#[serde(rename_all = "snake_case")]"#),
+        "`{name}` is no longer `#[serde(rename_all = \"snake_case\")]`. Its \
+         serialized values have changed, so {DOC} and this check both need \
+         revisiting -- do not simply delete the assertion."
+    );
+
+    let rest = &src[at..];
+    let body = &rest[..rest.find("\n}").expect("enum is closed")];
+    let mut out = Vec::new();
+    for line in body.lines().skip(1) {
+        let line = line.trim().trim_end_matches(',');
+        if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        if !line.chars().all(|c| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let mut snake = String::new();
+        for (i, c) in line.chars().enumerate() {
+            if c.is_ascii_uppercase() {
+                if i != 0 {
+                    snake.push('_');
+                }
+                snake.push(c.to_ascii_lowercase());
+            } else {
+                snake.push(c);
+            }
+        }
+        out.push(snake);
+    }
+    assert!(!out.is_empty(), "`pub enum {name}` yielded no variants");
+    out
+}
+
+/// Literal denial and acknowledgement strings a device can receive.
+///
+/// Only literals: the billing path answers with a computed reason, which the
+/// document covers as "(billing-specific text)" because there is nothing
+/// stable to enumerate.
+fn literal_device_messages(src: &str) -> BTreeSet<String> {
+    // Whitespace-tolerant between the paren and the literal, because rustfmt
+    // wraps the long ones onto their own line:
+    //
+    //     return Ok(Json(ToolGuardResponse::tool_denied(
+    //         "Metered tool requires a power-bound device",
+    //     )));
+    //
+    // The first version of this matched `tool_denied("` on one line and
+    // therefore skipped every wrapped message -- including the one message this
+    // whole check was written for. It passed, and it covered nothing.
+    let mut out = BTreeSet::new();
+    for opener in [
+        "tool_denied(",
+        "ToolGuardResponse::error(",
+        "ok_with_message(",
+    ] {
+        let mut from = 0;
+        while let Some(at) = src[from..].find(opener) {
+            let after = from + at + opener.len();
+            let rest = &src[after..];
+            let trimmed = rest.trim_start();
+            let skipped = rest.len() - trimmed.len();
+            from = after;
+            // A dynamic argument (`&reason`) has no literal to enumerate; the
+            // document covers that case as "(billing-specific text)".
+            if !trimmed.starts_with('"') {
+                continue;
+            }
+            let body = &rest[skipped + 1..];
+            if let Some(end) = body.find('"') {
+                out.insert(body[..end].to_string());
+                from = after + skipped + 1 + end;
+            }
+        }
+    }
+    assert!(
+        out.len() >= 8,
+        "only {} literal device messages found in {TOOLGUARD}, which is too few \
+         to be right -- the extraction broke and this check is covering a \
+         subset of the messages it claims to: {out:?}",
+        out.len()
+    );
+    out
+}
+
+#[test]
+fn every_enumerated_value_is_documented() {
+    let doc = read(DOC);
+    let spans = code_spans(&doc);
+
+    let mut expected: Vec<(String, String)> = Vec::new();
+    let modules = read(MODELS_MODULES);
+    for vocab in [
+        "binding_role",
+        "on_disconnect",
+        "interlock_kind",
+        "interlock_condition",
+        "interlock_reset",
+        "enforcement",
+    ] {
+        for value in wire_kinds(&module_body(&modules, vocab)) {
+            expected.push((vocab.to_string(), value));
+        }
+    }
+    for value in wire_kinds(&module_body(&read(MODELS_DEVICES), "device_role")) {
+        expected.push(("device_role".to_string(), value));
+    }
+    for value in snake_case_enum_values(&read(MODELS_TOOLS), "ToolStatus") {
+        expected.push(("ToolStatus".to_string(), value));
+    }
+
+    assert!(
+        expected.len() > 25,
+        "only {} enumerated values extracted, which is too few to be right -- \
+         the vocabularies moved and this check is passing vacuously",
+        expected.len()
+    );
+
+    let missing: Vec<String> = expected
+        .into_iter()
+        .filter(|(_, v)| !spans.iter().any(|s| s == v))
+        .map(|(vocab, v)| format!("  {vocab}::{v}"))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "these values the server accepts or sends are not written down in \
+         {DOC}:\n{}\n\n\
+         Firmware has to branch on them. An undocumented interlock condition \
+         is a rule nobody can implement -- and the document's own instruction \
+         is to treat an unrecognised condition as a hazard, so the tool stays \
+         off and nobody knows why.",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn every_wire_payload_field_is_documented() {
+    let doc = read(DOC);
+    let spans = code_spans(&doc);
+
+    let sources: Vec<(&str, String)> = vec![
+        (WIRE, read(WIRE)),
+        (TOOLGUARD, read(TOOLGUARD)),
+        (DEVICES_API, read(DEVICES_API)),
+        (DEVICES_INBOUND, read(DEVICES_INBOUND)),
+        (DOORS, read(DOORS)),
+    ];
+    let src = |file: &str| -> String {
+        sources
+            .iter()
+            .find(|(f, _)| *f == file)
+            .map(|(_, s)| s.clone())
+            .expect("source listed")
+    };
+
+    // Payloads a device sends or receives. Each named deliberately: a struct
+    // added to the wire has to be added here, and a struct renamed fails in
+    // `struct_fields` rather than quietly losing its coverage.
+    let payloads: [(&str, &str); 19] = [
+        (WIRE, "ToolModuleStatePayload"),
+        (WIRE, "ToolModuleTool"),
+        (WIRE, "DeviceBinding"),
+        (WIRE, "ToolInterlockRule"),
+        (WIRE, "PowerStatePayload"),
+        (WIRE, "PowerStateCircuit"),
+        (WIRE, "PowerStateTool"),
+        (WIRE, "ToolLeasePayload"),
+        (TOOLGUARD, "ToolGuardResponse"),
+        (TOOLGUARD, "ToolGuardSyncPayload"),
+        (TOOLGUARD, "ToolGuardSyncTool"),
+        (TOOLGUARD, "ToolGuardSyncUser"),
+        (TOOLGUARD, "PowerReportRequest"),
+        (TOOLGUARD, "ToolLogRequest"),
+        (TOOLGUARD, "PowerTripRequest"),
+        (DEVICES_API, "RegisterDeviceRequest"),
+        (DEVICES_API, "RegisterDeviceResponse"),
+        (DEVICES_API, "EdgeMqttConfig"),
+        (DEVICES_INBOUND, "DeviceDataPayload"),
+    ];
+
+    let mut missing: Vec<String> = Vec::new();
+    for (file, name) in payloads {
+        for field in struct_fields(&src(file), name) {
+            if !field_is_documented(&doc, &spans, &field) {
+                missing.push(format!("  {name}.{field}  ({file})"));
+            }
+        }
+    }
+    // The two door payloads, whose structs live beside each other.
+    let doors_src = src(DOORS);
+    for name in ["DoorStateSnapshot", "CompiledDoor"] {
+        for field in struct_fields(&doors_src, name) {
+            if !field_is_documented(&doc, &spans, &field) {
+                missing.push(format!("  {name}.{field}  ({DOORS})"));
+            }
+        }
+    }
+    let inbound = src(DEVICES_INBOUND);
+    for field in struct_fields(&inbound, "DoorEventIn") {
+        if !field_is_documented(&doc, &spans, &field) {
+            missing.push(format!("  DoorEventIn.{field}  ({DEVICES_INBOUND})"));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these fields cross the wire to or from a device and are not named in \
+         {DOC}:\n{}\n\n\
+         A field a firmware author cannot see is one they cannot send -- and \
+         for a *required* field, the server drops the whole message with only a \
+         log line on its own side. `command_key` was absent for months this \
+         way, and firmware written without it acts on unsigned commands.",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn every_literal_denial_message_is_documented() {
+    let doc = read(DOC);
+    let missing: Vec<String> = literal_device_messages(&read(TOOLGUARD))
+        .into_iter()
+        .filter(|m| !doc.contains(m))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "these messages a device can receive are not in {DOC}: {missing:?}\n\n\
+         The denial table is the only place a firmware author can learn what a \
+         refusal means. A message changed in the code and not here sends them \
+         looking for the wrong cause -- which is exactly what `Metered tool \
+         requires its own API key` did after #101 retired API keys."
+    );
+}
+
+#[test]
+fn no_device_message_names_a_retired_credential() {
+    // The specific regression, pinned. #101 removed `external_api_key` and
+    // `toolguard.global_api_key`; the denial text kept naming them for a year,
+    // so the one message a firmware author was most likely to hit told them to
+    // go and find a credential that does not exist.
+    let offenders: Vec<String> = literal_device_messages(&read(TOOLGUARD))
+        .into_iter()
+        .filter(|m| {
+            let lower = m.to_lowercase();
+            lower.contains("api key") || lower.contains("api_key")
+        })
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "these device-facing messages name a credential this server does not \
+         accept: {offenders:?}\n\n\
+         There is one credential, a device token, and what gates a metered tool \
+         is a `power`-role binding. Say that instead."
+    );
+}
+
+#[test]
+fn the_signed_message_layouts_match_the_document() {
+    let sig = read(SIG);
+    let doc = read(DOC);
+
+    // The canonical strings are the format literals in `css_lib::sig`. If the
+    // layout changes, every firmware's signatures stop verifying at once, and
+    // the only way an author learns the new one is from this document.
+    let mut found = 0;
+    for line in sig.lines() {
+        let trimmed = line.trim();
+        let Some(open) = trimmed.find("format!(\"") else {
+            continue;
+        };
+        let rest = &trimmed[open + "format!(\"".len()..];
+        let Some(close) = rest.find('"') else {
+            continue;
+        };
+        let layout = &rest[..close];
+        if !layout.contains('|') {
+            continue;
+        }
+        found += 1;
+        assert!(
+            doc.contains(layout),
+            "the signed-message layout `{layout}` from {SIG} does not appear in \
+             {DOC}.\n\n\
+             A device computes its MAC over exactly these bytes. A layout the \
+             document gets wrong produces signatures that are stable, \
+             plausible and rejected on every message."
+        );
+    }
+    assert!(
+        found >= 2,
+        "found {found} canonical signing layouts in {SIG}, expected at least \
+         two (unlock and event). The extraction broke, and this check now \
+         passes on any document at all."
+    );
+}
+
+// ── Self-tests for the accuracy checks ───────────────────────────────────────
+//
+// Same discipline as above: each extractor is fed the input it exists to
+// reject. The first of these is not hypothetical -- it is the bug this file's
+// own author wrote and the suite caught, which is the whole argument for
+// writing them.
+
+#[cfg(test)]
+mod the_accuracy_checks_reject_what_they_are_for {
+    use super::*;
+
+    /// A struct declared *inside a function* closes at its own indentation. The
+    /// first version of `struct_fields` scanned to the first `\n}` in column
+    /// zero, swallowed the rest of the handler, and reported a dozen phantom
+    /// fields from the locals that followed -- which would have demanded the
+    /// document describe `event_data` as part of a door event.
+    #[test]
+    fn a_struct_inside_a_function_stops_at_its_own_brace() {
+        let src = "\
+pub async fn handle(&self) {
+        #[derive(Deserialize)]
+        struct Inner {
+            door_id: Uuid,
+            granted: bool,
+        }
+
+        let audit = NewAuditLog {
+            event_type: something,
+            user_agent: None,
+        };
+    }
+";
+        assert_eq!(
+            vec!["door_id".to_string(), "granted".to_string()],
+            struct_fields(src, "Inner"),
+            "only the struct's own fields may be reported"
+        );
+    }
+
+    #[test]
+    fn a_top_level_struct_still_works() {
+        let src = "pub struct Outer {\n    pub a: String,\n    pub b: i32,\n}\n";
+        assert_eq!(
+            vec!["a".to_string(), "b".to_string()],
+            struct_fields(src, "Outer")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "no `struct Gone` declaration found")]
+    fn a_renamed_struct_is_refused_rather_than_silently_uncovered() {
+        struct_fields("pub struct Other { pub a: String }", "Gone");
+    }
+
+    /// The vocabulary trap again, for fields. `id`, `name`, `role` and `status`
+    /// occur in any protocol prose; a substring test would mark the most
+    /// forgettable fields as the ones that can never fail.
+    #[test]
+    fn prose_does_not_count_as_documenting_a_field() {
+        let doc = "The device sends its id and name, and the role it plays.";
+        let spans = code_spans(doc);
+        for field in ["id", "name", "role"] {
+            assert!(
+                !field_is_documented(doc, &spans, field),
+                "`{field}` in prose must not count as documented"
+            );
+        }
+    }
+
+    #[test]
+    fn a_json_key_or_a_code_span_counts() {
+        let doc = "the payload carries `params`, and \"uptime\": 86400 in seconds";
+        let spans = code_spans(doc);
+        assert!(field_is_documented(doc, &spans, "params"));
+        assert!(field_is_documented(doc, &spans, "uptime"));
+        assert!(!field_is_documented(doc, &spans, "command_key"));
+    }
+
+    #[test]
+    fn enum_variants_become_their_serialized_spelling() {
+        let src = "\
+#[derive(Serialize)]
+#[serde(rename_all = \"snake_case\")]
+pub enum ToolStatus {
+    Idle,
+    InUse,
+    Maintenance,
+}
+";
+        assert_eq!(
+            vec![
+                "idle".to_string(),
+                "in_use".to_string(),
+                "maintenance".to_string()
+            ],
+            snake_case_enum_values(src, "ToolStatus"),
+            "`InUse` serializes as `in_use`, which is what the document must say"
+        );
+    }
+
+    /// The conversion is only correct while the attribute is there. Losing it
+    /// changes every value on the wire, so the check must fail rather than go
+    /// on asserting the old spelling.
+    #[test]
+    #[should_panic(expected = "no longer")]
+    fn losing_the_rename_attribute_is_refused() {
+        let src = "pub enum ToolStatus {\n    Idle,\n}\n";
+        snake_case_enum_values(src, "ToolStatus");
+    }
+
+    /// Both layouts, because rustfmt chooses between them by line length and
+    /// the wrapped one is where the long messages live. An extractor that only
+    /// reads the inline form passes while covering none of them.
+    #[test]
+    fn literal_messages_are_extracted_in_either_layout() {
+        let src = r#"
+            return Ok(Json(ToolGuardResponse::tool_denied("Training required")));
+            return Ok(Json(ToolGuardResponse::tool_denied(&reason)));
+            return Ok(Json(ToolGuardResponse::tool_denied(
+                "Metered tool requires a power-bound device",
+            )));
+            return Ok(Json(ToolGuardResponse::error("Tool not found")));
+            ToolGuardResponse::ok_with_message(
+                "Usage logged",
+            )
+            ToolGuardResponse::tool_denied("Unknown card")
+            ToolGuardResponse::tool_denied("User is not active")
+            ToolGuardResponse::tool_denied("Tool is broken")
+            ToolGuardResponse::tool_denied("Tool is retired")
+        "#;
+        let found = literal_device_messages(src);
+        for expected in [
+            "Training required",
+            "Metered tool requires a power-bound device",
+            "Tool not found",
+            "Usage logged",
+        ] {
+            assert!(found.contains(expected), "missing {expected:?}: {found:?}");
+        }
+        assert!(
+            !found.iter().any(|m| m.contains("reason")),
+            "the computed billing reason has no literal to enumerate and must \
+             not become one: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_broken_internal_link_is_caught() {
+        // And the arrow case, which is the one a hand-written anchor gets
+        // wrong: the vanished `↔` leaves a double hyphen behind.
+        assert_eq!(
+            "the-local-broker-edge--module",
+            github_anchor("The local broker: edge ↔ module")
+        );
+        assert_eq!(
+            "enforcement-firmware",
+            github_anchor("`enforcement: firmware`")
+        );
+        assert_eq!("on_disconnect", github_anchor("`on_disconnect`"));
+        // Capitals fold and a trailing space is trimmed rather than becoming a
+        // hyphen, which is also what GitHub does -- so a heading edited to add
+        // a trailing space does not break every link to it.
+        assert_eq!("device-classes", github_anchor("Device Classes "));
+        // And a link to something that is not a heading is caught, which is
+        // the whole point.
+        let anchors: BTreeSet<String> = ["device-classes".to_string()].into_iter().collect();
+        assert!(!anchors.contains(&github_anchor("Device Clases")));
+    }
+
+    #[test]
+    fn a_retired_credential_in_a_message_is_caught() {
+        let src = r#"
+            tool_denied("Metered tool requires its own API key")
+            tool_denied("a") tool_denied("b") tool_denied("c") tool_denied("d")
+            tool_denied("e") tool_denied("f") tool_denied("g") tool_denied("h")
+        "#;
+        let offenders: Vec<String> = literal_device_messages(src)
+            .into_iter()
+            .filter(|m| {
+                let lower = m.to_lowercase();
+                lower.contains("api key") || lower.contains("api_key")
+            })
+            .collect();
+        assert_eq!(
+            1,
+            offenders.len(),
+            "the message that outlived #101 must be caught"
+        );
+    }
+}
+
+/// GitHub's heading-anchor algorithm: lower-case, drop everything that is not
+/// alphanumeric, space, hyphen or underscore, then spaces become hyphens.
+///
+/// Reproduced rather than approximated because the document's own headings
+/// contain backticks, colons and an `↔`, and each is dropped differently --
+/// `### The local broker: edge ↔ module` becomes
+/// `the-local-broker-edge--module`, with the double hyphen the vanished arrow
+/// leaves behind.
+fn github_anchor(heading: &str) -> String {
+    let cleaned: String = heading
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_')
+        .collect();
+    cleaned.trim().replace(' ', "-")
+}
+
+#[test]
+fn every_internal_link_resolves() {
+    let doc = read(DOC);
+
+    let anchors: BTreeSet<String> = doc
+        .lines()
+        .filter_map(|l| l.strip_prefix('#'))
+        .map(|rest| github_anchor(rest.trim_start_matches('#').trim()))
+        .collect();
+    assert!(
+        anchors.len() > 20,
+        "only {} headings found in {DOC}; the extraction broke",
+        anchors.len()
+    );
+
+    let mut broken = Vec::new();
+    let mut from = 0;
+    while let Some(at) = doc[from..].find("](#") {
+        let start = from + at + "](#".len();
+        let end = match doc[start..].find(')') {
+            Some(e) => start + e,
+            None => break,
+        };
+        let target = &doc[start..end];
+        if !anchors.contains(target) {
+            broken.push(target.to_string());
+        }
+        from = end;
+    }
+
+    assert!(
+        broken.is_empty(),
+        "{DOC} links to anchors it does not contain: {broken:?}\n\n\
+         The document is now long enough to be navigated rather than read \
+         start to finish, and the walkthrough leans on those links to keep the \
+         reference material out of the way. A link that goes nowhere sends a \
+         firmware author back to guessing."
+    );
+}

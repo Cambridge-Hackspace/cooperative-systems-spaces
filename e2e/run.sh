@@ -76,8 +76,13 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # where it claimed nothing; moving it is cheaper than giving the pages tier a
 # second stage, and three stages later is still early enough to fail fast on a
 # wiki fixture that did not build.
-STAGES_ALL="preflight,up,schema,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+#
+# `toolpass` stays where #38 put it, beside `schema`: it needs Postgres and not
+# the server, it drives its own scratch database, and it opens no HTTP session at
+# all -- so it claims no address and nothing in it cares where the admin comes
+# from.
+STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -669,6 +674,257 @@ list it froze now overrides the table, and event types added since are dropped"
     "$(sql_ro "SHOW timezone" | tr -d ' ')"
 
   emit_junit schema "encoding=${PG_ENCODING}" "migrations=${declared}"
+}
+
+# ===========================================================================
+# toolpass -- the ToolPass loader (#38), run four times over two extracts
+# ===========================================================================
+# `toolpass-load` moves the space's existing membership records -- 469 members,
+# their cards, their ledger and 8,236 usage sessions -- into this schema. It is
+# run twice for real: once well before the cutover, and once at the cutover with
+# a fresh extract. Nothing in this repository exercised it against a database
+# until this stage, and its unit tests cover only the pure mapping functions.
+#
+# That gap hid a defect of exactly the shape a unit test cannot see. The sessions
+# phase was idempotent at the *phase* level -- skip every session if any migrated
+# session already exists -- and the ledger phase at the *member* level. Both are
+# correct for re-running one extract and both are wrong for the run that matters:
+# the cutover extract is a superset of the first, so the rows it exists to carry
+# are precisely the ones belonging to members the first load already created. The
+# cutover would have committed none of them, printed `sessions: 0`, and exited
+# zero.
+#
+# So the oracle is a *sequence*, which is the only thing that can tell a
+# per-row upsert from a phase-level skip:
+#
+#   1. load the first extract into an empty database
+#   2. dry-run the cutover extract -- it must count the new rows and write none
+#   3. load the cutover extract -- the new rows arrive, including an existing
+#      member's
+#   4. load it again -- nothing arrives, nothing duplicates
+#
+# Every row count is asserted twice over, from both sides: against the loader's
+# own `counts:` report (what an operator reads, and what said `sessions: 0`) and
+# against the database (what is actually there). Either alone can agree with a
+# defect -- a loader that inserted nothing and reported nothing is consistent --
+# and the totals come from the fixture driver's read-back of the SQLite it wrote,
+# so no number in this stage is restated from the same place twice.
+#
+# Runs against a scratch database of its own (scratch_db_create), so it neither
+# leaves a migration admin in the world the later stages assert over nor depends
+# on where it sits in the order. It needs Postgres and not the server.
+#
+# Observed failing, which is the only thing that makes any of it worth running:
+# driven against a simulated loader with the old phase-level and member-level
+# guards, nine cases fire -- `cutover-load-reports-only-what-is-new`,
+# `cutover-load-holds-every-session`, the two ledger equivalents,
+# `re-load-imports-no-ledger-entry`, `re-load-leaves-the-session-total`,
+# `dry-run-counts-the-new-sessions`, and both `an-existing-members-new-*-arrived`
+# cases. Against the per-row upsert, none of them do.
+#
+# What this does not prove: anything about the transform that produces the staged
+# SQLite. That is a separate program, outside this repository, and the fixture
+# here is this suite's statement of the schema it must emit.
+
+# toolpass_manifest <file> <key> -- one count the fixture driver read back out of
+# the staged SQLite it had just written.
+toolpass_manifest() {
+  sed -n "s/^$2=//p" "$1"
+}
+
+# toolpass_reported <log> <field> -- one field of the loader's own `counts:` line.
+#
+# The loader prints its `Counts` with `{:?}`, which is what an operator sees and
+# therefore what is worth asserting on. A renamed field shows up here as an empty
+# value rather than a zero, so it fails as "expected [2], got []" rather than
+# quietly agreeing with a loader that did nothing.
+toolpass_reported() {
+  sed -n 's/.*counts: Counts {\(.*\)}.*/\1/p' "$1" \
+    | tr ',' '\n' \
+    | sed -n "s/^ *$2: \([0-9]*\) *$/\1/p"
+}
+
+stage_toolpass() {
+  cases_begin toolpass
+  stack_paths
+
+  if ! pg_ready; then
+    record_case "toolpass/postgres-is-up" fail "no database to load into; run the up stage first"
+    emit_junit toolpass
+    return 1
+  fi
+  record_case "toolpass/postgres-is-up" ok
+
+  # e2e/build.sh installs it. Asserted rather than assumed: without it every
+  # `run_loader` below fails in a way that reads as a broken loader.
+  if [[ ! -x "${ROOT}/e2e/artifacts/toolpass-load" ]]; then
+    record_case "toolpass/loader-is-built" fail \
+      "e2e/artifacts/toolpass-load is missing; e2e/build.sh installs it beside css-server"
+    emit_junit toolpass
+    return 1
+  fi
+  record_case "toolpass/loader-is-built" ok
+
+  local db="css_e2e_toolpass"
+  local gen1="${STACK_DIR}/toolpass-gen1.sqlite"
+  local gen2="${STACK_DIR}/toolpass-gen2.sqlite"
+  local manifest="${STACK_DIR}/toolpass-manifest.env"
+
+  # The fixtures, and the driver's own proof that the second extract adds rows
+  # the first did not -- without which every "the new rows arrived" assertion
+  # below would be zero against zero.
+  run_node toolpass.mjs >"${OUT}/logs/toolpass-fixture.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  if [[ ! -s ${manifest} ]] || [[ ! -s ${gen1} ]] || [[ ! -s ${gen2} ]]; then
+    record_case "toolpass/fixtures-were-written" fail \
+      "the driver left no staged SQLite; see logs/toolpass-fixture.log"
+    emit_junit toolpass
+    return 1
+  fi
+  record_case "toolpass/fixtures-were-written" ok
+
+  local want_users1 want_cards1 want_ledger1 want_sessions1
+  local want_users2 want_cards2 want_ledger2 want_sessions2
+  want_users1="$(toolpass_manifest "${manifest}" gen1.users)"
+  want_cards1="$(toolpass_manifest "${manifest}" gen1.cards)"
+  want_ledger1="$(toolpass_manifest "${manifest}" gen1.ledger)"
+  want_sessions1="$(toolpass_manifest "${manifest}" gen1.sessions)"
+  want_users2="$(toolpass_manifest "${manifest}" gen2.users)"
+  want_cards2="$(toolpass_manifest "${manifest}" gen2.cards)"
+  want_ledger2="$(toolpass_manifest "${manifest}" gen2.ledger)"
+  want_sessions2="$(toolpass_manifest "${manifest}" gen2.sessions)"
+
+  scratch_db_create "${db}"
+
+  # --- 1. the first extract, into an empty database ------------------------
+  local log1="${OUT}/logs/toolpass-load-1.log"
+  if run_loader "${db}" "${gen1}" >"${log1}" 2>&1; then
+    record_case "toolpass/first-load-succeeds" ok
+  else
+    record_case "toolpass/first-load-succeeds" fail "see logs/$(basename "${log1}")"
+  fi
+
+  # The loader carries the migrations itself and ran them on a virgin database,
+  # which is the only place that claim is tested -- everywhere else the server
+  # has already migrated before anything looks.
+  local declared applied
+  declared="$(find "${ROOT}/server/migrations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  applied="$(sql_ro "SELECT count(*) FROM __diesel_schema_migrations" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/loader-applies-every-migration" "${declared}" "${applied}"
+
+  assert_eq "toolpass/first-load-reports-its-sessions" "${want_sessions1}" \
+    "$(toolpass_reported "${log1}" sessions)"
+  assert_eq "toolpass/first-load-reports-its-ledger" "${want_ledger1}" \
+    "$(toolpass_reported "${log1}" ledger)"
+  assert_eq "toolpass/first-load-reports-its-users" "${want_users1}" \
+    "$(toolpass_reported "${log1}" users)"
+  assert_eq "toolpass/first-load-wrote-its-sessions" "${want_sessions1}" \
+    "$(sql_ro "SELECT count(*) FROM tool_usage_sessions" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/first-load-wrote-its-ledger" "${want_ledger1}" \
+    "$(sql_ro "SELECT count(*) FROM membership_ledger" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/first-load-wrote-its-cards" "${want_cards1}" \
+    "$(sql_ro "SELECT count(*) FROM user_cards" "${db}" | tr -d ' ')"
+  # Plus the migration system user, which the loader creates to own the migrated
+  # tools and act on the waivers. Stated as +1 rather than as a bare number so a
+  # second one appearing is a failure rather than a number somebody adjusts.
+  assert_eq "toolpass/first-load-wrote-its-users" "$((want_users1 + 1))" \
+    "$(sql_ro "SELECT count(*) FROM users" "${db}" | tr -d ' ')"
+
+  # --- 2. the cutover extract as a dry run, which must write nothing -------
+  # The property an operator leans on before committing a load of real member
+  # records, and it had no coverage. Both halves are asserted: that it counted
+  # the rows it would have written (else it proves nothing about rollback) and
+  # that it wrote none of them.
+  local logdry="${OUT}/logs/toolpass-load-dry.log"
+  run_loader "${db}" "${gen2}" --dry-run >"${logdry}" 2>&1 || true
+  assert_eq "toolpass/dry-run-counts-the-new-sessions" \
+    "$((want_sessions2 - want_sessions1))" "$(toolpass_reported "${logdry}" sessions)"
+  # awk rather than `grep -c`, which exits non-zero when it finds nothing: that
+  # status would have to be swallowed, and a swallowed status is how a stage ends
+  # up asserting against an empty string it cannot distinguish from a zero.
+  assert_eq "toolpass/dry-run-says-it-rolled-back" "1" \
+    "$(awk '/rolled back, nothing written/ { n++ } END { print n + 0 }' "${logdry}")"
+  assert_eq "toolpass/dry-run-wrote-no-session" "${want_sessions1}" \
+    "$(sql_ro "SELECT count(*) FROM tool_usage_sessions" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/dry-run-wrote-no-ledger-entry" "${want_ledger1}" \
+    "$(sql_ro "SELECT count(*) FROM membership_ledger" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/dry-run-wrote-no-user" "$((want_users1 + 1))" \
+    "$(sql_ro "SELECT count(*) FROM users" "${db}" | tr -d ' ')"
+
+  # --- 3. the cutover load -------------------------------------------------
+  local log2="${OUT}/logs/toolpass-load-2.log"
+  if run_loader "${db}" "${gen2}" >"${log2}" 2>&1; then
+    record_case "toolpass/cutover-load-succeeds" ok
+  else
+    record_case "toolpass/cutover-load-succeeds" fail "see logs/$(basename "${log2}")"
+  fi
+
+  assert_eq "toolpass/cutover-load-reports-only-what-is-new" \
+    "$((want_sessions2 - want_sessions1))" "$(toolpass_reported "${log2}" sessions)"
+  assert_eq "toolpass/cutover-load-reports-only-new-ledger-entries" \
+    "$((want_ledger2 - want_ledger1))" "$(toolpass_reported "${log2}" ledger)"
+  assert_eq "toolpass/cutover-load-holds-every-session" "${want_sessions2}" \
+    "$(sql_ro "SELECT count(*) FROM tool_usage_sessions" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/cutover-load-holds-every-ledger-entry" "${want_ledger2}" \
+    "$(sql_ro "SELECT count(*) FROM membership_ledger" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/cutover-load-holds-every-user" "$((want_users2 + 1))" \
+    "$(sql_ro "SELECT count(*) FROM users" "${db}" | tr -d ' ')"
+
+  # The two rows the old code dropped, named individually. A total can be right
+  # for the wrong reason; these cannot. `tps-3` and `toolpass:txn:tp-1:3` belong
+  # to a member the first load created, which is what made them invisible to a
+  # phase-level and a member-level guard respectively.
+  assert_eq "toolpass/an-existing-members-new-session-arrived" "1" \
+    "$(sql_ro "SELECT count(*) FROM tool_usage_sessions WHERE source_reference = 'tps-3'" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/an-existing-members-new-ledger-entry-arrived" "1" \
+    "$(sql_ro "SELECT count(*) FROM membership_ledger WHERE external_reference = 'toolpass:txn:tp-1:3'" "${db}" | tr -d ' ')"
+
+  # The cutover extract repeats one session and one ledger identifier -- the
+  # transform that produces it runs outside this repository and promises no
+  # uniqueness, and the loader batches 2000 rows per statement. So the totals
+  # just asserted are also the claim that a repeated row inside one batch loads
+  # once instead of aborting a cutover halfway through. That claim is only worth
+  # anything if the extract really does repeat something, which is this case.
+  local rows_sessions2 rows_ledger2
+  rows_sessions2="$(toolpass_manifest "${manifest}" gen2.sessions_rows)"
+  rows_ledger2="$(toolpass_manifest "${manifest}" gen2.ledger_rows)"
+  if [[ ${rows_sessions2} -gt ${want_sessions2} ]] && [[ ${rows_ledger2} -gt ${want_ledger2} ]]; then
+    record_case "toolpass/the-cutover-extract-repeats-a-staged-row" ok
+  else
+    record_case "toolpass/the-cutover-extract-repeats-a-staged-row" fail \
+      "nothing is repeated: ${rows_sessions2}/${want_sessions2} session and ${rows_ledger2}/${want_ledger2} ledger rows-per-identifier"
+  fi
+
+  # --- 4. the same extract again, which must change nothing ----------------
+  # The other half of idempotency, and the one the old code had: the fix must not
+  # buy "imports what is new" at the price of "imports it twice".
+  local log3="${OUT}/logs/toolpass-load-3.log"
+  if run_loader "${db}" "${gen2}" >"${log3}" 2>&1; then
+    record_case "toolpass/re-load-succeeds" ok
+  else
+    record_case "toolpass/re-load-succeeds" fail "see logs/$(basename "${log3}")"
+  fi
+
+  assert_eq "toolpass/re-load-imports-no-session" "0" "$(toolpass_reported "${log3}" sessions)"
+  assert_eq "toolpass/re-load-imports-no-ledger-entry" "0" "$(toolpass_reported "${log3}" ledger)"
+  assert_eq "toolpass/re-load-imports-no-user" "0" "$(toolpass_reported "${log3}" users)"
+  assert_eq "toolpass/re-load-leaves-the-session-total" "${want_sessions2}" \
+    "$(sql_ro "SELECT count(*) FROM tool_usage_sessions" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/re-load-leaves-the-ledger-total" "${want_ledger2}" \
+    "$(sql_ro "SELECT count(*) FROM membership_ledger" "${db}" | tr -d ' ')"
+
+  # --- and the migrated cards are sealed (#108) ----------------------------
+  # The loader is the one writer of cards that does not go through the API, so
+  # the cards stage's "every card is sealed" says nothing about it. It seals with
+  # keys handed to it on the command line; a loader that wrote a NULL blind index
+  # would produce rows no swipe could ever resolve, silently.
+  assert_eq "toolpass/every-migrated-card-arrived" "${want_cards2}" \
+    "$(sql_ro "SELECT count(*) FROM user_cards" "${db}" | tr -d ' ')"
+  assert_eq "toolpass/every-migrated-card-is-sealed" "0" \
+    "$(sql_ro "SELECT count(*) FROM user_cards WHERE code_bidx IS NULL OR code_encrypted IS NULL" "${db}" | tr -d ' ')"
+
+  emit_junit toolpass "driver=toolpass.mjs" "database=${db}" "loads=4"
 }
 
 # ===========================================================================

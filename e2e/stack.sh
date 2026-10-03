@@ -172,16 +172,98 @@ wait_for() {
 # *server* refuses the write, so a `sql_ro "INSERT ..."` that slips in fails
 # instead of silently working. e2e/lint.sh greps for any psql invocation outside
 # this function, so the rule is enforced rather than documented.
+# sql_ro <query> [database] -- defaults to the stack's own database. The second
+# argument exists for the `toolpass` stage, which asserts against a scratch
+# database on the same cluster (see scratch_db_create); it is still a read-only
+# connection, so the rule above holds wherever it points.
 sql_ro() {
-  local query="$1"
+  local query="$1" db="${2:-${PG_DB}}"
   if [[ ${PROVISION} == "external" ]]; then
     PGPASSWORD="${PG_PASS}" PGOPTIONS='-c default_transaction_read_only=on' \
-      psql -h 127.0.0.1 -p "${PG_PORT}" -U "${PG_USER}" -d "${PG_DB}" -tAc "${query}"
+      psql -h 127.0.0.1 -p "${PG_PORT}" -U "${PG_USER}" -d "${db}" -tAc "${query}"
   else
     pm exec \
       -e PGPASSWORD="${PG_PASS}" \
       -e PGOPTIONS='-c default_transaction_read_only=on' \
-      "${C_PG}" psql -h 127.0.0.1 -p "${PG_PORT}" -U "${PG_USER}" -d "${PG_DB}" -tAc "${query}"
+      "${C_PG}" psql -h 127.0.0.1 -p "${PG_PORT}" -U "${PG_USER}" -d "${db}" -tAc "${query}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# A scratch database, for the one program whose job is writing to a database
+# ---------------------------------------------------------------------------
+# `toolpass-load` is an operator tool, not a service: it opens its own
+# connection, runs the migrations and writes rows. Pointing it at the stack's
+# database would leave a migration admin, its tools and its cards in the world
+# every later stage asserts over, so it gets an empty database of its own on the
+# same cluster -- which also means the stage is independent of where it sits in
+# the order.
+#
+# This is the second and last psql invocation in the suite, and it is bounded so
+# that it cannot become a hole in the no-backdoors rule above: it takes a *name*
+# and never SQL, refuses any name outside `css_e2e_*` (so it cannot be pointed at
+# ${PG_DB}), and issues exactly DROP DATABASE / CREATE DATABASE. What it hands
+# back is empty; the program under test is the only thing that puts rows in it.
+#
+# Dropped and re-created rather than reused, so a second run inside one session
+# tests a first load rather than inheriting the last one's rows -- which is the
+# defect `pages` has today (#157).
+#
+# CREATE DATABASE copies template1, so the scratch database inherits the
+# cluster's encoding and collation and is exactly as hostile as the real one.
+scratch_db_create() {
+  local name="$1"
+  if [[ ! ${name} =~ ^css_e2e_[a-z0-9_]+$ ]]; then
+    die "scratch_db_create: refusing the name ${name}; scratch databases are css_e2e_*"
+  fi
+  # Both statements in one invocation, and PGPASSWORD on its own continuation
+  # line in the engine branch: that is the shape
+  # checks/tests/both_driver_paths_pass_the_same_env.rs can read, and a branch it
+  # cannot read is a branch nothing holds to the other one.
+  if [[ ${PROVISION} == "external" ]]; then
+    PGPASSWORD="${PG_PASS}" \
+      psql -h 127.0.0.1 -p "${PG_PORT}" -U "${PG_USER}" -d "${PG_DB}" \
+      -c "DROP DATABASE IF EXISTS ${name}" -c "CREATE DATABASE ${name}" >/dev/null
+  else
+    pm exec \
+      -e PGPASSWORD="${PG_PASS}" \
+      "${C_PG}" psql -h 127.0.0.1 -p "${PG_PORT}" -U "${PG_USER}" -d "${PG_DB}" \
+      -c "DROP DATABASE IF EXISTS ${name}" -c "CREATE DATABASE ${name}" >/dev/null
+  fi
+}
+
+# run_loader <database> <staged.sqlite> [extra flags...] -- one ToolPass load.
+#
+# Everything is passed on the command line in both branches, including the card
+# keys, because the loader takes them either way and two branches handing one
+# program two different worlds is what
+# checks/tests/both_driver_paths_pass_the_same_env.rs exists to prevent. The
+# sqlite path is the host path in both, which is why ${STACK_DIR} is mounted at
+# its own absolute path as well as at /stack -- the same reason start_server
+# does it.
+run_loader() {
+  local db="$1" sqlite="$2"
+  shift 2
+  local url="postgres://${PG_USER}:${PG_PASS}@127.0.0.1:${PG_PORT}/${db}"
+  if [[ ${PROVISION} == "external" ]]; then
+    "${ROOT}/e2e/artifacts/toolpass-load" \
+      --sqlite "${sqlite}" \
+      --database-url "${url}" \
+      --encryption-key "${CARDS_ENC_KEY}" \
+      --index-key "${CARDS_IDX_KEY}" \
+      --device-pepper "${CARDS_DEVICE_PEPPER}" \
+      "$@"
+  else
+    pm run --rm --network host \
+      -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
+      -v "${STACK_DIR}:${STACK_DIR}" \
+      "${IMG_SERVER_LOCAL}" /artifacts/toolpass-load \
+      --sqlite "${sqlite}" \
+      --database-url "${url}" \
+      --encryption-key "${CARDS_ENC_KEY}" \
+      --index-key "${CARDS_IDX_KEY}" \
+      --device-pepper "${CARDS_DEVICE_PEPPER}" \
+      "$@"
   fi
 }
 

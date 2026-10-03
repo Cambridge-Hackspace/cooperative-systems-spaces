@@ -478,6 +478,35 @@ and a Newbie is refused the launch a Member is granted. The pure
 statement-validation logic underneath is unit-tested in the `cmi5` crate; this
 stage proves the wiring.
 
+The `toolpass` stage is the second, and it covers the one program in this
+repository that nothing else could reach: `toolpass-load`, which moves the
+space's existing membership records — 469 members, their cards, their ledger and
+8,236 usage sessions — out of ToolPass and into this schema. Its unit tests cover
+the pure mapping functions (a role name, a card status, a money string) and
+nothing else, because everything interesting it does is a database write. It runs
+in its own scratch database on the stack's cluster — `scratch_db_create`, the
+second and last psql invocation in the suite, bounded to DROP/CREATE DATABASE on
+a `css_e2e_*` name so the no-backdoors rule stays in force — and it runs **four
+times over two extracts**, because a sequence is the only oracle that can tell a
+per-row upsert from a phase-level skip: the first extract into an empty database;
+the cutover extract as a dry run, which must count the new rows and write none of
+them; the cutover extract for real; and the cutover extract again, which must
+change nothing. Every total is asserted from both sides — against the loader's
+own `counts:` line, which is what an operator reads, and against the database —
+and the expected totals come from the fixture driver reading back the SQLite it
+has just written, so no number in the stage is restated from the place it came
+from.
+
+It earned its place immediately. The sessions phase was idempotent at the
+*phase* level — skip every session if any migrated session already exists — and
+the ledger phase at the *member* level. Both are right for re-running one
+extract and both are wrong for the run that matters: the cutover extract is a
+superset of the first, so the rows it exists to carry are exactly the ones
+belonging to members the first load already created. The cutover would have
+imported none of them, printed `sessions: 0`, and exited zero. The two rows that
+pin it are named individually in the stage rather than left to a total, because a
+total can be right for the wrong reason.
+
 **121 handlers map a database error to a bare 500.** Ratcheted rather than
 fixed, per §8. `checks/tests/database_errors_keep_their_meaning.rs` pins the
 count per file so it can only go down.
