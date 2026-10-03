@@ -5,8 +5,12 @@
 //!
 //! Properties:
 //!   * **Idempotent / re-runnable** — every entity is keyed on a natural id
-//!     (email, external_id, (user,tool), card code, ledger external_reference),
-//!     so a second run is a no-op / upsert, never a duplicate.
+//!     (email, external_id, (user,tool), card code, ledger external_reference,
+//!     session source_reference), so a second run is a no-op / upsert, never a
+//!     duplicate. Per *row*, in every phase: the cutover run is a second run
+//!     carrying a superset of the first extract, so a phase that skipped itself
+//!     for already holding data would import none of what it was run for. The
+//!     `toolpass` stack stage is the oracle for that (`e2e/run.sh`).
 //!   * **Transactional** — the whole load is one transaction; `--dry-run` does
 //!     all the work and rolls back, printing the counts it would have committed.
 //!   * **No Stripe** — plain Diesel inserts (no `StripeClient`), and it takes
@@ -342,7 +346,6 @@ struct Counts {
     assignments: usize,
     waivers: usize,
     ledger: usize,
-    ledger_members_skipped: usize,
     sessions: usize,
 }
 
@@ -628,28 +631,25 @@ fn load(
         }
     }
 
-    // Ledger — coarse idempotency per member (skip a member whose migrated
-    // entries are already present), then batch-insert their entries.
-    let mut by_member: HashMap<&str, Vec<&SLedger>> = HashMap::new();
-    for e in &s.ledger {
-        by_member.entry(&e.user_tp).or_default().push(e);
-    }
-    for (tp, entries) in &by_member {
-        let Some(&uid) = user_id.get(*tp) else {
-            continue;
-        };
-        let already: i64 = membership_ledger::table
-            .filter(membership_ledger::external_reference.like(format!("toolpass:txn:{}:%", tp)))
-            .count()
-            .get_result(conn)?;
-        if already > 0 {
-            c.ledger_members_skipped += 1;
-            continue;
-        }
-        let batch: Vec<NewMembershipLedgerEntry> = entries
-            .iter()
-            .map(|e| NewMembershipLedgerEntry {
-                user_id: uid,
+    // Ledger — idempotent per *entry* on `external_reference`
+    // (`toolpass:txn:{member}:{txn}`), which carries a partial unique index
+    // (`WHERE external_reference IS NOT NULL`, #38's migration). A partial index
+    // can only be named as a conflict target alongside its own predicate, which
+    // is what `filter_target` emits; without it Postgres finds no index matching
+    // the target and the statement errors instead of skipping the row.
+    //
+    // This was idempotent per *member*: skip a member any of whose migrated
+    // entries were already present. That is right for re-running one extract and
+    // wrong for the cutover, which is the run that matters -- the final extract
+    // carries every entry a member has accrued since the first load, and all of
+    // them were discarded for the member not being new.
+    let batch: Vec<NewMembershipLedgerEntry> = s
+        .ledger
+        .iter()
+        .filter_map(|e| {
+            let uid = user_id.get(&e.user_tp)?;
+            Some(NewMembershipLedgerEntry {
+                user_id: *uid,
                 entry_type: e.entry_type.clone(),
                 amount: e.amount.clone(),
                 currency: e.currency.clone(),
@@ -658,47 +658,53 @@ fn load(
                 external_reference: Some(e.ext_ref.clone()),
                 created_by: None,
             })
-            .collect();
-        for chunk in batch.chunks(LEDGER_CHUNK) {
-            diesel::insert_into(membership_ledger::table)
-                .values(chunk)
-                .execute(conn)?;
-            c.ledger += chunk.len();
-        }
+        })
+        .collect();
+    for chunk in batch.chunks(LEDGER_CHUNK) {
+        // `execute` returns rows actually inserted, so the reported count is
+        // what arrived rather than what was offered.
+        c.ledger += diesel::insert_into(membership_ledger::table)
+            .values(chunk)
+            .on_conflict(membership_ledger::external_reference)
+            .filter_target(membership_ledger::external_reference.is_not_null())
+            .do_nothing()
+            .execute(conn)?;
     }
 
-    // Sessions -- historical usage records. Idempotent at the phase level: if any
-    // migrated session (source_reference set) already exists, skip the phase.
-    // status is `settled` and hold_amount 0 -- the prepaid-hold concept does not
-    // apply to an import.
-    let existing_sessions: i64 = tool_usage_sessions::table
-        .filter(tool_usage_sessions::source_reference.is_not_null())
-        .count()
-        .get_result(conn)?;
-    if existing_sessions == 0 {
-        let batch: Vec<NewMigratedSession> = s
-            .sessions
-            .iter()
-            .filter_map(|se| {
-                let uid = user_id.get(&se.user_tp)?;
-                let tid = tool_id.get(&se.tool_tp)?;
-                Some(NewMigratedSession {
-                    tool_id: *tid,
-                    user_id: *uid,
-                    started_at: se.started_at,
-                    hold_amount: BigDecimal::from(0),
-                    reported_seconds: se.reported_seconds.clone(),
-                    status: "settled".to_string(),
-                    source_reference: Some(se.source_ref.clone()),
-                })
+    // Sessions -- historical usage records, idempotent per row on
+    // `source_reference` (the ToolPass session id), same partial-index reasoning
+    // as the ledger above. status is `settled` and hold_amount 0 -- the
+    // prepaid-hold concept does not apply to an import.
+    //
+    // This was idempotent at the phase level: skip every session if *any*
+    // migrated session existed. The first load therefore imported the whole
+    // history and every run after it imported nothing, so the cutover load --
+    // whose entire purpose is the sessions accrued since the first -- would have
+    // committed zero of them and reported success.
+    let batch: Vec<NewMigratedSession> = s
+        .sessions
+        .iter()
+        .filter_map(|se| {
+            let uid = user_id.get(&se.user_tp)?;
+            let tid = tool_id.get(&se.tool_tp)?;
+            Some(NewMigratedSession {
+                tool_id: *tid,
+                user_id: *uid,
+                started_at: se.started_at,
+                hold_amount: BigDecimal::from(0),
+                reported_seconds: se.reported_seconds.clone(),
+                status: "settled".to_string(),
+                source_reference: Some(se.source_ref.clone()),
             })
-            .collect();
-        for chunk in batch.chunks(LEDGER_CHUNK) {
-            diesel::insert_into(tool_usage_sessions::table)
-                .values(chunk)
-                .execute(conn)?;
-            c.sessions += chunk.len();
-        }
+        })
+        .collect();
+    for chunk in batch.chunks(LEDGER_CHUNK) {
+        c.sessions += diesel::insert_into(tool_usage_sessions::table)
+            .values(chunk)
+            .on_conflict(tool_usage_sessions::source_reference)
+            .filter_target(tool_usage_sessions::source_reference.is_not_null())
+            .do_nothing()
+            .execute(conn)?;
     }
 
     Ok(c)

@@ -396,7 +396,7 @@ report_and_exit
 log "release binaries"
 cargo build --locked --release \
   --bin css-server --bin css-cli --bin css-webhook-recvr --bin css-smtp-sink \
-  --bin css-groupsio-sink --bin css-stripe-sink --bin css-edge
+  --bin css-groupsio-sink --bin css-stripe-sink --bin css-edge --bin toolpass-load
 
 # Both edge profiles, on purpose. web_server.rs::create_router has a
 # #[cfg(debug_assertions)] arm that honours --frontend-path and a
@@ -415,6 +415,11 @@ install -m 0755 "${CARGO_TARGET_DIR}/release/css-groupsio-sink" e2e/artifacts/cs
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-stripe-sink" e2e/artifacts/css-stripe-sink
 install -m 0755 "${CARGO_TARGET_DIR}/release/css-edge" e2e/artifacts/css-edge
 install -m 0755 "${CARGO_TARGET_DIR}/debug/css-edge" e2e/artifacts/css-edge-dbg
+# The one-shot ToolPass loader (#38). An operator tool rather than a service, and
+# the `toolpass` stage runs it twice against a scratch database -- the only place
+# anything proves its per-row idempotency, which is the property the cutover load
+# depends on and the one a phase-level skip quietly broke.
+install -m 0755 "${CARGO_TARGET_DIR}/release/toolpass-load" e2e/artifacts/toolpass-load
 
 # run.sh's preflight stage asserts this commit matches the working tree, so a
 # run that skipped the build cannot silently test yesterday's binaries.
