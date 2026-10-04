@@ -48,10 +48,6 @@ export interface Tool {
   // The power receptacle this tool plugs into (#42), or null for a battery /
   // unmapped tool. Assigned via the Facility > Power tab.
   receptacle_id?: string | null
-  // Additional fields that may be present
-  manufacturer?: string
-  model?: string
-  notes?: string
 }
 
 export interface CreateToolRequest {
@@ -69,33 +65,32 @@ export interface CreateToolRequest {
   usage_flat_fee?: string | null
   usage_rate_per_min?: string | null
   usage_max_session_minutes?: number | null
-  manufacturer?: string
-  model?: string
-  notes?: string
-  status?: string
+  // The state the tool is catalogued in; the server defaults to idle and
+  // refuses in_use / retired.
+  status?: ToolStatus
 }
 
 export type NewTool = CreateToolRequest
 
 export interface UpdateToolRequest {
   name?: string
-  description?: string
+  // `null` clears the column; omitting the key leaves it alone. The server
+  // distinguishes the two (`Option<Option<T>>`), so blanking a field in the UI
+  // has to travel as an explicit null rather than as an absent key.
+  description?: string | null
   category?: ToolCategory
   status?: ToolStatus
-  barcode?: string
-  serial_number?: string
-  location?: string
-  purchase_date?: string
-  purchase_price?: number
-  maintenance_notes?: string
+  barcode?: string | null
+  serial_number?: string | null
+  location?: string | null
+  purchase_date?: string | null
+  purchase_price?: number | null
+  maintenance_notes?: string | null
   requires_training?: boolean
-  external_id?: string
+  external_id?: string | null
   usage_flat_fee?: string | null
   usage_rate_per_min?: string | null
   usage_max_session_minutes?: number | null
-  manufacturer?: string
-  model?: string
-  notes?: string
 }
 
 export interface ChangeToolStatusRequest {

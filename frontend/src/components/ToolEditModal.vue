@@ -44,30 +44,6 @@
 
         <div class="form-row">
           <div class="form-group">
-            <label for="manufacturer">Manufacturer</label>
-            <input
-              id="manufacturer"
-              v-model="form.manufacturer"
-              type="text"
-              placeholder="e.g., DeWalt, Milwaukee"
-              class="input"
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="model">Model</label>
-            <input
-              id="model"
-              v-model="form.model"
-              type="text"
-              placeholder="Model number"
-              class="input"
-            />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group">
             <label for="serial_number">Serial Number</label>
             <input
               id="serial_number"
@@ -200,10 +176,10 @@
         <RateTierManagement v-if="toolBillingEnabled" :tool-id="props.tool.id" />
 
         <div class="form-group">
-          <label for="notes">Notes</label>
+          <label for="maintenance_notes">Notes</label>
           <textarea
-            id="notes"
-            v-model="form.notes"
+            id="maintenance_notes"
+            v-model="form.maintenance_notes"
             placeholder="Additional notes about the tool"
             rows="3"
             class="textarea"
@@ -234,6 +210,7 @@ import SchedulePicker from './SchedulePicker.vue'
 import RateTierManagement from './RateTierManagement.vue'
 import { useConfigStore } from '@/stores/config'
 import axios from 'axios'
+import { apiErrorMessage } from '@/utils/apiError'
 
 interface Props {
   tool: Tool
@@ -264,8 +241,6 @@ const form = ref({
   name: '',
   category: '' as ToolCategory,
   description: '',
-  manufacturer: '',
-  model: '',
   serial_number: '',
   barcode: '',
   external_id: '',
@@ -273,7 +248,7 @@ const form = ref({
   purchase_date: '',
   purchase_price: undefined,
   requires_training: false,
-  notes: '',
+  maintenance_notes: '',
   schedule_id: null,
   usage_flat_fee: '',
   usage_rate_per_min: '',
@@ -303,8 +278,6 @@ const loadToolData = () => {
     name: props.tool.name || '',
     category: props.tool.category,
     description: props.tool.description || '',
-    manufacturer: props.tool.manufacturer || '',
-    model: props.tool.model || '',
     serial_number: props.tool.serial_number || '',
     barcode: props.tool.barcode || '',
     external_id: props.tool.external_id || '',
@@ -312,7 +285,7 @@ const loadToolData = () => {
     purchase_date: props.tool.purchase_date || '',
     purchase_price: props.tool.purchase_price,
     requires_training: props.tool.requires_training || false,
-    notes: props.tool.notes || '',
+    maintenance_notes: props.tool.maintenance_notes || '',
     schedule_id: (props.tool as any).schedule_id ?? null,
     usage_flat_fee: props.tool.usage_flat_fee ?? '',
     usage_rate_per_min: props.tool.usage_rate_per_min ?? '',
@@ -337,7 +310,15 @@ const updateTool = async () => {
     // Clean up form data
     const toolData = { ...form.value }
 
-    // Convert empty strings to null for optional fields
+    // A blanked field is sent as an explicit null, which the API now reads as
+    // "clear this column" rather than "no opinion" -- `UpdateToolRequest`'s
+    // nullable fields are `Option<Option<T>>` for exactly this. Before that,
+    // absent and null were the same request and blanking anything was silently
+    // discarded with a 200.
+    //
+    // `undefined` is left alone deliberately: JSON.stringify drops those keys,
+    // which is the "leave it alone" case. Only a field the operator actually
+    // emptied becomes null.
     Object.keys(toolData).forEach((key) => {
       if (toolData[key as keyof typeof toolData] === '') {
         ;(toolData as any)[key] = null
@@ -354,7 +335,7 @@ const updateTool = async () => {
     }
     emit('updated')
   } catch (err: any) {
-    error.value = err.response?.data?.error || err.message || 'Failed to update tool'
+    error.value = apiErrorMessage(err, 'Failed to update tool')
   } finally {
     loading.value = false
   }

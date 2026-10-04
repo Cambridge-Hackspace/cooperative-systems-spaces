@@ -19,10 +19,6 @@
       <div v-if="tool.location" class="info-row">
         <strong>Location:</strong> {{ tool.location }}
       </div>
-      <div v-if="tool.manufacturer" class="info-row">
-        <strong>Manufacturer:</strong> {{ tool.manufacturer }}
-      </div>
-      <div v-if="tool.model" class="info-row"><strong>Model:</strong> {{ tool.model }}</div>
       <div v-if="tool.serial_number" class="info-row">
         <strong>Serial #:</strong> {{ tool.serial_number }}
       </div>
