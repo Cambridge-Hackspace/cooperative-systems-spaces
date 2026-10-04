@@ -1158,3 +1158,349 @@ fn every_internal_link_resolves() {
          firmware author back to guessing."
     );
 }
+
+// ── The local broker's response payloads, row by row ─────────────────────────
+//
+// `every_wire_payload_field_is_documented` above walks *structs*. The edge's
+// replies to a module are not structs: three of the five are
+// `serde_json::json!` literals built inside their handlers, so that check
+// cannot see them and never could. The gap was not hypothetical -- the document
+// described all three `toolguard/response/*` topics as carrying the server's
+// `ToolGuardResponse`, and said `tool_on: true` was "the *only* thing that
+// means energize", when the local wire carries `authorized` and has no
+// `tool_on` field anywhere. Firmware written to that sentence looks for a field
+// that never arrives, finds nothing, and never starts a tool.
+//
+// WHY THIS IS ROW-SCOPED, which the checks above are not. They ask whether a
+// name appears *somewhere* in the document, which is the right question for a
+// vocabulary and the wrong one for a payload. Both defects this check exists
+// for are invisible to a whole-document search: `tool_on` is legitimately
+// documented for `POST /api/toolguard/tool-on`, and `granted` is legitimately
+// documented for `doors/event`. Each was present in the document and absent
+// from the row that had to carry it, so only a per-topic comparison can fail.
+const EDGE_MQTT: &str = "edge/src/mqtt.rs";
+const EDGE_DOORS: &str = "edge/src/doors.rs";
+
+/// Where one topic's payload is actually defined.
+enum Payload {
+    /// The keys of the `json!` literals this handler publishes.
+    Handler(&'static str),
+    /// The serde field names of a struct, `(file, name)`.
+    Struct(&'static str, &'static str),
+}
+
+/// Topic -> its source of truth, duplicated here deliberately.
+///
+/// This mapping is the check. Deriving it from the code would make the test
+/// agree with whatever the code does, which is the one thing a documentation
+/// oracle must not do: the question is whether the *document* matches, and that
+/// needs an independent statement of which source answers for which row.
+const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
+    (
+        "toolguard/response/tool-on",
+        Payload::Handler("handle_tool_on"),
+    ),
+    (
+        "toolguard/response/tool-off",
+        Payload::Handler("handle_tool_off"),
+    ),
+    (
+        "toolguard/response/tool-log",
+        Payload::Handler("handle_tool_log"),
+    ),
+    ("toolguard/response/power", Payload::Handler("handle_power")),
+    (
+        "door/response/unlock",
+        Payload::Struct(EDGE_DOORS, "LocalUnlockResponse"),
+    ),
+];
+
+/// The body of one function, by text, from its declaration to the `}` at its
+/// own indentation. Same reasoning as `struct_fields`: closing on the first
+/// `}` in column zero swallows every later function in the `impl`.
+fn fn_body(src: &str, name: &str) -> String {
+    let (start, indent) = src
+        .lines()
+        .enumerate()
+        .find_map(|(i, line)| {
+            let trimmed = line.trim_start();
+            let hit = trimmed.starts_with(&format!("fn {name}("))
+                || trimmed.starts_with(&format!("async fn {name}("))
+                || trimmed.starts_with(&format!("pub fn {name}("))
+                || trimmed.starts_with(&format!("pub async fn {name}("));
+            hit.then(|| (i, line.len() - trimmed.len()))
+        })
+        .unwrap_or_else(|| {
+            panic!("no `fn {name}` found; the mapping names a function that is gone")
+        });
+
+    let close = format!("{}}}", " ".repeat(indent));
+    let mut out = Vec::new();
+    for line in src.lines().skip(start) {
+        let last = line == close && !out.is_empty();
+        out.push(line);
+        if last {
+            break;
+        }
+    }
+    out.join("\n")
+}
+
+/// Index just past the `)` matching the `(` at `open`.
+fn balanced_paren(src: &str, open: usize) -> usize {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    src.len()
+}
+
+/// Every `"name"` used as a JSON key in a span.
+fn json_keys(span: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut from = 0;
+    while let Some(at) = span[from..].find('"') {
+        let start = from + at + 1;
+        let Some(len) = span[start..].find('"') else {
+            break;
+        };
+        let name = &span[start..start + len];
+        let after = span[start + len + 1..].trim_start();
+        if after.starts_with(':') && !name.is_empty() {
+            out.insert(name.to_string());
+        }
+        from = start + len + 1;
+    }
+    out
+}
+
+/// The keys of the `json!` literals a handler actually *publishes*.
+///
+/// Scoped to literals that are either bound to `response_payload` or passed
+/// straight to `publish_local`, because a handler builds other JSON too:
+/// `handle_tool_on` also constructs the HTTP forward body `{card, tool_id}`,
+/// and collecting the whole function would report those as part of the reply.
+///
+/// That scoping is a naming convention, and it fails in the safe direction: if
+/// the binding is renamed the key set goes empty and the anti-vacuity assertion
+/// below fails loudly, which tells the next reader to update this mapping
+/// rather than silently checking nothing.
+fn published_json_keys(body: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut from = 0;
+    while let Some(at) = body[from..].find("json!(") {
+        let start = from + at;
+        let stmt_start = body[..start]
+            .rfind(|c: char| c == ';' || c == '{')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prefix = &body[stmt_start..start];
+        let published =
+            prefix.contains("publish_local(") || prefix.contains("let response_payload");
+        let end = balanced_paren(body, start + "json!".len());
+        if published {
+            out.extend(json_keys(&body[start..end]));
+        }
+        from = end;
+    }
+    out
+}
+
+/// Every quoted identifier in a span, whether or not a `:` follows it.
+///
+/// Separate from [`json_keys`] on purpose, because the two sides are written
+/// differently and each needs its own reader. Source is Rust, where a key is
+/// always `"name":` and the colon is what distinguishes a key from a string
+/// *value*. The document's tables use two styles -- `{ "card", "tool_id" }` for
+/// a bare field list and `{ "authorized": bool }` when the type matters -- and
+/// demanding colons there would read the bare rows as carrying no fields at
+/// all, which is a false pass rather than a false failure.
+///
+/// Restricted to identifier shape (lowercase, digits, `_`) so that a quoted
+/// word in the surrounding prose is not read as a field. It would still read a
+/// quoted *value* like `"edge"` as one; no row in the table has that, and a row
+/// that grows one will fail loudly here rather than quietly.
+fn quoted_names(span: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut from = 0;
+    while let Some(at) = span[from..].find('"') {
+        let start = from + at + 1;
+        let Some(len) = span[start..].find('"') else {
+            break;
+        };
+        let name = &span[start..start + len];
+        let identifier_shaped = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if identifier_shaped {
+            out.insert(name.to_string());
+        }
+        from = start + len + 1;
+    }
+    out
+}
+
+/// The field names a topic's row in the document claims it carries.
+fn documented_payload_fields(doc: &str, topic: &str) -> BTreeSet<String> {
+    let section = match doc.split(LOCAL_SECTION).nth(1) {
+        Some(s) => s,
+        None => return BTreeSet::new(),
+    };
+    let needle = format!("`{topic}`");
+    section
+        .lines()
+        .find(|l| l.starts_with('|') && l.contains(&needle))
+        .and_then(|row| row.split('|').nth(2).map(quoted_names))
+        .unwrap_or_default()
+}
+
+/// Every field the edge publishes on a local response topic is named in that
+/// topic's own row, and every field the row names is one the edge publishes.
+#[test]
+fn every_local_response_payload_matches_its_row() {
+    let doc = read(DOC);
+    let mqtt = read(EDGE_MQTT);
+
+    for (topic, payload) in LOCAL_RESPONSE_PAYLOADS {
+        let actual: BTreeSet<String> = match payload {
+            Payload::Handler(name) => published_json_keys(&fn_body(&mqtt, name)),
+            Payload::Struct(file, name) => struct_fields(&read(file), name).into_iter().collect(),
+        };
+        let documented = documented_payload_fields(&doc, topic);
+
+        assert!(
+            !actual.is_empty(),
+            "extracted no payload fields at all for `{topic}` from the source. \
+             The handler or struct named in LOCAL_RESPONSE_PAYLOADS has moved or \
+             been renamed, and this row has been checking nothing."
+        );
+        assert!(
+            !documented.is_empty(),
+            "{DOC} has no row naming any payload field for `{topic}` under \
+             `{LOCAL_SECTION}`. Either the table moved -- in which case this \
+             check was passing vacuously -- or the row lost its payload cell."
+        );
+
+        let undocumented: Vec<&String> = actual.difference(&documented).collect();
+        assert!(
+            undocumented.is_empty(),
+            "the edge publishes these fields on `{topic}` and {DOC}'s row for it \
+             does not name them: {undocumented:?}\n\n\
+             A firmware author reads one row to learn one message. A field that \
+             is described elsewhere in the document, or nowhere, is a field they \
+             will not know to read -- and on these topics the omitted field has \
+             twice been the one that decides whether to energize."
+        );
+
+        let invented: Vec<&String> = documented.difference(&actual).collect();
+        assert!(
+            invented.is_empty(),
+            "{DOC}'s row for `{topic}` names fields the edge never publishes: \
+             {invented:?}\n\n\
+             Firmware written from this row looks for a field that never \
+             arrives. Absence is not permission, so it fails closed -- as a \
+             tool that never starts, with no error at either end. This is the \
+             defect the check was added for: the row said `tool_on`, the wire \
+             carries `authorized`."
+        );
+    }
+}
+
+#[cfg(test)]
+mod the_payload_row_check_rejects_what_it_is_for {
+    use super::*;
+
+    /// The real table with `authorized` swapped back to the old wrong claim.
+    #[test]
+    fn a_row_naming_a_field_the_wire_does_not_carry_fails() {
+        let doc = read(DOC).replace(
+            r#"| `toolguard/response/tool-on` | `{ "authorized": bool, "reason": string }` |"#,
+            r#"| `toolguard/response/tool-on` | `{ "status": string, "tool_on": bool }` |"#,
+        );
+        let documented = documented_payload_fields(&doc, "toolguard/response/tool-on");
+        let actual = published_json_keys(&fn_body(&read(EDGE_MQTT), "handle_tool_on"));
+
+        assert!(
+            documented.contains("tool_on"),
+            "the mutant did not apply; the row's text has changed and this \
+             self-test is no longer driving the arm it names"
+        );
+        assert!(
+            !documented
+                .difference(&actual)
+                .collect::<Vec<_>>()
+                .is_empty(),
+            "a row naming `tool_on` must be caught: the wire carries \
+             `authorized` and no `tool_on` at all"
+        );
+    }
+
+    /// A field added to the wire and not to the row.
+    #[test]
+    fn a_published_field_missing_from_the_row_fails() {
+        let mqtt = read(EDGE_MQTT).replace(
+            r#"serde_json::json!({ "authorized": authorized, "reason": reason });"#,
+            r#"serde_json::json!({ "authorized": authorized, "reason": reason, "retry_after_ms": 500 });"#,
+        );
+        let actual = published_json_keys(&fn_body(&mqtt, "handle_tool_on"));
+        assert!(
+            actual.contains("retry_after_ms"),
+            "the mutant did not apply; the literal's text has changed and this \
+             self-test is no longer driving the arm it names"
+        );
+
+        let documented = documented_payload_fields(&read(DOC), "toolguard/response/tool-on");
+        assert!(
+            !actual
+                .difference(&documented)
+                .collect::<Vec<_>>()
+                .is_empty(),
+            "a field published and not documented must be caught"
+        );
+    }
+
+    /// The vacuity arm: a document whose local section is gone must fail rather
+    /// than pass with an empty documented set.
+    #[test]
+    fn a_missing_table_is_not_a_pass() {
+        let doc = read(DOC).replace(LOCAL_SECTION, "### Something else entirely");
+        for (topic, _) in LOCAL_RESPONSE_PAYLOADS {
+            assert!(
+                documented_payload_fields(&doc, topic).is_empty(),
+                "with the section heading gone, `{topic}` must yield no \
+                 documented fields -- which is what the check's non-empty \
+                 assertion then refuses"
+            );
+        }
+    }
+
+    /// The scoping arm: a handler's non-reply JSON must stay out of the set.
+    /// `handle_tool_on` also builds the HTTP forward body `{card, tool_id}`,
+    /// and counting those would make the row's comparison fail for fields that
+    /// never touch the local broker.
+    #[test]
+    fn other_json_in_the_same_handler_is_not_collected() {
+        let keys = published_json_keys(&fn_body(&read(EDGE_MQTT), "handle_tool_on"));
+        assert!(
+            keys.contains("authorized") && keys.contains("reason"),
+            "the reply's own fields must be collected, got {keys:?}"
+        );
+        assert!(
+            !keys.contains("card") && !keys.contains("tool_id"),
+            "the HTTP forward body's fields must NOT be collected, got {keys:?}"
+        );
+    }
+}
