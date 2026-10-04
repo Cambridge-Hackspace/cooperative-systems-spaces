@@ -241,8 +241,18 @@ must be `power`: see [authentication](#authentication).
 
 ### Step 3 — boot in the right order
 
+**Which order depends on your [class](#device-classes), and getting this wrong is
+not a style question.**
+
+**A class 1 module behind an edge calls none of these.** You speak only the local
+broker (step 4); the edge performs the whole sequence below on your behalf. In
+particular **do not call `boot-reset`** — see the warning at the end of this step.
+
+**A class 2 standalone device, or an edge, boots like this:**
+
 ```
 POST /api/toolguard/boot-reset     ← first, always
+GET  /api/toolguard/sync           ← the allow-list (class 2 and edge only)
 GET  /api/toolguard/module-state   ← your wiring and interlocks
 GET  /api/toolguard/power-state    ← lockouts
 subscribe to the push topics
@@ -250,8 +260,16 @@ start the heartbeat (15 s)
 ```
 
 `boot-reset` is first because your reboot may have orphaned a session and left a
-tool permanently "in use" for the next member. A class 2 device also calls
-`GET /api/toolguard/sync`; a class 1 module does not — its edge does.
+tool permanently "in use" for the next member.
+
+> **`boot-reset` is site-wide, not scoped to you.** It returns **every** tool the
+> server believes is in use to Idle and settles **every** open metered session as
+> `abandoned` — charging the usage reported so far — regardless of which device
+> asks or what it is bound to. That is correct for the one coordinator that just
+> rebooted and knows nothing is running. It is destructive for anything else: a
+> module that calls it on its own boot stops and bills every machine in the
+> building, including ones mid-cut on another bench. Only a device that governs
+> the whole site may call it.
 
 *The mistake here:* skipping `boot-reset` because it worked in testing. It
 worked because you never crashed mid-session in testing.
@@ -267,16 +285,26 @@ subscribe toolguard/response/tool-on
 ```
 
 Then — and this is the single most common firmware defect in this protocol —
-**energize only if `tool_on` is exactly `true`**:
+**energize only if `authorized` is exactly `true`**:
 
 ```json
-{ "status": "error", "message": "Training required", "tool_on": false }
+{ "authorized": false, "reason": "Training required" }
 ```
 
-That is a *successful* request. Over HTTP it is **200**. Over MQTT there is no
-status code at all. A response arriving is not a yes, `status: "ok"` without
-`tool_on` is not a yes, and `message` is for humans — never branch on it. See
-[denials are 200, not 4xx](#denials-are-200-not-4xx).
+That is a *successful* request. Over MQTT there is no status code at all, so the
+field is the whole answer. A response arriving is not a yes, a response without
+an `authorized` field is not a yes, and `reason` is for humans — never branch on
+it.
+
+**The field is named differently on the two wires, and this is the one place that
+matters.** On the local broker the edge answers `authorized`; over HTTP the server
+answers `tool_on` inside its envelope (see
+[`POST /api/toolguard/tool-on`](#post-apitoolguardtool-on) and
+[denials are 200, not 4xx](#denials-are-200-not-4xx)). A module speaks the local
+broker and wants `authorized`; a class 2 standalone device calls HTTP and wants
+`tool_on`. Looking for the wrong one finds nothing, and nothing is not permission
+— so the failure is safe but total: a tool that never starts, with no error
+anywhere.
 
 If nothing answers, fail closed. A timeout is a no.
 
@@ -286,10 +314,13 @@ Authorization got the tool started. Staying on is a **lease**, renewed on
 `toolguard/lease`, and the renewals stopping *is* the instruction to stop:
 
 ```json
-{ "tool_id":"dev-tool-01", "device_id":"…", "grant":true, "ttl_ms":3000 }
+{ "tool_id":"7c9e6679-7425-40de-944b-e07fc1f90ae7", "device_id":"…",
+  "grant":true, "ttl_ms":3000 }
 ```
 
 1. Filter on `device_id` — every module on the broker sees every lease.
+   **`tool_id` here is the UUID, never your configured `external_id`** — see
+   [the wire](#the-wire).
 2. On each message with `grant: true`, restart a timer for `ttl_ms`
    **from receipt, on a monotonic clock**. Do not read a timestamp; there isn't
    one, deliberately.
@@ -322,8 +353,12 @@ A door is the same model with a different output, and two differences that
 matter:
 
 - You publish `door/request/scan` `{"door_id","card_id"}` and act on
-  `door/response/unlock` `{"door_id","duration_ms"}` — a *momentary* release,
-  not a state.
+  `door/response/unlock` `{"door_id","granted","duration_ms","reason"}` — a
+  *momentary* release, not a state. **Release only when `granted` is `true`**,
+  the same rule as `authorized` on the tool path: a refusal arrives on this same
+  topic with `granted: false`, and `reason` is for humans. `duration_ms` is `0`
+  on a refusal, so firmware that pulses it blindly happens not to open the door
+  — do not rely on that, check `granted`.
 - A door's `doors/unlock` command from the server **may carry a `sig`**, and if
   your device holds a `command_key` you must verify it and ignore the command if
   it does not check out. See [signed commands](#signed-commands).
@@ -728,6 +763,14 @@ believes is in use to Idle, because a device that rebooted mid-session left them
 stuck. Any metered session still open is settled as `abandoned` — the usage
 reported so far is charged and the hold released.
 
+**It is site-wide and takes no scope.** Unlike the per-tool operations, this one
+needs no binding — a valid device token is the whole credential — and "every
+tool" means every tool on the server, not every tool you are bound to. So it is
+for a device that coordinates the site and has just established that nothing is
+running. **A module behind an edge must not call it:** its edge already did, and
+a second call from a rebooting controller stops and bills every machine in the
+building. See [step 3](#step-3--boot-in-the-right-order).
+
 `message` is `N tool(s) reset to idle`.
 
 ### `POST /api/toolguard/power-report`
@@ -873,7 +916,12 @@ re-broadcasts. `message` is `Circuit tripped`. A missing `circuit_id` is a 400.
 
 - The **site broker** carries the server ↔ device wire. Its topics are
   namespaced: the namespace comes from `mqtt_config.mqtt_namespace` at
-  registration — `cs/spaces` by default. **Do not hard-code it.**
+  registration. It is **deployment-specific** — whatever the server's
+  `[edge.edge_mqtt_config].mqtt_namespace` says — and there is no default to fall
+  back on: this repository's own sample configs disagree (`cs/spaces` in the
+  edge's, `css` in the server's). **Do not hard-code it;** read it from your
+  registration response. The examples below use `cs/spaces` only because the
+  text needs something concrete.
 - The **local broker** carries the edge ↔ module wire, on the LAN, with
   unnamespaced topics. If you are writing module firmware — a ToolGuard, a card
   reader, a plug — this is the one you speak, and [the edge is your
@@ -1031,20 +1079,35 @@ without the other.
 
 | topic | payload |
 |---|---|
-| `toolguard/response/tool-on` | the server's `ToolGuardResponse` |
-| `toolguard/response/tool-off` | the server's `ToolGuardResponse` |
-| `toolguard/response/tool-log` | the server's `ToolGuardResponse` |
+| `toolguard/response/tool-on` | `{ "authorized": bool, "reason": string }` |
+| `toolguard/response/tool-off` | `{ "ok": true }` |
+| `toolguard/response/tool-log` | `{ "ok": true }` |
 | `toolguard/response/power` | `{ "ok": true }` — an ack, nothing more |
-| `door/response/unlock` | `{ "door_id", "duration_ms" }` — a momentary unlock |
+| `door/response/unlock` | `{ "door_id", "granted", "duration_ms", "reason" }` — a momentary unlock |
 | `toolguard/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
 | `toolguard/lease` | permission for one power module to stay energized — see [the lease](#authorization-is-a-lease-not-a-command) |
 
 Three things about this table that cost time if you learn them the hard way:
 
-**The response topics carry the server's envelope unchanged.** Everything in
-[denials are 200, not 4xx](#denials-are-200-not-4xx) applies here too — there is
-no status code on MQTT at all, so `tool_on: true` is the *only* thing that means
-energize. A response arriving is not an answer of yes.
+**The response topics do NOT carry the server's envelope — the local wire has its
+own shape, and `tool_on` does not appear on it at all.** The edge decides (from
+its cache, or by asking the server) and answers with its own verdict:
+
+```json
+{ "authorized": false, "reason": "Training required" }
+```
+
+So on the local broker, **energize only if `authorized` is exactly `true`.** The
+reasoning behind [denials are 200, not 4xx](#denials-are-200-not-4xx) applies here
+with more force, because there is no status code on MQTT at all: a response
+arriving is not an answer of yes, a response with no `authorized` field is not a
+yes, and `reason` is for humans — never branch on it. If nothing answers, fail
+closed; a timeout is a no.
+
+`tool-off` and `tool-log` answer `{ "ok": true }`, which acknowledges *receipt*
+and nothing else. It is not a confirmation that the session was settled or the
+usage recorded — the edge forwards both to the server after answering you, and a
+later failure there is invisible on this topic.
 
 **`toolguard/request/power` is the MQTT twin of `POST /api/toolguard/power-report`,**
 with the same fields and the same rule about `relay_on`: omit it if you cannot
@@ -1134,7 +1197,7 @@ module per renewal:
 
 ```json
 {
-  "tool_id": "laser-01",
+  "tool_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "device_id": "…uuid…",
   "grant": true,
   "ttl_ms": 3000,
@@ -1144,6 +1207,17 @@ module per renewal:
 
 Filter on `device_id` — every module on the broker sees every lease. Energize
 only while `grant` is `true`, and only for `ttl_ms` after the message **arrived**.
+
+**`tool_id` on this topic is always the tool's UUID, never its `external_id`.**
+Elsewhere in this protocol a tool may be named either way and a *request* you
+send is resolved both ways — but the coordinator builds this field from the
+wiring snapshot, which is keyed by UUID, so there is nothing to resolve. This is
+the same trap as
+[`locked_tool_ids`](#get-apitoolguardpower-state), and it fails in the safer
+direction: match the lease against your configured `external_id` and you match
+nothing, so you never energize. Resolve your `external_id` to a UUID once
+through `module-state` and match on that, or filter on `device_id` alone — which
+is sufficient when your device holds exactly one `power` binding.
 
 `grant: false` is an instruction to de-energize now, sent when the coordinator
 can still reach you and has decided you may not run. It is a courtesy, not the
