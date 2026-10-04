@@ -162,6 +162,21 @@ pub struct PowerReportRequest {
     /// as off, so a plug that cannot answer does not silently disarm it.
     #[serde(default)]
     pub relay_on: Option<bool>,
+    /// Which module sent this reading (#161).
+    ///
+    /// The MQTT twin `toolguard/request/power` has carried this since #83,
+    /// because the edge needs it to know a module is alive before it will grant
+    /// a lease. The HTTP form did not, so when an edge forwarded a module's
+    /// report the only device the server could see was the EDGE -- and
+    /// `space_devices.last_seen_at` is written nowhere else. A module behind an
+    /// edge therefore had no liveness at all from the server's side: the bypass
+    /// sweep recorded it silent on its first pass and then sat at NoChange
+    /// forever, so it could never report the transition it exists for.
+    ///
+    /// Optional, so an older edge keeps working -- it simply contributes no
+    /// liveness, which is the state before this field existed.
+    #[serde(default)]
+    pub device_id: Option<uuid::Uuid>,
 }
 
 /// Request parameters for tool logging
@@ -816,7 +831,7 @@ async fn power_report(
     // Authenticate before validating the body, so a credential-less request is
     // refused with 401 rather than a 422 about the missing tool_id.
     let toolguard_id = req.tool_id.as_deref().unwrap_or("");
-    authorize_toolguard(&state, &headers, toolguard_id).await?;
+    let caller = authorize_power_report(&state, &headers, toolguard_id, req.device_id).await?;
 
     if toolguard_id.is_empty() {
         return Err(ApiError::BadRequest("tool_id is required".to_string()));
@@ -825,6 +840,52 @@ async fn power_report(
     let tool = find_tool_by_toolguard_id(&state, toolguard_id)
         .await?
         .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
+
+    // Only meaningful for a relay; a module reporting for itself is its own
+    // subject. Kept so the log distinguishes the two paths.
+    if caller.relayed_for.is_some() {
+        tracing::debug!(
+            "power-report for tool {} relayed by edge {} on behalf of module {:?}",
+            tool.id,
+            caller.device_id,
+            caller.relayed_for
+        );
+    }
+
+    // #161: credit the MODULE that sent this reading with being alive, not just
+    // the caller that relayed it.
+    //
+    // The trust story, stated because it is the one thing this introduces: the
+    // caller is an authenticated device, and it is VOUCHING for a module it
+    // heard from on its own local broker. That is weaker than the module
+    // authenticating for itself -- which it cannot do, having no site-broker
+    // credentials by design (FIRMWARE.md, "a module does not need credentials
+    // for the site broker and generally should not have them"). The alternative
+    // is what we had: no liveness for that class of device at all, and a
+    // detector that silently answers about nothing. A compromised edge can
+    // already lie about every reading in this payload; being able to also say
+    // "the plug I coordinate is alive" adds no capability worth the blindness.
+    //
+    // Failure here is logged and ignored. A liveness refresh is not what the
+    // caller asked for, and losing it must not fail a power report that the
+    // fast-trip path depends on.
+    if let Some(module_id) = req.device_id {
+        match state.db.touch_device_last_seen(module_id) {
+            Ok(true) => {
+                tracing::debug!("power-report: refreshed last_seen for module {module_id}");
+            }
+            Ok(false) => {
+                // Named rather than silent: a module reporting faithfully under
+                // an id the server does not know will read as permanently
+                // silent, and from either end that looks like a dead plug.
+                tracing::warn!(
+                    "power-report named device {module_id}, which is not a registered device; \
+                     its liveness cannot be recorded"
+                );
+            }
+            Err(e) => tracing::warn!("power-report: failed to refresh last_seen: {e}"),
+        }
+    }
 
     // #84: is this tool powered right now, by either oracle? The clock only
     // restarts when an unbroken run of being powered ends, so a tool that has
@@ -1378,6 +1439,134 @@ async fn authorize_toolguard(
     Err(ApiError::Unauthorized(
         "This device is not bound to that tool".to_string(),
     ))
+}
+
+/// Who sent a power report, and on whose behalf.
+pub struct PowerReportCaller {
+    /// The authenticated device that made the request.
+    pub device_id: uuid::Uuid,
+    /// The module it relayed for, when this was a relay. `None` when the caller
+    /// reported for itself.
+    pub relayed_for: Option<uuid::Uuid>,
+}
+
+/// Authorize a power report, which has two legitimate shapes.
+///
+/// **Direct.** A module with its own site credentials, bound to the tool, posts
+/// its own reading. `authorize_toolguard`'s rule covers this unchanged.
+///
+/// **Relayed (#161).** A module behind an edge has no site credentials and should
+/// not have any -- it speaks the local broker and nothing else. Its reading
+/// reaches the server only because the edge forwards it, signed with the *edge's*
+/// token. The edge is not bound to the tool, so the plain rule refused every such
+/// report: `authorize_toolguard` requires the CALLER's binding, and the caller is
+/// a courier rather than a party to it.
+///
+/// That refusal was silent in both directions. The edge spawns the forward and
+/// only warns on a transport error, and a 401 is a successful HTTP call -- so
+/// nothing was logged at either end, and the server's power aggregation, its
+/// `relay_on` record and #84's bypass detector received nothing at all from any
+/// module behind an edge. The lease path hid it: a lease is decided entirely
+/// edge-locally, so every tool still worked.
+///
+/// So a relay is accepted when BOTH bindings exist, and both are an
+/// administrator's statement rather than anything a caller asserts:
+///
+/// * the caller is bound to the tool in the **`edge`** role -- "this coordinator
+///   speaks for this tool", the same binding a door already requires of its
+///   coordinator; and
+/// * the named `device_id` is bound to the same tool in the **`power`** role --
+///   the module the reading is actually about.
+///
+/// Why not simply trust any registered device that names a correctly-bound
+/// module: this data feeds circuit aggregation, which can trip a circuit, and the
+/// bypass detector. Widening "may post power data for this tool" from *bound to
+/// it* to *any device with a token* is not a trade worth making for an admin step
+/// that the doors model already asks for. And gating on the device's **declared**
+/// `edge` capability would be theatre -- capabilities are self-asserted at
+/// registration, so any device can claim one.
+///
+/// What this does NOT add: trust. An edge already holds the card pepper and
+/// authorizes swipes offline for parts too small to run argon2 (#109), so a device
+/// that can say "this card may energize this machine" is not escalated by being
+/// able to say "this plug drew four amps". The binding makes the existing trust
+/// explicit and scoped, rather than conferring new trust.
+async fn authorize_power_report(
+    state: &AppState,
+    headers: &HeaderMap,
+    toolguard_id: &str,
+    subject: Option<uuid::Uuid>,
+) -> Result<PowerReportCaller, ApiError> {
+    // The direct case, and the device-wide case (an empty tool_id, validated by
+    // the caller straight after). Unchanged.
+    match authorize_toolguard(state, headers, toolguard_id).await {
+        Ok(device_id) => {
+            return Ok(PowerReportCaller {
+                device_id,
+                relayed_for: None,
+            })
+        }
+        // A server fault stays a server fault -- the same reasoning
+        // `authorize_toolguard` documents. Only an authorization REFUSAL is worth
+        // reconsidering as a relay; reporting an outage as "not bound to that
+        // tool" would send whoever is holding a dead plug looking in the wrong
+        // place. Asked of the error rather than matched against one variant, so
+        // this agrees with the status table by construction and covers
+        // `DatabaseError` too.
+        Err(e) if e.is_server_error() => return Err(e),
+        Err(_) => {}
+    }
+
+    // Past here the caller holds a valid token but is not bound to the tool. The
+    // only remaining way through is as that tool's coordinator, relaying for one
+    // of its modules.
+    let (device_id, _) = extract_device_auth(state, headers).await?;
+
+    let Some(subject) = subject else {
+        tracing::warn!(
+            "Rejected power-report from device {device_id} for tool_id={toolguard_id}: \
+             not bound to it, and no device_id to relay for"
+        );
+        return Err(ApiError::Unauthorized(
+            "This device is not bound to that tool".to_string(),
+        ));
+    };
+
+    let tool = find_tool_by_toolguard_id(state, toolguard_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Tool not found".to_string()))?;
+
+    let is_coordinator = state.db.device_is_bound_to_tool_in_role(
+        device_id,
+        tool.id,
+        crate::models::binding_role::EDGE,
+    )?;
+    let subject_is_a_module = state.db.device_is_bound_to_tool_in_role(
+        subject,
+        tool.id,
+        crate::models::binding_role::POWER,
+    )?;
+
+    if is_coordinator && subject_is_a_module {
+        return Ok(PowerReportCaller {
+            device_id,
+            relayed_for: Some(subject),
+        });
+    }
+
+    // Said separately, because the two are different operator mistakes and
+    // "unauthorized" sends you looking in the wrong place for one of them.
+    tracing::warn!(
+        "Rejected power-report relay from device {device_id} for tool {} \
+         (coordinator binding: {is_coordinator}, subject {subject} bound as power: \
+         {subject_is_a_module})",
+        tool.id
+    );
+    Err(ApiError::Unauthorized(if !is_coordinator {
+        "This device is not bound to that tool as its edge coordinator".to_string()
+    } else {
+        "The device_id named is not bound to that tool in the power role".to_string()
+    }))
 }
 
 /// A billable report must come from the thing that actually switches the tool: a

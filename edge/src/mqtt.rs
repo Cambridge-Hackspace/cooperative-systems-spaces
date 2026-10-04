@@ -829,6 +829,13 @@ impl LocalMqttClient {
             "max_voltage": req.max_voltage.map(|v| v.to_string()),
             "amperage_limit": req.amperage_limit.map(|v| v.to_string()),
             "self_tripped": req.self_tripped,
+            // #161: name the MODULE, not just this edge. Without it the server
+            // can only refresh its own last_seen, and the module -- which has no
+            // site-broker credentials and never will -- has no liveness at all
+            // from the server's side. Absent stays absent: an older server
+            // ignores the field, and a module that sent no device_id contributes
+            // none, which is what `note_device_seen` above already told us.
+            "device_id": req.device_id,
             // Forwarded rather than dropped: #84's relay oracle reads this, and
             // until now a module reporting over the local broker could never
             // make it fire at all. Absent stays absent -- serde_json renders

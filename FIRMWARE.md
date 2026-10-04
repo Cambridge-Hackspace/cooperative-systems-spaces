@@ -239,6 +239,23 @@ Until that happens, `tool-on` will refuse you, and the refusal looks exactly
 like a credential problem. If you are building for a metered tool, the binding
 must be `power`: see [authentication](#authentication).
 
+**A tool whose module sits behind an edge needs TWO bindings, and the second one
+is easy to miss.** The module is bound in its own role (`power`, say), and the
+**edge is bound to the same tool in the `edge` role** — the same statement a door
+already requires of its coordinator. The module's binding says what the hardware
+does; the edge's says who may speak for the tool.
+
+The edge binding is what lets your reports reach the server at all. A module
+behind an edge has no site-broker credentials, so its
+[power reports](#post-apitoolguardpower-report) arrive signed by the edge — and
+without the `edge` binding the server refuses them, because the caller is not
+bound to the tool. Nothing about energizing the tool breaks (a lease is decided
+on the edge), so the symptom is narrow and quiet: the server records no power
+draw, no relay state, and no liveness for you.
+
+A device that reports **directly**, with its own token and its own binding, needs
+only the one.
+
 ### Step 3 — boot in the right order
 
 **Which order depends on your [class](#device-classes), and getting this wrong is
@@ -780,6 +797,7 @@ Body fields, all optional so that a partial or older firmware still parses:
 ```json
 {
   "tool_id": "laser-01",
+  "device_id": "…your uuid…",
   "draw_now": "4.2",
   "voltage_now": "119.8",
   "max_voltage": "125",
@@ -792,6 +810,16 @@ Body fields, all optional so that a partial or older firmware still parses:
 Decimal fields are **strings**, not floats, to avoid binary rounding on values
 that get billed and compared against limits.
 
+- `device_id` is **your** device id, and sending it is what gives you liveness.
+  `last_seen_at` — what the server's silence detector reads, and what the admin
+  device list shows as online — is otherwise only written by a **site-broker
+  heartbeat**, which a module behind an edge does not have and should not need.
+  Without this field the server's only evidence of you is your edge, so you read
+  as permanently silent: the sweep records it once and then never changes its
+  mind, which means it can never report you actually *going* quiet. Send it on
+  every report, exactly as on the [MQTT twin](#the-local-broker-edge--module).
+  An edge forwarding a module's report passes the module's id through, so the
+  liveness lands on the module rather than on the edge.
 - `self_tripped: true` means *this controller shut itself off* after exceeding
   its own over-current limit. It locks out this tool only; the circuit is fine.
 - `relay_on` is your own view of your output. **Absent is not `false`.** Omit it
@@ -1326,7 +1354,19 @@ being gone.
 
 ### Liveness
 
-The server watches `last_seen`, updated by your heartbeat. A device silent for
+The server watches `last_seen`, and **how it gets updated depends on what you
+are:**
+
+- A device on the **site broker** (an edge, a kiosk, a class 2 standalone)
+  updates it with its 15-second `heartbeat`.
+- A **module behind an edge** has no site-broker credentials, so it cannot
+  heartbeat. It updates `last_seen` by sending `device_id` on its
+  [power reports](#post-apitoolguardpower-report) — the edge passes the id
+  through, and the server credits the module. A module that omits `device_id`
+  has no liveness at the server at all, and separately will never be granted a
+  lease (see the local-broker tables).
+
+A device silent for
 longer than `bypass.module_silence_secs` (default **90 seconds**, against a
 15-second heartbeat) is recorded as silent in the audit log. The event records
 silence and explicitly declines to guess the cause — unplugged, crashed, wifi

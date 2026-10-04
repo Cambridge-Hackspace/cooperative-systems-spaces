@@ -849,6 +849,33 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Mark a device as heard from now. Returns whether a row was updated.
+    ///
+    /// `space_devices.last_seen_at` is what `bypass::sweep_once` reads and what
+    /// the admin device list calls "online", and until #161 it had exactly one
+    /// writer: the inbound `heartbeat` handler, reached only by a device
+    /// publishing on the site broker or the WebSocket. A module behind an edge
+    /// speaks neither -- it talks to the edge's local broker -- so its row stayed
+    /// NULL for its whole life, `classify_liveness` read NULL as silent, and the
+    /// sweep recorded it silent once and never again. The detector could not
+    /// report the one transition it exists for, for precisely the device class it
+    /// was written to cover.
+    ///
+    /// `false` means no live device has that id. The caller decides whether that
+    /// is worth a warning; it is not an error here, because the id came off the
+    /// wire and a bad one is a client problem rather than a database fault.
+    pub fn touch_device_last_seen(&self, device_id: uuid::Uuid) -> Result<bool, DatabaseError> {
+        use crate::schema::space_devices;
+        let mut conn = self.get_connection()?;
+        let rows = diesel::update(space_devices::table)
+            .filter(space_devices::id.eq(device_id))
+            .filter(space_devices::deleted_at.is_null())
+            .set(space_devices::last_seen_at.eq(chrono::Utc::now()))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(rows > 0)
+    }
+
     /// Update tool status
     pub fn update_tool_status(
         &self,
