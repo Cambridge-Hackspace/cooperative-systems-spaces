@@ -38,28 +38,71 @@ pub struct CreateToolRequest {
     pub usage_flat_fee: Option<bigdecimal::BigDecimal>,
     pub usage_rate_per_min: Option<bigdecimal::BigDecimal>,
     pub usage_max_session_minutes: Option<i32>,
+    /// The state the tool is catalogued in. Defaults to `Idle`.
+    ///
+    /// The create form has offered this since it was written and the handler
+    /// hardcoded `Idle`, so choosing "Broken" or "Maintenance" for a tool you
+    /// are cataloguing awaiting repair was accepted and discarded. `InUse` and
+    /// `Retired` are refused: a tool cannot be created already in use, and
+    /// creating one already retired is not a thing anyone wants -- the same two
+    /// the form declines to offer.
+    pub status: Option<ToolStatus>,
+}
+
+/// Absent means "leave this column alone"; `null` means "clear it".
+///
+/// `Option<T>` cannot express both. Under `treat_none_as_null = false` a `None`
+/// is a column Diesel omits from the UPDATE, and serde maps *both* an absent key
+/// and an explicit `null` to `None` -- so a client blanking a field and a client
+/// not mentioning it arrive identically, and the blank is silently discarded.
+/// That is exactly what the edit form does: it converts its empty strings to
+/// `null` intending "clear this", gets a 200, and nothing changes.
+///
+/// `Option<Option<T>>` plus this deserializer gives three states: absent ->
+/// `None` (skip), `null` -> `Some(None)` (set NULL), value -> `Some(Some(v))`.
+/// Only the nullable columns get it; `name`, `category`, `status` and
+/// `requires_training` are NOT NULL and have nothing to clear to.
+fn clearable<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, diesel::AsChangeset)]
 #[diesel(table_name = crate::schema::tools, treat_none_as_null = false)]
 pub struct UpdateToolRequest {
     pub name: Option<String>,
-    pub description: Option<String>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub description: Option<Option<String>>,
     pub category: Option<ToolCategory>,
     pub status: Option<ToolStatus>,
-    pub barcode: Option<String>,
-    pub serial_number: Option<String>,
-    pub location: Option<String>,
-    pub purchase_date: Option<chrono::NaiveDate>,
-    pub purchase_price: Option<bigdecimal::BigDecimal>,
-    pub maintenance_notes: Option<String>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub barcode: Option<Option<String>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub serial_number: Option<Option<String>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub location: Option<Option<String>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub purchase_date: Option<Option<chrono::NaiveDate>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub purchase_price: Option<Option<bigdecimal::BigDecimal>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub maintenance_notes: Option<Option<String>>,
     pub requires_training: Option<bool>,
-    pub external_id: Option<String>,
-    pub place_id: Option<uuid::Uuid>,
-    pub schedule_id: Option<uuid::Uuid>,
-    pub usage_flat_fee: Option<bigdecimal::BigDecimal>,
-    pub usage_rate_per_min: Option<bigdecimal::BigDecimal>,
-    pub usage_max_session_minutes: Option<i32>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub external_id: Option<Option<String>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub place_id: Option<Option<uuid::Uuid>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub schedule_id: Option<Option<uuid::Uuid>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub usage_flat_fee: Option<Option<bigdecimal::BigDecimal>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub usage_rate_per_min: Option<Option<bigdecimal::BigDecimal>>,
+    #[serde(default, deserialize_with = "clearable")]
+    pub usage_max_session_minutes: Option<Option<i32>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -145,11 +188,22 @@ async fn create_tool(
     State(state): State<AppState>,
     Json(payload): Json<CreateToolRequest>,
 ) -> Result<Json<ApiResponse<Tool>>, ApiError> {
+    // Refused rather than silently coerced: an operator who asked for a state
+    // and got a different one has been told the wrong thing about their
+    // inventory, which is the defect this field is fixing in the first place.
+    let status = payload.status.unwrap_or(ToolStatus::Idle);
+    if matches!(status, ToolStatus::InUse | ToolStatus::Retired) {
+        return Err(ApiError::BadRequest(format!(
+            "a tool cannot be created with status `{}`",
+            status.as_str()
+        )));
+    }
+
     let new_tool = NewTool {
         name: payload.name,
         description: payload.description,
         category: payload.category,
-        status: Some(ToolStatus::Idle),
+        status: Some(status),
         barcode: payload.barcode,
         serial_number: payload.serial_number,
         location: payload.location,

@@ -73,8 +73,7 @@ function tool(over: Partial<Tool> = {}): Tool {
     created_by: 'admin-1',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
-    manufacturer: 'Startrite',
-    model: '351',
+    external_id: 'bandsaw-01',
     serial_number: 'SN-9',
     barcode: 'BC-9',
     location: 'Wood shop',
@@ -193,17 +192,17 @@ describe('what the form starts with', () => {
     const w = await modal()
     expect((w.find('#name').element as HTMLInputElement).value).toBe('Bandsaw')
     expect((w.find('#category').element as HTMLSelectElement).value).toBe('saw')
-    expect((w.find('#manufacturer').element as HTMLInputElement).value).toBe('Startrite')
+    expect((w.find('#external_id').element as HTMLInputElement).value).toBe('bandsaw-01')
     expect((w.find('#serial_number').element as HTMLInputElement).value).toBe('SN-9')
     expect((w.find('#location').element as HTMLInputElement).value).toBe('Wood shop')
   })
 
   it('blanks the fields the tool does not carry rather than showing undefined', async () => {
     const w = await modal(
-      tool({ manufacturer: undefined, model: undefined, notes: undefined, barcode: undefined })
+      tool({ external_id: undefined, maintenance_notes: undefined, barcode: undefined })
     )
-    expect((w.find('#manufacturer').element as HTMLInputElement).value).toBe('')
-    expect((w.find('#notes').element as HTMLTextAreaElement).value).toBe('')
+    expect((w.find('#external_id').element as HTMLInputElement).value).toBe('')
+    expect((w.find('#maintenance_notes').element as HTMLTextAreaElement).value).toBe('')
   })
 
   // FINDING, pinned. `onMounted` awaits the category request and the schedule
@@ -254,15 +253,23 @@ describe('what the form sends', () => {
     })
   })
 
-  it('turns cleared fields into null rather than an empty string', async () => {
+  // An explicit null, not an absent key, and the distinction is the whole
+  // point: `UpdateToolRequest`'s nullable fields are `Option<Option<T>>`, so
+  // null means "clear this column" and a missing key means "leave it alone".
+  // Before that they were the same request and every blanking was discarded
+  // with a 200.
+  it('turns cleared fields into an explicit null rather than an empty string', async () => {
     const w = await modal()
-    await w.find('#manufacturer').setValue('')
-    await w.find('#notes').setValue('')
+    await w.find('#external_id').setValue('')
+    await w.find('#maintenance_notes').setValue('')
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(sent().manufacturer).toBeNull()
-    expect(sent().notes).toBeNull()
+    expect(sent().external_id).toBeNull()
+    expect(sent().maintenance_notes).toBeNull()
+    // And the key must be PRESENT, because an absent key is the other meaning.
+    expect(Object.keys(sent())).toContain('external_id')
+    expect(Object.keys(sent())).toContain('maintenance_notes')
   })
 })
 

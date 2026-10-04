@@ -45,28 +45,20 @@
           ></textarea>
         </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="manufacturer">Manufacturer</label>
-            <input
-              id="manufacturer"
-              v-model="form.manufacturer"
-              type="text"
-              placeholder="e.g., DeWalt, Milwaukee"
-              class="input"
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="model">Model</label>
-            <input
-              id="model"
-              v-model="form.model"
-              type="text"
-              placeholder="Model number"
-              class="input"
-            />
-          </div>
+        <div class="form-group">
+          <label for="external_id">External ID</label>
+          <input
+            id="external_id"
+            v-model="form.external_id"
+            type="text"
+            placeholder="External system ID (e.g., ToolPass device ID)"
+            class="input"
+          />
+          <small class="help-text"
+            >Optional ID for external system integration (ToolPass, etc.). This is the short name
+            firmware is configured with — set it before provisioning hardware, because changing it
+            later stops a configured device matching.</small
+          >
         </div>
 
         <div class="form-row">
@@ -196,10 +188,10 @@
         </fieldset>
 
         <div class="form-group">
-          <label for="notes">Notes</label>
+          <label for="maintenance_notes">Notes</label>
           <textarea
-            id="notes"
-            v-model="form.notes"
+            id="maintenance_notes"
+            v-model="form.maintenance_notes"
             placeholder="Additional notes about the tool"
             rows="3"
             class="textarea"
@@ -225,6 +217,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { toolsApi, schedulesApi } from '../utils/api'
 import type { NewTool, ToolCategory } from '../types/tools'
+import { ToolStatus } from '../types/tools'
 import type { Schedule } from '../types'
 import SchedulePicker from './SchedulePicker.vue'
 import { useConfigStore } from '@/stores/config'
@@ -248,16 +241,15 @@ const form = ref<NewTool & { schedule_id?: string | null }>({
   name: '',
   category: '' as ToolCategory,
   description: '',
-  manufacturer: '',
-  model: '',
   serial_number: '',
   barcode: '',
+  external_id: '',
   location: '',
-  status: 'idle',
+  status: ToolStatus.Idle,
   purchase_date: '',
   purchase_price: null,
   requires_training: false,
-  notes: '',
+  maintenance_notes: '',
   schedule_id: null,
   usage_flat_fee: '',
   usage_rate_per_min: '',

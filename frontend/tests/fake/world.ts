@@ -179,8 +179,6 @@ export class World {
         status: 'idle',
         description: null,
         location: 'Bay 3',
-        manufacturer: null,
-        model: null,
         serial_number: null,
         purchase_date: null,
         purchase_price: null,

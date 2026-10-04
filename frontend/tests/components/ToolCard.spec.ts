@@ -42,8 +42,6 @@ function tool(overrides: Partial<Tool> = {}): Tool {
     status: ToolStatus.Idle,
     description: null,
     location: null,
-    manufacturer: null,
-    model: null,
     serial_number: null,
     purchase_date: null,
     purchase_price: null,
@@ -207,20 +205,21 @@ describe('the optional detail rows', () => {
       tool: tool({
         description: 'A big saw',
         location: 'Bay 3',
-        manufacturer: 'Acme',
-        model: 'X1',
         serial_number: 'SN-1',
         purchase_price: 1200,
       }),
       canManage: false,
     })
     const rows = wrapper.findAll('.info-row')
-    expect(rows).toHaveLength(6)
+    // Four, not six: the Manufacturer and Model rows were removed. They read
+    // `tool.manufacturer` and `tool.model`, which this API has never sent --
+    // there is no such column and no such request field -- so both rows were
+    // permanently invisible and this assertion only passed because the fixture
+    // supplied fields the server cannot.
+    expect(rows).toHaveLength(4)
     expect(rows.map((r) => r.text())).toEqual([
       'Description: A big saw',
       'Location: Bay 3',
-      'Manufacturer: Acme',
-      'Model: X1',
       'Serial #: SN-1',
       'Price: $1200',
     ])

@@ -142,8 +142,7 @@ describe('what the form sends', () => {
   it('carries every field the user filled in', async () => {
     const w = await modal()
     await fillMinimum(w)
-    await w.find('#manufacturer').setValue('Startrite')
-    await w.find('#model').setValue('351')
+    await w.find('#external_id').setValue('bandsaw-01')
     await w.find('#serial_number').setValue('SN-9')
     await w.find('#barcode').setValue('BC-9')
     await w.find('#location').setValue('Wood shop')
@@ -155,8 +154,7 @@ describe('what the form sends', () => {
     expect(sent()).toMatchObject({
       name: 'Bandsaw',
       category: ToolCategory.Saw,
-      manufacturer: 'Startrite',
-      model: '351',
+      external_id: 'bandsaw-01',
       serial_number: 'SN-9',
       barcode: 'BC-9',
       location: 'Wood shop',
@@ -174,13 +172,12 @@ describe('what the form sends', () => {
 
     for (const key of [
       'description',
-      'manufacturer',
-      'model',
+      'external_id',
       'serial_number',
       'barcode',
       'location',
       'purchase_date',
-      'notes',
+      'maintenance_notes',
     ]) {
       expect(sent()[key], `${key} should be null, not ""`).toBeNull()
     }
