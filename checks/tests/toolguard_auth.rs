@@ -64,7 +64,37 @@ enum Auth {
 }
 
 /// The functions that constitute authenticating a ToolGuard caller.
-const AUTHORIZERS: &[&str] = &["extract_device_auth", "authorize_toolguard"];
+///
+/// `authorize_power_report` joined these with #161: a module behind an edge has
+/// no site credentials, so its reading arrives signed by the edge, and that
+/// handler needs a rule the plain one cannot express (the caller bound as the
+/// tool's `edge`, the named module bound as its `power`). It authenticates by
+/// delegating rather than by calling the primitive itself.
+const AUTHORIZERS: &[&str] = &[
+    "extract_device_auth",
+    "authorize_toolguard",
+    "authorize_power_report",
+];
+
+/// The one that actually reads the credential. Everything else in
+/// [`AUTHORIZERS`] has to reach this, which
+/// [`every_authorizer_reaches_the_primitive`] is what proves.
+const PRIMITIVE_AUTHORIZER: &str = "extract_device_auth";
+
+/// Strip `//` line comments, so prose naming a function cannot stand in for a
+/// call to it.
+///
+/// Found by mutation: `authorize_power_report` was hollowed out until it
+/// authenticated nothing, and [`every_authorizer_reaches_the_primitive`] passed
+/// regardless — its docstring and an inline comment both name
+/// `authorize_toolguard`, and a substring search cannot tell prose from code.
+/// Two source checks in this repository already carry scars from exactly this.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// The body of `async fn <name>(`, ending at the next top-level item.
 ///
@@ -130,6 +160,39 @@ fn the_routing_table_registers_exactly_the_handlers_this_check_knows_about() {
     );
 }
 
+/// A name on the [`AUTHORIZERS`] list has to earn it.
+///
+/// The handler check above is satisfied by a handler *mentioning* any of these,
+/// so the list is trusted: add a name that does not authenticate and every
+/// handler calling it is silently exonerated — the same shape as the absorption
+/// bug `handler_body` documents, one level up. So each delegating authorizer must
+/// be shown to reach the primitive that reads the credential, rather than taken
+/// on the list's word.
+#[test]
+fn every_authorizer_reaches_the_primitive() {
+    let src = read("server/src/api/toolguard.rs");
+
+    let hollow: Vec<&str> = AUTHORIZERS
+        .iter()
+        .filter(|a| **a != PRIMITIVE_AUTHORIZER)
+        .filter(|a| {
+            let body = code_only(handler_body(&src, a));
+            // Either it reads the credential itself, or it delegates to another
+            // authorizer that does.
+            !AUTHORIZERS
+                .iter()
+                .filter(|other| **other != **a)
+                .any(|other| body.contains(other))
+        })
+        .copied()
+        .collect();
+
+    assert!(
+        hollow.is_empty(),
+        "these names are trusted as authorizers but never reach          `{PRIMITIVE_AUTHORIZER}`: {hollow:?}. Any handler calling one of them is          reported as authenticated while accepting an unauthenticated request."
+    );
+}
+
 #[test]
 fn every_toolguard_handler_authenticates_its_caller() {
     let src = read("server/src/api/toolguard.rs");
@@ -139,7 +202,7 @@ fn every_toolguard_handler_authenticates_its_caller() {
         .filter(|(_, auth)| *auth == Auth::Required)
         .map(|(name, _)| *name)
         .filter(|name| {
-            let body = handler_body(&src, name);
+            let body = code_only(handler_body(&src, name));
             !AUTHORIZERS.iter().any(|a| body.contains(a))
         })
         .collect();

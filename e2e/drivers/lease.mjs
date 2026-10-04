@@ -44,6 +44,18 @@ const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
 const FIXTURE = path.join(STACK_DIR, 'lease-fixture.json')
 const SKIPPED = path.join(STACK_DIR, 'lease-skipped')
 
+/**
+ * The server's own view of one device's liveness -- `space_devices.last_seen_at`
+ * as the admin list reports it. #161: a module behind an edge cannot heartbeat
+ * on the site broker, so this column is the only place its liveness can land,
+ * and it lands there only because the forwarded power report names the module.
+ */
+async function serverLiveness(adminToken, deviceId) {
+  const r = await GET('/api/admin/devices', { token: adminToken })
+  const rows = r.json?.data ?? []
+  return rows.find((d) => d.id === deviceId) ?? null
+}
+
 const phase = process.argv[2]
 const mqttPort = process.argv[3] ?? '1883'
 const devicePepper = process.argv[4] ?? ''
@@ -117,6 +129,14 @@ async function setup() {
   const plug = await claim(`lease-plug-${tag}`, 'power', '02:00:00:00:83:02')
   ok('lease/plug-registered', !!plug.id, `register -> ${plug.status} ${plug.text.slice(0, 160)}`)
 
+  // #161 negative case: a registered device bound to NOTHING. The relay rule
+  // must turn on the coordinator's binding, not merely on holding a valid
+  // token -- a power reading feeds circuit aggregation, which can trip, and the
+  // bypass detector. Without this arm, "the relay was accepted" would be
+  // consistent with accepting a relay from anybody.
+  const stranger = await claim(`lease-stranger-${tag}`, 'edge', '02:00:00:00:83:03')
+  ok('lease/stranger-registered', !!stranger.id, `register -> ${stranger.status}`)
+
   const authToken = edge.token
 
   // on_disconnect is left unset so the server applies its own default. The
@@ -128,6 +148,21 @@ async function setup() {
     body: { resource_id: toolId, device_id: plug.id, role: 'power', name: `lease plug ${tag}` },
   })
   assertEq('lease/module-bound', 201, binding.status)
+
+  // #161: the EDGE's own binding, in the `edge` role -- "this coordinator speaks
+  // for this tool", the same statement a door already requires of its
+  // coordinator. Without it the server refuses every power report the edge
+  // relays, because `authorize_toolguard` asks for the CALLER's binding and the
+  // edge is a courier rather than a party to the plug's.
+  //
+  // Bound here rather than left out because the fixture should model the real
+  // wiring: a plug behind a coordinator is the normal shape, and the refusal it
+  // used to produce was silent at both ends.
+  const edgeBinding = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: { resource_id: toolId, device_id: edge.id, role: 'edge', name: `lease edge ${tag}` },
+  })
+  assertEq('lease/coordinator-bound', 201, edgeBinding.status)
   assertEq(
     'lease/binding-defaults-to-fail-off',
     'fail_off',
@@ -143,7 +178,20 @@ async function setup() {
     deviceId: plug.id,
     edgeId: edge.id,
     moduleId: binding.json?.data?.id,
+    strangerToken: stranger.token,
   }
+  // #161 precondition, asserted before the thing it is a precondition for: a
+  // freshly registered module has never been heard from, so the server must
+  // show it with no liveness at all. If this is already set, the assertion in
+  // the assert phase proves nothing -- it would pass whether or not the power
+  // report did anything.
+  const freshPlug = await serverLiveness(admin.token, plug.id)
+  ok(
+    'lease/module-starts-with-no-liveness',
+    freshPlug !== null && !freshPlug.last_seen_at,
+    `the plug must start with last_seen_at unset, got ${JSON.stringify(freshPlug?.last_seen_at)}`
+  )
+
   fs.writeFileSync(FIXTURE, JSON.stringify(fixture, null, 2))
   // Two opaque strings the shell needs, as plain files, so the stage does not
   // have to parse JSON to publish one MQTT message.
@@ -210,6 +258,57 @@ async function assertWindows() {
 
   ok('lease/windows-were-captured', before !== null && after !== null && stopped !== null,
     'one or more capture files is missing; the stage did not run to completion')
+
+  // ── #161: the SERVER's view of the module, the other side of the same event ─
+  //
+  // Two oracles for one claim, which is the point of asserting it here rather
+  // than only in the lease windows. The windows prove the EDGE believed the
+  // module was alive -- that is what moved the lease from refuse to grant. This
+  // proves the SERVER was told as well, which is a different fact with a
+  // different mechanism and was false until #161: the edge forwarded the power
+  // report under its own token and never named the module, so `last_seen_at`
+  // stayed NULL, `classify_liveness` read NULL as silent, and the bypass sweep
+  // recorded the module silent once and then never changed its mind. A module
+  // that genuinely went quiet produced no transition at all.
+  //
+  // The precondition for this ran in the setup phase
+  // (`lease/module-starts-with-no-liveness`), deliberately before the power
+  // report, so a failure here cannot be read as "it was always set".
+  const admin = await adminAccount('lease_admin')
+  const plugNow = await serverLiveness(admin.token, fixture.deviceId)
+  ok(
+    'lease/power-report-gave-the-module-liveness',
+    !!plugNow?.last_seen_at,
+    `the server must have last_seen_at for ${fixture.deviceId} after a power report ` +
+      `naming it; got ${JSON.stringify(plugNow?.last_seen_at)}. Without this the silence ` +
+      `detector is blind to every module behind an edge.`
+  )
+
+  // The negative, asserted next to the positive so the pair reads as one claim:
+  // relaying is a coordinator's privilege, not a token-holder's. `stranger`
+  // declares the `edge` role in its capabilities and holds a valid token, and is
+  // bound to nothing -- so if a declared capability were doing the work here
+  // rather than the binding, this would pass.
+  const refused = await POST('/api/toolguard/power-report', {
+    token: fixture.strangerToken,
+    body: { tool_id: fixture.externalId, device_id: fixture.deviceId, draw_now: '0.0' },
+  })
+  ok(
+    'lease/an-unbound-device-cannot-relay',
+    refused.status === 401 || refused.status === 403,
+    `a device bound to nothing must not relay a power report; got ${refused.status} ` +
+      `${refused.text.slice(0, 140)}`
+  )
+
+  // And the edge is NOT the thing credited. The defect's shape was that the
+  // forwarded report could only ever refresh the relayer, so asserting the
+  // module is live says nothing unless the module is a different row from the
+  // edge -- which is why the fixture registers two devices.
+  ok(
+    'lease/liveness-landed-on-the-module-not-the-edge',
+    fixture.deviceId !== fixture.edgeId,
+    'the fixture must use two distinct devices or this assertion is vacuous'
+  )
 
   // ── window 1: it refuses, and says so repeatedly ──────────────────────────
   const refusals = mine(before)

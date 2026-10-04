@@ -75,30 +75,16 @@ impl DeviceInbound {
         }
     }
 
+    /// A device said it is alive.
+    ///
+    /// #161: this used to own the only write to `last_seen_at`, inline. It now
+    /// goes through `touch_device_last_seen` because the power-report path needs
+    /// the same write for a module that cannot heartbeat for itself, and one
+    /// column with two hand-rolled writers is how the two drift apart.
     pub async fn handle_heartbeat(&self, device_id: Uuid) {
-        let mut conn = match self.db.pool().get() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to get DB connection: {}", e);
-                return;
-            }
-        };
-
-        let update = UpdateSpaceDevice {
-            last_seen_at: Some(Utc::now()),
-            ..Default::default()
-        };
-
-        match diesel::update(space_devices::table)
-            .filter(space_devices::id.eq(device_id))
-            .filter(space_devices::deleted_at.is_null())
-            .set(&update)
-            .execute(&mut conn)
-        {
-            Ok(rows) if rows > 0 => {
-                tracing::debug!("Updated last_seen_at for device {}", device_id);
-            }
-            Ok(_) => warn!("Device not found or already deleted: {}", device_id),
+        match self.db.touch_device_last_seen(device_id) {
+            Ok(true) => tracing::debug!("Updated last_seen_at for device {}", device_id),
+            Ok(false) => warn!("Device not found or already deleted: {}", device_id),
             Err(e) => error!("Failed to update device last_seen_at: {}", e),
         }
     }

@@ -37,6 +37,9 @@ const KIND_TRIP: &str = "trip";
 
 /// Module roles.
 const ROLE_POWER: &str = "power";
+/// The coordinator's own binding on a resource. Never a liveness subject -- see
+/// [`ModuleState::offline_fail_off`].
+const ROLE_EDGE: &str = "edge";
 
 /// Disconnect policies.
 const ON_DISCONNECT_FAIL_OFF: &str = "fail_off";
@@ -283,6 +286,30 @@ impl ModuleState {
         tool.modules
             .iter()
             .find(|m| {
+                // A coordinator is not a liveness subject, and asking whether it
+                // is silent is circular: THIS code is what the coordinator runs,
+                // so if it were silent there would be no lease to withhold. The
+                // mechanism for a dead coordinator is renewals stopping, which
+                // needs no binding to express.
+                //
+                // Not merely redundant -- unsatisfiable. `note_device_seen` is
+                // driven by `toolguard/request/power`, and a coordinator does not
+                // send power reports about itself, so an `edge` binding can never
+                // be seen. With the server's default `on_disconnect = fail_off`,
+                // binding an edge to a tool therefore denied that tool a lease
+                // forever. Found by #161 adding the edge binding the relay rule
+                // needs and watching the e2e's own
+                // `a-module-that-reported-is-granted` go red with
+                // ModuleOffline("lease edge ..").
+                //
+                // Scoped to `edge` deliberately. `reader` and `sensor` bindings
+                // are also never credited by the present ingest, so a `fail_off`
+                // one would deny the same way -- that is pre-existing, is not
+                // circular the way this is, and wants its own decision about what
+                // ought to report liveness rather than a silent widening here.
+                if m.role == ROLE_EDGE {
+                    return false;
+                }
                 if m.on_disconnect != ON_DISCONNECT_FAIL_OFF {
                     return false;
                 }
@@ -536,6 +563,63 @@ mod tests {
     // engine believes it is alive". Until this existed `module_seen` was written
     // by nothing outside these tests, so every `fail_off` binding looked
     // permanently silent and no lease was ever granted to one.
+
+    #[test]
+    /// A coordinator's own binding must not gate the tool it coordinates.
+    ///
+    /// #161 needs the edge bound to a tool in the `edge` role so the server will
+    /// accept a power report the edge relays for a module behind it. That binding
+    /// arrives with the server's default `on_disconnect = fail_off`, and an
+    /// `edge` binding is never credited by `note_device_seen` -- a coordinator
+    /// does not send power reports about itself -- so before this it made the
+    /// tool permanently un-leasable.
+    ///
+    /// The mutant is removing the `ROLE_EDGE` arm in `offline_fail_off`: this
+    /// then reads ModuleOffline for the coordinator's binding and the tool never
+    /// energizes, which is exactly what the e2e caught.
+    #[test]
+    fn a_coordinator_binding_does_not_withhold_the_lease() {
+        let mut plug = binding("m-plug", ROLE_POWER, ON_DISCONNECT_FAIL_OFF);
+        plug.device_id = "plug-1".to_string();
+        let mut coordinator = binding("m-edge", ROLE_EDGE, ON_DISCONNECT_FAIL_OFF);
+        coordinator.device_id = "edge-1".to_string();
+
+        let s = state_with(vec![plug, coordinator], vec![]);
+
+        // Only the PLUG reports. The coordinator never will, and that must not
+        // matter.
+        s.note_device_seen("plug-1", t0());
+
+        assert_eq!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Allow,
+            "a tool whose plug has reported must be allowed even though its \
+             coordinator's binding has never been heard from"
+        );
+    }
+
+    /// The control for the test above: a non-`edge` binding that never reports
+    /// STILL withholds the lease. Without this, excluding the coordinator could
+    /// have been written as excluding everything, and the test above would pass
+    /// just as well.
+    #[test]
+    fn a_silent_power_binding_still_withholds_the_lease() {
+        let mut plug = binding("m-plug", ROLE_POWER, ON_DISCONNECT_FAIL_OFF);
+        plug.device_id = "plug-1".to_string();
+        let mut second = binding("m-plug-2", ROLE_POWER, ON_DISCONNECT_FAIL_OFF);
+        second.device_id = "plug-2".to_string();
+
+        let s = state_with(vec![plug, second], vec![]);
+        s.note_device_seen("plug-1", t0());
+
+        assert!(
+            matches!(
+                s.evaluate("tool-1", t0(), timeout()),
+                Decision::Deny(Denial::ModuleOffline(_))
+            ),
+            "a fail_off POWER binding that has never reported must still deny"
+        );
+    }
 
     #[test]
     fn a_device_report_marks_every_binding_that_device_holds() {
