@@ -48,6 +48,13 @@ pub enum MqttEvent {
 
 #[derive(Deserialize)]
 struct ToolOnPayload {
+    /// The tool this is an answer about, echoed by the edge (#166).
+    ///
+    /// `default` so a pre-#166 edge, which sent no such field, still parses --
+    /// it then reads as empty, which is what this did on every reply before the
+    /// edge echoed anything.
+    #[serde(default)]
+    tool_id: String,
     authorized: bool,
     #[serde(default)]
     reason: String,
@@ -236,8 +243,12 @@ fn handle_incoming(evt_tx: &Sender<MqttEvent>, msg: &mqtt::Message) {
     if topic == TOOL_ON_RESP {
         match serde_json::from_slice::<ToolOnPayload>(payload) {
             Ok(p) => {
+                // #166: the edge now names the tool, so the reply carries its
+                // own subject instead of being matched by whatever scan this
+                // UI happened to have outstanding. Empty means a pre-#166
+                // edge; the App's pending_scan fallback still covers that.
                 let _ = evt_tx.send(MqttEvent::ToolOnResponse {
-                    tool_id: String::new(), // matched by App via pending_scan
+                    tool_id: p.tool_id,
                     authorized: p.authorized,
                     reason: p.reason,
                 });

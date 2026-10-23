@@ -772,7 +772,8 @@ fn every_wire_payload_field_is_documented() {
     // Payloads a device sends or receives. Each named deliberately: a struct
     // added to the wire has to be added here, and a struct renamed fails in
     // `struct_fields` rather than quietly losing its coverage.
-    let payloads: [(&str, &str); 19] = [
+    let payloads: [(&str, &str); 20] = [
+        (WIRE, "LocalToolOnResponse"),
         (WIRE, "ToolModuleStatePayload"),
         (WIRE, "ToolModuleTool"),
         (WIRE, "DeviceBinding"),
@@ -1196,9 +1197,13 @@ enum Payload {
 /// oracle must not do: the question is whether the *document* matches, and that
 /// needs an independent statement of which source answers for which row.
 const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
+    // A struct since #166, where it was a `json!` literal in three places.
+    // `Handler` here would now read a body that builds no literal at all --
+    // which is an empty key set, and an empty key set compares equal to
+    // anything the document says.
     (
         "toolguard/response/tool-on",
-        Payload::Handler("handle_tool_on"),
+        Payload::Struct(WIRE, "LocalToolOnResponse"),
     ),
     (
         "toolguard/response/tool-off",
@@ -1424,15 +1429,28 @@ mod the_payload_row_check_rejects_what_it_is_for {
     use super::*;
 
     /// The real table with `authorized` swapped back to the old wrong claim.
+    ///
+    /// `actual` comes from the struct since #166, which is what the row now
+    /// names. Reading it from `handle_tool_on` would collect nothing -- the
+    /// handler builds no reply literal any more -- and an empty actual set
+    /// makes every `difference` vacuous, so this arm would pass while proving
+    /// nothing.
     #[test]
     fn a_row_naming_a_field_the_wire_does_not_carry_fails() {
         let doc = read(DOC).replace(
-            r#"| `toolguard/response/tool-on` | `{ "authorized": bool, "reason": string }` |"#,
+            r#"| `toolguard/response/tool-on` | `{ "tool_id": string, "authorized": bool, "reason": string }` |"#,
             r#"| `toolguard/response/tool-on` | `{ "status": string, "tool_on": bool }` |"#,
         );
         let documented = documented_payload_fields(&doc, "toolguard/response/tool-on");
-        let actual = published_json_keys(&fn_body(&read(EDGE_MQTT), "handle_tool_on"));
+        let actual: BTreeSet<String> = struct_fields(&read(WIRE), "LocalToolOnResponse")
+            .into_iter()
+            .collect();
 
+        assert!(
+            !actual.is_empty(),
+            "extracted no fields from LocalToolOnResponse, so the comparison \
+             below is vacuous and this self-test proves nothing"
+        );
         assert!(
             documented.contains("tool_on"),
             "the mutant did not apply; the row's text has changed and this \
@@ -1449,16 +1467,22 @@ mod the_payload_row_check_rejects_what_it_is_for {
     }
 
     /// A field added to the wire and not to the row.
+    ///
+    /// Mutates the struct rather than a `json!` literal, following the row to
+    /// its new source of truth (#166). The defect this guards is unchanged: a
+    /// field reaches the wire and the row that teaches it does not grow.
     #[test]
     fn a_published_field_missing_from_the_row_fails() {
-        let mqtt = read(EDGE_MQTT).replace(
-            r#"serde_json::json!({ "authorized": authorized, "reason": reason });"#,
-            r#"serde_json::json!({ "authorized": authorized, "reason": reason, "retry_after_ms": 500 });"#,
+        let wire = read(WIRE).replace(
+            "pub struct LocalToolOnResponse {\n    /// The tool the request named, echoed back unchanged.\n    pub tool_id: String,",
+            "pub struct LocalToolOnResponse {\n    pub retry_after_ms: u32,\n    pub tool_id: String,",
         );
-        let actual = published_json_keys(&fn_body(&mqtt, "handle_tool_on"));
+        let actual: BTreeSet<String> = struct_fields(&wire, "LocalToolOnResponse")
+            .into_iter()
+            .collect();
         assert!(
             actual.contains("retry_after_ms"),
-            "the mutant did not apply; the literal's text has changed and this \
+            "the mutant did not apply; the struct's text has changed and this \
              self-test is no longer driving the arm it names"
         );
 
@@ -1488,18 +1512,32 @@ mod the_payload_row_check_rejects_what_it_is_for {
     }
 
     /// The scoping arm: a handler's non-reply JSON must stay out of the set.
-    /// `handle_tool_on` also builds the HTTP forward body `{card, tool_id}`,
-    /// and counting those would make the row's comparison fail for fields that
+    ///
+    /// A handler that answers the broker often also builds an HTTP forward
+    /// body, and counting its fields would make a row fail for fields that
     /// never touch the local broker.
+    ///
+    /// Driven on a fixture rather than on a chosen handler. It used to read
+    /// `handle_tool_on` and assert that `card` and `tool_id` were *excluded* --
+    /// a premise #166 inverted, since `tool_id` is now part of that reply. The
+    /// property being checked belongs to `published_json_keys`, not to whichever
+    /// topic happens to be handler-backed this month, so it is tested directly
+    /// and both cells are driven.
     #[test]
     fn other_json_in_the_same_handler_is_not_collected() {
-        let keys = published_json_keys(&fn_body(&read(EDGE_MQTT), "handle_tool_on"));
+        let body = r#"
+            let forward = serde_json::json!({ "card": req.card, "tool_id": req.tool_id });
+            self.http.post(url).json(&forward).send().await;
+            let response_payload = serde_json::json!({ "ok": true, "detail": reason });
+            self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
+        "#;
+        let keys = published_json_keys(body);
         assert!(
-            keys.contains("authorized") && keys.contains("reason"),
+            keys.contains("ok") && keys.contains("detail"),
             "the reply's own fields must be collected, got {keys:?}"
         );
         assert!(
-            !keys.contains("card") && !keys.contains("tool_id"),
+            !keys.contains("card"),
             "the HTTP forward body's fields must NOT be collected, got {keys:?}"
         );
     }

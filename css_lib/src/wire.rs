@@ -192,6 +192,39 @@ pub struct ToolLeasePayload {
     pub reason: Option<String>,
 }
 
+/// The edge's answer to [`local::TOOL_ON_REQUEST`] (#166).
+///
+/// A type rather than a `json!` literal for one reason: `tool_id` must not be
+/// omissible. The edge answers tool-on from three separate places -- a power
+/// lockout, the online-synchronous path, and the cached-allow-list path -- and
+/// every module on the broker receives all three. Built by hand, a fourth site
+/// would eventually ship without the field and the omission would look exactly
+/// like a reply meant for somebody else.
+///
+/// **`tool_id` is what makes the reply addressable.** These topics carry no
+/// device id and are not namespaced, so a module cannot otherwise tell its own
+/// answer from a neighbour's: two readers on one broker, and a yes at one
+/// machine could open a session at another where someone is waiting for a no.
+/// A receiver **must** discard a reply whose `tool_id` is not the one it asked
+/// about. It is an echo of the request, not a decision, so it is not inside any
+/// authorization test.
+///
+/// This mirrors what the door half of the same resource model (#101) has always
+/// done: `door/response/unlock` echoes `door_id`.
+///
+/// `reason` is for humans and logs. **Branch on `authorized`, display
+/// `reason`** -- the strings are not part of the contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalToolOnResponse {
+    /// The tool the request named, echoed back unchanged.
+    pub tool_id: String,
+    /// Whether the session may start. Exactly `true` is the only yes; a missing
+    /// field is not a yes.
+    pub authorized: bool,
+    /// Why, for a human. Never branch on this text.
+    pub reason: String,
+}
+
 /// The **edge ↔ module** vocabulary, on the *local* broker.
 ///
 /// [`kinds`] above is the server ↔ device wire: namespaced under
@@ -228,9 +261,16 @@ pub mod local {
 
     // ── edge → module (the edge publishes) ───────────────────────────────
 
-    /// Answer to [`TOOL_ON_REQUEST`]. Carries the server's `ToolGuardResponse`,
-    /// so the `tool_on: true`-or-nothing rule applies here exactly as it does
-    /// over HTTP: absence of `tool_on` is not permission.
+    /// Answer to [`TOOL_ON_REQUEST`]: one [`super::LocalToolOnResponse`],
+    /// `{ tool_id, authorized, reason }`.
+    ///
+    /// **This is not the server's `ToolGuardResponse`, and there is no
+    /// `tool_on` field on this wire** -- that is the HTTP spelling, and this
+    /// comment claimed otherwise until #166. The local rule is `authorized`
+    /// exactly `true`; absence of it is not permission.
+    ///
+    /// Discard a reply whose `tool_id` is not the one you asked about: every
+    /// module on the broker receives every answer.
     pub const TOOL_ON_RESPONSE: &str = "toolguard/response/tool-on";
     /// Answer to [`TOOL_OFF_REQUEST`].
     pub const TOOL_OFF_RESPONSE: &str = "toolguard/response/tool-off";
@@ -239,7 +279,13 @@ pub mod local {
     /// Ack for [`POWER_REQUEST`]: `{ "ok": true }`. An ack, not an instruction
     /// -- a power module must never read this as permission to stay energized.
     pub const POWER_RESPONSE: &str = "toolguard/response/power";
-    /// A momentary unlock for a door's relay: `{ door_id, duration_ms }`.
+    /// The answer to [`DOOR_SCAN_REQUEST`]: an `edge::doors::LocalUnlockResponse`,
+    /// `{ door_id, granted, duration_ms, reason? }`.
+    ///
+    /// **A deny is published here too**, with `granted: false` and
+    /// `duration_ms: 0` -- so a message arriving is not an unlock. Branch on
+    /// `granted`. This comment listed only `{ door_id, duration_ms }` until
+    /// #166, which read as "anything that arrives is an unlock".
     pub const DOOR_UNLOCK_RESPONSE: &str = "door/response/unlock";
     /// The cached allow-list, pushed whenever it changes. The local twin of
     /// `GET /api/toolguard/sync`.

@@ -305,13 +305,22 @@ Then — and this is the single most common firmware defect in this protocol —
 **energize only if `authorized` is exactly `true`**:
 
 ```json
-{ "authorized": false, "reason": "Training required" }
+{ "tool_id": "dev-tool-01", "authorized": false, "reason": "Training required" }
 ```
 
 That is a *successful* request. Over MQTT there is no status code at all, so the
 field is the whole answer. A response arriving is not a yes, a response without
 an `authorized` field is not a yes, and `reason` is for humans — never branch on
 it.
+
+**And check `tool_id` before you read `authorized`.** These topics are not
+namespaced and carry no device id, so every module on the broker receives every
+answer. `tool_id` is the request echoed back, and it is the only thing that makes
+a reply yours: **discard a reply whose `tool_id` is not the one you asked
+about.** Without that check, two readers on one broker take each other's
+verdicts — a yes at one machine starting a session at another where somebody is
+waiting for a no. It is an echo, not a decision, so it belongs in the "is this
+mine" test and never in the "may I" test.
 
 **The field is named differently on the two wires, and this is the one place that
 matters.** On the local broker the edge answers `authorized`; over HTTP the server
@@ -1107,7 +1116,7 @@ without the other.
 
 | topic | payload |
 |---|---|
-| `toolguard/response/tool-on` | `{ "authorized": bool, "reason": string }` |
+| `toolguard/response/tool-on` | `{ "tool_id": string, "authorized": bool, "reason": string }` |
 | `toolguard/response/tool-off` | `{ "ok": true }` |
 | `toolguard/response/tool-log` | `{ "ok": true }` |
 | `toolguard/response/power` | `{ "ok": true }` — an ack, nothing more |
@@ -1122,7 +1131,7 @@ own shape, and `tool_on` does not appear on it at all.** The edge decides (from
 its cache, or by asking the server) and answers with its own verdict:
 
 ```json
-{ "authorized": false, "reason": "Training required" }
+{ "tool_id": "dev-tool-01", "authorized": false, "reason": "Training required" }
 ```
 
 So on the local broker, **energize only if `authorized` is exactly `true`.** The
