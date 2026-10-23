@@ -183,9 +183,33 @@ impl App {
                     self.push_log("MQTT disconnected");
                 }
                 MqttEvent::ToolOnResponse {
-                    authorized, reason, ..
+                    tool_id: replied_for,
+                    authorized,
+                    reason,
                 } => {
-                    if let Some((tool_id, _)) = self.pending_scan.take() {
+                    // #166: the edge names the tool its answer is about, so
+                    // prefer that over "whatever we asked about last". On a
+                    // shared local broker those are not the same thing -- every
+                    // module receives every reply, and before the echo existed
+                    // a neighbour's verdict landed here as though it were ours.
+                    //
+                    // An empty value means a pre-#166 edge, which sent no such
+                    // field; there, the pending scan is all there is.
+                    let target = match self.pending_scan.clone() {
+                        None => None,
+                        Some((pending, _)) => {
+                            if replied_for.is_empty() || replied_for == pending {
+                                self.pending_scan = None;
+                                Some(pending)
+                            } else {
+                                self.push_log(format!(
+                                    "ignored a tool-on reply for {replied_for}; waiting on {pending}"
+                                ));
+                                None
+                            }
+                        }
+                    };
+                    if let Some(tool_id) = target {
                         if let Some(station) = self.tools.iter_mut().find(|t| t.id == tool_id) {
                             station.pending = false;
                             if authorized {

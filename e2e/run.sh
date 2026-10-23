@@ -2063,6 +2063,43 @@ stage_lease() {
   # Window 2: same coordinator, same rules, and the answer has to change.
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2.txt"
 
+  # ---- the tool-on reply must name the tool it answers (#166) --------------
+  #
+  # Borrowing this stage's fixture rather than standing up a second one: it
+  # already has a registered device, a bound tool and a synced authenticated
+  # edge, which is everything the exchange needs. It runs here, before the edge
+  # is stopped, and touches none of the lease windows.
+  #
+  # The card is deliberately one that resolves to nobody. A DENIAL exercises the
+  # same publish site as a grant and needs no card fixture, so the assertion is
+  # about the envelope rather than about authorization -- and a reply that
+  # refuses must still say what it refused.
+  #
+  # SUBSCRIBE BEFORE PUBLISH, which mqtt_sub cannot express on its own: it
+  # blocks for its whole window. So it is backgrounded and given a second to
+  # attach. That second is a race in principle; the window is 6s against a
+  # reply the edge emits immediately, and a missed attach presents as the
+  # driver's "the edge answers at all" case failing loudly rather than as a
+  # wrong answer.
+  local other_tool="e2e-no-such-tool-166"
+  printf '%s' "${other_tool}" >"${STACK_DIR}/toolon-other-id"
+
+  mqtt_sub "toolguard/response/tool-on" 6 "${STACK_DIR}/toolon-reply-own.txt" &
+  local toolon_sub=$!
+  sleep 1
+  mqtt_pub "toolguard/request/tool-on" \
+    "{\"card\":\"E2E-NOSUCHCARD-166\",\"tool_id\":\"${tool}\"}" || true
+  wait "${toolon_sub}" || true
+
+  # The second request names a tool that exists nowhere. Its own id coming back
+  # is what distinguishes an echo from a constant; one request cannot.
+  mqtt_sub "toolguard/response/tool-on" 6 "${STACK_DIR}/toolon-reply-other.txt" &
+  toolon_sub=$!
+  sleep 1
+  mqtt_pub "toolguard/request/tool-on" \
+    "{\"card\":\"E2E-NOSUCHCARD-166\",\"tool_id\":\"${other_tool}\"}" || true
+  wait "${toolon_sub}" || true
+
   stop_edge
 
   # Window 3: the absence, with time allowed to pass. Opened after the edge is
@@ -2071,6 +2108,12 @@ stage_lease() {
   mqtt_sub "toolguard/lease" 5 "${STACK_DIR}/lease-window-3.txt"
 
   run_node lease.mjs assert >"${OUT}/logs/lease.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  # Reads the two captures above. Separate driver, not a mode of lease.mjs:
+  # this is a claim about the tool-on envelope and not about the lease, and
+  # putting it in lease.mjs would bury it under a name nobody greps for it by.
+  run_node toolonreply.mjs assert >"${OUT}/logs/toolonreply.log" 2>&1 || true
   absorb_driver_cases || true
 
   collect_server_log

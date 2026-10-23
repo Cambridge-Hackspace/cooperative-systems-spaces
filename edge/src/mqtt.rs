@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use css_lib::wire::local;
+use css_lib::wire::{local, LocalToolOnResponse};
 
 use crate::config::{Config, MqttConfig};
 use crate::doors::{
@@ -698,11 +698,7 @@ impl LocalMqttClient {
         // whose circuit tripped or that the server locked stays refused even if
         // the server is now unreachable (the lockout is sticky in the cache).
         if self.power_state.is_locked(&req.tool_id) {
-            let response_payload = serde_json::json!({
-                "authorized": false,
-                "reason": "Tool is locked out (power)"
-            });
-            self.publish_local(local::TOOL_ON_RESPONSE, &response_payload);
+            self.publish_tool_on(&req.tool_id, false, "Tool is locked out (power)");
             return;
         }
 
@@ -711,9 +707,7 @@ impl LocalMqttClient {
         // unreachable, deny -- fail closed, because we cannot safely bill offline.
         if self.toolguard_state.tool_requires_online(&req.tool_id) {
             let (authorized, reason) = self.remote_tool_on(&req).await;
-            let response_payload =
-                serde_json::json!({ "authorized": authorized, "reason": reason });
-            self.publish_local(local::TOOL_ON_RESPONSE, &response_payload);
+            self.publish_tool_on(&req.tool_id, authorized, &reason);
             return;
         }
 
@@ -732,8 +726,7 @@ impl LocalMqttClient {
             AccessResult::ToolUnavailable(s) => (false, format!("Tool unavailable: {}", s)),
         };
 
-        let response_payload = serde_json::json!({ "authorized": authorized, "reason": reason });
-        self.publish_local(local::TOOL_ON_RESPONSE, &response_payload);
+        self.publish_tool_on(&req.tool_id, authorized, &reason);
 
         if authorized {
             // Best-effort forward to the remote server so it records the state change
@@ -952,6 +945,25 @@ impl LocalMqttClient {
                 }
             }
             Err(e) => warn!("Failed to serialize local response: {}", e),
+        }
+    }
+
+    /// Answer a tool-on request (#166).
+    ///
+    /// The single way this topic is published, so `tool_id` cannot be left off
+    /// by one of the three decision paths. A module needs it to tell its own
+    /// answer from the answer to the reader at the next machine -- these topics
+    /// carry no device id and are not namespaced, so without it every reply is
+    /// addressed to everyone.
+    fn publish_tool_on(&self, tool_id: &str, authorized: bool, reason: &str) {
+        let payload = LocalToolOnResponse {
+            tool_id: tool_id.to_string(),
+            authorized,
+            reason: reason.to_string(),
+        };
+        match serde_json::to_value(&payload) {
+            Ok(v) => self.publish_local(local::TOOL_ON_RESPONSE, &v),
+            Err(e) => warn!("Failed to serialize tool-on response: {}", e),
         }
     }
 
