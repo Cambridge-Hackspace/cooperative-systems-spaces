@@ -160,6 +160,40 @@ fn the_routing_table_registers_exactly_the_handlers_this_check_knows_about() {
     );
 }
 
+/// Walk the call graph from `name`, following only names on `authorizers`, and
+/// say whether `primitive` is reached.
+///
+/// A WALK, NOT ONE HOP. The previous version asked whether a body mentioned
+/// *some other* name on the list and called that reaching the primitive — so two
+/// authorizers naming each other satisfied it with neither reading a credential,
+/// and the test's own name was the only thing asserting otherwise. [`AUTHORIZERS`]
+/// says a name on it is trusted; this is what stops that trust being circular.
+///
+/// `primitive` is recognised when it appears in a body, so its own body is never
+/// taken — the walk does not depend on where it is defined.
+fn reaches(src: &str, name: &str, authorizers: &[&str], primitive: &str) -> bool {
+    let mut seen: Vec<&str> = vec![name];
+    let mut frontier: Vec<&str> = vec![name];
+
+    while let Some(cur) = frontier.pop() {
+        let body = code_only(handler_body(src, cur));
+        for next in authorizers.iter().filter(|n| **n != cur) {
+            if !body.contains(next) {
+                continue;
+            }
+            if *next == primitive {
+                return true;
+            }
+            if !seen.contains(next) {
+                seen.push(next);
+                frontier.push(next);
+            }
+        }
+    }
+
+    false
+}
+
 /// A name on the [`AUTHORIZERS`] list has to earn it.
 ///
 /// The handler check above is satisfied by a handler *mentioning* any of these,
@@ -175,21 +209,77 @@ fn every_authorizer_reaches_the_primitive() {
     let hollow: Vec<&str> = AUTHORIZERS
         .iter()
         .filter(|a| **a != PRIMITIVE_AUTHORIZER)
-        .filter(|a| {
-            let body = code_only(handler_body(&src, a));
-            // Either it reads the credential itself, or it delegates to another
-            // authorizer that does.
-            !AUTHORIZERS
-                .iter()
-                .filter(|other| **other != **a)
-                .any(|other| body.contains(other))
-        })
+        .filter(|a| !reaches(&src, a, AUTHORIZERS, PRIMITIVE_AUTHORIZER))
         .copied()
         .collect();
 
     assert!(
         hollow.is_empty(),
-        "these names are trusted as authorizers but never reach          `{PRIMITIVE_AUTHORIZER}`: {hollow:?}. Any handler calling one of them is          reported as authenticated while accepting an unauthenticated request."
+        "these names are trusted as authorizers but never reach `{PRIMITIVE_AUTHORIZER}`: \
+         {hollow:?}. Any handler calling one of them is reported as authenticated while \
+         accepting an unauthenticated request."
+    );
+}
+
+/// The walk must reject a cycle, because that is what the one-hop version
+/// accepted.
+///
+/// Fed the shape of the real defect rather than a shape invented to pass: two
+/// authorizers that name each other and nothing else. The one-hop predicate
+/// answered "both delegate to an authorizer" and the suite went green with no
+/// credential read anywhere on that path. The positive half is here too — a
+/// genuine chain must still be accepted, or a correct `every_authorizer_reaches_the_primitive`
+/// would start failing on the truth.
+#[test]
+fn the_reachability_walk_rejects_a_cycle_and_accepts_a_real_chain() {
+    const AUTH: &[&str] = &["prim", "alpha", "beta"];
+
+    let cyclic = "\
+async fn alpha(req: Request) -> Response {
+    beta(req).await
+}
+async fn beta(req: Request) -> Response {
+    alpha(req).await
+}
+";
+    assert!(
+        !reaches(cyclic, "alpha", AUTH, "prim"),
+        "alpha and beta name only each other, so no credential is ever read — \
+         the walk accepted a cycle, which is the defect this test exists for"
+    );
+    assert!(
+        !reaches(cyclic, "beta", AUTH, "prim"),
+        "the same cycle entered from the other end must also be rejected"
+    );
+
+    let chain = "\
+async fn alpha(req: Request) -> Response {
+    beta(req).await
+}
+async fn beta(req: Request) -> Response {
+    prim(req).await
+}
+";
+    assert!(
+        reaches(chain, "alpha", AUTH, "prim"),
+        "alpha -> beta -> prim is a real delegation and must be accepted, or the \
+         check rejects correct code"
+    );
+
+    // A comment naming the primitive must not count, for `code_only`'s reason:
+    // prose cannot stand in for a call.
+    let commented = "\
+async fn alpha(req: Request) -> Response {
+    // delegates to prim
+    beta(req).await
+}
+async fn beta(req: Request) -> Response {
+    alpha(req).await
+}
+";
+    assert!(
+        !reaches(commented, "alpha", AUTH, "prim"),
+        "a comment naming `prim` is prose, not a call, and must not satisfy the walk"
     );
 }
 
