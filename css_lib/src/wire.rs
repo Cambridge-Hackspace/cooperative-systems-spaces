@@ -97,7 +97,9 @@ pub struct ToolModuleTool {
 pub struct DeviceBinding {
     pub id: String,
     pub device_id: String,
-    /// `reader` | `power` | `sensor`.
+    /// `reader` | `power` | `sensor` | `edge`. `edge` is load-bearing, not an
+    /// afterthought: it is the role a coordinator holds on a resource, and
+    /// `authorize_power_report` requires it to accept a relayed report.
     pub role: String,
     pub name: String,
     /// Role-specific configuration (gpio pin, receptacle id, sensor input, ...).
@@ -225,6 +227,56 @@ pub struct LocalToolOnResponse {
     pub reason: String,
 }
 
+/// A module's usage report on [`local::TOOL_LOG_REQUEST`] (#169).
+///
+/// A type rather than a shared request struct because tool-log is the only one
+/// of the three tool topics that carries durations, and the edge used to parse
+/// all three into one struct whose field set was their union. That union is
+/// what a documentation oracle sees, so no per-topic check could tell whether
+/// tool-on had grown a `seconds` or tool-log had lost one. Same reasoning as
+/// [`LocalToolOnResponse`]: the shape a module must get right is worth naming.
+///
+/// **Two durations, because a machine's working signal gives two honest answers
+/// and they are not interchangeable.** A laser's enable line drops on every
+/// scan-line return, so a device watching it can report the whole engrave as
+/// continuous machine time, or only the intervals the beam was actually on --
+/// figures that differ by 30-50% on the same job.
+///
+/// - `seconds` is **the usage the device reports as billable**, unchanged in
+///   meaning since before this type existed. `FIRMWARE.md` has always said the
+///   module decides what "in use" means, so nothing deployed changes behaviour.
+/// - `active_seconds` is the narrower figure: time the working signal was
+///   actually asserted. Optional, so every existing module stays valid.
+///
+/// Which one bills is a per-tool platform setting (`tools.usage_basis`), not a
+/// firmware choice. The other is still recorded -- for an unmetered tool it is
+/// pure statistics, and for a metered one it is how an administrator tells a
+/// dense engrave from a sparse one at the same bench time.
+///
+/// **`seconds` stays optional, and that is deliberately not a narrowing.** The
+/// struct this replaced defaulted it, and the edge treats absence as `0.0`; a
+/// required field here would start dropping payloads that are accepted today.
+/// Reports **accumulate** server-side in one atomic statement, so a module
+/// should prefer periodic increments to a single end-of-session total: a reboot
+/// then loses one interval rather than the whole session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LocalToolLogRequest {
+    /// The card that activated the session, not the last card seen. On a
+    /// metered tool the server checks it against the open session.
+    pub card: String,
+    /// The tool this usage belongs to.
+    pub tool_id: String,
+    /// Billable usage, as the device defines it. Absent is treated as `0.0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f32>,
+    /// Time the working signal was asserted, if the device senses one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_seconds: Option<f32>,
+    /// Recorded and surfaced, never billed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+}
+
 /// The **edge ↔ module** vocabulary, on the *local* broker.
 ///
 /// [`kinds`] above is the server ↔ device wire: namespaced under
@@ -244,11 +296,19 @@ pub struct LocalToolOnResponse {
 pub mod local {
     // ── module → edge (the edge subscribes) ──────────────────────────────
 
-    /// A card was presented at a tool: `{ card, tool_id, api_key? }`.
+    // `api_key?` used to be documented on all three tool topics. Nothing has
+    // ever read it here, and the HTTP form has been refused with 401 since #101
+    // slice 6 -- so it was a field a firmware author could implement in good
+    // faith and have silently ignored. Removed in #169.
+
+    /// A card was presented at a tool: `{ card, tool_id }`.
     pub const TOOL_ON_REQUEST: &str = "toolguard/request/tool-on";
-    /// The session ended: `{ card, tool_id, api_key? }`.
+    /// The session ended: `{ card, tool_id }`.
     pub const TOOL_OFF_REQUEST: &str = "toolguard/request/tool-off";
-    /// Usage to bill or record: `{ card, tool_id, seconds, temperature?, api_key? }`.
+    /// Usage to bill or record: carries [`LocalToolLogRequest`] --
+    /// `{ card, tool_id, seconds, active_seconds?, temperature? }`. Two
+    /// durations because a working signal gives two honest answers; which one
+    /// bills is `tools.usage_basis`, not the module's choice (#169).
     pub const TOOL_LOG_REQUEST: &str = "toolguard/request/tool-log";
     /// A power module's reading: `{ tool_id, draw_now, voltage_now, relay_on?, ... }`.
     /// Decimal fields are strings; `relay_on` absent means "cannot report",

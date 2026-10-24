@@ -2,7 +2,7 @@
 //!
 //! Vocabularies (role, on_disconnect, interlock kind/condition/reset/enforcement)
 //! are TEXT columns guarded by CHECK constraints in the migration; these consts are
-//! the Rust-side source of truth. `checks/tests/tool_module_vocab_matches.rs` asserts
+//! the Rust-side source of truth. `checks/tests/text_check_vocabularies_match.rs` asserts
 //! the two agree, so a value can't be added on one side and forgotten on the other.
 
 use crate::schema::{device_bindings, tool_interlocks};
@@ -19,7 +19,7 @@ use uuid::Uuid;
 /// `doors.edge_device_id` column. Every value here must also be a declarable
 /// `device_role` (a device cannot be bound in a role it does not claim) --
 /// `checks/tests/device_capabilities_agree.rs` asserts that containment, and
-/// `tool_module_vocab_matches.rs` asserts this set equals the SQL CHECK.
+/// `text_check_vocabularies_match.rs` asserts this set equals the SQL CHECK.
 ///
 /// Was `module_role`, renamed when `edge` joined: a coordinator is not a module.
 pub mod binding_role {

@@ -199,6 +199,32 @@ pub struct Tool {
     /// tool or one not yet mapped to the power topology (#42). Appended last for
     /// the positional-`Queryable` reason the metered-billing fields document.
     pub receptacle_id: Option<Uuid>,
+    /// Which reported duration the charge is computed from (#169). One of
+    /// [`usage_basis`]. Appended last, same positional-`Queryable` reason.
+    pub usage_basis: String,
+}
+
+/// Which of `tool-log`'s two durations a metered charge is computed from (#169).
+///
+/// A device watching a machine's working signal can report two honest figures,
+/// and they are not interchangeable: a laser's enable line drops on every
+/// scan-line return, so the same engrave is either continuous machine time or
+/// only the intervals the beam was on -- 30-50% apart. Which one a member pays
+/// for is a platform decision, so it lives here and not in firmware, which
+/// reports both and chooses nothing.
+///
+/// A TEXT column with a CHECK constraint, like the #83 vocabularies;
+/// `checks/tests/text_check_vocabularies_match.rs` asserts these consts equal
+/// the SQL, so a value cannot be added on one side and forgotten on the other.
+pub mod usage_basis {
+    /// Bill `tool-log`'s `seconds` -- the usage the device calls billable. The
+    /// default, and exactly the behaviour that predates #169.
+    pub const OCCUPANCY: &str = "occupancy";
+    /// Bill `tool-log`'s `active_seconds` -- only the time the working signal
+    /// was asserted. For a tool whose cost is consumable wear rather than
+    /// bench time.
+    pub const ACTIVE: &str = "active";
+    pub const ALL: [&str; 2] = [OCCUPANCY, ACTIVE];
 }
 
 /// New tool for creation

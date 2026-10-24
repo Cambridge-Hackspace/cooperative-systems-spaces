@@ -219,6 +219,7 @@ diesel::table! {
         usage_rate_per_min -> Nullable<Numeric>,
         usage_max_session_minutes -> Nullable<Int4>,
         receptacle_id -> Nullable<Uuid>,
+        usage_basis -> Text,
     }
 }
 
@@ -299,6 +300,7 @@ diesel::table! {
         rate_per_min -> Nullable<Numeric>,
         tier_id -> Nullable<Uuid>,
         source_reference -> Nullable<Text>,
+        reported_active_seconds -> Nullable<Numeric>,
     }
 }
 

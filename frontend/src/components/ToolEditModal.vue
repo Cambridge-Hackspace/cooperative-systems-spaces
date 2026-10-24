@@ -171,6 +171,20 @@
               />
             </div>
           </div>
+          <div class="form-group">
+            <label for="usage_basis">Bill for</label>
+            <select id="usage_basis" v-model="form.usage_basis" class="input">
+              <option value="occupancy">Time the tool was in use</option>
+              <option value="active">Time the machine was working</option>
+            </select>
+            <small class="help-text">
+              Which figure a reporting device is billed on. “In use” is the whole session the member
+              held the tool. “Working” counts only the time the machine was actually running — on a
+              laser that is beam-on time rather than bench time, and the two can differ by half.
+              Choosing “working” on a tool whose device reports no working signal falls back to the
+              in-use figure rather than billing nothing.
+            </small>
+          </div>
         </fieldset>
 
         <RateTierManagement v-if="toolBillingEnabled" :tool-id="props.tool.id" />
@@ -204,7 +218,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { toolsApi, schedulesApi } from '../utils/api'
-import type { Tool, ToolCategory } from '../types/tools'
+import type { Tool, ToolCategory, UsageBasis } from '../types/tools'
+
+// A function with a declared return type, rather than a literal or a cast, and
+// the reason is a genuine disagreement between the two checks. In the `ref()`
+// below, a bare `'occupancy'` infers as `string` (too wide for
+// `UpdateToolRequest`); `'occupancy' as UsageBasis` fixes that but eslint's
+// `no-unnecessary-type-assertion` rejects it, because the literal *is*
+// assignable; and a `const` annotated `UsageBasis` gets narrowed back to
+// `'occupancy'`, which then refuses `'active'`. A call expression's type is its
+// declared return type, so this is the one spelling all three agree on.
+const defaultUsageBasis = (): UsageBasis => 'occupancy'
 import type { Schedule } from '../types'
 import SchedulePicker from './SchedulePicker.vue'
 import RateTierManagement from './RateTierManagement.vue'
@@ -253,6 +277,9 @@ const form = ref({
   usage_flat_fee: '',
   usage_rate_per_min: '',
   usage_max_session_minutes: undefined,
+  // Never '': the blank-to-null sweep in updateTool would turn an empty string
+  // into an explicit null, and this column is NOT NULL.
+  usage_basis: defaultUsageBasis(),
 })
 
 // Methods
@@ -290,6 +317,7 @@ const loadToolData = () => {
     usage_flat_fee: props.tool.usage_flat_fee ?? '',
     usage_rate_per_min: props.tool.usage_rate_per_min ?? '',
     usage_max_session_minutes: props.tool.usage_max_session_minutes ?? undefined,
+    usage_basis: props.tool.usage_basis ?? defaultUsageBasis(),
   }
 }
 

@@ -387,7 +387,12 @@ async fn delete_interlock(
 /// Accept `value` only if it is in `allowed`, naming the field and the permitted
 /// set on rejection. The database CHECKs the same sets; catching it here makes it
 /// a 400 that says what was wrong instead of a 500 from a constraint.
-fn one_of(value: &str, allowed: &[&str], field: &str) -> Result<String, ApiError> {
+/// Validate a value against a TEXT+CHECK vocabulary, so a bad one answers 400
+/// naming the alternatives rather than 500 naming a database constraint.
+/// `pub(crate)` because `api::tools` validates `usage_basis` the same way
+/// (#169); duplicating it there would be a second place for the message to
+/// drift.
+pub(crate) fn one_of(value: &str, allowed: &[&str], field: &str) -> Result<String, ApiError> {
     if allowed.contains(&value) {
         Ok(value.to_string())
     } else {

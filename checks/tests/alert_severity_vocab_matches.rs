@@ -4,7 +4,7 @@
 //! drift -- a level added to the enum but not the CHECK compiles, migrates,
 //! and fails at the first subscription that uses it. This duplicates the
 //! mapping deliberately and asserts the two agree. Same shape as
-//! `tool_module_vocab_matches.rs`; the migration is located by a needle so a
+//! `text_check_vocabularies_match.rs`; the migration is located by a needle so a
 //! later redefinition supersedes this one.
 
 use css_checks::{read, repo_root};

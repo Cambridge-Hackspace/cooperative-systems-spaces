@@ -87,6 +87,21 @@ const WRITERS: &[Writer] = &[
         ),
     },
     Writer {
+        name: "add_reported_active_seconds",
+        exempt: Some(
+            "The #169 twin of `add_reported_seconds`, and exempt for the same \
+                      reason and no more: one atomic UPDATE \
+                      (COALESCE(reported_active_seconds,0) + $n WHERE \
+                      status='open'), so a zero-row update means the session \
+                      closed and nothing accumulates. It carries strictly less \
+                      weight than its sibling -- this figure bills only when the \
+                      tool's `usage_basis` is `active`, and when it is not, the \
+                      column is a statistic. The caller has already learned \
+                      whether a session was open from `add_reported_seconds` \
+                      above it, so the count here would tell it nothing new.",
+        ),
+    },
+    Writer {
         name: "touch_card_last_used",
         exempt: Some(
             "A best-effort last-used timestamp on an access card. It runs on \

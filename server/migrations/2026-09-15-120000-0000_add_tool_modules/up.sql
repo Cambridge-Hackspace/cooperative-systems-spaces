@@ -9,7 +9,7 @@
 -- expected to grow (new sensor conditions), and this mirrors the project's move
 -- away from rigid enums (see the audit_event_types lookup table). The permitted
 -- values are kept in lockstep with the Rust consts in models/tool_modules.rs by
--- checks/tests/tool_module_vocab_matches.rs.
+-- checks/tests/text_check_vocabularies_match.rs.
 --
 -- Scope note: extending space_device_kind with reader/power/sensor kinds, and the
 -- runtime (sync + edge coordinator + lease) live in later increments; this

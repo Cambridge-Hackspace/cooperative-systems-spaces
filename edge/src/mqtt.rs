@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use css_lib::wire::{local, LocalToolOnResponse};
+use css_lib::wire::{local, LocalToolLogRequest, LocalToolOnResponse};
 
 use crate::config::{Config, MqttConfig};
 use crate::doors::{
@@ -384,15 +384,18 @@ pub async fn run_mqtt_event_loop(
 // edge is one of four crates that speak it, and a private copy per crate is how
 // `toolguard-test-ui` came to be a release behind without anything noticing.
 
-/// JSON published by local hardware onto the local broker
+/// Tool-on and tool-off, published by local hardware onto the local broker.
+/// They carry nothing but the card and the tool.
+///
+/// `seconds` and `temperature` used to live here too, because one struct parsed
+/// all three tool topics. Their union is what a per-topic documentation check
+/// sees, so nothing could tell whether tool-on had grown a duration or tool-log
+/// had lost one. Tool-log now has its own named type in `css_lib::wire` (#169)
+/// and this one is exactly the two topics it serves.
 #[derive(Debug, Deserialize)]
 struct LocalToolRequest {
     card: String,
     tool_id: String,
-    #[serde(default)]
-    seconds: Option<f32>,
-    #[serde(default)]
-    temperature: Option<f32>,
 }
 
 /// A firmware power reading on the local broker (#48). The edge records it for
@@ -552,6 +555,16 @@ impl LocalMqttClient {
             return;
         }
 
+        // Tool-log is parsed as its own shape, because it is the only one of
+        // the three that carries durations (#169).
+        if topic == local::TOOL_LOG_REQUEST {
+            match serde_json::from_slice(payload) {
+                Ok(req) => self.handle_tool_log(req).await,
+                Err(e) => warn!("Failed to parse local tool request on {}: {}", topic, e),
+            }
+            return;
+        }
+
         let req: LocalToolRequest = match serde_json::from_slice(payload) {
             Ok(r) => r,
             Err(e) => {
@@ -563,7 +576,6 @@ impl LocalMqttClient {
         match topic {
             local::TOOL_ON_REQUEST => self.handle_tool_on(req).await,
             local::TOOL_OFF_REQUEST => self.handle_tool_off(req).await,
-            local::TOOL_LOG_REQUEST => self.handle_tool_log(req).await,
             _ => {}
         }
     }
@@ -901,7 +913,7 @@ impl LocalMqttClient {
         });
     }
 
-    async fn handle_tool_log(&self, req: LocalToolRequest) {
+    async fn handle_tool_log(&self, req: LocalToolLogRequest) {
         let seconds = req.seconds.unwrap_or(0.0);
         let response_payload = serde_json::json!({ "ok": true });
         self.publish_local(local::TOOL_LOG_RESPONSE, &response_payload);
@@ -912,12 +924,18 @@ impl LocalMqttClient {
         let card = req.card.clone();
         let tool_id = req.tool_id.clone();
         let temperature = req.temperature;
+        let active_seconds = req.active_seconds;
         tokio::spawn(async move {
             let mut body = serde_json::json!({
                 "card": card,
                 "tool_id": tool_id,
                 "seconds": seconds,
             });
+            // Forwarded only when the module sent it: absent means "this device
+            // senses no working signal", which is not the same as zero.
+            if let Some(a) = active_seconds {
+                body["active_seconds"] = serde_json::json!(a);
+            }
             if let Some(t) = temperature {
                 body["temperature"] = serde_json::json!(t);
             }

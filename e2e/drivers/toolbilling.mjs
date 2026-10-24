@@ -49,7 +49,10 @@ const toolOff = (card, tid, token) =>
 const toolLog = (card, tid, token, seconds) =>
   POST('/api/toolguard/tool-log', { token, body: { card, tool_id: tid, seconds } })
 
-async function createMeteredTool(admin, { externalId, flatFee, maxMin, requiresTraining }) {
+async function createMeteredTool(
+  admin,
+  { externalId, flatFee, maxMin, requiresTraining, ratePerMin },
+) {
   const res = await POST('/api/tools', {
     token: admin.token,
     body: {
@@ -58,7 +61,10 @@ async function createMeteredTool(admin, { externalId, flatFee, maxMin, requiresT
       requires_training: !!requiresTraining,
       external_id: externalId,
       usage_flat_fee: flatFee,
-      usage_rate_per_min: null,
+      // Defaults to null so every existing caller is unchanged; the
+      // usage-basis section needs a per-minute rate, because a flat fee is
+      // the same whichever duration bills and so cannot discriminate.
+      usage_rate_per_min: ratePerMin ?? null,
       usage_max_session_minutes: maxMin,
     },
   })
@@ -409,5 +415,159 @@ await main(async () => {
       `the activating member's own report was refused: ${JSON.stringify(ownerLog.json)}`)
 
     await toolOff('M1-OWNER', ext, powerTokens[ext])
+  }
+
+  // ── #169: which reported duration bills is the TOOL's setting ────────────
+  //
+  // A device watching a machine's working signal reports two durations, and
+  // they are not interchangeable -- a laser's enable line drops on every
+  // scan-line return, so the same engrave is either continuous bench time or
+  // only the intervals the beam was on. `usage_basis` picks which one the
+  // charge uses.
+  //
+  // WHY A PER-MINUTE RATE AND A SLEEP. A flat fee is identical whichever
+  // duration bills, so it cannot tell the two apart; only a time charge can.
+  // And `effective = min(reported, wall_clock)` -- wall clock is a cap, never a
+  // source -- so both reported figures must sit *below* the session's real
+  // elapsed time or the cap, not the basis, decides the charge and both cases
+  // come out equal. Hence small reported values and a sleep that puts elapsed
+  // comfortably above the larger of them.
+  {
+    const RATE = '60.00' // => charge is exactly `effective_seconds` in currency
+    const REPORTED = 1.0 // billed under `occupancy`
+    const ACTIVE = 0.25 // billed under `active`
+
+    const basisTool = async (externalId, basis) => {
+      // maxMin 1 keeps the prepaid hold at rate x 1 = 60, which the funding
+      // below covers. The cap is then 60 billable seconds, well above both
+      // figures, so `max_minutes` is not what decides either case.
+      const t = await createMeteredTool(admin, {
+        externalId,
+        flatFee: null,
+        ratePerMin: RATE,
+        maxMin: 1,
+      })
+      const set = await PUT(`/api/tools/${t.id}`, {
+        token: admin.token,
+        body: { usage_basis: basis },
+      })
+      // Named by tool, not by basis: two of these tools are `active`, and
+      // duplicate case names would collide in the report.
+      assertEq(`usagebasis/${externalId}-set`, 200, set.status, set.text.slice(0, 200))
+      assertEq(`usagebasis/${externalId}-stored`, basis, set.json?.data?.usage_basis)
+      return t
+    }
+
+    // The validation is checked before anything depends on it: an unknown value
+    // must be refused by name rather than reaching the column's CHECK and
+    // surfacing as a 500 about a constraint.
+    const occupancyTool = await basisTool('e2e-basis-occ', 'occupancy')
+    const bad = await PUT(`/api/tools/${occupancyTool.id}`, {
+      token: admin.token,
+      body: { usage_basis: 'tube-hours' },
+    })
+    assertEq('usagebasis/rejects-an-unknown-value', 400, bad.status, bad.text.slice(0, 200))
+    ok(
+      'usagebasis/refusal-names-the-alternatives',
+      /occupancy/.test(bad.text) && /active/.test(bad.text),
+      `a 400 that does not say what is allowed just blocks somebody: ${bad.text.slice(0, 200)}`,
+    )
+
+    // Both created for their side effects: `basisTool` asserts the setting
+    // stored, and registers the tool's power token under its external id.
+    await basisTool('e2e-basis-act', 'active')
+    await basisTool('e2e-basis-fallback', 'active')
+
+    const lastSessionOf = async (m) =>
+      (await GET(`/api/admin/tool-billing/users/${m.user.id}/sessions`, { token: admin.token }))
+        .json?.data?.[0]
+
+    // One full session, reporting whichever figures the case calls for.
+    const runBasisCase = async (label, extId, card, report) => {
+      const m = await account(`basis_${label}`)
+      await setCard(m, card)
+      await fund(admin, m, '200.00')
+
+      const on = await toolOn(card, extId, powerTokens[extId])
+      ok(`usagebasis/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
+
+      const log = await POST('/api/toolguard/tool-log', {
+        token: powerTokens[extId],
+        body: { card, tool_id: extId, ...report },
+      })
+      assertEq(`usagebasis/${label}-logged`, 'ok', log.json?.status, JSON.stringify(log.json))
+
+      // Put wall clock above both reported figures, so the cap is not the
+      // thing under test.
+      await new Promise((r) => setTimeout(r, 2000))
+
+      const off = await toolOff(card, extId, powerTokens[extId])
+      assertEq(`usagebasis/${label}-off`, 200, off.status)
+      return await lastSessionOf(m)
+    }
+
+    const occ = await runBasisCase('occupancy', 'e2e-basis-occ', 'E2E-BASIS-OCC', {
+      seconds: REPORTED,
+      active_seconds: ACTIVE,
+    })
+    const act = await runBasisCase('active', 'e2e-basis-act', 'E2E-BASIS-ACT', {
+      seconds: REPORTED,
+      active_seconds: ACTIVE,
+    })
+
+    ok(
+      'usagebasis/occupancy-bills-the-reported-seconds',
+      Math.abs(Number(occ?.charged_amount) - REPORTED) < 1e-9,
+      `charged=${occ?.charged_amount} expected=${REPORTED}. If this is lower than ` +
+        `expected the wall-clock cap bit, which means the sleep above was too ` +
+        `short rather than the basis being wrong.`,
+    )
+    ok(
+      'usagebasis/active-bills-the-working-seconds',
+      Math.abs(Number(act?.charged_amount) - ACTIVE) < 1e-9,
+      `charged=${act?.charged_amount} expected=${ACTIVE}`,
+    )
+
+    // THE DISCRIMINATING ASSERTION. Either case alone is satisfied by a server
+    // that ignores `usage_basis` and always bills one figure; only the pair
+    // proves the setting is read. Asserted as a strict inequality rather than
+    // by re-deriving the numbers, so it still means something if the fixtures
+    // change.
+    ok(
+      'usagebasis/the-basis-changes-the-charge',
+      Number(act?.charged_amount) < Number(occ?.charged_amount),
+      `same report, two bases, same charge: occupancy=${occ?.charged_amount} ` +
+        `active=${act?.charged_amount}. The tool's usage_basis is not being read.`,
+    )
+
+    // The second oracle: the figure that did NOT bill is still recorded, so an
+    // administrator can tell a dense engrave from a sparse one at equal bench
+    // time. Without this, "report both" is only a claim about the wire.
+    ok(
+      'usagebasis/the-unbilled-figure-is-still-recorded',
+      Math.abs(Number(occ?.reported_active_seconds) - ACTIVE) < 1e-6,
+      `the occupancy-billed session did not keep active_seconds: ` +
+        `reported_active_seconds=${occ?.reported_active_seconds} expected=${ACTIVE}`,
+    )
+
+    // A tool set to `active` whose device senses nothing must bill what it does
+    // report, not nothing. Absence is the fallback trigger -- a genuine zero is
+    // an answer and is billed as zero.
+    const fb = await runBasisCase('fallback', 'e2e-basis-fallback', 'E2E-BASIS-FB', {
+      seconds: REPORTED,
+    })
+    ok(
+      'usagebasis/active-falls-back-when-no-working-signal-is-reported',
+      Math.abs(Number(fb?.charged_amount) - REPORTED) < 1e-9,
+      `charged=${fb?.charged_amount} expected=${REPORTED}. A tool configured for ` +
+        `the working figure and wired to a device that cannot sense one must not ` +
+        `bill zero.`,
+    )
+    ok(
+      'usagebasis/the-fallback-leaves-the-active-figure-unset',
+      fb?.reported_active_seconds === null || fb?.reported_active_seconds === undefined,
+      `expected no active figure at all, got ${fb?.reported_active_seconds}. A zero ` +
+        `here would read as "the machine never ran" rather than "nothing measured it".`,
+    )
   }
 })

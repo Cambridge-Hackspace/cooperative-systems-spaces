@@ -368,6 +368,39 @@ publish  toolguard/request/tool-off  {"card":…,"tool_id":…}
 the stop settles the session. Send `tool-off` on **every** stop, including the
 ugly ones — an un-ended session leaves the tool unusable for the next member.
 
+**Report usage in increments, not as one total at the end.** Reports
+*accumulate* — the server adds each one to the session in a single atomic
+statement — so a module that reports every thirty seconds loses one interval to
+a reboot, where one that reports the total at the end loses the whole session.
+A `tool-off` with no `tool-log` before it bills a per-minute tool **nothing**:
+wall clock is only ever a *cap* on reported usage, never a source of it.
+
+**If you sense whether the machine is actually working, say so separately**
+(#169):
+
+```
+publish  toolguard/request/tool-log
+         {"card":…,"tool_id":…,"seconds":612.5,"active_seconds":404.0}
+```
+
+Two figures, because a working signal gives two honest answers. A laser's
+enable line drops on every scan-line return, so the same engrave is either
+continuous machine time or only the intervals the beam was on — 30–50% apart.
+
+- `seconds` is **the usage you report as billable**. Unchanged: you decide what
+  "in use" means for your machine.
+- `active_seconds` is the narrower figure — the time your working signal was
+  asserted. Optional.
+
+**Which one bills is not yours to choose.** It is a per-tool server setting
+(`usage_basis`), so report both honestly and let the space decide. Omit
+`active_seconds` entirely if you sense nothing — absent means "this device
+cannot tell", which is *not* the same as zero, and a zero reads as "the machine
+sat idle".
+
+Do not send a duration in `temperature`. It is recorded and never billed, and
+anything else there is a lie in the audit record.
+
 If you switch power, also publish `toolguard/request/power` periodically, and
 **always include `device_id`**: a module the coordinator has not heard from is a
 module it will not grant a lease to. A report carrying only `tool_id` and
@@ -693,12 +726,25 @@ stop — an un-ended session leaves the tool unusable for the next member.
 
 ### `POST /api/toolguard/tool-log`
 
-JSON body: `card`, `tool_id`, `seconds` (float), optional `temperature`
-(float). Requires a device token bound to this tool; for a metered tool that
-binding must be the `power` one.
+JSON body: `card`, `tool_id`, `seconds` (float), optional `active_seconds`
+(float) and `temperature` (float). Requires a device token bound to this tool;
+for a metered tool that binding must be the `power` one.
 
 Reports usage. `message` is `Usage logged`. For metered tools this is what gets
 billed; send it before `tool-off`.
+
+**Reports accumulate.** Each call adds to the open session rather than replacing
+it, in one atomic statement, so sending periodic increments is both safe and
+preferred — see [step 6](#step-6--report-then-stop).
+
+`active_seconds` (#169) is the time your working signal was asserted, as
+distinct from the usage you call billable. Which of the two the charge uses is
+the tool's `usage_basis` setting, not the device's choice; the other is still
+recorded, and on an **unmetered** tool both are kept as statistics with no
+billing involved. Omit it if you sense nothing — absent is "cannot tell", not
+zero. A non-finite or negative `active_seconds` is dropped on its own rather
+than failing the report, so a sensor fault cannot cost a member their real
+usage.
 
 On a **metered** tool the report is checked against the session it belongs to,
 and two refusals are specific to this endpoint:
@@ -1107,8 +1153,8 @@ without the other.
 |---|---|
 | `toolguard/request/tool-on` | `{ "card", "tool_id" }` |
 | `toolguard/request/tool-off` | `{ "card", "tool_id" }` |
-| `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "temperature"? }` |
-| `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "self_tripped"?, … }` |
+| `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "active_seconds"?, "temperature"? }` |
+| `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
 | `door/request/scan` | `{ "door_id", "card_id" }` |
 | `kiosk/refresh` | *(none)* — ask the edge to re-push `toolguard/state` |
 
