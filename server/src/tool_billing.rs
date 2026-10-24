@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::config::{ActuationMode, BillingMode, ConfigManager};
 use crate::database::{DatabaseError, DatabaseManager};
+use crate::models::usage_basis;
 use crate::models::{
     AuditEventType, LedgerEntryType, NewAuditLog, NewMembershipLedgerEntry, NewToolUsageSession,
     Tool, ToolUsageSession, User,
@@ -48,6 +49,38 @@ pub fn max_session_cost(
     let flat = flat_fee.clone().unwrap_or_else(zero);
     let rate = rate_per_min.clone().unwrap_or_else(zero);
     (flat + rate * BigDecimal::from(max_minutes)).round(2)
+}
+
+/// Which of a session's two reported durations the charge is computed from,
+/// given the tool's `usage_basis` (#169).
+///
+/// Pure, and separated from `settle_open_session_for_tool` for that reason: the
+/// decision has two edges that are easy to get backwards and neither needs a
+/// database to pin.
+///
+/// **Absence falls back; zero does not.** A tool set to `active` whose device
+/// senses no working signal reports nothing in that field, and billing it zero
+/// would mean a machine that ran for an hour costs nothing because of how it
+/// happens to be wired. A device that reports a genuine `0` is answering the
+/// question -- the machine did not run -- and is billed accordingly.
+///
+/// An unrecognized basis behaves as `occupancy`. The column has a CHECK and the
+/// API validates against the vocabulary, so this is unreachable through either
+/// door; it resolves to the default rather than panicking because the one way
+/// in would be a hand-edited row, and refusing to settle a session over it
+/// would strand a tool rather than charge a defensible amount.
+pub fn effective_reported(
+    basis: &str,
+    reported_seconds: &Option<BigDecimal>,
+    reported_active_seconds: &Option<BigDecimal>,
+) -> BigDecimal {
+    match basis {
+        usage_basis::ACTIVE => reported_active_seconds
+            .clone()
+            .or_else(|| reported_seconds.clone())
+            .unwrap_or_else(zero),
+        _ => reported_seconds.clone().unwrap_or_else(zero),
+    }
 }
 
 /// The charge for a settled session: `flat + rate × min(minutes_used,
@@ -355,7 +388,19 @@ impl ToolBillingService {
     /// Accumulate a validated device usage report onto the tool's open session.
     /// Returns `false` for a negative report or an orphan (no open session) so
     /// the caller can reject it. The wall-clock cap is applied at settle.
-    pub fn record_usage(&self, tool_id: Uuid, seconds: f32) -> Result<bool, DatabaseError> {
+    /// `active_seconds` (#169) accumulates alongside, when the device reported
+    /// one. It is validated the same way but its absence is not a refusal: most
+    /// devices sense no working signal at all, and every module deployed before
+    /// #169 sends none. A non-finite or negative *active* figure is dropped on
+    /// its own rather than rejecting the whole report, because the billable
+    /// figure is still good and refusing it would lose real usage over a
+    /// statistic.
+    pub fn record_usage(
+        &self,
+        tool_id: Uuid,
+        seconds: f32,
+        active_seconds: Option<f32>,
+    ) -> Result<bool, DatabaseError> {
         if !(seconds.is_finite() && seconds >= 0.0) {
             return Ok(false);
         }
@@ -364,6 +409,10 @@ impl ToolBillingService {
         };
         let dec = BigDecimal::from_str(&format!("{seconds:.3}")).unwrap_or_else(|_| zero());
         self.db.add_reported_seconds(session.id, dec)?;
+        if let Some(active) = active_seconds.filter(|a| a.is_finite() && *a >= 0.0) {
+            let dec = BigDecimal::from_str(&format!("{active:.3}")).unwrap_or_else(|_| zero());
+            self.db.add_reported_active_seconds(session.id, dec)?;
+        }
         Ok(true)
     }
 
@@ -380,7 +429,14 @@ impl ToolBillingService {
         let Some(session) = self.db.open_tool_session_for_tool(tool.id)? else {
             return Ok(None);
         };
-        let reported = session.reported_seconds.clone().unwrap_or_else(zero);
+        // #169: which reported figure bills is the tool's setting, not the
+        // module's choice. See `effective_reported` for why absence falls back
+        // and a reported zero does not.
+        let reported = effective_reported(
+            &tool.usage_basis,
+            &session.reported_seconds,
+            &session.reported_active_seconds,
+        );
         // Wall-clock cap: cutting time can never exceed the time the tool was on.
         let elapsed = (Utc::now() - session.started_at).num_seconds().max(0);
         let elapsed_dec = BigDecimal::from(elapsed);
@@ -526,6 +582,66 @@ mod tests {
         assert!(!is_metered(&Some(bd("0")), &Some(bd("0"))));
         assert!(is_metered(&Some(bd("0.50")), &None));
         assert!(is_metered(&None, &Some(bd("0.20"))));
+    }
+
+    #[test]
+    fn occupancy_bills_the_reported_seconds_and_active_bills_the_working_ones() {
+        let reported = Some(bd("600"));
+        let active = Some(bd("400"));
+        // The discriminating pair: the same session, two bases, two answers.
+        // Either line alone passes against an implementation that ignores the
+        // basis entirely.
+        assert_eq!(
+            effective_reported(usage_basis::OCCUPANCY, &reported, &active),
+            bd("600")
+        );
+        assert_eq!(
+            effective_reported(usage_basis::ACTIVE, &reported, &active),
+            bd("400")
+        );
+    }
+
+    #[test]
+    fn an_absent_active_figure_falls_back_but_a_reported_zero_does_not() {
+        let reported = Some(bd("600"));
+        // No device ever reported a working signal: bill what it did report,
+        // rather than nothing because of how the tool happens to be wired.
+        assert_eq!(
+            effective_reported(usage_basis::ACTIVE, &reported, &None),
+            bd("600")
+        );
+        // A device that reports zero is answering the question -- the machine
+        // did not run -- and that answer must survive. This is the edge the
+        // fallback above would eat if it tested for zero instead of absence.
+        assert_eq!(
+            effective_reported(usage_basis::ACTIVE, &reported, &Some(bd("0"))),
+            bd("0")
+        );
+    }
+
+    #[test]
+    fn a_session_with_nothing_reported_bills_no_time_on_either_basis() {
+        // Not a fallback case: there is nothing to fall back to. Both must be
+        // zero rather than one of them panicking on the None.
+        assert_eq!(
+            effective_reported(usage_basis::OCCUPANCY, &None, &None),
+            bd("0")
+        );
+        assert_eq!(
+            effective_reported(usage_basis::ACTIVE, &None, &None),
+            bd("0")
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_basis_bills_as_occupancy_rather_than_panicking() {
+        // Unreachable through the API or the column's CHECK; reachable by a
+        // hand-edited row. Settling at the default beats refusing to settle,
+        // which would strand the tool.
+        assert_eq!(
+            effective_reported("tube-hours", &Some(bd("600")), &Some(bd("400"))),
+            bd("600")
+        );
     }
 
     #[test]

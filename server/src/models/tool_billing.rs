@@ -45,6 +45,13 @@ pub struct ToolUsageSession {
     /// (#38, e.g. a ToolPass session id); `None` for a live session the app
     /// opened itself. Appended last for the positional `Queryable`.
     pub source_reference: Option<String>,
+    /// Accumulated `active_seconds` from `tool-log` -- the time a device's
+    /// working signal was asserted (#169). Recorded whatever the tool's
+    /// `usage_basis`, so the figure that is not billed is still visible.
+    /// `None` means no device reported a working signal, which is not zero: a
+    /// tool with no sensing hardware must not read as one that never ran.
+    /// Appended last for the positional `Queryable`.
+    pub reported_active_seconds: Option<BigDecimal>,
 }
 
 /// A session to open (activation). Everything else defaults: `ended_at`,

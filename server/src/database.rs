@@ -5011,6 +5011,40 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Accumulate a device's reported *active* seconds onto the open session
+    /// (#169) -- the time the module's working signal was asserted, as opposed
+    /// to the usage it calls billable.
+    ///
+    /// Atomic for the same reason as `add_reported_seconds` above: a module is
+    /// expected to send periodic increments, so two in flight on one session
+    /// must not read the same base. This figure bills only when the tool's
+    /// `usage_basis` is `active`, but it accumulates either way, so the
+    /// gameability argument applies to it whenever it does bill.
+    pub fn add_reported_active_seconds(
+        &self,
+        session_id: uuid::Uuid,
+        seconds: bigdecimal::BigDecimal,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::tool_usage_sessions::dsl::*;
+        use diesel::dsl::sql;
+        use diesel::sql_types::Numeric;
+        let mut conn = self.get_connection()?;
+        diesel::update(
+            tool_usage_sessions
+                .filter(id.eq(session_id))
+                .filter(status.eq("open")),
+        )
+        .set(
+            reported_active_seconds.eq(sql::<diesel::sql_types::Nullable<Numeric>>(
+                "COALESCE(reported_active_seconds, 0) + ",
+            )
+            .bind::<Numeric, _>(seconds)),
+        )
+        .execute(&mut conn)
+        .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
     /// Settle an open session: record the charge/usage and close it. Returns
     /// `true` iff this call was the one that closed it -- **idempotent**: a second
     /// settle (a replayed report) matches no open row and returns `false`, so a

@@ -23,6 +23,10 @@ export enum ToolCategory {
   Other = 'other',
 }
 
+/// Which reported duration a metered charge is computed from (#169). Mirrors
+/// `usage_basis::ALL` in `server/src/models/tools.rs` and the column's CHECK.
+export type UsageBasis = 'occupancy' | 'active'
+
 export interface Tool {
   id: string
   name: string
@@ -45,6 +49,11 @@ export interface Tool {
   usage_flat_fee?: string | null
   usage_rate_per_min?: string | null
   usage_max_session_minutes?: number | null
+  // Which of tool-log's two reported durations the charge uses (#169):
+  // 'occupancy' (the device's billable figure, the default) or 'active' (only
+  // the time its working signal was asserted). Never null -- NOT NULL with a
+  // default server-side.
+  usage_basis?: UsageBasis
   // The power receptacle this tool plugs into (#42), or null for a battery /
   // unmapped tool. Assigned via the Facility > Power tab.
   receptacle_id?: string | null
@@ -91,6 +100,9 @@ export interface UpdateToolRequest {
   usage_flat_fee?: string | null
   usage_rate_per_min?: string | null
   usage_max_session_minutes?: number | null
+  // Not nullable: the column is NOT NULL with a default, so there is no
+  // "cleared" state to send. Omit the key to leave it alone.
+  usage_basis?: UsageBasis
 }
 
 export interface ChangeToolStatusRequest {

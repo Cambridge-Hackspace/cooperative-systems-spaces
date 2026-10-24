@@ -185,6 +185,9 @@ pub struct ToolLogRequest {
     pub card: String,
     pub tool_id: String,
     pub seconds: f32,
+    /// Time the device's working signal was asserted, if it senses one (#169).
+    /// Absent means "this device cannot tell", which is not zero.
+    pub active_seconds: Option<f32>,
     pub temperature: Option<f32>,
 }
 
@@ -198,6 +201,8 @@ pub struct ToolLogRequestWire {
     pub tool_id: Option<String>,
     #[serde(default)]
     pub seconds: Option<f32>,
+    #[serde(default)]
+    pub active_seconds: Option<f32>,
     #[serde(default)]
     pub temperature: Option<f32>,
 }
@@ -215,6 +220,10 @@ impl ToolLogRequestWire {
                 card,
                 tool_id,
                 seconds,
+                // Not in the required tuple: a device that senses no working
+                // signal is the normal case, and demanding it would refuse
+                // every module deployed before #169.
+                active_seconds: self.active_seconds,
                 temperature: self.temperature,
             }),
             _ => Err(ApiError::BadRequest(
@@ -766,7 +775,7 @@ async fn tool_log(
                 }
             }
             let applied = billing
-                .record_usage(tool.id, req.seconds)
+                .record_usage(tool.id, req.seconds, req.active_seconds)
                 .map_err(ApiError::from)?;
             if !applied {
                 log_tool_access_denied(
@@ -796,6 +805,10 @@ async fn tool_log(
             "toolguard_id": req.tool_id,
             "card_id": card_id,
             "seconds": req.seconds,
+            // Recorded for every tool, metered or not (#169): on an unmetered
+            // one this is the whole point of the report, and the billing gates
+            // above never ran.
+            "active_seconds": req.active_seconds,
             "temperature": req.temperature,
         })),
     };
@@ -809,6 +822,7 @@ async fn tool_log(
         tool.id,
         &req.tool_id,
         req.seconds,
+        req.active_seconds,
         req.temperature,
     )
     .await?;
@@ -1748,14 +1762,19 @@ async fn log_tool_usage(
     tool_id: Uuid,
     toolguard_id: &str,
     seconds: f32,
+    active_seconds: Option<f32>,
     temperature: Option<f32>,
 ) -> Result<(), ApiError> {
     let details = serde_json::json!({
         "tool_id": tool_id,
         "toolguard_id": toolguard_id,
         "seconds": seconds,
+        // #169. Null means the device senses no working signal, not that the
+        // machine sat idle -- the two read the same in a chart and must not.
+        "active_seconds": active_seconds,
         "temperature": temperature,
         "duration_minutes": seconds / 60.0,
+        "active_minutes": active_seconds.map(|a| a / 60.0),
     });
     let user_id = user.id;
     if let Err(e) = state

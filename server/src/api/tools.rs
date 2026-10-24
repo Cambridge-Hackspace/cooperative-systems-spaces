@@ -103,6 +103,11 @@ pub struct UpdateToolRequest {
     pub usage_rate_per_min: Option<Option<bigdecimal::BigDecimal>>,
     #[serde(default, deserialize_with = "clearable")]
     pub usage_max_session_minutes: Option<Option<i32>>,
+    /// Which reported duration bills (#169). Not `clearable`: the column is
+    /// `NOT NULL` with a default, so there is no "unset" to return it to --
+    /// `None` here means "leave it alone", and clearing it would have to mean
+    /// writing the default, which is a different request than this struct makes.
+    pub usage_basis: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -254,6 +259,13 @@ async fn update_tool(
     Path(tool_id): Path<Uuid>,
     Json(payload): Json<UpdateToolRequest>,
 ) -> Result<Json<ApiResponse<Tool>>, ApiError> {
+    // Checked here rather than left to the column's CHECK constraint, which
+    // would surface a typo as a database error naming the constraint instead of
+    // the allowed values (#169).
+    if let Some(basis) = payload.usage_basis.as_deref() {
+        crate::api::tool_modules::one_of(basis, &crate::models::usage_basis::ALL, "usage_basis")?;
+    }
+
     // Logged, then converted -- not replaced. `map_err` to a bare
     // InternalServerError threw away everything the error knew: updating a tool
     // that does not exist answered 500 rather than 404, and a name that

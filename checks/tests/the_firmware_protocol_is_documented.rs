@@ -1220,6 +1220,44 @@ const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
     ),
 ];
 
+/// Topic -> the shape a *module publishes* on it, duplicated here deliberately
+/// for the same reason as [`LOCAL_RESPONSE_PAYLOADS`].
+///
+/// **This half did not exist until #169, and that was the hole.** The response
+/// rows were covered; the request rows were not, so nothing compared what the
+/// edge actually *accepts* against what the document tells a firmware author to
+/// send. `tool-log` grew a second duration and the only thing that would have
+/// noticed was a human reading two files side by side.
+///
+/// `kiosk/refresh` is deliberately absent: its documented payload is *(none)*
+/// and it has no struct, so there is nothing on either side to compare. That is
+/// the only topic under this heading with no payload, so the exclusion covers
+/// exactly it.
+const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
+    // Tool-on and tool-off share one struct because they carry the same two
+    // fields. Tool-log no longer does -- see `LocalToolLogRequest`.
+    (
+        "toolguard/request/tool-on",
+        Payload::Struct(EDGE_MQTT, "LocalToolRequest"),
+    ),
+    (
+        "toolguard/request/tool-off",
+        Payload::Struct(EDGE_MQTT, "LocalToolRequest"),
+    ),
+    (
+        "toolguard/request/tool-log",
+        Payload::Struct(WIRE, "LocalToolLogRequest"),
+    ),
+    (
+        "toolguard/request/power",
+        Payload::Struct(EDGE_MQTT, "LocalPowerRequest"),
+    ),
+    (
+        "door/request/scan",
+        Payload::Struct(EDGE_DOORS, "LocalScanRequest"),
+    ),
+];
+
 /// The body of one function, by text, from its declaration to the `}` at its
 /// own indentation. Same reasoning as `struct_fields`: closing on the first
 /// `}` in column zero swallows every later function in the `impl`.
@@ -1420,6 +1458,59 @@ fn every_local_response_payload_matches_its_row() {
              tool that never starts, with no error at either end. This is the \
              defect the check was added for: the row said `tool_on`, the wire \
              carries `authorized`."
+        );
+    }
+}
+
+/// Every field the edge *accepts* on a local request topic is named in that
+/// topic's own row, and every field the row names is one the edge accepts.
+///
+/// The mirror of the test above, and the half that was missing (#169). The
+/// failure it exists to catch is the quieter one: a module sends a field the
+/// edge silently discards, or omits one it needed, and the only symptom is
+/// usage that is wrong rather than absent.
+#[test]
+fn every_local_request_payload_matches_its_row() {
+    let doc = read(DOC);
+
+    for (topic, payload) in LOCAL_REQUEST_PAYLOADS {
+        let actual: BTreeSet<String> = match payload {
+            Payload::Handler(name) => published_json_keys(&fn_body(&read(EDGE_MQTT), name)),
+            Payload::Struct(file, name) => struct_fields(&read(file), name).into_iter().collect(),
+        };
+        let documented = documented_payload_fields(&doc, topic);
+
+        assert!(
+            !actual.is_empty(),
+            "extracted no payload fields at all for `{topic}` from the source. \
+             The struct named in LOCAL_REQUEST_PAYLOADS has moved or been \
+             renamed, and this row has been checking nothing."
+        );
+        assert!(
+            !documented.is_empty(),
+            "{DOC} has no row naming any payload field for `{topic}` under \
+             `{LOCAL_SECTION}`. Either the table moved -- in which case this \
+             check was passing vacuously -- or the row lost its payload cell."
+        );
+
+        let undocumented: Vec<&String> = actual.difference(&documented).collect();
+        assert!(
+            undocumented.is_empty(),
+            "the edge accepts these fields on `{topic}` and {DOC}'s row for it \
+             does not name them: {undocumented:?}\n\n\
+             A field the edge reads but the document does not mention is one no \
+             firmware author will send, so the behaviour it controls is \
+             unreachable in practice."
+        );
+
+        let invented: Vec<&String> = documented.difference(&actual).collect();
+        assert!(
+            invented.is_empty(),
+            "{DOC}'s row for `{topic}` names fields the edge never reads: \
+             {invented:?}\n\n\
+             Firmware written from this row sends a field that is silently \
+             discarded. Nothing errors -- the report is simply wrong, or the \
+             usage lands as zero, which is the failure #169 was about."
         );
     }
 }

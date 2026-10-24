@@ -1,9 +1,14 @@
-//! The binding / interlock vocabularies live in two places: the
-//! `CHECK (... IN (...))` constraints in the migrations, and the `pub const` sets
-//! in `server/src/models/tool_modules.rs`. Either alone can drift -- a value added
+//! The TEXT+CHECK vocabularies live in two places: the `CHECK (... IN (...))`
+//! constraints in the migrations, and the `pub const` sets in
+//! `server/src/models/`. Either alone can drift -- a value added
 //! to the CHECK but not the Rust consts (or vice versa) compiles and migrates
 //! fine, and the mismatch only surfaces as a runtime insert error much later. This
 //! oracle duplicates the mapping deliberately and asserts the two agree.
+//!
+//! Was `tool_module_vocab_matches.rs`, renamed in #169 when `tools.usage_basis`
+//! joined: the machinery was never specific to bindings, and a third copy of it
+//! in a third file is how three parsers come to disagree about what a CHECK
+//! looks like.
 //!
 //! **Each vocabulary is located rather than hardcoded.** They no longer share one
 //! migration: #101 moved `role` and `on_disconnect` onto `device_bindings` (the
@@ -19,7 +24,8 @@
 use css_checks::{read, repo_root};
 use std::collections::BTreeSet;
 
-const MODELS: &str = "server/src/models/tool_modules.rs";
+const MODULES: &str = "server/src/models/tool_modules.rs";
+const TOOLS: &str = "server/src/models/tools.rs";
 
 /// The contents of the last `up.sql`, in diesel's order, containing `needle`.
 ///
@@ -101,32 +107,66 @@ fn quoted(s: &str, q: char) -> BTreeSet<String> {
     out
 }
 
-/// (Rust module, SQL column, needle identifying the migration that defines it).
-const VOCABULARIES: [(&str, &str, &str); 6] = [
+/// (models file, Rust module, SQL column, needle identifying the migration that
+/// defines it).
+///
+/// The file is per-entry rather than one constant because these vocabularies do
+/// not all belong to one model: `usage_basis` is a property of a tool, not of a
+/// binding, and putting it in `tool_modules.rs` to satisfy this table would be
+/// the test deciding where production code lives.
+const VOCABULARIES: [(&str, &str, &str, &str); 7] = [
     // Widened with `edge` by the door-coordinator fold, via a named constraint.
-    ("binding_role", "role", "device_bindings_role_check"),
+    (
+        MODULES,
+        "binding_role",
+        "role",
+        "device_bindings_role_check",
+    ),
     // Unchanged since the binding table was created.
     (
+        MODULES,
         "on_disconnect",
         "on_disconnect",
         "CREATE TABLE device_bindings",
     ),
     // The interlock vocabularies stayed with the table they belong to.
-    ("interlock_kind", "kind", "CREATE TABLE tool_interlocks"),
     (
+        MODULES,
+        "interlock_kind",
+        "kind",
+        "CREATE TABLE tool_interlocks",
+    ),
+    (
+        MODULES,
         "interlock_condition",
         "condition",
         "CREATE TABLE tool_interlocks",
     ),
-    ("interlock_reset", "reset", "CREATE TABLE tool_interlocks"),
-    ("enforcement", "enforcement", "CREATE TABLE tool_interlocks"),
+    (
+        MODULES,
+        "interlock_reset",
+        "reset",
+        "CREATE TABLE tool_interlocks",
+    ),
+    (
+        MODULES,
+        "enforcement",
+        "enforcement",
+        "CREATE TABLE tool_interlocks",
+    ),
+    // #169: which of tool-log's two durations a metered charge uses.
+    (
+        TOOLS,
+        "usage_basis",
+        "usage_basis",
+        "ADD COLUMN usage_basis",
+    ),
 ];
 
 #[test]
-fn binding_and_interlock_vocabularies_match_between_sql_and_rust() {
-    let rust = read(MODELS);
-
-    for (module, col, needle) in VOCABULARIES {
+fn text_check_vocabularies_match_between_sql_and_rust() {
+    for (file, module, col, needle) in VOCABULARIES {
+        let rust = read(file);
         let sql = migration_defining(needle);
         let from_sql = sql_check_values(&sql, col);
         let from_rust = rust_module_values(&rust, module);
@@ -143,6 +183,47 @@ fn binding_and_interlock_vocabularies_match_between_sql_and_rust() {
              sql CHECK:   {from_sql:?}"
         );
     }
+}
+
+/// Both halves of the `usage_basis` comparison must actually have parsed
+/// something, or the `assert_eq!` above is an equality of two empty sets.
+///
+/// The SQL half is already guarded by the non-empty assertion in the loop; this
+/// pins the **Rust** half, which has no such guard because an empty module would
+/// only fail against a non-empty CHECK. `occupancy` is the value whose presence
+/// carries the back-compatibility promise -- it is the default, and a tool that
+/// loses it starts billing something else -- so it is the right known positive.
+#[test]
+fn the_usage_basis_parse_finds_its_values_rather_than_nothing() {
+    let values = rust_module_values(&read(TOOLS), "usage_basis");
+    assert!(
+        values.contains("occupancy"),
+        "the `usage_basis` module parsed as {values:?}, which does not contain \
+         the default. Either the module moved out of {TOOLS} or the const shape \
+         changed, and in both cases the comparison above is vacuous rather than \
+         failing."
+    );
+    assert!(
+        values.contains("active"),
+        "the `usage_basis` module parsed as {values:?}, missing `active` -- so \
+         the figure #169 exists to make billable is not in the vocabulary"
+    );
+}
+
+/// And the parser must be capable of *disagreeing*. Without this, a
+/// `rust_module_values` that returned a fixed set would satisfy every assertion
+/// above.
+#[test]
+fn the_module_parser_reports_only_what_is_there() {
+    let src = "pub mod usage_basis {\n    pub const ONE: &str = \"one\";\n}\n";
+    assert_eq!(
+        rust_module_values(src, "usage_basis"),
+        ["one"]
+            .into_iter()
+            .map(String::from)
+            .collect::<BTreeSet<_>>(),
+        "the module parser does not read the block it is given"
+    );
 }
 
 /// The `role` vocabulary is now widened in a migration *later* than the one that
