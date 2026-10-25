@@ -398,6 +398,18 @@ struct LocalToolRequest {
     tool_id: String,
 }
 
+/// Tool-off on its own (#179): the card is optional, because a stop is a
+/// safety act and needs no badge. A plug with a stop button, a sensor, or an
+/// automation on the local broker names the tool alone, and the server ends
+/// whatever session is open on it. Tool-on keeps its own type above: it always
+/// names who is asking.
+#[derive(Debug, Deserialize)]
+struct LocalToolStopRequest {
+    #[serde(default)]
+    card: Option<String>,
+    tool_id: String,
+}
+
 /// A firmware power reading on the local broker (#48). The edge records it for
 /// local aggregation, relays it to the server, and (on a local overage) trips.
 #[derive(Debug, Deserialize)]
@@ -579,6 +591,14 @@ impl LocalMqttClient {
             return;
         }
 
+        if topic == local::TOOL_OFF_REQUEST {
+            match serde_json::from_slice::<LocalToolStopRequest>(payload) {
+                Ok(req) => self.handle_tool_off(req).await,
+                Err(e) => warn!("Failed to parse local tool request on {}: {}", topic, e),
+            }
+            return;
+        }
+
         let req: LocalToolRequest = match serde_json::from_slice(payload) {
             Ok(r) => r,
             Err(e) => {
@@ -589,7 +609,6 @@ impl LocalMqttClient {
 
         match topic {
             local::TOOL_ON_REQUEST => self.handle_tool_on(req).await,
-            local::TOOL_OFF_REQUEST => self.handle_tool_off(req).await,
             _ => {}
         }
     }
@@ -942,7 +961,7 @@ impl LocalMqttClient {
         }
     }
 
-    async fn handle_tool_off(&self, req: LocalToolRequest) {
+    async fn handle_tool_off(&self, req: LocalToolStopRequest) {
         let response_payload = serde_json::json!({ "ok": true });
         self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
         // The lease ends with the stop, not a sync interval later (#179).
@@ -955,7 +974,12 @@ impl LocalMqttClient {
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         tokio::spawn(async move {
-            let body = serde_json::json!({ "card": card, "tool_id": tool_id });
+            let mut body = serde_json::json!({ "tool_id": tool_id });
+            // Forwarded only when the device sent one (#179); the server ends
+            // the open session either way.
+            if let Some(c) = card {
+                body["card"] = serde_json::json!(c);
+            }
             if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                 warn!("Failed to forward tool-off to remote: {}", e);
             }

@@ -370,7 +370,9 @@ the stop settles the session. Send `tool-off` on **every** stop, including the
 ugly ones — an un-ended session leaves the tool unusable for the next member.
 
 A plug sends the same `tool-log` with **no `card`** — it never learns one — and
-the server attributes it to whoever is signed on to the tool. So a tool with a
+the server attributes it to whoever is signed on to the tool. The same goes for
+`tool-off`: a stop needs no badge, so a plug's stop button, a sensor, or an
+automation on the local broker ends the session by naming the tool alone. So a tool with a
 separate badge reader and plug meters as one box does: the reader starts and
 stops, the plug reports the power it switched.
 
@@ -739,13 +741,23 @@ with `tool_on: false`:
 
 ### `POST /api/toolguard/tool-off`
 
-JSON body: `card`, `tool_id`. Requires a device token bound to this tool.
+JSON body: `tool_id`; optional `card`. Requires a device token bound to this
+tool, in any role.
 
 Ends the session and returns the tool to Idle. Returns `tool_off: true`.
 
+**A stop needs no badge.** A stop is a safety act: any device bound to the tool
+may send it, and a device that read no card — a plug with a stop button, a
+sensor, an automation on the local broker — omits `card` and names the tool
+alone. The server ends whatever session is open on it and records the stop
+against that session's member; a card-less stop on a tool that is already idle
+is still accepted and recorded against nobody, so a stop that lands late is
+harmless rather than refused. A `card`, when sent, is the card that was
+presented, and an unknown one is refused as before.
+
 Unlike `tool-on`, this endpoint answers `status: "error"` with **no** `tool_off`
-field for an unknown card, a missing tool, or a bad key. Send it anyway on every
-stop — an un-ended session leaves the tool unusable for the next member.
+field for an unknown card or a missing tool. Send it anyway on every stop — an
+un-ended session leaves the tool unusable for the next member.
 
 ### `POST /api/toolguard/tool-log`
 
@@ -1227,7 +1239,7 @@ without the other.
 | topic | payload |
 |---|---|
 | `toolguard/request/tool-on` | `{ "card", "tool_id" }` |
-| `toolguard/request/tool-off` | `{ "card", "tool_id" }` |
+| `toolguard/request/tool-off` | `{ "card"?, "tool_id" }` |
 | `toolguard/request/tool-log` | `{ "card"?, "tool_id", "seconds", "active_seconds"?, "temperature"? }` |
 | `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
 | `toolguard/request/alive` | `{ "device_id" }` |

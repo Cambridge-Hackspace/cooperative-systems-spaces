@@ -1234,15 +1234,16 @@ const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
 /// the only topic under this heading with no payload, so the exclusion covers
 /// exactly it.
 const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
-    // Tool-on and tool-off share one struct because they carry the same two
-    // fields. Tool-log no longer does -- see `LocalToolLogRequest`.
+    // Tool-on and tool-off used to share one struct. Tool-off has its own since
+    // #179, because its card is optional -- a stop needs no badge -- and a
+    // shared type could not say so. Tool-log has had its own since #169.
     (
         "toolguard/request/tool-on",
         Payload::Struct(EDGE_MQTT, "LocalToolRequest"),
     ),
     (
         "toolguard/request/tool-off",
-        Payload::Struct(EDGE_MQTT, "LocalToolRequest"),
+        Payload::Struct(EDGE_MQTT, "LocalToolStopRequest"),
     ),
     (
         "toolguard/request/tool-log",

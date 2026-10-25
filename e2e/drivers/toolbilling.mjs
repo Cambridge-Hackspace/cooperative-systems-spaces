@@ -25,7 +25,10 @@
 //     one-minute tool is swept at a minute while a ten-minute tool and a no-cap
 //     tool on the same server are not;
 //   * the sweep RELEASES the tool too (#173) -- metered or not, so with no
-//     session row to find -- and says so with a Warning-severity audit event.
+//     session row to find -- and says so with a Warning-severity audit event;
+//   * a stop needs no badge (#179): a device bound to the tool in ANY role
+//     ends the session with a card-less tool-off; it settles; a late stop on
+//     an idle tool is accepted; an unbound credential is still refused.
 //
 // WHAT THIS DOES NOT PROVE: postpaid dip-and-block or the per-time charge (both
 // unit-covered), nor the edge's online-sync behaviour (the edge's own tests).
@@ -699,6 +702,70 @@ await main(async () => {
       `expected no active figure at all, got ${fb?.reported_active_seconds}. A zero ` +
         `here would read as "the machine never ran" rather than "nothing measured it".`,
     )
+  }
+
+  // ── #179: a stop needs no badge ──────────────────────────────────────────
+  //
+  // A stop is a safety act. Any device bound to the tool may send a tool-off
+  // with no card -- a plug with a stop button, a sensor, an automation -- and
+  // the server ends whatever session is open, settling it against the member
+  // who opened it. A member of its own, so nothing above is coupled to it.
+  {
+    const ext = 'e2e-flat-tool'
+    const m = await account('tb_stop')
+    await setCard(m, 'STOP-CARD')
+    await fund(admin, m, '20.00') // member, balance 10
+    const on = await toolOn('STOP-CARD', ext, powerTokens[ext])
+    ok('stop/session-open', on.json?.tool_on === true, JSON.stringify(on.json))
+    ok(
+      'stop/hold-placed-before-the-stop',
+      toolBillingHonored({ balance: 10, held: 1.5, available: 8.5 }, await view(m)) === null,
+      JSON.stringify(await view(m)),
+    )
+    // The READER device: bound to this tool, not the one that activated, and
+    // presenting no card at all.
+    const cardless = await POST('/api/toolguard/tool-off', {
+      token: readerTokens[ext],
+      body: { tool_id: ext },
+    })
+    ok(
+      'stop/a-cardless-stop-from-a-bound-device-is-accepted',
+      cardless.status === 200 && cardless.json?.tool_off === true,
+      `a stop with no card was refused: ${cardless.status} ${JSON.stringify(cardless.json)}`,
+    )
+    const toolRow = (await GET(`/api/tools/${tool.id}`, { token: admin.token })).json?.data
+    assertEq('stop/the-tool-is-idle-again', 'idle', toolRow?.status)
+    // Two oracles: the session row settled against the member who opened it,
+    // AND the ledger -- fee charged, hold released -- with no card named.
+    const s = (await GET(`/api/admin/tool-billing/users/${m.user.id}/sessions`, { token: admin.token }))
+      .json?.data?.[0]
+    ok(
+      'stop/the-session-settled-against-the-member-who-opened-it',
+      s?.status === 'settled' && Math.abs(Number(s?.charged_amount) - 1.5) < 1e-9,
+      `expected the opener's session settled at 1.50: ${JSON.stringify(s)}`,
+    )
+    ok(
+      'stop/the-ledger-agrees',
+      toolBillingHonored({ balance: 8.5, held: 0, available: 8.5, nonNegative: true }, await view(m)) === null,
+      JSON.stringify(await view(m)),
+    )
+    // A stop that lands late -- the tool is already idle -- is harmless, not an
+    // error: a device that cannot know whether it was first must still be able
+    // to send one.
+    const late = await POST('/api/toolguard/tool-off', { token: powerTokens[ext], body: { tool_id: ext } })
+    ok(
+      'stop/a-late-cardless-stop-on-an-idle-tool-is-harmless',
+      late.status === 200 && late.json?.tool_off === true,
+      `${late.status} ${JSON.stringify(late.json)}`,
+    )
+    ok(
+      'stop/a-late-stop-charges-nothing',
+      toolBillingHonored({ balance: 8.5, held: 0, available: 8.5 }, await view(m)) === null,
+      JSON.stringify(await view(m)),
+    )
+    // Bound is still the authorization: no credential, no stop.
+    const nobody = await POST('/api/toolguard/tool-off', { token: 'not-a-real-token', body: { tool_id: ext } })
+    assertEq('stop/an-unbound-credential-cannot-stop-anything', 401, nobody.status)
   }
 
   // ── #171, the other end: what the sweep did while the above ran ──────────
