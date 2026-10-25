@@ -56,6 +56,7 @@ pub mod rbac;
 pub mod recaptcha;
 pub mod schedules;
 pub mod schema;
+pub mod session_sweep;
 pub mod shutdown;
 pub mod stripe;
 pub mod tool_billing;

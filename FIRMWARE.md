@@ -277,7 +277,8 @@ start the heartbeat (15 s)
 ```
 
 `boot-reset` is first because your reboot may have orphaned a session and left a
-tool permanently "in use" for the next member.
+tool "in use" for the next member until the session sweep reaches it — hours, at
+the defaults ([step 6](#step-6--report-then-stop)).
 
 > **`boot-reset` is site-wide, not scoped to you.** It returns **every** tool the
 > server believes is in use to Idle and settles **every** open metered session as
@@ -367,6 +368,17 @@ publish  toolguard/request/tool-off  {"card":…,"tool_id":…}
 `tool-log` before `tool-off`: on a metered tool the log is what gets billed and
 the stop settles the session. Send `tool-off` on **every** stop, including the
 ugly ones — an un-ended session leaves the tool unusable for the next member.
+
+**Releasing the tool is your job.** The server does have a net under you: a
+session that runs past the tool's cap (`usage_max_session_minutes`, or the
+site's default) plus a grace is returned to `idle` by a periodic sweep, its
+billing session settled as `abandoned`, and a **Warning-severity**
+`tool_released_by_sweep` audit event raised against your tool. That event is
+how an operator learns a device is not closing its sessions, and it is not
+something to design for: the tool is unusable for everyone else until the cap
+and the grace have both run out — hours, at the defaults — and the member is
+billed to whatever was last reported. Build the stops into the device: the
+member's own card, a sensed idle-out, a maximum session.
 
 **Report usage in increments, not as one total at the end.** Reports
 *accumulate* — the server adds each one to the session in a single atomic

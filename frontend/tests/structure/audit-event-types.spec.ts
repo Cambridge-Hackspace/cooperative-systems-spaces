@@ -135,6 +135,10 @@ describe('the audit filter against the server enum', () => {
       // safety interlock -- so they join the unfiltered set alongside the power
       // topology events. They are still recorded and readable; what they do not
       // get is a curated filter option.
+      // 105 -> 105: the session sweep (#173) added tool_released_by_sweep, which
+      // IS offered -- like revoked_card_presented, it is a signal that a device
+      // is not doing its job, and a signal nobody can isolate in the log is not
+      // loud. So it does not count here.
     ).toBe(105)
   })
 

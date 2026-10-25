@@ -494,6 +494,10 @@ pub enum AuditEventType {
     /// The sweep closed a session that was never stopped (no `tool-off`),
     /// settling it from reported usage (or the cap).
     ToolSessionAbandoned,
+    /// The session sweep returned a tool nobody released to `idle` (#173). A
+    /// Warning, not a record: the device that opened the session did not close
+    /// it, and will go on not closing it until someone looks.
+    ToolReleasedBySweep,
     // Per-member rate tiers (#34). Rate changes are money changes, so who
     // created/edited a tier and who assigned a member to one is audited.
     ToolRateTierCreated,
@@ -645,6 +649,7 @@ impl AuditEventType {
             Self::SubscriptionPaymentFailed => "subscription_payment_failed",
             Self::ToolUsageCharged => "tool_usage_charged",
             Self::ToolSessionAbandoned => "tool_session_abandoned",
+            Self::ToolReleasedBySweep => "tool_released_by_sweep",
             Self::ToolRateTierCreated => "tool_rate_tier_created",
             Self::ToolRateTierUpdated => "tool_rate_tier_updated",
             Self::ToolRateTierDeleted => "tool_rate_tier_deleted",
@@ -794,6 +799,7 @@ impl AuditEventType {
             SubscriptionPaymentFailed,
             ToolUsageCharged,
             ToolSessionAbandoned,
+            ToolReleasedBySweep,
             ToolRateTierCreated,
             ToolRateTierUpdated,
             ToolRateTierDeleted,
@@ -850,10 +856,9 @@ impl AuditEventType {
             | TrainingWaiverRevoked
             | TrainingDocumentationAcknowledged => Category::Training,
             ToolAccessGranted | ToolAccessDenied | ToolActivated | ToolDeactivated
-            | ToolUsageLogged | ToolUsageCharged | ToolSessionAbandoned | ToolRateTierCreated
-            | ToolRateTierUpdated | ToolRateTierDeleted | ToolTierAssigned | ToolTierUnassigned => {
-                Category::Tool
-            }
+            | ToolUsageLogged | ToolUsageCharged | ToolSessionAbandoned | ToolReleasedBySweep
+            | ToolRateTierCreated | ToolRateTierUpdated | ToolRateTierDeleted
+            | ToolTierAssigned | ToolTierUnassigned => Category::Tool,
             RevokedCardPresented | CardIssued | CardDisabled | CardReleased => Category::Card,
             DeviceInviteCreated | DeviceInviteUsed | DeviceInviteExpired | DeviceRegistered
             | DeviceNameChanged | DeviceDeleted | DeviceVersionChanged => Category::Device,
@@ -947,7 +952,8 @@ impl AuditEventType {
             | RevokedCardPresented
             | EmailSendFailed
             | SubscriptionPaymentFailed
-            | MembershipLastAdminProtected => Severity::Warning,
+            | MembershipLastAdminProtected
+            | ToolReleasedBySweep => Severity::Warning,
             // Refusals, recoveries, and changes to who may do what.
             FailedLoginAttempt
             | MfaLoginFailed

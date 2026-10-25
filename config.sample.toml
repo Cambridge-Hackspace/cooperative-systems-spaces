@@ -208,12 +208,6 @@ default_max_session_minutes = 120
 min_balance = "0"
 # Display currency for tool charges.
 currency = "USD"
-# How often open sessions are checked for abandonment (seconds).
-sweep_interval_secs = 3600
-# How long past a tool's own session cap an open session may run before the
-# sweep settles it as abandoned. The cap is the tool's own max, or
-# default_max_session_minutes when it sets none.
-abandoned_grace_minutes = 60
 
 # Report Configuration
 # Settings for generating and managing reports
@@ -338,6 +332,18 @@ help_text = "0x"
 profiles_enabled_seed = true
 
 [tools]
+# The session sweep returns a tool nobody released (no tool-off arrived) to
+# idle once its session has run past its cap plus the grace below, settles any
+# open billing session, and raises a Warning-severity audit event. Firmware is
+# expected to release the tool itself; this is the net under that, not the
+# mechanism. It runs whether or not billing is enabled.
+#
+# How often it runs (seconds).
+session_sweep_secs = 3600
+# How long past a tool's own session cap a session may run before the sweep
+# calls it abandoned. The cap is the tool's own max, or
+# [tool_billing].default_max_session_minutes when it sets none.
+session_grace_minutes = 60
 
 [[tools.tool_categories]]
 value = "saw"
