@@ -277,6 +277,38 @@ pub struct LocalToolLogRequest {
     pub temperature: Option<f32>,
 }
 
+/// A device saying it is alive, on [`local::ALIVE_REQUEST`] (#170).
+///
+/// **Every device sends this, whatever its role.** It is the liveness contract
+/// on the local broker: the edge credits the device's bindings with having been
+/// heard from, and forwards it so the server's `last_seen_at` -- what the
+/// silence detector (#84) and the admin device list read -- is written for the
+/// device too.
+///
+/// Before this, the only thing that counted as being alive was a power report.
+/// That is a claim about a circuit, and the server gates its relay on the
+/// `power` binding -- so a reader or a sensor, which has no power to report,
+/// could never be credited at the server at all, and at the edge only by
+/// sending a power report it had no business sending. With the default
+/// `on_disconnect = fail_off`, a reader bound to a tool therefore denied that
+/// tool its lease forever, and the member saw ACCESS GRANTED beside a machine
+/// that never came on.
+///
+/// Carries the device id and nothing else, on purpose. "Health" beyond *alive*
+/// -- uptime, signal strength, a fault flag -- is a different message with its
+/// own shape; bolting fields onto the liveness contract is how a heartbeat
+/// grows into something expensive to send every second.
+///
+/// A power report still counts as being alive, for plugs that predate this.
+/// There is no acknowledgement: the lease is the feedback, and an ack per pulse
+/// would double the traffic to say nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalAliveRequest {
+    /// The device's own id, from registration. The edge resolves it to every
+    /// binding the device holds; firmware cannot know a binding id.
+    pub device_id: String,
+}
+
 /// The **edge ↔ module** vocabulary, on the *local* broker.
 ///
 /// [`kinds`] above is the server ↔ device wire: namespaced under
@@ -318,6 +350,9 @@ pub mod local {
     pub const DOOR_SCAN_REQUEST: &str = "door/request/scan";
     /// A kiosk asking the edge to re-push its state. No payload.
     pub const KIOSK_REFRESH_REQUEST: &str = "kiosk/refresh";
+    /// A device saying it is alive: carries [`super::LocalAliveRequest`] --
+    /// `{ device_id }`. Every role sends it; see the type for why (#170).
+    pub const ALIVE_REQUEST: &str = "toolguard/request/alive";
 
     // ── edge → module (the edge publishes) ───────────────────────────────
 

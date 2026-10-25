@@ -286,6 +286,7 @@ pub fn toolguard_routes() -> Router<AppState> {
         .route("/power-state", get(power_state))
         .route("/module-state", get(module_state))
         .route("/power-trip", post(power_trip))
+        .route("/alive", post(alive))
 }
 
 /// GET /api/toolguard - API status check
@@ -1452,6 +1453,101 @@ async fn authorize_toolguard(
     );
     Err(ApiError::Unauthorized(
         "This device is not bound to that tool".to_string(),
+    ))
+}
+
+/// The wire form of an alive pulse (#170). Optional for the same reason as
+/// [`ToolRequestWire`]: a body that does not parse must be refused AFTER
+/// authentication, not before it, or an unauthenticated caller learns the
+/// body's shape from the status code.
+#[derive(Debug, Default, Deserialize)]
+pub struct AliveRequestWire {
+    /// The device being reported alive. Absent means the caller itself.
+    #[serde(default)]
+    pub device_id: Option<uuid::Uuid>,
+}
+
+/// POST /api/toolguard/alive -- a device is alive (#170).
+///
+/// Writes `last_seen_at` for the subject, which is what the silence detector
+/// (#84) and the admin device list read. A device may report for itself, and a
+/// coordinator may report for any device bound to a tool it coordinates, in
+/// ANY role -- which is the whole difference from the power-report relay. That
+/// one is a claim about a circuit and is gated on the `power` binding, so a
+/// reader or a sensor behind an edge could never be credited at the server at
+/// all: it read as permanently silent, and the silence detector could never
+/// report it actually going quiet.
+///
+/// No audit row. This arrives about once a second per device, and #84 derives
+/// its transitions from `last_seen_at` rather than from a log of pulses.
+async fn alive(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ToolGuardResponse>, ApiError> {
+    let parsed: Option<AliveRequestWire> = serde_json::from_slice(&body).ok();
+    let caller =
+        authorize_alive(&state, &headers, parsed.as_ref().and_then(|p| p.device_id)).await?;
+    // Past authentication: a body that did not parse is now the caller's fault.
+    let parsed =
+        parsed.ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?;
+    let subject = parsed.device_id.unwrap_or(caller);
+
+    match state.db.touch_device_last_seen(subject) {
+        Ok(true) => Ok(Json(ToolGuardResponse::ok_with_message("Alive"))),
+        // A bound subject exists by construction, and the self case is the
+        // authenticated caller -- so this is a device deleted between being
+        // bound and pulsing, and worth saying rather than quietly succeeding.
+        Ok(false) => Err(ApiError::NotFound("Device not found".to_string())),
+        Err(e) => Err(ApiError::from(e)),
+    }
+}
+
+/// Who may say a device is alive: the device itself, or a coordinator of a tool
+/// the device is bound to.
+///
+/// Mirrors `authorize_power_report`'s relay rule with one deliberate
+/// difference: the subject may hold ANY binding on the shared tool, not only
+/// `power`. Liveness is not a claim about a circuit, so the reason the power
+/// relay narrows to `power` does not apply -- and narrowing here is exactly
+/// what left a reader's silence unsatisfiable.
+async fn authorize_alive(
+    state: &AppState,
+    headers: &HeaderMap,
+    subject: Option<uuid::Uuid>,
+) -> Result<uuid::Uuid, ApiError> {
+    let caller = match extract_device_auth(state, headers).await {
+        Ok((device_id, _)) => device_id,
+        // A database fault stays a database fault: reporting an outage as a
+        // credential problem sends whoever is holding a dead device looking in
+        // the wrong place. Asked of the error rather than matched against one
+        // variant, so this agrees with the status table by construction and
+        // covers `DatabaseError` too -- the reasoning `authorize_power_report`
+        // records.
+        Err(e) if e.is_server_error() => return Err(e),
+        Err(_) => {
+            tracing::warn!("Rejected unauthenticated alive pulse");
+            return Err(ApiError::Unauthorized(
+                "ToolGuard operations require a registered device token".to_string(),
+            ));
+        }
+    };
+    let Some(subject) = subject else {
+        return Ok(caller);
+    };
+    if subject == caller {
+        return Ok(caller);
+    }
+    if state.db.device_coordinates_device(caller, subject)? {
+        return Ok(caller);
+    }
+    tracing::warn!(
+        "Rejected alive pulse from device {} on behalf of {}: not its coordinator",
+        caller,
+        subject
+    );
+    Err(ApiError::Unauthorized(
+        "This device does not coordinate that device".to_string(),
     ))
 }
 

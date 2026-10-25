@@ -254,6 +254,7 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/schedules", Guard::Auth), // schedules::list_schedules_member
     R("GET", "/api/schedules/00000000-0000-4000-8000-000000000001", Guard::Auth), // schedules::get_schedule_member
     R("GET", "/api/toolguard", Guard::Public), // toolguard::api_status
+    R("POST", "/api/toolguard/alive", Guard::InlineAuth), // toolguard::alive
     R("POST", "/api/toolguard/boot-reset", Guard::InlineAuth), // toolguard::boot_reset
     R("POST", "/api/toolguard/power-report", Guard::InlineAuth), // toolguard::power_report
     R("GET", "/api/toolguard/module-state", Guard::InlineAuth), // toolguard::module_state

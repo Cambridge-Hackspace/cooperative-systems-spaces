@@ -55,6 +55,10 @@ const EXPECTED: &[(&str, Auth)] = &[
     // #83 tool module bindings + interlocks: the edge polls the wiring snapshot
     // it coordinates from, device-authed exactly like power_state.
     ("module_state", Auth::Required),
+    // #170 liveness pulse: a device says it is alive -- for itself, or as the
+    // coordinator of a tool the named device is bound to in any role.
+    // Device-authed like everything else here.
+    ("alive", Auth::Required),
 ];
 
 #[derive(PartialEq, Eq, Debug)]
@@ -70,10 +74,17 @@ enum Auth {
 /// handler needs a rule the plain one cannot express (the caller bound as the
 /// tool's `edge`, the named module bound as its `power`). It authenticates by
 /// delegating rather than by calling the primitive itself.
+///
+/// `authorize_alive` joined with #170, for the same shape of reason: a relayed
+/// liveness pulse needs the coordinator rule too, but with the subject bound in
+/// ANY role rather than `power` -- liveness is not a claim about a circuit. It
+/// calls the primitive directly, which `every_authorizer_reaches_the_primitive`
+/// is what proves; being on this list is not what makes it trusted.
 const AUTHORIZERS: &[&str] = &[
     "extract_device_auth",
     "authorize_toolguard",
     "authorize_power_report",
+    "authorize_alive",
 ];
 
 /// The one that actually reads the credential. Everything else in

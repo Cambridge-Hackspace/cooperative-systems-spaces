@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use css_lib::wire::{local, LocalToolLogRequest, LocalToolOnResponse};
+use css_lib::wire::{local, LocalAliveRequest, LocalToolLogRequest, LocalToolOnResponse};
 
 use crate::config::{Config, MqttConfig};
 use crate::doors::{
@@ -528,6 +528,10 @@ impl LocalMqttClient {
             .wait()
             .context("Failed to subscribe to power requests")?;
         self.client
+            .subscribe(local::ALIVE_REQUEST, 1)
+            .wait()
+            .context("Failed to subscribe to alive pulses")?;
+        self.client
             .subscribe(local::KIOSK_REFRESH_REQUEST, 0)
             .wait()
             .context("Failed to subscribe to kiosk refresh topic")?;
@@ -552,6 +556,16 @@ impl LocalMqttClient {
 
         if topic == local::POWER_REQUEST {
             self.handle_power(payload).await;
+            return;
+        }
+
+        // The pulse (#170). Any device, any role: this is what credits a device
+        // with being alive, and a power report is the only other thing that does.
+        if topic == local::ALIVE_REQUEST {
+            match serde_json::from_slice::<LocalAliveRequest>(payload) {
+                Ok(req) => self.handle_alive(req).await,
+                Err(e) => warn!("Failed to parse local alive pulse: {}", e),
+            }
             return;
         }
 
@@ -909,6 +923,47 @@ impl LocalMqttClient {
             let body = serde_json::json!({ "card": card, "tool_id": tool_id });
             if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
                 warn!("Failed to forward tool-off to remote: {}", e);
+            }
+        });
+    }
+
+    /// A device said it is alive (#170).
+    ///
+    /// Two effects, for two audiences. The edge credits every binding the device
+    /// holds, which is what the lease engine's `fail_off` check reads -- so a
+    /// reader or sensor that could never send a power report can now be heard
+    /// from at all. And the pulse is forwarded so the SERVER's `last_seen_at` is
+    /// written for the device too: that column is what #84's silence detector
+    /// and the admin device list read, and a forwarded power report could never
+    /// write it for a non-power device, because the server gates that relay on
+    /// the `power` binding.
+    ///
+    /// Forwarded on every pulse, matching what the power report does today. At
+    /// a pulse a second per device that is far more than the server's 90 s
+    /// silence threshold needs; a per-device throttle on the forward is the
+    /// obvious follow-up if the request rate ever matters, and it belongs here
+    /// rather than in firmware, which should not have to know the server's
+    /// thresholds.
+    async fn handle_alive(&self, req: LocalAliveRequest) {
+        let marked = self
+            .module_state
+            .note_device_seen(&req.device_id, chrono::Utc::now());
+        if marked == 0 {
+            warn!(
+                "Alive pulse from device {} matched no module binding; it will be \
+                 refused a lease until its wiring arrives",
+                req.device_id
+            );
+        }
+
+        let url = format!("{}/api/toolguard/alive", self.remote_instance_url);
+        let token = self.remote_auth_token.clone();
+        let http = self.http_client.clone();
+        let device_id = req.device_id;
+        tokio::spawn(async move {
+            let body = serde_json::json!({ "device_id": device_id });
+            if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
+                warn!("Failed to forward alive pulse to remote: {}", e);
             }
         });
     }
