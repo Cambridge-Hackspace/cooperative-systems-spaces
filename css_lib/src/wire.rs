@@ -261,9 +261,16 @@ pub struct LocalToolOnResponse {
 /// then loses one interval rather than the whole session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LocalToolLogRequest {
-    /// The card that activated the session, not the last card seen. On a
-    /// metered tool the server checks it against the open session.
-    pub card: String,
+    /// The card that activated the session, not the last card seen, from a
+    /// device that read one; the server checks it against the open session.
+    ///
+    /// **Optional** (#174). A plug never learns a card -- the only thing it
+    /// receives is a lease, which names a device and not a member -- so it
+    /// reports naming the tool alone, and the server attributes the usage to
+    /// whoever is signed on to that tool. The server already knows; the plug
+    /// does not have to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<String>,
     /// The tool this usage belongs to.
     pub tool_id: String,
     /// Billable usage, as the device defines it. Absent is treated as `0.0`.

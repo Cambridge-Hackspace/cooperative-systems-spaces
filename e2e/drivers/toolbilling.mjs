@@ -11,8 +11,12 @@
 // It proves:
 //   * a metered activation places a hold (available drops by the max cost);
 //   * stop settles the actual charge and releases the hold -- never negative;
-//   * the `power` binding is required (an unrecognized credential is refused by
-//     entry auth, and a `reader`-bound device is refused by the metered gate);
+//   * an unrecognized credential is refused by entry auth; a device bound to
+//     the tool in ANY role may start, report on and stop a metered tool
+//     (#174) -- the charge goes to the session, not to the device;
+//   * a metered tool with a SEPARATE reader and plug meters end to end: the
+//     reader starts and stops, the plug reports with no card, and the charge is
+//     the plug's figure (#174);
 //   * insufficient balance and (separately) non-membership are refused;
 //   * a second stop does not double-charge (idempotent);
 //   * TRAINING is checked before any money moves: an untrained member is refused
@@ -184,33 +188,46 @@ await main(async () => {
     sweep.cases.push({ label, ext, m, card, id: t.id })
   }
 
-  // The `power` binding is required, and two DIFFERENT layers refuse anything
-  // less. Neither places a hold, and the two oracles below pin each layer --
-  // which is the same shape as before #101 slice 6, when the pair was "a wrong
-  // key" and "the shared global key".
-  //   * A credential that is not a credential at all is rejected by entry auth
-  //     (authorize_toolguard) with 401 BEFORE the metered gate is reached -- a
-  //     stronger refusal than a tool_denied body, so there is no `tool_on` field
-  //     to read. Retiring the API keys is what makes a bare string this, rather
-  //     than something the server would compare.
-  //   * A `reader`-bound device DOES pass entry auth -- it is a valid token bound
-  //     to this very tool -- and is then refused by the metered gate
-  //     (metered_device_ok) with tool_on:false. This is the oracle that pins the
-  //     billing hardening: being authorized to START a tool is not being
-  //     authorized to put money on it. It replaces the global-key case exactly,
-  //     and it is a sharper test, because a reader is bound to THIS tool rather
-  //     than being a credential for everything.
+  // A credential that is not a credential at all is rejected by entry auth
+  // (authorize_toolguard) with 401 -- a stronger refusal than a tool_denied
+  // body, so there is no `tool_on` field to read. Retiring the API keys is what
+  // makes a bare string this, rather than something the server would compare.
+  // It places no hold.
   const wrong = await toolOn('E2E-CARD-1', 'e2e-flat-tool', 'not-a-real-token')
   ok('toolbilling/unrecognized-credential-denied', wrong.status === 401,
     `${wrong.status} ${JSON.stringify(wrong.json)}`)
-  const readerOnly = await toolOn('E2E-CARD-1', 'e2e-flat-tool', readerTokens['e2e-flat-tool'])
-  ok('toolbilling/reader-binding-cannot-post-a-charge', readerOnly.json?.tool_on === false,
-    `a device bound as reader passed entry auth and must still be refused by the ` +
-      `metered gate: ${JSON.stringify(readerOnly.json)}`)
   ok(
     'toolbilling/no-hold-after-denied',
     toolBillingHonored({ balance: 10, held: 0, available: 10 }, await view(member)) === null,
     JSON.stringify(await view(member)),
+  )
+
+  // #174: a `reader`-bound device MAY start a metered tool -- and stop it, and
+  // its stop settles. Until #174 this arm asserted the opposite ("being
+  // authorized to START a tool is not being authorized to put money on it"),
+  // and that rule made a tool with a separate badge reader and plug unstartable
+  // by badge: the reader held no `power` binding and the plug held no card. The
+  // charge is attributed to the session -- the member and the tool -- not to
+  // the device that opened it, so binding to the tool is the whole
+  // authorization. A member of its own, so the main member's ledger below is
+  // untouched by this.
+  const readerMember = await account('toolbilling_reader')
+  await setCard(readerMember, 'E2E-CARD-R')
+  await fund(admin, readerMember, '20.00') // member, balance 10
+  const readerOn = await toolOn('E2E-CARD-R', 'e2e-flat-tool', readerTokens['e2e-flat-tool'])
+  ok('toolbilling/a-reader-bound-device-may-start-a-metered-tool', readerOn.json?.tool_on === true,
+    `a device bound as reader was refused a metered tool: ${JSON.stringify(readerOn.json)}`)
+  ok(
+    'toolbilling/the-readers-activation-placed-the-hold',
+    toolBillingHonored({ balance: 10, held: 1.5, available: 8.5, nonNegative: true }, await view(readerMember)) === null,
+    JSON.stringify(await view(readerMember)),
+  )
+  assertEq('toolbilling/the-reader-stops', 200,
+    (await toolOff('E2E-CARD-R', 'e2e-flat-tool', readerTokens['e2e-flat-tool'])).status)
+  ok(
+    'toolbilling/the-readers-stop-settled-not-deferred',
+    toolBillingHonored({ balance: 8.5, held: 0, available: 8.5, nonNegative: true }, await view(readerMember)) === null,
+    `a stop from the reader used to defer the settle to the sweep: ${JSON.stringify(await view(readerMember))}`,
   )
 
   // Activate with the tool's `power`-bound device: a hold of the max session cost (1.50).
@@ -467,6 +484,67 @@ await main(async () => {
       `the activating member's own report was refused: ${JSON.stringify(ownerLog.json)}`)
 
     await toolOff('M1-OWNER', ext, powerTokens[ext])
+  }
+
+  // ── #174: a metered tool with a SEPARATE reader and plug ─────────────────
+  //
+  // The shape #83 was built for -- a laser on an unmodifiable plug with a badge
+  // reader beside it -- and the one nothing exercised until now, because it
+  // could not work: the reader was refused for lacking the `power` binding and
+  // the plug had no card to name. Now the reader starts and stops, the plug
+  // reports with NO card, and the server attributes the plug's figure to the
+  // member on the session. A per-minute rate, so the charge can only come from
+  // a report (a flat fee is the same whether anything was reported).
+  {
+    const ext = 'e2e-split-tool'
+    await createMeteredTool(admin, { externalId: ext, flatFee: null, ratePerMin: '60.00', maxMin: 1 })
+    const m = await account('tb_split')
+    await setCard(m, 'SPLIT-CARD')
+    await fund(admin, m, '200.00') // member, balance 190
+    const plugLog = (seconds) =>
+      POST('/api/toolguard/tool-log', { token: powerTokens[ext], body: { tool_id: ext, seconds } })
+    const sessionOf = async (member) =>
+      (await GET(`/api/admin/tool-billing/users/${member.user.id}/sessions`, { token: admin.token }))
+        .json?.data?.[0]
+
+    // Nobody signed on: a card-less report has nobody to go to, and is refused
+    // the way a card-named report with no session is.
+    const orphan = await plugLog(1.0)
+    assertEq('split/a-cardless-report-with-nobody-signed-on-is-refused', 'error', orphan.json?.status,
+      `usage was attributed to nobody: ${JSON.stringify(orphan.json)}`)
+
+    const on = await toolOn('SPLIT-CARD', ext, readerTokens[ext])
+    ok('split/the-reader-starts-the-tool', on.json?.tool_on === true, JSON.stringify(on.json))
+
+    const report = await plugLog(1.0)
+    assertEq('split/the-plug-reports-with-no-card', 'ok', report.json?.status,
+      `the plug's card-less report was refused: ${JSON.stringify(report.json)}`)
+
+    // Bound to the tool is the authorization: a device bound to a DIFFERENT
+    // tool is refused at entry auth, card or no card. Without this the
+    // card-less path would let any device on the site put time on any session.
+    const foreign = await POST('/api/toolguard/tool-log', {
+      token: powerTokens['e2e-flat-tool'],
+      body: { tool_id: ext, seconds: 100 },
+    })
+    ok('split/a-device-bound-elsewhere-cannot-report-here', foreign.status === 401,
+      `a device bound to another tool put time on this one: ${foreign.status} ${JSON.stringify(foreign.json)}`)
+
+    // Wall clock above the reported second, so the cap is not what decides.
+    await new Promise((r) => setTimeout(r, 2000))
+    assertEq('split/the-reader-stops', 200, (await toolOff('SPLIT-CARD', ext, readerTokens[ext])).status)
+
+    // Two oracles: the session's charge AND the ledger. Rate 60/min, so the
+    // charge is exactly the plug's seconds -- 1.00 -- and not the foreign 100.
+    const s = await sessionOf(m)
+    ok('split/the-charge-is-the-plugs-figure',
+      s?.status === 'settled' && Math.abs(Number(s?.charged_amount) - 1.0) < 1e-9,
+      `expected a settled session charged 1.00 from the plug's report: ${JSON.stringify(s)}`)
+    ok(
+      'split/the-ledger-agrees',
+      toolBillingHonored({ balance: 189, held: 0, available: 189, nonNegative: true }, await view(m)) === null,
+      JSON.stringify(await view(m)),
+    )
   }
 
   // ── #169: which reported duration bills is the TOOL's setting ────────────

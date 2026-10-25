@@ -982,10 +982,15 @@ impl LocalMqttClient {
         let active_seconds = req.active_seconds;
         tokio::spawn(async move {
             let mut body = serde_json::json!({
-                "card": card,
                 "tool_id": tool_id,
                 "seconds": seconds,
             });
+            // Forwarded only when the module sent one. A plug names no card
+            // (#174); the server attributes its report through the tool's
+            // session, and an invented card here would be refused as unknown.
+            if let Some(c) = card {
+                body["card"] = serde_json::json!(c);
+            }
             // Forwarded only when the module sent it: absent means "this device
             // senses no working signal", which is not the same as zero.
             if let Some(a) = active_seconds {

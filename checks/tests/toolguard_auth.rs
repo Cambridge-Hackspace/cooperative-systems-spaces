@@ -365,25 +365,57 @@ fn the_retired_credentials_are_not_back() {
     );
 }
 
-/// A billable report needs the `power` binding, not merely any binding.
+/// Being bound to the tool is the whole authorization to put money on it, and a
+/// report that names no card is attributed through the tool's session (#174).
 ///
-/// Entry auth accepts any binding, so a `reader` may start a tool. Posting money
-/// against it is narrower on purpose: that is the property `metered_key_ok`
-/// provided by demanding the tool's own key, and it has to survive the move to
-/// device tokens rather than being quietly relaxed to "any authenticated device".
+/// Until #174 a narrower gate (`metered_device_ok`) demanded the `power`
+/// binding for `tool-on` and `tool-log` on a metered tool, which made a tool
+/// with a separate badge reader and plug unstartable by badge: the reader held
+/// no `power` binding and the plug held no card. The owner's decision was that
+/// the server already knows who is signed on to a tool, so a device that cannot
+/// name a card names the tool alone. These are the two properties that decision
+/// rests on, and either regressing silently would reopen #174 from one side or
+/// the other.
 #[test]
-fn the_metered_gate_requires_the_power_binding() {
+fn a_cardless_report_is_attributed_through_the_tools_session() {
     let src = read("server/src/api/toolguard.rs");
-    let body = handler_body(&src, "metered_device_ok");
+    let body = handler_body(&src, "signed_on_user");
 
     assert!(
-        body.contains("device_is_bound_to_tool_in_role"),
-        "the metered gate no longer asks for a ROLE-scoped binding. If it accepts \
-         any binding, a reader wired to a metered tool can post charges for it."
+        body.contains("open_tool_session_for_tool"),
+        "a card-less report is no longer attributed to the open billing session's \
+         member -- a plug's usage on a metered tool would land on nobody."
     );
     assert!(
-        body.contains("binding_role::POWER"),
-        "the metered gate no longer requires the `power` role specifically. A \
-         billable report must come from the thing that actually switches the tool."
+        body.contains("latest_activation") && body.contains("ToolStatus::InUse"),
+        "a card-less report on an UNMETERED tool is no longer attributed to the \
+         member whose activation put it in use -- or is, without checking the tool \
+         is still in use, which would bill the last member for the next one's time."
     );
+
+    let log = handler_body(&src, "tool_log");
+    assert!(
+        log.contains("signed_on_user"),
+        "tool_log no longer consults signed_on_user: a report naming no card has \
+         nobody to go to and a plug cannot meter anything."
+    );
+}
+
+/// The `power` binding is not what authorizes a charge any more (#174). Entry
+/// auth -- a device token bound to THIS tool, in any role -- is.
+///
+/// The relay rules on the power report and the alive pulse still ask for roles,
+/// as they should: a relayed liveness claim is about a specific device. The
+/// three money-moving handlers must not.
+#[test]
+fn the_tool_handlers_do_not_gate_on_the_power_role() {
+    let src = read("server/src/api/toolguard.rs");
+    for handler in ["tool_on", "tool_off", "tool_log"] {
+        let body = handler_body(&src, handler);
+        assert!(
+            !body.contains("binding_role::POWER"),
+            "{handler} asks for the `power` role again. A reader beside a separate \
+             plug then cannot start, report on or stop a metered tool, which is #174."
+        );
+    }
 }
