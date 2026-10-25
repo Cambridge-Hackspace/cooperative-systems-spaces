@@ -515,8 +515,9 @@ async fn main() -> Result<(), anyhow::Error> {
     if app_config.tool_billing.enabled {
         let sweep_state = app_state.clone();
         let daemon_shutdown = shutdown.clone();
+        let interval = app_config.tool_billing.sweep_interval_secs.max(1);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
@@ -536,7 +537,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 }
             }
         });
-        info!("Tool-billing sweep started (hourly)");
+        info!("Tool-billing sweep started ({interval}s interval)");
     }
 
     // Serve frontend static files

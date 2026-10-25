@@ -16,7 +16,10 @@
 //   * insufficient balance and (separately) non-membership are refused;
 //   * a second stop does not double-charge (idempotent);
 //   * TRAINING is checked before any money moves: an untrained member is refused
-//     at the training gate and NO session or charge is ever created.
+//     at the training gate and NO session or charge is ever created;
+//   * the abandoned-session sweep judges each session against ITS tool's cap
+//     (#171): a one-minute tool is swept at a minute while a ten-minute tool and
+//     a no-cap tool on the same server are not.
 //
 // WHAT THIS DOES NOT PROVE: postpaid dip-and-block or the per-time charge (both
 // unit-covered), nor the edge's online-sync behaviour (the edge's own tests).
@@ -131,6 +134,36 @@ await main(async () => {
     toolBillingHonored({ balance: 10, held: 0, available: 10, nonNegative: true }, await view(member)) === null,
     JSON.stringify(await view(member)),
   )
+
+  // ── #171: the sweep judges a session against ITS tool's cap ──────────────
+  //
+  // Three metered tools, one open session each, on a server whose sweep runs
+  // every 2s with no grace (stack-config). Once a minute has passed, the
+  // one-minute tool's session must be settled as abandoned, and the ten-minute
+  // tool's and the no-cap tool's (default 120) must still be open on that same
+  // sweep. The defect was one global cutoff -- default plus grace -- for every
+  // tool, so before the fix the first case fails (the one-minute tool is judged
+  // at 120 minutes); a sweep that applied the SMALLEST cap to every tool fails
+  // the other two. Each claim from two sides: the session row AND the ledger.
+  //
+  // Opened here, at the top, so the minute elapses while the rest of the driver
+  // runs; asserted at the bottom.
+  const sweep = { startedAt: Date.now(), cases: [] }
+  for (const [label, maxMin] of [
+    ['one-minute', 1],
+    ['ten-minute', 10],
+    ['no-cap', null],
+  ]) {
+    const ext = `e2e-sweep-${label}`
+    await createMeteredTool(admin, { externalId: ext, flatFee: '0.50', maxMin })
+    const m = await account(`sweep_${label}`)
+    const card = `E2E-SWEEP-${label.toUpperCase()}`
+    await setCard(m, card)
+    await fund(admin, m, '20.00') // member, balance 10
+    const on = await toolOn(card, ext, powerTokens[ext])
+    ok(`sweep/${label}-activated`, on.json?.tool_on === true, JSON.stringify(on.json))
+    sweep.cases.push({ label, ext, m, card })
+  }
 
   // The `power` binding is required, and two DIFFERENT layers refuse anything
   // less. Neither places a hold, and the two oracles below pin each layer --
@@ -569,5 +602,57 @@ await main(async () => {
       `expected no active figure at all, got ${fb?.reported_active_seconds}. A zero ` +
         `here would read as "the machine never ran" rather than "nothing measured it".`,
     )
+  }
+
+  // ── #171, the other end: what the sweep did while the above ran ──────────
+  {
+    // A minute past the one-minute cap, plus a few sweeps to notice it.
+    const remaining = sweep.startedAt + 75_000 - Date.now()
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining))
+
+    const sessionOf = async (m) =>
+      (await GET(`/api/admin/tool-billing/users/${m.user.id}/sessions`, { token: admin.token }))
+        .json?.data?.[0]
+    const [one, ten, none] = sweep.cases
+    const oneSession = await sessionOf(one.m)
+    ok(
+      'sweep/a-session-past-its-own-cap-is-settled-abandoned',
+      oneSession?.status === 'abandoned',
+      `the one-minute tool's session is ${oneSession?.status} after ` +
+        `${Math.round((Date.now() - sweep.startedAt) / 1000)}s: the sweep is not ` +
+        `reading the tool's own cap. ${JSON.stringify(oneSession)}`,
+    )
+    // Second oracle: the ledger -- the hold is gone and the flat fee charged.
+    ok(
+      'sweep/the-abandoned-sessions-hold-is-released-and-its-fee-charged',
+      toolBillingHonored({ balance: 9.5, held: 0, available: 9.5, nonNegative: true }, await view(one.m)) === null,
+      JSON.stringify(await view(one.m)),
+    )
+
+    // THE DISCRIMINATING PAIR. A sweep that applied the one-minute cap to every
+    // tool passes the case above and fails these; the sweep as it was passes
+    // these and fails the case above. Only all three prove the cap is per tool.
+    const tenSession = await sessionOf(ten.m)
+    const noneSession = await sessionOf(none.m)
+    ok(
+      'sweep/a-ten-minute-tool-is-not-swept-at-one-minute',
+      tenSession?.status === 'open',
+      `a member mid-job on a ten-minute tool was cut off: ${JSON.stringify(tenSession)}`,
+    )
+    ok(
+      'sweep/a-tool-with-no-cap-of-its-own-keeps-the-default',
+      noneSession?.status === 'open',
+      `a tool that sets no cap must be judged at the global default, not at ` +
+        `another tool's: ${JSON.stringify(noneSession)}`,
+    )
+    for (const c of [ten, none]) {
+      ok(
+        `sweep/the-${c.label}-hold-is-still-held`,
+        toolBillingHonored({ balance: 10, held: 0.5, available: 9.5 }, await view(c.m)) === null,
+        JSON.stringify(await view(c.m)),
+      )
+      // Tidy: a clean stop, so nothing is left open for a later stage to settle.
+      assertEq(`sweep/${c.label}-stopped`, 200, (await toolOff(c.card, c.ext, powerTokens[c.ext])).status)
+    }
   }
 })

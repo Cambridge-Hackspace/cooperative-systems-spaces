@@ -377,6 +377,22 @@ pub struct ToolBillingConfig {
     pub min_balance: String,
     /// Display currency for tool charges.
     pub currency: String,
+    /// How often open sessions are checked for abandonment.
+    #[serde(default = "default_sweep_interval_secs")]
+    pub sweep_interval_secs: u64,
+    /// How long past a tool's own session cap an open session may run before
+    /// the sweep settles it as abandoned (#171). The cap is the tool's
+    /// `usage_max_session_minutes`, or `default_max_session_minutes` when it
+    /// sets none -- never the global figure for a tool that has its own.
+    #[serde(default = "default_abandoned_grace_minutes")]
+    pub abandoned_grace_minutes: i64,
+}
+
+fn default_sweep_interval_secs() -> u64 {
+    3600
+}
+fn default_abandoned_grace_minutes() -> i64 {
+    60
 }
 
 impl Default for ToolBillingConfig {
@@ -389,6 +405,8 @@ impl Default for ToolBillingConfig {
             default_max_session_minutes: 120,
             min_balance: "0".to_string(),
             currency: "USD".to_string(),
+            sweep_interval_secs: default_sweep_interval_secs(),
+            abandoned_grace_minutes: default_abandoned_grace_minutes(),
         }
     }
 }
