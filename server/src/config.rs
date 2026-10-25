@@ -377,22 +377,6 @@ pub struct ToolBillingConfig {
     pub min_balance: String,
     /// Display currency for tool charges.
     pub currency: String,
-    /// How often open sessions are checked for abandonment.
-    #[serde(default = "default_sweep_interval_secs")]
-    pub sweep_interval_secs: u64,
-    /// How long past a tool's own session cap an open session may run before
-    /// the sweep settles it as abandoned (#171). The cap is the tool's
-    /// `usage_max_session_minutes`, or `default_max_session_minutes` when it
-    /// sets none -- never the global figure for a tool that has its own.
-    #[serde(default = "default_abandoned_grace_minutes")]
-    pub abandoned_grace_minutes: i64,
-}
-
-fn default_sweep_interval_secs() -> u64 {
-    3600
-}
-fn default_abandoned_grace_minutes() -> i64 {
-    60
 }
 
 impl Default for ToolBillingConfig {
@@ -405,8 +389,6 @@ impl Default for ToolBillingConfig {
             default_max_session_minutes: 120,
             min_balance: "0".to_string(),
             currency: "USD".to_string(),
-            sweep_interval_secs: default_sweep_interval_secs(),
-            abandoned_grace_minutes: default_abandoned_grace_minutes(),
         }
     }
 }
@@ -1328,11 +1310,34 @@ pub struct ToolCategoryMapping {
 pub struct ToolConfig {
     /// List of tool categories with their internal values and display labels
     pub tool_categories: Vec<ToolCategoryMapping>,
+    /// How often the session sweep runs (#171, #173). It returns a tool nobody
+    /// released to `idle` once its session has run past its cap plus the grace
+    /// below, and settles any open billing session on the way. Runs whether or
+    /// not billing is enabled: the default configuration has billing off, and
+    /// that is exactly where an unmetered tool would otherwise stay `in_use`
+    /// forever.
+    #[serde(default = "default_session_sweep_secs")]
+    pub session_sweep_secs: u64,
+    /// How long past a tool's own session cap a session may run before the
+    /// sweep calls it abandoned. The cap is the tool's
+    /// `usage_max_session_minutes`, or `[tool_billing].default_max_session_minutes`
+    /// when it sets none -- never the global figure for a tool that has its own.
+    #[serde(default = "default_session_grace_minutes")]
+    pub session_grace_minutes: i64,
+}
+
+fn default_session_sweep_secs() -> u64 {
+    3600
+}
+fn default_session_grace_minutes() -> i64 {
+    60
 }
 
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {
+            session_sweep_secs: default_session_sweep_secs(),
+            session_grace_minutes: default_session_grace_minutes(),
             tool_categories: vec![
                 ToolCategoryMapping {
                     value: "saw".to_string(),

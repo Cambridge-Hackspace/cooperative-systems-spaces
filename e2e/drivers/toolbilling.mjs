@@ -17,9 +17,11 @@
 //   * a second stop does not double-charge (idempotent);
 //   * TRAINING is checked before any money moves: an untrained member is refused
 //     at the training gate and NO session or charge is ever created;
-//   * the abandoned-session sweep judges each session against ITS tool's cap
-//     (#171): a one-minute tool is swept at a minute while a ten-minute tool and
-//     a no-cap tool on the same server are not.
+//   * the session sweep judges each session against ITS tool's cap (#171): a
+//     one-minute tool is swept at a minute while a ten-minute tool and a no-cap
+//     tool on the same server are not;
+//   * the sweep RELEASES the tool too (#173) -- metered or not, so with no
+//     session row to find -- and says so with a Warning-severity audit event.
 //
 // WHAT THIS DOES NOT PROVE: postpaid dip-and-block or the per-time charge (both
 // unit-covered), nor the edge's online-sync behaviour (the edge's own tests).
@@ -45,6 +47,15 @@ let macSeq = 0
 function q(path, params) {
   return `${path}?${new URLSearchParams(params).toString()}`
 }
+async function auditCount(admin, eventType, userId) {
+  const res = await GET(q('/api/admin/audit-logs', { event_type: eventType, per_page: '100' }), {
+    token: admin.token,
+  })
+  assertEq(`toolbilling/audit-query:${eventType}`, 200, res.status)
+  return (res.json?.data ?? []).filter((r) => r.user_id === userId).length
+}
+const toolStatus = async (admin, id) =>
+  (await GET(`/api/tools/${id}`, { token: admin.token })).json?.data?.status
 const toolOn = (card, tid, token) =>
   POST('/api/toolguard/tool-on', { token, body: { card, tool_id: tid } })
 const toolOff = (card, tid, token) =>
@@ -135,34 +146,42 @@ await main(async () => {
     JSON.stringify(await view(member)),
   )
 
-  // ── #171: the sweep judges a session against ITS tool's cap ──────────────
+  // ── #171/#173: the sweep judges a session against ITS tool's cap, and
+  // releases the tool ───────────────────────────────────────────────────────
   //
-  // Three metered tools, one open session each, on a server whose sweep runs
-  // every 2s with no grace (stack-config). Once a minute has passed, the
-  // one-minute tool's session must be settled as abandoned, and the ten-minute
-  // tool's and the no-cap tool's (default 120) must still be open on that same
-  // sweep. The defect was one global cutoff -- default plus grace -- for every
-  // tool, so before the fix the first case fails (the one-minute tool is judged
-  // at 120 minutes); a sweep that applied the SMALLEST cap to every tool fails
-  // the other two. Each claim from two sides: the session row AND the ledger.
+  // Four tools, one open session each, on a server whose sweep runs every 2s
+  // with no grace (stack-config). Once a minute has passed, the one-minute
+  // tool's session must be settled as abandoned AND the tool returned to idle;
+  // the ten-minute tool's and the no-cap tool's (default 120) must still be open
+  // and in use on that same sweep. The #171 defect was one global cutoff --
+  // default plus grace -- for every tool, so before that fix the first case
+  // fails (the one-minute tool is judged at 120 minutes); a sweep that applied
+  // the SMALLEST cap to every tool fails the other two. Each claim from two
+  // sides: the session row AND the ledger.
+  //
+  // The fourth tool is UNMETERED with a one-minute cap. It has no session row
+  // at all, so a billing sweep has nothing to find -- the #173 case: the tool
+  // itself must still be released, and the release audited.
   //
   // Opened here, at the top, so the minute elapses while the rest of the driver
   // runs; asserted at the bottom.
   const sweep = { startedAt: Date.now(), cases: [] }
-  for (const [label, maxMin] of [
-    ['one-minute', 1],
-    ['ten-minute', 10],
-    ['no-cap', null],
+  for (const [label, maxMin, flatFee] of [
+    ['one-minute', 1, '0.50'],
+    ['ten-minute', 10, '0.50'],
+    ['no-cap', null, '0.50'],
+    ['unmetered', 1, null],
   ]) {
     const ext = `e2e-sweep-${label}`
-    await createMeteredTool(admin, { externalId: ext, flatFee: '0.50', maxMin })
+    const t = await createMeteredTool(admin, { externalId: ext, flatFee, maxMin })
     const m = await account(`sweep_${label}`)
     const card = `E2E-SWEEP-${label.toUpperCase()}`
     await setCard(m, card)
     await fund(admin, m, '20.00') // member, balance 10
     const on = await toolOn(card, ext, powerTokens[ext])
     ok(`sweep/${label}-activated`, on.json?.tool_on === true, JSON.stringify(on.json))
-    sweep.cases.push({ label, ext, m, card })
+    assertEq(`sweep/${label}-is-in-use`, 'in_use', await toolStatus(admin, t.id))
+    sweep.cases.push({ label, ext, m, card, id: t.id })
   }
 
   // The `power` binding is required, and two DIFFERENT layers refuse anything
@@ -613,7 +632,7 @@ await main(async () => {
     const sessionOf = async (m) =>
       (await GET(`/api/admin/tool-billing/users/${m.user.id}/sessions`, { token: admin.token }))
         .json?.data?.[0]
-    const [one, ten, none] = sweep.cases
+    const [one, ten, none, unmetered] = sweep.cases
     const oneSession = await sessionOf(one.m)
     ok(
       'sweep/a-session-past-its-own-cap-is-settled-abandoned',
@@ -651,6 +670,59 @@ await main(async () => {
         toolBillingHonored({ balance: 10, held: 0.5, available: 9.5 }, await view(c.m)) === null,
         JSON.stringify(await view(c.m)),
       )
+    }
+
+    // ── #173: the tool comes back too, not only the money ──────────────────
+    // Settling the session and freeing the tool are different writes to
+    // different tables, and until #173 only the first happened: the money was
+    // reconciled and the tool stayed `in_use` for everyone.
+    assertEq(
+      'sweep/a-released-tool-is-idle-again',
+      'idle',
+      await toolStatus(admin, one.id),
+      'the session was settled but the tool is still in use: the sweep reconciled the money and stranded the machine',
+    )
+    // THE DISCRIMINATOR between "have the billing sweep clear the status" and
+    // "a sweep independent of billing": an unmetered tool has no session row,
+    // so a status change bolted onto the billing settle never runs for it.
+    assertEq(
+      'sweep/an-unmetered-tool-with-no-session-row-is-released-too',
+      'idle',
+      await toolStatus(admin, unmetered.id),
+      'an unmetered tool stayed in use: the release is riding on the billing session, which this tool never had',
+    )
+    ok(
+      'sweep/an-unmetered-release-moves-no-money',
+      toolBillingHonored({ balance: 10, held: 0, available: 10 }, await view(unmetered.m)) === null,
+      JSON.stringify(await view(unmetered.m)),
+    )
+    // The negatives, with the same clock: tools inside their cap keep their
+    // session. A sweep that freed tools eagerly cuts a member off mid-job,
+    // which is worse than the defect.
+    for (const c of [ten, none]) {
+      assertEq(`sweep/the-${c.label}-tool-is-still-in-use`, 'in_use', await toolStatus(admin, c.id))
+    }
+    // Loud: a release is a Warning-severity audit event against the member
+    // whose session it was, and only against them. The event is written in the
+    // same pass as the status change, so it is there by the time the status is.
+    const released = await auditCount(admin, 'tool_released_by_sweep', unmetered.m.user.id)
+    ok(
+      'sweep/the-release-is-audited-against-the-member',
+      released === 1,
+      `expected exactly one tool_released_by_sweep for the unmetered member, got ${released}`,
+    )
+    assertEq(
+      'sweep/a-tool-still-in-use-raised-no-release-event',
+      0,
+      await auditCount(admin, 'tool_released_by_sweep', ten.m.user.id),
+    )
+    // And a released tool is usable again: the next member is not told it is
+    // already in use.
+    const again = await toolOn(unmetered.card, unmetered.ext, powerTokens[unmetered.ext])
+    ok('sweep/a-released-tool-can-be-started-again', again.json?.tool_on === true, JSON.stringify(again.json))
+    assertEq('sweep/unmetered-stopped', 200, (await toolOff(unmetered.card, unmetered.ext, powerTokens[unmetered.ext])).status)
+
+    for (const c of [ten, none]) {
       // Tidy: a clean stop, so nothing is left open for a later stage to settle.
       assertEq(`sweep/${c.label}-stopped`, 200, (await toolOff(c.card, c.ext, powerTokens[c.ext])).status)
     }

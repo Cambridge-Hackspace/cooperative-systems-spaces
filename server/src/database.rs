@@ -1806,6 +1806,24 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
     /// Get tool events
+    /// The most recent `activated` event for a tool, if it has ever had one:
+    /// when, and by whom, its current session began (#173).
+    pub fn latest_activation(
+        &self,
+        tid: uuid::Uuid,
+    ) -> Result<Option<crate::models::ToolEvent>, DatabaseError> {
+        use crate::schema::tool_events::dsl::*;
+
+        let mut conn = self.get_connection()?;
+        tool_events
+            .filter(tool_id.eq(tid))
+            .filter(event_type.eq("activated"))
+            .order(created_at.desc())
+            .first::<crate::models::ToolEvent>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     pub fn get_tool_events(
         &self,
         _tool_id: uuid::Uuid,

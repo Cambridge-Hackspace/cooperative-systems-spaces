@@ -34,6 +34,11 @@ fn is_positive(v: &Option<BigDecimal>) -> bool {
     v.as_ref().is_some_and(|x| *x > zero())
 }
 
+/// A tool's session cap in minutes: its own, or the global fallback (#171).
+pub fn session_cap_minutes(own: Option<i32>, default: i32) -> i32 {
+    own.unwrap_or(default)
+}
+
 /// When an open session started before this, the sweep calls it abandoned:
 /// the tool's own cap plus `grace_minutes` for a stop still in flight (#171).
 ///
@@ -280,12 +285,13 @@ impl ToolBillingService {
 
     /// Billable-minute cap for a tool (its own value, or the global default).
     pub fn max_minutes(&self, tool: &Tool) -> i32 {
-        tool.usage_max_session_minutes.unwrap_or_else(|| {
+        session_cap_minutes(
+            tool.usage_max_session_minutes,
             self.config
                 .get_config()
                 .tool_billing
-                .default_max_session_minutes
-        })
+                .default_max_session_minutes,
+        )
     }
 
     pub fn tool_is_metered(&self, tool: &Tool) -> bool {
@@ -540,11 +546,7 @@ impl ToolBillingService {
         if !self.enabled() {
             return Ok(0);
         }
-        let grace = self
-            .config
-            .get_config()
-            .tool_billing
-            .abandoned_grace_minutes;
+        let grace = self.config.get_config().tools.session_grace_minutes;
         let now = Utc::now();
         // #171: each session is judged against ITS tool's cap, which the query
         // cannot know. It is pre-filtered with the tightest cutoff any tool can

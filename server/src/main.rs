@@ -509,35 +509,45 @@ async fn main() -> Result<(), anyhow::Error> {
         tool_billing,
     };
 
-    // The tool-billing abandoned-session sweep. Spawned after AppState because it
-    // re-broadcasts the toolguard allow-list (freeing a settled hold can restore
-    // tools to a member's affordable set), which needs the whole state. Hourly.
-    if app_config.tool_billing.enabled {
+    // The session sweep (#173): returns a tool nobody released to `idle` once
+    // its session has run past its own cap plus a grace, settling any open
+    // billing session on the way (#171). Not gated on billing -- the default
+    // configuration has billing off, and that is exactly where an unmetered
+    // tool would otherwise stay `in_use` forever. Spawned after AppState
+    // because a release can change a member's affordable set, which the
+    // toolguard allow-list broadcast carries.
+    {
+        let sweep = css_server::session_sweep::SessionSweep::new(
+            app_state.db.clone(),
+            app_state.config_manager.clone(),
+            app_state.tool_billing.clone(),
+        );
         let sweep_state = app_state.clone();
         let daemon_shutdown = shutdown.clone();
-        let interval = app_config.tool_billing.sweep_interval_secs.max(1);
+        let interval = app_config.tools.session_sweep_secs.max(1);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // The first tick completes at once; skipping it keeps a restart
+            // from judging every tool before anything has had a chance to
+            // report in.
+            ticker.tick().await;
             loop {
                 tokio::select! {
                     _ = daemon_shutdown.cancelled() => break,
                     _ = ticker.tick() => {}
                 }
-                if let Some(svc) = &sweep_state.tool_billing {
-                    match svc.sweep_abandoned() {
-                        Ok(0) => {}
-                        Ok(n) => {
-                            info!("Tool-billing sweep settled {n} abandoned session(s)");
-                            css_server::api::toolguard::broadcast_toolguard_state(&sweep_state)
-                                .await;
-                        }
-                        Err(e) => warn!("Tool-billing sweep failed: {e}"),
+                match sweep.sweep_once() {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        info!("Session sweep released {n} tool(s) nobody had released");
+                        css_server::api::toolguard::broadcast_toolguard_state(&sweep_state).await;
                     }
+                    Err(e) => warn!("Session sweep failed: {e}"),
                 }
             }
         });
-        info!("Tool-billing sweep started ({interval}s interval)");
+        info!("Session sweep started ({interval}s interval)");
     }
 
     // Serve frontend static files
