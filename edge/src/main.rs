@@ -189,6 +189,14 @@ async fn main() -> Result<()> {
             // Shared power lockout + local fast-trip state (#48).
             let power_state = Arc::new(css_edge::power::PowerState::new());
             let module_state = Arc::new(css_edge::modules::ModuleState::new());
+            // A session this edge opened outranks a stale sync for two sync
+            // intervals (#179); the server's pushes make the wait short in
+            // practice, and this is the ceiling for a poll in flight.
+            module_state.set_local_session_grace(chrono::Duration::seconds(
+                (app_config.toolguard_sync_interval_secs as i64)
+                    .saturating_mul(2)
+                    .max(10),
+            ));
 
             // Shared door cache + cross-client bridges. `doors_unlock_*` flows
             // remote → local (server-issued unlocks → local relay).

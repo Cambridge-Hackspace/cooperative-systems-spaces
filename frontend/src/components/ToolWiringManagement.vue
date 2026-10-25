@@ -59,6 +59,8 @@
                 <th>Role</th>
                 <th>Name</th>
                 <th>On disconnect</th>
+                <th>Start</th>
+                <th>Run-on</th>
               </tr>
             </thead>
             <tbody>
@@ -71,6 +73,19 @@
                   <span :class="m.on_disconnect === 'fail_off' ? 'text-success' : ''">
                     {{ m.on_disconnect }}
                   </span>
+                </td>
+                <td class="whitespace-nowrap">
+                  <template v-if="m.role === 'power'">
+                    stage {{ m.start_stage ?? 0
+                    }}<span v-if="m.start_delay_ms">, then {{ seconds(m.start_delay_ms) }}</span>
+                  </template>
+                  <span v-else class="text-base-content/50">—</span>
+                </td>
+                <td class="whitespace-nowrap">
+                  <template v-if="m.role === 'power' && m.run_on_ms">{{
+                    seconds(m.run_on_ms)
+                  }}</template>
+                  <span v-else class="text-base-content/50">—</span>
                 </td>
               </tr>
             </tbody>
@@ -135,6 +150,11 @@ const catalog = ref<Tool[]>([])
 const wiredTools = computed(() => tools.value)
 
 /** Prefer the tool's real name; fall back to whatever identifier we have. */
+/** `1500` → `1.5 s`: the timings are stored in ms and read in seconds. */
+function seconds(ms: number): string {
+  return `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`
+}
+
 function toolName(t: ToolModuleStateTool): string {
   const match = catalog.value.find((c) => c.id === t.tool_id)
   return match?.name ?? t.external_id ?? t.tool_id

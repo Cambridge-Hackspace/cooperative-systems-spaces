@@ -107,6 +107,22 @@ pub struct DeviceBinding {
     /// `fail_off` | `hold_last` | `ignore` -- what this module does when its link
     /// drops. Deny-biased default is `fail_off` for safety-critical power.
     pub on_disconnect: String,
+    /// Start sequencing, for a `power` binding (#179). Bindings in a lower
+    /// stage must have **confirmed they are energized** -- a power report from
+    /// that device with `relay_on: true`, received since the tool was allowed
+    /// -- before this one is leased. Any number of bindings per stage, any
+    /// number of stages. Default 0, which is "first".
+    #[serde(default)]
+    pub start_stage: i32,
+    /// After the stage before it has confirmed (or, for the first stage, after
+    /// the tool is allowed), wait this long before leasing: spin-up time.
+    #[serde(default)]
+    pub start_delay_ms: i32,
+    /// After *any* denial, keep this binding leased this long: run-on time. It
+    /// applies to the coordinator's decisions, never to its silence -- an edge
+    /// that dies still lapses every lease at its TTL.
+    #[serde(default)]
+    pub run_on_ms: i32,
 }
 
 /// One configured interlock: an AND-ed start precondition or an OR-ed trip.

@@ -25,11 +25,11 @@
 //! it safe when it stops hearing from the edge. This file is the cross-module
 //! coordinator and the backstop, not a replacement for either.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use chrono::{DateTime, Duration, Utc};
-use css_lib::wire::{ToolInterlockRule, ToolModuleStatePayload, ToolModuleTool};
+use css_lib::wire::{DeviceBinding, ToolInterlockRule, ToolModuleStatePayload, ToolModuleTool};
 
 /// Interlock kinds, as they arrive on the wire.
 const KIND_START_GATE: &str = "start_gate";
@@ -71,6 +71,11 @@ pub enum Denial {
     Unobserved(String),
     /// A module the tool depends on has gone quiet and its policy is fail_off.
     ModuleOffline(String),
+    /// Nobody is signed on to the tool (#179). A lease permits a relay to stay
+    /// closed for a member who is using the machine; with no session there is
+    /// nobody it is for, and a standalone plug that followed interlocks alone
+    /// was energized all day.
+    NotInUse,
     /// Nothing is known about this tool at all.
     Unknown,
 }
@@ -116,6 +121,26 @@ struct Inner {
     leases: HashMap<String, DateTime<Utc>>,
     /// module_id -> when it was last heard from.
     module_seen: HashMap<String, DateTime<Utc>>,
+    /// Sessions this edge authorized itself, by tool key: when each opened.
+    /// Authoritative at once; the server's view reconciles them later.
+    local_sessions: HashMap<String, DateTime<Utc>>,
+    /// Tools the server's last sync said are in use, by tool key.
+    synced_in_use: HashSet<String>,
+    /// How long a locally opened session outranks a sync that says idle. A
+    /// sync in flight when the member swiped still carries the old status; one
+    /// arriving after this is the server's considered answer.
+    local_session_grace: Duration,
+    /// When each tool's decision last turned Allow; absent while denied. The
+    /// threshold a relay confirmation must be newer than, and the clock a
+    /// first-stage delay counts from.
+    allowed_since: HashMap<String, DateTime<Utc>>,
+    /// The latest relay state each device reported, and when.
+    relay_state: HashMap<String, (bool, DateTime<Utc>)>,
+    /// Bindings currently leased, by binding id: when each was first granted
+    /// in the present allow. Run-on applies only to these.
+    granted_since: HashMap<String, DateTime<Utc>>,
+    /// Bindings in run-on after a denial, by binding id: leased until.
+    run_on_until: HashMap<String, DateTime<Utc>>,
 }
 
 pub struct ModuleState {
@@ -131,8 +156,77 @@ impl Default for ModuleState {
 impl ModuleState {
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(Inner::default()),
+            inner: RwLock::new(Inner {
+                local_session_grace: Duration::seconds(30),
+                ..Inner::default()
+            }),
         }
+    }
+
+    /// How long a session this edge authorized outranks a sync saying the
+    /// tool is idle. Twice the sync interval covers one stale poll in flight.
+    pub fn set_local_session_grace(&self, grace: Duration) {
+        self.inner.write().expect("module lock").local_session_grace = grace;
+    }
+
+    /// A session opened or closed on this edge's own say-so: a `tool-on` it
+    /// answered yes to, or a `tool-off` it relayed (#179). Closing also drops
+    /// the server's synced claim for the tool, so a lease ends with the stop
+    /// rather than a sync interval later.
+    pub fn note_session(&self, tool: &str, open: bool, now: DateTime<Utc>) {
+        let mut inner = self.inner.write().expect("module lock");
+        let key = Self::tool_key(&inner, tool);
+        if open {
+            inner.local_sessions.insert(key, now);
+        } else {
+            inner.local_sessions.remove(&key);
+            inner.synced_in_use.remove(&key);
+        }
+    }
+
+    /// The server's view of which tools are in use, from a sync (#179).
+    ///
+    /// Replaces the synced set, and retires any local session older than the
+    /// grace that the server does not list: an administrator released the
+    /// tool, or the session sweep did, and this edge was not the one told.
+    /// A younger local session is kept -- the sync may predate the swipe.
+    pub fn reconcile_sessions(&self, in_use_tool_ids: &[String], now: DateTime<Utc>) {
+        let mut inner = self.inner.write().expect("module lock");
+        let synced: HashSet<String> = in_use_tool_ids
+            .iter()
+            .map(|t| Self::tool_key(&inner, t))
+            .collect();
+        let grace = inner.local_session_grace;
+        inner
+            .local_sessions
+            .retain(|key, opened| synced.contains(key) || now - *opened < grace);
+        inner.synced_in_use = synced;
+    }
+
+    /// A device reported its relay state (#179). This is what confirms, for
+    /// start sequencing, that an earlier stage actually energized -- not that
+    /// it was told to.
+    pub fn note_relay_state(&self, device_id: &str, relay_on: bool, now: DateTime<Utc>) {
+        let mut inner = self.inner.write().expect("module lock");
+        inner
+            .relay_state
+            .insert(device_id.to_string(), (relay_on, now));
+    }
+
+    /// Whether the tool is in use as far as this edge knows.
+    fn in_use(inner: &Inner, tool_key: &str) -> bool {
+        inner.synced_in_use.contains(tool_key) || inner.local_sessions.contains_key(tool_key)
+    }
+
+    /// The snapshot's key for a tool named either way, or the name itself when
+    /// no wiring is held for it yet.
+    fn tool_key(inner: &Inner, tool: &str) -> String {
+        inner
+            .snapshot
+            .as_ref()
+            .and_then(|s| Self::resolve(s, tool))
+            .map(|t| t.tool_id.clone())
+            .unwrap_or_else(|| tool.to_string())
     }
 
     /// Replace the wiring snapshot. Latches, readings and leases are kept: the
@@ -368,6 +462,13 @@ impl ModuleState {
             }
         }
 
+        // Last, after the safety arms, so a refusal's reason names the hazard
+        // when there is one: a silent sensor is still the thing to go and look
+        // at, whether or not anyone is signed on.
+        if !Self::in_use(&inner, &tool_key) {
+            return Decision::Deny(Denial::NotInUse);
+        }
+
         Decision::Allow
     }
 
@@ -467,6 +568,20 @@ impl ModuleState {
     ///
     /// A tool with no power module yields no action: there is nothing to hold
     /// on, so there is nothing to renew.
+    ///
+    /// **Start sequencing and run-on (#179)** are decided here, per binding,
+    /// from the tool's one decision:
+    ///
+    /// - While the tool is allowed, a binding is leased once every binding in
+    ///   a lower `start_stage` has *confirmed* it is energized -- a relay
+    ///   report of `true` newer than the allow -- and its own `start_delay_ms`
+    ///   has then passed. Until then it gets **no lease at all**, not a
+    ///   refusal: a refusal ends a reader-and-relay box's session, and "not
+    ///   yet" is not "no".
+    /// - When the tool is denied, a binding that was leased and has `run_on_ms`
+    ///   keeps its grant for that long, whatever the denial was; every other
+    ///   binding is refused at once. A binding never leased in this allow gets
+    ///   no run-on: there is nothing to run on.
     pub fn tick(
         &self,
         now: DateTime<Utc>,
@@ -476,20 +591,112 @@ impl ModuleState {
         let mut out = Vec::new();
         for tool in self.tools() {
             let decision = self.renew(&tool, now, ttl, module_timeout);
-            for device_id in self.power_modules(&tool) {
-                out.push(LeaseAction {
-                    tool_id: tool.clone(),
-                    device_id,
-                    grant: decision.is_allowed(),
-                    ttl_ms: ttl.num_milliseconds().max(0),
-                    reason: match &decision {
-                        Decision::Allow => None,
-                        Decision::Deny(d) => Some(format!("{d:?}")),
-                    },
-                });
+            let mut inner = self.inner.write().expect("module lock");
+            let Some(wiring) = inner
+                .snapshot
+                .as_ref()
+                .and_then(|s| Self::resolve(s, &tool))
+            else {
+                continue;
+            };
+            let tool_key = wiring.tool_id.clone();
+            let mut power: Vec<DeviceBinding> = wiring
+                .modules
+                .iter()
+                .filter(|m| m.role == ROLE_POWER)
+                .cloned()
+                .collect();
+            // Stage, then name: a stable order for the commands and for the
+            // "who is blocking" answer, independent of how bindings were made.
+            power.sort_by(|a, b| (a.start_stage, &a.name).cmp(&(b.start_stage, &b.name)));
+            let ttl_ms = ttl.num_milliseconds().max(0);
+            let lease = |device_id: &str, grant: bool, reason: Option<String>| LeaseAction {
+                tool_id: tool.clone(),
+                device_id: device_id.to_string(),
+                grant,
+                ttl_ms,
+                reason,
+            };
+
+            match &decision {
+                Decision::Allow => {
+                    let allowed_since = *inner.allowed_since.entry(tool_key.clone()).or_insert(now);
+                    for b in &power {
+                        inner.run_on_until.remove(&b.id);
+                    }
+                    let first_stage = power.iter().map(|b| b.start_stage).min().unwrap_or(0);
+                    for b in &power {
+                        // Everything in a lower stage must have confirmed on
+                        // since the allow; this binding's clock starts at the
+                        // latest of those confirmations.
+                        let base = if b.start_stage <= first_stage {
+                            Some(allowed_since)
+                        } else {
+                            let mut base = allowed_since;
+                            let mut blocked = false;
+                            for earlier in power.iter().filter(|e| e.start_stage < b.start_stage) {
+                                match Self::confirmed_on_at(&inner, earlier, allowed_since) {
+                                    Some(at) => base = base.max(at),
+                                    None => {
+                                        blocked = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            (!blocked).then_some(base)
+                        };
+                        let Some(base) = base else { continue };
+                        let due = base + Duration::milliseconds(i64::from(b.start_delay_ms.max(0)));
+                        if now < due {
+                            continue;
+                        }
+                        inner.granted_since.entry(b.id.clone()).or_insert(now);
+                        out.push(lease(&b.device_id, true, None));
+                    }
+                }
+                Decision::Deny(denial) => {
+                    if inner.allowed_since.remove(&tool_key).is_some() {
+                        // The transition. Run-on is for what was actually on.
+                        for b in &power {
+                            if b.run_on_ms > 0 && inner.granted_since.contains_key(&b.id) {
+                                inner.run_on_until.insert(
+                                    b.id.clone(),
+                                    now + Duration::milliseconds(i64::from(b.run_on_ms)),
+                                );
+                            }
+                        }
+                    }
+                    for b in &power {
+                        let running_on = inner
+                            .run_on_until
+                            .get(&b.id)
+                            .is_some_and(|until| now < *until);
+                        if running_on {
+                            out.push(lease(&b.device_id, true, None));
+                        } else {
+                            inner.run_on_until.remove(&b.id);
+                            inner.granted_since.remove(&b.id);
+                            out.push(lease(&b.device_id, false, Some(format!("{denial:?}"))));
+                        }
+                    }
+                }
             }
         }
         out
+    }
+
+    /// When a binding's device last confirmed its relay closed, if that
+    /// confirmation is newer than `since` -- a report from before the allow is
+    /// the previous run's, not this one's.
+    fn confirmed_on_at(
+        inner: &Inner,
+        binding: &DeviceBinding,
+        since: DateTime<Utc>,
+    ) -> Option<DateTime<Utc>> {
+        match inner.relay_state.get(&binding.device_id) {
+            Some((true, at)) if *at >= since => Some(*at),
+            _ => None,
+        }
     }
 
     /// Every tool this edge holds wiring for.
@@ -539,10 +746,25 @@ mod tests {
             name: format!("{role} {id}"),
             params: serde_json::json!({}),
             on_disconnect: on_disconnect.to_string(),
+            start_stage: 0,
+            start_delay_ms: 0,
+            run_on_ms: 0,
         }
     }
 
+    /// A state with one wired tool that somebody is signed on to (#179): the
+    /// arms about interlocks and liveness presume a member at the machine, and
+    /// the in-use rule has its own arms below.
     fn state_with(modules: Vec<DeviceBinding>, interlocks: Vec<ToolInterlockRule>) -> ModuleState {
+        let s = state_nobody_on(modules, interlocks);
+        s.note_session("tool-1", true, t0());
+        s
+    }
+
+    fn state_nobody_on(
+        modules: Vec<DeviceBinding>,
+        interlocks: Vec<ToolInterlockRule>,
+    ) -> ModuleState {
         let s = ModuleState::new();
         s.apply_state(ToolModuleStatePayload {
             as_of: t0().to_rfc3339(),
@@ -648,6 +870,10 @@ mod tests {
                 },
             ],
         });
+
+        // Somebody is signed on to both (#179); this arm is about liveness.
+        s.note_session("tool-1", true, t0());
+        s.note_session("tool-2", true, t0());
 
         assert_eq!(
             2,
@@ -1050,5 +1276,309 @@ mod tests {
             s.is_latched("tool-1"),
             "a configuration change must not clear live safety state"
         );
+    }
+
+    // ── In use, and start sequencing / run-on (#179) ─────────────────────────
+    //
+    // A lease is for a member at the machine: no session, no lease. And when a
+    // tool has several power bindings they come on in stages, each only after
+    // the stage before it has CONFIRMED it energized, and go off with a run-on
+    // for the ones that need it. Nothing here knows what is plugged in.
+
+    fn plug(id: &str, stage: i32, delay_ms: i32, run_on_ms: i32) -> DeviceBinding {
+        let mut b = binding(id, ROLE_POWER, ON_DISCONNECT_FAIL_OFF);
+        b.start_stage = stage;
+        b.start_delay_ms = delay_ms;
+        b.run_on_ms = run_on_ms;
+        b
+    }
+
+    fn ticked(s: &ModuleState, now: DateTime<Utc>) -> Vec<LeaseAction> {
+        s.tick(now, Duration::seconds(3), timeout())
+    }
+
+    fn for_dev<'a>(out: &'a [LeaseAction], id: &str) -> Option<&'a LeaseAction> {
+        out.iter().find(|l| l.device_id == format!("dev-{id}"))
+    }
+
+    fn grant_for(out: &[LeaseAction], id: &str) -> Option<bool> {
+        for_dev(out, id).map(|l| l.grant)
+    }
+
+    fn ms(n: i64) -> Duration {
+        Duration::milliseconds(n)
+    }
+
+    /// Two plugs, both alive, somebody signed on; `a` first, `b` behind it.
+    fn two_stage(delay_b_ms: i32, run_on_b_ms: i32) -> ModuleState {
+        let s = state_with(
+            vec![plug("a", 0, 0, 0), plug("b", 1, delay_b_ms, run_on_b_ms)],
+            vec![],
+        );
+        s.note_device_seen("dev-a", t0());
+        s.note_device_seen("dev-b", t0());
+        // The allow is observed at a tick, and a confirmation counts only from
+        // then: establish it, so the arms can confirm "after the allow".
+        ticked(&s, t0());
+        s
+    }
+
+    #[test]
+    fn a_tool_nobody_is_signed_on_to_is_not_leased() {
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        assert_eq!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Deny(Denial::NotInUse),
+            "a plug followed the interlocks alone and was on with nobody there"
+        );
+        assert_eq!(grant_for(&ticked(&s, t0()), "a"), Some(false));
+        // Named by external id, as a tool-on names it.
+        s.note_session("ext-1", true, t0());
+        assert!(s.evaluate("tool-1", t0(), timeout()).is_allowed());
+        s.note_session("ext-1", false, t0() + ms(1_000));
+        assert_eq!(
+            s.evaluate("tool-1", t0() + ms(1_000), timeout()),
+            Decision::Deny(Denial::NotInUse)
+        );
+    }
+
+    #[test]
+    fn the_servers_synced_status_counts_as_a_session() {
+        // A session opened at another reader, or in online-synchronous mode,
+        // reaches this edge through the sync.
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.reconcile_sessions(&["tool-1".to_string()], t0());
+        assert!(s.evaluate("tool-1", t0(), timeout()).is_allowed());
+        s.reconcile_sessions(&[], t0() + ms(1));
+        assert_eq!(
+            s.evaluate("tool-1", t0() + ms(1), timeout()),
+            Decision::Deny(Denial::NotInUse)
+        );
+    }
+
+    #[test]
+    fn a_sync_saying_idle_retires_a_local_session_only_after_the_grace() {
+        // The sync in flight when the member swiped still says idle; it must
+        // not undo the swipe. One arriving after the grace is the server's
+        // considered answer -- an administrator released the tool.
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.note_session("tool-1", true, t0());
+        s.reconcile_sessions(&[], t0() + ms(1_000));
+        assert!(
+            s.evaluate("tool-1", t0() + ms(1_000), timeout())
+                .is_allowed(),
+            "a stale sync undid a swipe a second old"
+        );
+        s.note_device_seen("dev-a", t0() + Duration::seconds(31));
+        s.reconcile_sessions(&[], t0() + Duration::seconds(31));
+        assert_eq!(
+            s.evaluate("tool-1", t0() + Duration::seconds(31), timeout()),
+            Decision::Deny(Denial::NotInUse),
+            "the server said idle after the grace and the edge kept leasing"
+        );
+    }
+
+    #[test]
+    fn a_local_stop_ends_the_lease_without_waiting_for_a_sync() {
+        let s = state_with(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.reconcile_sessions(&["tool-1".to_string()], t0());
+        s.note_session("tool-1", false, t0() + ms(500));
+        assert_eq!(
+            s.evaluate("tool-1", t0() + ms(500), timeout()),
+            Decision::Deny(Denial::NotInUse),
+            "a tool-off this edge relayed should end the lease at once, not a sync later"
+        );
+    }
+
+    #[test]
+    fn a_safety_reason_outranks_not_in_use() {
+        // A silent sensor is still the thing to go and look at.
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
+        assert!(matches!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Deny(Denial::ModuleOffline(_))
+        ));
+    }
+
+    #[test]
+    fn a_later_stage_is_leased_only_after_the_earlier_one_confirms_it_is_on() {
+        let s = two_stage(0, 0);
+        let out = ticked(&s, t0());
+        assert_eq!(grant_for(&out, "a"), Some(true));
+        assert_eq!(
+            for_dev(&out, "b"),
+            None,
+            "the second stage must get NO lease yet -- a refusal would end a session: {out:?}"
+        );
+        assert_eq!(
+            for_dev(&ticked(&s, t0() + ms(1_000)), "b"),
+            None,
+            "a timer stood in for a confirmation"
+        );
+        s.note_relay_state("dev-a", true, t0() + ms(1_500));
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "b"), Some(true));
+    }
+
+    #[test]
+    fn a_confirmation_from_before_the_allow_does_not_count() {
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0), plug("b", 1, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.note_device_seen("dev-b", t0());
+        // The previous run's relay state, from before anyone signed on.
+        s.note_relay_state("dev-a", true, t0() - Duration::seconds(10));
+        s.note_session("tool-1", true, t0());
+        assert_eq!(
+            for_dev(&ticked(&s, t0()), "b"),
+            None,
+            "a stale confirmation was believed"
+        );
+        s.note_relay_state("dev-a", true, t0() + ms(1_000));
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "b"), Some(true));
+    }
+
+    #[test]
+    fn an_earlier_stage_that_never_confirms_blocks_everything_behind_it() {
+        // `a` is alive but reports no relay state -- a plug that cannot tell.
+        // Nothing behind it may start, however long it waits.
+        let s = two_stage(0, 0);
+        for secs in [0, 1, 5, 30, 60] {
+            s.note_device_seen("dev-a", t0() + Duration::seconds(secs));
+            s.note_device_seen("dev-b", t0() + Duration::seconds(secs));
+            let out = ticked(&s, t0() + Duration::seconds(secs));
+            assert_eq!(grant_for(&out, "a"), Some(true));
+            assert_eq!(for_dev(&out, "b"), None, "at {secs}s: {out:?}");
+        }
+    }
+
+    #[test]
+    fn the_start_delay_counts_from_the_confirmation() {
+        let s = two_stage(2_000, 0);
+        s.note_relay_state("dev-a", true, t0() + ms(500));
+        assert_eq!(for_dev(&ticked(&s, t0() + ms(2_499)), "b"), None);
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(2_500)), "b"), Some(true));
+    }
+
+    #[test]
+    fn the_first_stage_delay_counts_from_the_allow() {
+        let s = state_with(vec![plug("a", 0, 1_000, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        assert_eq!(for_dev(&ticked(&s, t0()), "a"), None);
+        assert_eq!(for_dev(&ticked(&s, t0() + ms(999)), "a"), None);
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(1_000)), "a"), Some(true));
+    }
+
+    #[test]
+    fn run_on_keeps_a_leased_binding_on_after_a_denial_and_refuses_the_rest_at_once() {
+        let s = two_stage(0, 3_000);
+        s.note_relay_state("dev-a", true, t0());
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(100)), "b"), Some(true));
+        // The member signs off: the tool is denied.
+        let stop = t0() + ms(5_000);
+        s.note_session("tool-1", false, stop);
+        let out = ticked(&s, stop);
+        let a = for_dev(&out, "a").expect("a is addressed");
+        assert!(!a.grant, "the binding with no run-on stayed on: {a:?}");
+        assert_eq!(a.reason.as_deref(), Some("NotInUse"));
+        let b = for_dev(&out, "b").expect("b is addressed");
+        assert!(
+            b.grant && b.reason.is_none(),
+            "run-on was not granted: {b:?}"
+        );
+        assert_eq!(grant_for(&ticked(&s, stop + ms(2_999)), "b"), Some(true));
+        assert_eq!(
+            grant_for(&ticked(&s, stop + ms(3_000)), "b"),
+            Some(false),
+            "run-on outlived its time"
+        );
+    }
+
+    #[test]
+    fn run_on_applies_to_a_trip_as_much_as_to_a_stop() {
+        // Every denial, as decided: an extractor running on after a trip is
+        // harmless and usually wanted; the power the trip must cut is the
+        // first stage's, and that is refused at once.
+        let s = state_with(
+            vec![plug("a", 0, 0, 0), plug("b", 1, 0, 3_000)],
+            vec![rule(KIND_TRIP, "door_open", false, 0)],
+        );
+        s.note_device_seen("dev-a", t0());
+        s.note_device_seen("dev-b", t0());
+        s.observe("tool-1", "door_open", false, t0());
+        ticked(&s, t0());
+        s.note_relay_state("dev-a", true, t0());
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(100)), "b"), Some(true));
+        let trip = t0() + ms(5_000);
+        s.observe("tool-1", "door_open", true, trip);
+        let out = ticked(&s, trip);
+        assert_eq!(grant_for(&out, "a"), Some(false));
+        assert!(for_dev(&out, "a")
+            .unwrap()
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("Tripped"));
+        assert_eq!(grant_for(&out, "b"), Some(true));
+    }
+
+    #[test]
+    fn run_on_never_applies_to_a_binding_that_was_not_leased() {
+        // `b` was waiting on a confirmation that never came; there is nothing
+        // to run on.
+        let s = two_stage(0, 3_000);
+        assert_eq!(for_dev(&ticked(&s, t0()), "b"), None);
+        s.note_session("tool-1", false, t0() + ms(1_000));
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(1_000)), "b"), Some(false));
+    }
+
+    #[test]
+    fn a_new_allow_clears_a_run_on_and_the_sequence_starts_over() {
+        let s = two_stage(0, 3_000);
+        s.note_relay_state("dev-a", true, t0());
+        ticked(&s, t0() + ms(100));
+        s.note_session("tool-1", false, t0() + ms(1_000));
+        assert_eq!(
+            grant_for(&ticked(&s, t0() + ms(1_000)), "b"),
+            Some(true),
+            "in run-on"
+        );
+        // Signed on again during the run-on: `a` first, and `b` waits for a
+        // FRESH confirmation rather than riding the run-on into the new run.
+        s.note_session("tool-1", true, t0() + ms(2_000));
+        let out = ticked(&s, t0() + ms(2_000));
+        assert_eq!(grant_for(&out, "a"), Some(true));
+        assert_eq!(
+            for_dev(&out, "b"),
+            None,
+            "the run-on grant leaked into the new allow: {out:?}"
+        );
+        s.note_relay_state("dev-a", true, t0() + ms(2_500));
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(3_000)), "b"), Some(true));
+    }
+
+    #[test]
+    fn stages_may_hold_several_bindings_and_need_not_start_at_zero() {
+        let s = state_with(
+            vec![plug("a1", 2, 0, 0), plug("a2", 2, 0, 0), plug("c", 5, 0, 0)],
+            vec![],
+        );
+        for d in ["dev-a1", "dev-a2", "dev-c"] {
+            s.note_device_seen(d, t0());
+        }
+        let out = ticked(&s, t0());
+        assert_eq!(grant_for(&out, "a1"), Some(true));
+        assert_eq!(grant_for(&out, "a2"), Some(true));
+        assert_eq!(for_dev(&out, "c"), None);
+        s.note_relay_state("dev-a1", true, t0() + ms(500));
+        assert_eq!(
+            for_dev(&ticked(&s, t0() + ms(1_000)), "c"),
+            None,
+            "one of two confirmed is not confirmed"
+        );
+        s.note_relay_state("dev-a2", true, t0() + ms(1_500));
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "c"), Some(true));
     }
 }

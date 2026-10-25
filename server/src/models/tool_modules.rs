@@ -99,6 +99,13 @@ pub struct DeviceBinding {
     pub on_disconnect: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Start sequencing for a `power` binding (#179): bindings in a lower stage
+    /// must confirm they are energized before this one is leased.
+    pub start_stage: i32,
+    /// Spin-up: wait this long after the stage before it confirms.
+    pub start_delay_ms: i32,
+    /// Keep this binding leased this long after any denial.
+    pub run_on_ms: i32,
 }
 
 /// A new device binding for insertion.
@@ -112,6 +119,9 @@ pub struct NewDeviceBinding {
     pub name: String,
     pub params: Value,
     pub on_disconnect: String,
+    pub start_stage: i32,
+    pub start_delay_ms: i32,
+    pub run_on_ms: i32,
 }
 
 /// A configurable safety interlock rule for a tool.

@@ -2048,10 +2048,12 @@ stage_lease() {
   # Written as plain files by the setup driver rather than parsed out of its
   # JSON here: a shell JSON reader is a dependency and a bug surface, and these
   # are two opaque strings.
-  local dev tool sensor
+  local dev tool sensor plug2 card
   dev="$(cat "${STACK_DIR}/lease-device-id")"
   tool="$(cat "${STACK_DIR}/lease-tool-id")"
   sensor="$(cat "${STACK_DIR}/lease-sensor-id")"
+  plug2="$(cat "${STACK_DIR}/lease-plug2-id")"
+  card="$(cat "${STACK_DIR}/lease-card")"
 
   # Window 1: the module has reported nothing, so the lease must be refused.
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1.txt"
@@ -2060,6 +2062,11 @@ stage_lease() {
   # it a fail_off binding looks permanently silent and is refused forever.
   mqtt_pub "toolguard/request/power" \
     "{\"tool_id\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.0}" || true
+
+  # The second plug (#179) pulses now, before window 1b, so that the sensor is
+  # the ONLY silent fail_off binding in that window and its refusal can name
+  # it. The second plug's own liveness is not what 1b is about.
+  mqtt_pub "toolguard/request/alive" "{\"device_id\":\"${plug2}\"}" || true
 
   # Window 1b (#170): the plug has reported, and the answer must STILL be no,
   # because the fail_off SENSOR on the same tool has not. This is the
@@ -2073,8 +2080,39 @@ stage_lease() {
   # a non-power device can ever be satisfied.
   mqtt_pub "toolguard/request/alive" "{\"device_id\":\"${sensor}\"}" || true
 
-  # Window 2: same coordinator, same rules, and the answer has to change.
+  # Window 1c (#179): every module alive, every interlock satisfied, and NOBODY
+  # signed on. The answer must still be no, with NotInUse.
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1c.txt"
+
+  # The member signs on at the edge. The reply is captured so a session that
+  # never opened is reported as that, not as a sequencing failure later.
+  mqtt_sub "toolguard/response/tool-on" 4 "${STACK_DIR}/lease-toolon-reply.txt" &
+  local lease_toolon_sub=$!
+  sleep 1
+  mqtt_pub "toolguard/request/tool-on" \
+    "{\"card\":\"${card}\",\"tool_id\":\"${tool}\"}" || true
+  wait "${lease_toolon_sub}" || true
+
+  # Window 2: same coordinator, same rules, and the answer has to change -- for
+  # the FIRST stage. The second (#179) must get nothing: it waits for the first
+  # to confirm it energized.
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2.txt"
+
+  # The first plug confirms: relay_on true. This, not the lease having been
+  # sent, is what the second stage waits for.
+  mqtt_pub "toolguard/request/power" \
+    "{\"tool_id\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.3,\"relay_on\":true}" || true
+
+  # Window 2a: inside the second stage's 3 s start delay -- still nothing.
+  mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2a.txt"
+  # Window 2b: past it -- granted.
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2b.txt"
+
+  # The member signs off. First stage refused at once; second runs on 3 s.
+  mqtt_pub "toolguard/request/tool-off" \
+    "{\"card\":\"${card}\",\"tool_id\":\"${tool}\"}" || true
+  mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2c.txt"
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2d.txt"
 
   # ---- the tool-on reply must name the tool it answers (#166) --------------
   #

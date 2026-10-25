@@ -1001,7 +1001,10 @@ gate it; the poll fallback for the MQTT `module/state` push.
           "role": "power",
           "name": "laser-contactor",
           "params": { "gpio": 7, "active_low": false },
-          "on_disconnect": "fail_off"
+          "on_disconnect": "fail_off",
+          "start_stage": 0,
+          "start_delay_ms": 0,
+          "run_on_ms": 0
         }
       ],
       "interlocks": [
@@ -1043,6 +1046,10 @@ Field by field:
   switch, so it is usually the one you need first.
 - **`on_disconnect`** — what you must do when the link drops; see
   [`on_disconnect`](#on_disconnect).
+- **`start_stage`**, **`start_delay_ms`**, **`run_on_ms`** — how the
+  coordinator orders the leases when a tool has several `power` bindings. You
+  do nothing with them: they describe when your lease will *arrive* and how
+  long it may *outlive* a stop. See [start sequencing](#start-sequencing-and-run-on).
 - **`power_fails_safe`** — a property of the *tool*, not of you: whether every
   power module bound to it reaches a safe state unaided. See
   [`power_fails_safe`](#power_fails_safe).
@@ -1412,6 +1419,45 @@ tool; a lease is what permits a *relay* to remain closed, and it is withheld for
 reasons that have nothing to do with who swiped — a door opened, a sensor went
 quiet, the coordinator lost confidence. Both must hold. Neither implies the
 other.
+
+**And a lease is for a member at the machine.** The coordinator grants one only
+while the tool is **in use** — a session opened by a `tool-on` it answered yes
+to, or that the server reports — in addition to every interlock and liveness
+condition. A plug bound to a tool nobody has signed on to is refused with
+`NotInUse`, whatever its interlocks say. A plug with no reader on its tool is
+therefore never energized: there is nobody it would be for.
+
+#### Start sequencing and run-on
+
+A tool may have **any number** of `power` bindings — a machine and the
+extractor that must run whenever it does, on their own circuits. Each binding
+carries three timings, set by the administrator and delivered to you in
+`module/state`, and the coordinator applies them; your firmware does nothing
+but obey the lease it is given.
+
+- **`start_stage`** — bindings in a *lower* stage must have **confirmed they
+  are energized** before yours is leased. Confirmation is your own power
+  report with `relay_on: true`, received since the tool was allowed — not a
+  timer, and not the lease having been sent. **A device that omits `relay_on`
+  can never confirm, so nothing behind it will ever start**; a plug that is
+  the first stage of anything must report its relay state.
+- **`start_delay_ms`** — after that confirmation (or, for the first stage,
+  after the tool is allowed), the coordinator waits this long more: spin-up.
+- **`run_on_ms`** — after *any* denial, a binding that was leased keeps its
+  grant this long before the `grant: false` arrives.
+
+Two consequences for firmware:
+
+1. **While your turn has not come, you receive *no lease at all* — not a
+   refusal.** A `grant: false` would end a reader-and-relay box's session, and
+   "not yet" is not "no". So a device that waits for a first lease must wait
+   at least the whole start sequence; a box that gives up after five seconds
+   will give up on a machine behind a three-second fan spin-up and a
+   confirmation. Size that timeout from the wiring, not from a default.
+2. **Run-on is a decision, not a reprieve from silence.** It applies when the
+   coordinator *decides* to deny — a stop, a trip, a sensor gone quiet — and
+   says so. If the coordinator itself dies, renewals stop and every lease
+   lapses at its TTL, run-on or not. Your watchdog is still the mechanism.
 
 ### `on_disconnect`
 

@@ -390,7 +390,22 @@ async fn boot_reset(
             tracing::error!("Failed to write audit event: {}", e);
         }
 
-        broadcast_toolguard_state(&state).await;
+        // Answer first, fan out after. The broadcast rebuilds and publishes the
+        // allow-list for EVERY registered device -- seconds per device on a
+        // site with many -- and this is the first call an edge makes at boot,
+        // awaited inline before it connects to its local broker or fetches its
+        // wiring. Awaiting the fan-out here held an edge's whole startup for as
+        // long as the site had devices; the e2e saw it as an edge that never
+        // synced its wiring within a minute. The reset itself is done and
+        // committed above; the broadcast is a side effect the caller does not
+        // need to wait for.
+        // Tracked, not detached: the stop path waits for it (#102), so a
+        // shutdown mid-broadcast does not leave half the devices on a stale
+        // allow-list.
+        let fan_out = state.clone();
+        state.shutdown.spawn(async move {
+            broadcast_toolguard_state(&fan_out).await;
+        });
     }
 
     Ok(Json(ToolGuardResponse::ok_with_message(format!(
