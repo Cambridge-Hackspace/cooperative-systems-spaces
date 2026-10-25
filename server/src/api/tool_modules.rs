@@ -115,9 +115,21 @@ async fn create_module(
     let role = one_of(&req.role, &binding_role::ALL, "role")?;
     let on_disc = match req.on_disconnect.as_deref() {
         Some(v) => one_of(v, &on_disconnect::ALL, "on_disconnect")?,
-        // Deny-biased: an unstated policy is the fail-safe one, matching the
-        // column default, so a binding created without one cannot hold a tool on
-        // through a link loss.
+        // Deny-biased for anything that can hold a tool on: an unstated policy
+        // is the fail-safe one, matching the column default, so a plug or a
+        // sensor bound without one cannot keep a tool energized through a link
+        // loss -- a silent sensor is an unobserved condition, and #83 treats
+        // that as a hazard.
+        //
+        // A READER is the exception (#170). It holds nothing on: a dead reader
+        // cannot produce a swipe, so there is no hazard for `fail_off` to
+        // protect against, and a reader dying mid-job is no reason to stop the
+        // machine. `fail_off` on it only ever did one thing -- with no power to
+        // report it could never be heard from, so it denied its own tool a
+        // lease forever while the member watched ACCESS GRANTED beside a dead
+        // machine. Its silence is still RECORDED (#84 reads `last_seen_at`);
+        // it just does not withhold the tool.
+        None if role == binding_role::READER => on_disconnect::IGNORE.to_string(),
         None => on_disconnect::FAIL_OFF.to_string(),
     };
     if req.name.trim().is_empty() {

@@ -401,10 +401,17 @@ sat idle".
 Do not send a duration in `temperature`. It is recorded and never billed, and
 anything else there is a lie in the audit record.
 
-If you switch power, also publish `toolguard/request/power` periodically, and
-**always include `device_id`**: a module the coordinator has not heard from is a
-module it will not grant a lease to. A report carrying only `tool_id` and
-`device_id` is a valid heartbeat.
+**Whatever you are, publish `toolguard/request/alive` `{ "device_id" }` on a
+timer** — every second or two, well inside the coordinator's 5 s silence
+threshold. It is the liveness contract: a device the coordinator has not heard
+from is a device whose `fail_off` bindings deny their tool a lease, and a device
+the server has not heard from is one its silence detector can never see go
+quiet. A reader and a sensor have no power to report, so this is the only way
+they can be heard from at all.
+
+If you switch power, also publish `toolguard/request/power` periodically with
+your `device_id` — that is your telemetry, and it counts as being alive too,
+for plugs that predate the pulse.
 
 ### Step 7 — doors, if that is what you are building
 
@@ -886,6 +893,42 @@ that get billed and compared against limits.
 401, not 422. A missing `tool_id` on an authenticated request is a 400, and an
 unknown one is a 404. `message` is `Power reported`.
 
+### `POST /api/toolguard/alive`
+
+JSON body: optional `device_id`. Absent means *you*.
+
+Says a device is alive, and nothing else. Writes that device's `last_seen_at`,
+which is what the server's silence detector and the admin device list read.
+`message` is `Alive`.
+
+**Every device sends this, whatever its role.** It is the liveness contract.
+Before it, the only thing that counted as alive was a power report, and the
+server gates the relay of those on the `power` binding — so a reader or a
+sensor behind an edge could never be credited at the server at all, and at the
+edge only by sending a power report it had no business sending. With the
+default `on_disconnect = fail_off`, a reader bound to a tool therefore denied
+that tool its lease forever: the member saw ACCESS GRANTED beside a machine that
+never came on.
+
+Who may send it:
+
+- a device, for itself — any registered token;
+- a coordinator, for any device bound to a tool it coordinates, in **any**
+  role. This is the one difference from the power-report relay, which demands
+  the subject hold `power`. Liveness is not a claim about a circuit.
+
+| `message` | meaning |
+|---|---|
+| `This device does not coordinate that device` | you named a `device_id` that is not you, and you are not bound as `edge` on any tool it is bound to |
+| `Device not found` | the named device was deleted between being bound and pulsing |
+
+A module behind an edge publishes the [MQTT twin](#the-local-broker-edge--module),
+`toolguard/request/alive` `{ "device_id" }`, every second or two, and the edge
+forwards it here. There is no acknowledgement on the local broker: the lease is
+the feedback, and an ack per pulse would double the traffic to say nothing.
+
+A power report still counts as being alive, for plugs that predate this.
+
 ### `GET /api/toolguard/power-state`
 
 No parameters; a device token is the credential. The lockout and
@@ -1155,6 +1198,7 @@ without the other.
 | `toolguard/request/tool-off` | `{ "card", "tool_id" }` |
 | `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "active_seconds"?, "temperature"? }` |
 | `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
+| `toolguard/request/alive` | `{ "device_id" }` |
 | `door/request/scan` | `{ "door_id", "card_id" }` |
 | `kiosk/refresh` | *(none)* — ask the edge to re-push `toolguard/state` |
 
@@ -1198,13 +1242,21 @@ report relay state, because absent means "cannot report" and `false` means "I
 looked and it is off". The detector needs to tell those apart.
 
 **Send `device_id` on every power report.** It is optional so that older
-firmware keeps parsing, but it is how the coordinator knows you are alive, and
-a module it has not heard from is a module it will not grant a lease to. A plug
-whose binding is `fail_off` — the default, and the right default — and which
-never sends `device_id` is refused permanently, and from the outside that looks
-identical to a tool that is simply switched off. Report it even when you have
-nothing else to say: a power report carrying only `tool_id` and `device_id` is
-a valid heartbeat.
+firmware keeps parsing, but it is how the coordinator knows a plug is alive, and
+a plug it has not heard from is a plug it will not grant a lease to. A plug
+whose binding is `fail_off` — the default for a plug, and the right one — and
+which never sends `device_id` is refused permanently, and from the outside that
+looks identical to a tool that is simply switched off.
+
+**The pulse is the general form of the same thing.** `toolguard/request/alive`
+`{ "device_id" }`, from every device whatever its role. A power report counts as
+alive too, but a reader or a sensor has no power to report, and the server will
+not even accept a relayed power report for a device that holds no `power`
+binding — so for them the pulse is the only way to be heard from. The server's
+binding defaults follow the same reasoning: a `reader` binding defaults to
+`on_disconnect = ignore`, because a dead reader cannot start anything and is no
+reason to stop a running machine; `power` and `sensor` default to `fail_off`,
+because a silent sensor is an unobserved condition.
 
 **`toolguard/response/power` is an acknowledgement, not an instruction.** It says
 your report was received. It is not permission to remain energized, and firmware

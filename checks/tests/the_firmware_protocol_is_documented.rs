@@ -1256,6 +1256,11 @@ const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
         "door/request/scan",
         Payload::Struct(EDGE_DOORS, "LocalScanRequest"),
     ),
+    // #170: the liveness pulse every device sends, whatever its role.
+    (
+        "toolguard/request/alive",
+        Payload::Struct(WIRE, "LocalAliveRequest"),
+    ),
 ];
 
 /// The body of one function, by text, from its declaration to the `}` at its

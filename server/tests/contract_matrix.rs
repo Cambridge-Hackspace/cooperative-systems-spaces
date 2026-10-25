@@ -342,11 +342,11 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     let jwt_routes =
         ROUTES.iter().filter(|r| r.is_guarded()).count() - device_routes - cmi5_session_routes;
 
-    // 10: the six pre-existing controller endpoints, the #43 power-report ingest,
-    // the two #48 edge power endpoints (power-state poll + power-trip), and the
-    // #83 module-state poll -- all InlineAuth (a device token or a per-tool/global
-    // API key).
-    assert_eq!(device_routes, 10, "device-authenticated routes");
+    // 11: the six pre-existing controller endpoints, the #43 power-report ingest,
+    // the two #48 edge power endpoints (power-state poll + power-trip), the
+    // #83 module-state poll, and the #170 alive pulse -- all InlineAuth (a
+    // device token or a per-tool/global API key).
+    assert_eq!(device_routes, 11, "device-authenticated routes");
     // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
     // (GET/PUT/DELETE), all authenticated by the session credential. Like the
     // device surface, only their shape checks are reachable offline; their
@@ -387,14 +387,14 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // MFA view and two removals (#151, Admin).
     assert_eq!(jwt_routes, 219, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 219 * 7 + (10 + 6) * 3);
+    assert_eq!(asserted_pairs(), 219 * 7 + (11 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
     // on its contents by looking it up.
     let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
     assert_eq!(
-        deferred, 64,
+        deferred, 68,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

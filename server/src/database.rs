@@ -3245,6 +3245,45 @@ impl DatabaseManager {
         .map_err(DatabaseError::Diesel)
     }
 
+    /// Whether `edge_id` coordinates a tool that `subject_id` is bound to, in
+    /// any role (#170).
+    ///
+    /// The relay rule for an alive pulse. It deliberately asks for ANY role on
+    /// the subject's side: liveness is not a claim about a circuit, so the
+    /// reason `device_is_bound_to_tool_in_role` narrows the power relay to
+    /// `power` does not apply -- and applying it anyway is what left a reader's
+    /// silence unsatisfiable at the server.
+    pub fn device_coordinates_device(
+        &self,
+        edge_id: uuid::Uuid,
+        subject_id: uuid::Uuid,
+    ) -> Result<bool, DatabaseError> {
+        use crate::schema::device_bindings;
+        use diesel::dsl::exists;
+        use diesel::select;
+
+        let mut conn = self.get_connection()?;
+        // Two statements rather than one nested subselect: diesel will not
+        // nest a `device_bindings` subquery inside an `exists` over
+        // `device_bindings` without an alias, and the repo has none.
+        let coordinated = device_bindings::table
+            .filter(device_bindings::device_id.eq(edge_id))
+            .filter(device_bindings::role.eq(crate::models::binding_role::EDGE))
+            .select(device_bindings::resource_id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        if coordinated.is_empty() {
+            return Ok(false);
+        }
+        select(exists(
+            device_bindings::table
+                .filter(device_bindings::device_id.eq(subject_id))
+                .filter(device_bindings::resource_id.eq_any(coordinated)),
+        ))
+        .get_result::<bool>(&mut conn)
+        .map_err(DatabaseError::Diesel)
+    }
+
     /// The `kind` of a resource ("door" or "tool"), or `None` if there is no such
     /// resource. #101: a binding may name any resource, so the endpoint needs to
     /// know one exists without caring which subtype it is.

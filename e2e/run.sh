@@ -2048,9 +2048,10 @@ stage_lease() {
   # Written as plain files by the setup driver rather than parsed out of its
   # JSON here: a shell JSON reader is a dependency and a bug surface, and these
   # are two opaque strings.
-  local dev tool
+  local dev tool sensor
   dev="$(cat "${STACK_DIR}/lease-device-id")"
   tool="$(cat "${STACK_DIR}/lease-tool-id")"
+  sensor="$(cat "${STACK_DIR}/lease-sensor-id")"
 
   # Window 1: the module has reported nothing, so the lease must be refused.
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1.txt"
@@ -2059,6 +2060,18 @@ stage_lease() {
   # it a fail_off binding looks permanently silent and is refused forever.
   mqtt_pub "toolguard/request/power" \
     "{\"tool_id\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.0}" || true
+
+  # Window 1b (#170): the plug has reported, and the answer must STILL be no,
+  # because the fail_off SENSOR on the same tool has not. This is the
+  # discriminating step: it shows the sensor's silence is what denies, rather
+  # than the plug's. (The READER on the tool never reports at all, and its
+  # default no longer withholds the lease -- window 2 is the proof of that.)
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1b.txt"
+
+  # The pulse. A sensor cannot send a power report -- it has no power -- so this
+  # is the only way it can be heard from, and the only way a fail_off binding on
+  # a non-power device can ever be satisfied.
+  mqtt_pub "toolguard/request/alive" "{\"device_id\":\"${sensor}\"}" || true
 
   # Window 2: same coordinator, same rules, and the answer has to change.
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2.txt"

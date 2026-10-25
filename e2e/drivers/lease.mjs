@@ -24,6 +24,19 @@
 // "the lease never worked at all", and the failure would present several
 // inferences away from its cause.
 //
+// #170 added a window 1b between 1 and 2, and two more bindings to the tool.
+// The plug's power report used to be the only thing that could satisfy
+// `fail_off`, and a reader or a sensor -- which has no power to report -- could
+// never satisfy it, so the default denied the tool its lease forever. Now:
+//
+//   1b. after the PLUG has reported but the fail_off SENSOR has not -- leases
+//       still refuse, and the reason names the sensor. This is the
+//       discriminating step: it is what shows the sensor's silence is what
+//       denies, rather than the plug's.
+//   2.  (as before) after the sensor's alive pulse -- grants. The READER on
+//       the same tool never pulses at all, so this grant is also the proof
+//       that a reader's default no longer withholds the tool.
+//
 // What this does NOT prove: that a physical relay opens. Nothing here switches
 // hardware. It proves the decision leaves the coordinator correctly addressed
 // and correctly timed; what a module does with it is firmware's half of the
@@ -170,10 +183,54 @@ async function setup() {
     'the whole stage is about the policy that must not be granted while silent'
   )
 
+  // #170: two more roles on the same tool, each taking the server's own default.
+  //
+  // A READER has no power to report, so under the old rules it could never be
+  // heard from -- and with the old default of `fail_off` it denied this tool its
+  // lease forever while the member saw ACCESS GRANTED. Its default is now
+  // `ignore`: a dead reader cannot produce a swipe, so there is nothing for
+  // `fail_off` to protect, and its silence must not withhold the tool. It is
+  // bound here and NEVER pulses, so window 2's grant is also the proof of that.
+  //
+  // A SENSOR keeps `fail_off`: a silent safety sensor is an unobserved
+  // condition. It cannot send a power report either, so the alive pulse is the
+  // only way it can satisfy that -- which windows 1b and 2 prove between them.
+  const reader = await claim(`lease-reader-${tag}`, 'reader', '02:00:00:00:83:04')
+  ok('lease/reader-registered', !!reader.id, `register -> ${reader.status}`)
+  const sensor = await claim(`lease-sensor-${tag}`, 'sensor', '02:00:00:00:83:05')
+  ok('lease/sensor-registered', !!sensor.id, `register -> ${sensor.status}`)
+
+  const readerBinding = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: { resource_id: toolId, device_id: reader.id, role: 'reader', name: `lease reader ${tag}` },
+  })
+  assertEq('lease/reader-bound', 201, readerBinding.status)
+  assertEq(
+    'lease/a-reader-binding-defaults-to-ignore',
+    'ignore',
+    readerBinding.json?.data?.on_disconnect,
+    '#170: a reader has no power to report, so a fail_off default could never be satisfied'
+  )
+  const sensorBinding = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: { resource_id: toolId, device_id: sensor.id, role: 'sensor', name: `lease sensor ${tag}` },
+  })
+  assertEq('lease/sensor-bound', 201, sensorBinding.status)
+  // The negative beside the positive: the reader default must not have widened
+  // to every non-power role. A sensor's silence is a hazard.
+  assertEq(
+    'lease/a-sensor-binding-still-defaults-to-fail-off',
+    'fail_off',
+    sensorBinding.json?.data?.on_disconnect,
+    'a silent safety sensor is an unobserved condition; the reader default must not have widened to it'
+  )
+
   const fixture = {
     tag,
     toolId,
     externalId: `lease-${tag}`,
+    readerId: reader.id,
+    sensorId: sensor.id,
     // The device the lease is ADDRESSED to -- the plug, not the coordinator.
     deviceId: plug.id,
     edgeId: edge.id,
@@ -192,11 +249,28 @@ async function setup() {
     `the plug must start with last_seen_at unset, got ${JSON.stringify(freshPlug?.last_seen_at)}`
   )
 
+  // #170 preconditions, same reasoning: the assert phase claims the sensor's
+  // pulse reached the server and the reader's absence of one did not. Neither
+  // claim means anything unless both start at nothing.
+  for (const [label, id] of [
+    ['sensor', sensor.id],
+    ['reader', reader.id],
+  ]) {
+    const fresh = await serverLiveness(admin.token, id)
+    ok(
+      `lease/${label}-starts-with-no-liveness`,
+      fresh !== null && !fresh.last_seen_at,
+      `the ${label} must start with last_seen_at unset, got ${JSON.stringify(fresh?.last_seen_at)}`
+    )
+  }
+
   fs.writeFileSync(FIXTURE, JSON.stringify(fixture, null, 2))
   // Two opaque strings the shell needs, as plain files, so the stage does not
   // have to parse JSON to publish one MQTT message.
   fs.writeFileSync(path.join(STACK_DIR, 'lease-device-id'), plug.id)
   fs.writeFileSync(path.join(STACK_DIR, 'lease-tool-id'), `lease-${tag}`)
+  // The sensor's id, for the stage to publish its alive pulse (#170).
+  fs.writeFileSync(path.join(STACK_DIR, 'lease-sensor-id'), sensor.id)
 
   // The edge's own configuration, written here because this is where the
   // credentials are. `Approved` is the registered state; websocket transport
@@ -255,9 +329,13 @@ async function assertWindows() {
   const before = captured('lease-window-1.txt')
   const after = captured('lease-window-2.txt')
   const stopped = captured('lease-window-3.txt')
+  const midway = captured('lease-window-1b.txt')
 
-  ok('lease/windows-were-captured', before !== null && after !== null && stopped !== null,
-    'one or more capture files is missing; the stage did not run to completion')
+  ok(
+    'lease/windows-were-captured',
+    before !== null && midway !== null && after !== null && stopped !== null,
+    'one or more capture files is missing; the stage did not run to completion'
+  )
 
   // ── #161: the SERVER's view of the module, the other side of the same event ─
   //
@@ -308,6 +386,57 @@ async function assertWindows() {
     'lease/liveness-landed-on-the-module-not-the-edge',
     fixture.deviceId !== fixture.edgeId,
     'the fixture must use two distinct devices or this assertion is vacuous'
+  )
+
+  // ── #170: the pulse reaches the SERVER, for a device with no power binding ─
+  //
+  // The windows prove the edge believed the sensor was alive. This proves the
+  // server was told too, which was impossible before: the edge could only
+  // forward a POWER report, and the server refuses a relayed power report for
+  // any device not bound as `power`. The sensor is bound as `sensor`, so
+  // `last_seen_at` here can only have come through `/api/toolguard/alive`.
+  const sensorNow = await serverLiveness(admin.token, fixture.sensorId)
+  ok(
+    'lease/an-alive-pulse-gives-a-non-power-device-liveness',
+    !!sensorNow?.last_seen_at,
+    `the server must have last_seen_at for the sensor ${fixture.sensorId} after its ` +
+      `alive pulse was relayed; got ${JSON.stringify(sensorNow?.last_seen_at)}. ` +
+      `A sensor behind an edge is otherwise invisible to the silence detector.`
+  )
+  // And the reader, which never pulsed, must NOT have been credited -- or the
+  // grant in window 2 could be read as the reader having reported rather than
+  // as its default no longer withholding the tool.
+  const readerNow = await serverLiveness(admin.token, fixture.readerId)
+  ok(
+    'lease/a-device-that-never-pulsed-has-no-liveness',
+    readerNow !== null && !readerNow.last_seen_at,
+    `the reader never pulsed and must still have last_seen_at unset, got ` +
+      `${JSON.stringify(readerNow?.last_seen_at)}; something credited it anyway`
+  )
+  // Vouching is a coordinator's privilege. `stranger` holds a valid token and is
+  // bound to nothing, so if a token alone could report another device alive, a
+  // dead sensor could be kept "alive" by anything on the network.
+  const refusedAlive = await POST('/api/toolguard/alive', {
+    token: fixture.strangerToken,
+    body: { device_id: fixture.sensorId },
+  })
+  ok(
+    'lease/an-unbound-device-cannot-vouch-for-another',
+    refusedAlive.status === 401 || refusedAlive.status === 403,
+    `a device bound to nothing must not report another device alive; got ` +
+      `${refusedAlive.status} ${refusedAlive.text.slice(0, 140)}`
+  )
+  // But any registered device may say it, itself, is alive -- that is the whole
+  // point of the pulse, and it needs no binding to express.
+  const selfAlive = await POST('/api/toolguard/alive', {
+    token: fixture.strangerToken,
+    body: {},
+  })
+  assertEq(
+    'lease/any-registered-device-may-report-itself-alive',
+    200,
+    selfAlive.status,
+    `a registered device reporting itself alive was refused: ${selfAlive.text.slice(0, 140)}`
   )
 
   // ── window 1: it refuses, and says so repeatedly ──────────────────────────
@@ -362,6 +491,36 @@ async function assertWindows() {
     'lease/refusal-explains-itself',
     typeof refusals[0]?.reason === 'string' && refusals[0].reason.length > 0,
     'a refusal should carry a reason for the log, even though firmware must not branch on it'
+  )
+
+  // ── window 1b (#170): the plug has reported; the sensor has not ───────────
+  //
+  // The discriminating step. If this window GRANTED, the sensor's silence would
+  // not be what denies, and window 2's grant would prove nothing about the
+  // pulse. It must refuse, and it must say the sensor is why.
+  const midRefusals = mine(midway)
+  ok(
+    'lease/leases-still-arrive-with-the-plug-alive-and-the-sensor-silent',
+    midRefusals.length >= 1,
+    `no lease addressed to ${fixture.deviceId} in window 1b (saw ${(midway ?? []).length} in total)`
+  )
+  assertEq(
+    'lease/a-silent-fail-off-sensor-still-denies-the-tool',
+    false,
+    midRefusals[midRefusals.length - 1]?.grant,
+    'the plug reported but the fail_off sensor had not; a silent safety sensor is an ' +
+      'unobserved condition and must withhold the lease'
+  )
+  ok(
+    'lease/the-refusal-names-the-silent-sensor',
+    midRefusals.length > 0 &&
+      midRefusals.every(
+        (r) => typeof r.reason === 'string' && r.reason.includes('ModuleOffline') && /sensor/.test(r.reason)
+      ),
+    `window 1b's refusals should cite ModuleOffline naming the sensor, got ` +
+      `${JSON.stringify(midRefusals.map((r) => r.reason))}. If this names the plug, the ` +
+      `power report is not crediting it; if it names the reader, the reader default ` +
+      `has not taken effect.`
   )
 
   // ── window 2: one report is enough to change the answer ───────────────────
