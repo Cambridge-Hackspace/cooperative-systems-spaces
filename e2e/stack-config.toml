@@ -109,6 +109,11 @@ require_membership = true
 default_max_session_minutes = 120
 min_balance = "0"
 currency = "USD"
+# The abandoned-session sweep every 2s with no grace, so the toolbilling stage
+# can watch a one-minute-cap tool be swept while a ten-minute one is not (#171)
+# without backdating a row -- which the no-backdoors rule forbids.
+sweep_interval_secs = 2
+abandoned_grace_minutes = 0
 
 # Enabled and pointed at css-groupsio-sink so the groupsio stage exercises the
 # whole sync against a simulated Groups.io. api_key/webhook_secret are the fixture

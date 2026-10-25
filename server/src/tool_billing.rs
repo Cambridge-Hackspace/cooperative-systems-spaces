@@ -34,6 +34,19 @@ fn is_positive(v: &Option<BigDecimal>) -> bool {
     v.as_ref().is_some_and(|x| *x > zero())
 }
 
+/// When an open session started before this, the sweep calls it abandoned:
+/// the tool's own cap plus `grace_minutes` for a stop still in flight (#171).
+///
+/// A cap below a minute is treated as one, so a misconfigured tool is swept
+/// after a minute rather than at once.
+pub fn abandoned_cutoff(
+    max_minutes: i32,
+    grace_minutes: i64,
+    now: chrono::DateTime<Utc>,
+) -> chrono::DateTime<Utc> {
+    now - chrono::Duration::minutes(i64::from(max_minutes.max(1)) + grace_minutes.max(0))
+}
+
 /// Whether a tool is metered: it has a flat fee or a per-minute rate set.
 pub fn is_metered(flat_fee: &Option<BigDecimal>, rate_per_min: &Option<BigDecimal>) -> bool {
     is_positive(flat_fee) || is_positive(rate_per_min)
@@ -527,20 +540,27 @@ impl ToolBillingService {
         if !self.enabled() {
             return Ok(0);
         }
-        let default_max = self
+        let grace = self
             .config
             .get_config()
             .tool_billing
-            .default_max_session_minutes
-            .max(1) as i64;
-        // A generous cutoff: the global default max plus an hour of grace.
-        let cutoff = Utc::now() - chrono::Duration::minutes(default_max + 60);
-        let stale = self.db.open_tool_sessions_older_than(cutoff)?;
+            .abandoned_grace_minutes;
+        let now = Utc::now();
+        // #171: each session is judged against ITS tool's cap, which the query
+        // cannot know. It is pre-filtered with the tightest cutoff any tool can
+        // have -- a one-minute cap -- so a session younger than that is never
+        // loaded, and everything older is decided per tool below.
+        let candidates = self
+            .db
+            .open_tool_sessions_older_than(abandoned_cutoff(1, grace, now))?;
         let mut closed = 0;
-        for session in stale {
+        for session in candidates {
             let Some(tool) = self.db.get_tool_by_id(session.tool_id)? else {
                 continue;
             };
+            if session.started_at >= abandoned_cutoff(self.max_minutes(&tool), grace, now) {
+                continue;
+            }
             match self.settle_open_session_for_tool(&tool, "abandoned") {
                 Ok(Some(_)) => closed += 1,
                 Ok(None) => {}
@@ -574,6 +594,32 @@ mod tests {
 
     fn bd(s: &str) -> BigDecimal {
         BigDecimal::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn the_sweep_cutoff_is_the_tools_own_cap_plus_the_grace() {
+        // #171: a 600-minute tool at 181 minutes is inside its cutoff while a
+        // 120-minute one is past it. The sweep used to judge both at 180.
+        let now = Utc::now();
+        let started_181_min_ago = now - chrono::Duration::minutes(181);
+        assert!(started_181_min_ago >= abandoned_cutoff(600, 60, now));
+        assert!(started_181_min_ago < abandoned_cutoff(120, 60, now));
+        assert_eq!(
+            abandoned_cutoff(600, 60, now),
+            now - chrono::Duration::minutes(660)
+        );
+    }
+
+    #[test]
+    fn a_cap_below_a_minute_is_swept_after_a_minute_not_at_once() {
+        let now = Utc::now();
+        assert_eq!(
+            abandoned_cutoff(0, 0, now),
+            now - chrono::Duration::minutes(1)
+        );
+        assert_eq!(abandoned_cutoff(-5, 0, now), abandoned_cutoff(1, 0, now));
+        // And a negative grace is no grace, not a head start.
+        assert_eq!(abandoned_cutoff(1, -30, now), abandoned_cutoff(1, 0, now));
     }
 
     #[test]
