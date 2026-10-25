@@ -348,8 +348,178 @@ pub struct LocalAliveRequest {
 /// before #83 and #84, with nothing to say so. One vocabulary, one place, and
 /// `checks/tests/the_firmware_protocol_is_documented.rs` holds `FIRMWARE.md` to
 /// it in both directions.
+/// `resource/request/scan`: a card presented to a resource (#182).
+///
+/// **One request for every kind of resource.** A door, a tool and a room are
+/// the same thing on this wire: something a badge is presented to, whose
+/// bindings decide what follows a yes. `resource` is the resource's UUID or its
+/// short external id, resolved the way a tool id always has been. The old
+/// `toolguard/request/tool-on { card, tool_id }` and
+/// `door/request/scan { door_id, card_id }` are accepted as aliases for one
+/// release and then go.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalScan {
+    pub resource: String,
+    pub card: String,
+}
+
+/// `resource/request/stop`: end the session on a resource (#182). `card` is
+/// optional -- a stop is a safety act and needs no badge; a device that read
+/// none names the resource alone. Alias: `toolguard/request/tool-off`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalStop {
+    pub resource: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<String>,
+}
+
+/// `resource/request/usage`: usage to bill or record (#182). The same two
+/// durations as [`LocalToolLogRequest`], which is its alias on
+/// `toolguard/request/tool-log`; `card` optional for the same reason (#174).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LocalUsage {
+    pub resource: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+}
+
+/// `resource/request/power`: a power module's reading (#182). The same fields
+/// as its alias `toolguard/request/power`, naming the resource. Decimal fields
+/// are numbers here and strings on the HTTP relay; `relay_on` absent means
+/// "cannot report", which is not `false` -- and since #179 a `true` is what
+/// confirms, for start sequencing, that this device actually energized.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LocalPower {
+    pub resource: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_now: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_now: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_voltage: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amperage_limit: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_tripped: Option<bool>,
+}
+
+/// What a device holding a `strike` binding may do on a yes: release the latch
+/// for `pulse_ms` (#182). Carried on [`LocalScanReply`] only when the resource
+/// has a strike and the answer is yes; a reader with no latch ignores it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalStrike {
+    pub pulse_ms: i32,
+}
+
+/// `resource/response/scan`: the answer to a [`LocalScan`] (#182).
+///
+/// `resource` echoes the request, so a device on a broker shared with others
+/// can tell its own verdict from a neighbour's. `authorized` exactly `true` is
+/// the only yes. `reason` is for humans. `strike` is present only on a yes for
+/// a resource with a latch: the pulse the device may perform. This one reply
+/// replaces both `toolguard/response/tool-on` and `door/response/unlock`,
+/// which the edge keeps publishing alongside it for one release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalScanReply {
+    pub resource: String,
+    pub authorized: bool,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<LocalStrike>,
+}
+
+impl LocalScanReply {
+    /// The resource-shaped twin of a tool-on reply.
+    pub fn from_tool(reply: &LocalToolOnResponse) -> Self {
+        LocalScanReply {
+            resource: reply.tool_id.clone(),
+            authorized: reply.authorized,
+            reason: reply.reason.clone(),
+            strike: None,
+        }
+    }
+
+    /// The resource-shaped twin of a door unlock: a yes carries the pulse.
+    pub fn from_door(door_id: &str, granted: bool, duration_ms: i32, reason: Option<&str>) -> Self {
+        LocalScanReply {
+            resource: door_id.to_string(),
+            authorized: granted,
+            reason: reason.unwrap_or_default().to_string(),
+            strike: granted.then_some(LocalStrike {
+                pulse_ms: duration_ms,
+            }),
+        }
+    }
+}
+
+/// `resource/lease`: one [`ToolLeasePayload`] with the resource named as such
+/// (#182). Same meaning, same timing, same rules; the edge publishes both for
+/// one release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceLeasePayload {
+    pub resource: String,
+    pub device_id: String,
+    pub grant: bool,
+    pub ttl_ms: i64,
+    pub reason: Option<String>,
+}
+
+impl From<&ToolLeasePayload> for ResourceLeasePayload {
+    fn from(l: &ToolLeasePayload) -> Self {
+        ResourceLeasePayload {
+            resource: l.tool_id.clone(),
+            device_id: l.device_id.clone(),
+            grant: l.grant,
+            ttl_ms: l.ttl_ms,
+            reason: l.reason.clone(),
+        }
+    }
+}
+
 pub mod local {
-    // ── module → edge (the edge subscribes) ──────────────────────────────
+    // ── the wire, resource-shaped (#182) ──────────────────────────────────
+    //
+    // A door, a tool and a room are the same thing here: a resource a badge is
+    // presented to. One scan, one stop, one usage report, one power report,
+    // one lease -- named by `resource`. The `toolguard/*` and `door/*` topics
+    // below are ALIASES for one release: still subscribed, still published,
+    // and removed in the next minor.
+
+    /// A card presented to a resource: [`super::LocalScan`], `{ resource, card }`.
+    pub const SCAN_REQUEST: &str = "resource/request/scan";
+    /// End the session on a resource: [`super::LocalStop`], `{ resource, card? }`.
+    pub const STOP_REQUEST: &str = "resource/request/stop";
+    /// Usage to bill or record: [`super::LocalUsage`].
+    pub const USAGE_REQUEST: &str = "resource/request/usage";
+    /// A power module's reading: [`super::LocalPower`].
+    pub const POWER_REPORT_REQUEST: &str = "resource/request/power";
+    /// A device saying it is alive: [`super::LocalAliveRequest`], `{ device_id }`.
+    pub const RESOURCE_ALIVE_REQUEST: &str = "resource/request/alive";
+    /// The answer to [`SCAN_REQUEST`]: [`super::LocalScanReply`].
+    pub const SCAN_RESPONSE: &str = "resource/response/scan";
+    /// Ack for [`STOP_REQUEST`]: `{ "ok": true }`, receipt and nothing more.
+    pub const STOP_RESPONSE: &str = "resource/response/stop";
+    /// Ack for [`USAGE_REQUEST`]: `{ "ok": true }`.
+    pub const USAGE_RESPONSE: &str = "resource/response/usage";
+    /// Ack for [`POWER_REPORT_REQUEST`]: `{ "ok": true }` -- never permission.
+    pub const POWER_REPORT_RESPONSE: &str = "resource/response/power";
+    /// The cached allow-list, pushed whenever it changes.
+    pub const RESOURCE_STATE: &str = "resource/state";
+    /// One [`super::ResourceLeasePayload`] per message; see [`TOOL_LEASE`] for
+    /// the rules, which are unchanged.
+    pub const RESOURCE_LEASE: &str = "resource/lease";
+
+    // ── module → edge (the edge subscribes) -- ALIASES, one release ────────
 
     // `api_key?` used to be documented on all three tool topics. Nothing has
     // ever read it here, and the HTTP form has been refused with 401 since #101
@@ -377,7 +547,7 @@ pub mod local {
     /// `{ device_id }`. Every role sends it; see the type for why (#170).
     pub const ALIVE_REQUEST: &str = "toolguard/request/alive";
 
-    // ── edge → module (the edge publishes) ───────────────────────────────
+    // ── edge → module (the edge publishes) -- ALIASES, one release ─────────
 
     /// Answer to [`TOOL_ON_REQUEST`]: one [`super::LocalToolOnResponse`],
     /// `{ tool_id, authorized, reason }`.
@@ -423,6 +593,61 @@ pub mod local {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ── the resource-shaped wire (#182) ───────────────────────────────────
+
+    #[test]
+    fn a_scan_reply_from_a_tool_carries_no_strike_and_omits_the_field() {
+        let reply = LocalScanReply::from_tool(&LocalToolOnResponse {
+            tool_id: "laser-01".into(),
+            authorized: true,
+            reason: "authorized".into(),
+        });
+        let v = serde_json::to_value(&reply).unwrap();
+        assert_eq!(v["resource"], "laser-01");
+        assert_eq!(v["authorized"], true);
+        assert!(v.get("strike").is_none(), "a tool reply grew a strike: {v}");
+    }
+
+    #[test]
+    fn a_scan_reply_from_a_door_carries_the_pulse_only_on_a_yes() {
+        let yes = LocalScanReply::from_door("d-1", true, 4000, None);
+        assert_eq!(yes.strike, Some(LocalStrike { pulse_ms: 4000 }));
+        let no = LocalScanReply::from_door("d-1", false, 0, Some("denied"));
+        assert_eq!(no.strike, None, "a refusal carried a pulse");
+        assert_eq!(no.reason, "denied");
+        assert!(!no.authorized);
+    }
+
+    #[test]
+    fn a_stop_with_no_card_serializes_without_the_key() {
+        let v = serde_json::to_value(LocalStop {
+            resource: "r".into(),
+            card: None,
+        })
+        .unwrap();
+        assert!(v.get("card").is_none(), "{v}");
+        let parsed: LocalStop = serde_json::from_str(r#"{"resource":"r"}"#).unwrap();
+        assert_eq!(parsed.card, None);
+    }
+
+    #[test]
+    fn a_resource_lease_is_the_tool_lease_renamed_and_nothing_else() {
+        let l = ToolLeasePayload {
+            tool_id: "t".into(),
+            device_id: "d".into(),
+            grant: true,
+            ttl_ms: 3000,
+            reason: None,
+        };
+        let r = ResourceLeasePayload::from(&l);
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["resource"], "t");
+        assert_eq!(v["device_id"], "d");
+        assert_eq!(v["grant"], true);
+        assert_eq!(v["ttl_ms"], 3000);
+        assert!(v.get("tool_id").is_none());
+    }
 
     #[test]
     fn round_trip() {

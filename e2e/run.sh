@@ -2077,8 +2077,10 @@ stage_lease() {
 
   # The pulse. A sensor cannot send a power report -- it has no power -- so this
   # is the only way it can be heard from, and the only way a fail_off binding on
-  # a non-power device can ever be satisfied.
-  mqtt_pub "toolguard/request/alive" "{\"device_id\":\"${sensor}\"}" || true
+  # a non-power device can ever be satisfied. On the resource-shaped topic
+  # (#182); the plug's power report above went on the alias, so both names are
+  # driven in this stage.
+  mqtt_pub "resource/request/alive" "{\"device_id\":\"${sensor}\"}" || true
 
   # Window 1c (#179): every module alive, every interlock satisfied, and NOBODY
   # signed on. The answer must still be no, with NotInUse.
@@ -2086,11 +2088,13 @@ stage_lease() {
 
   # The member signs on at the edge. The reply is captured so a session that
   # never opened is reported as that, not as a sequencing failure later.
-  mqtt_sub "toolguard/response/tool-on" 4 "${STACK_DIR}/lease-toolon-reply.txt" &
+  # A scan on the resource-shaped wire (#182), answered on the resource-shaped
+  # reply topic. The alias pair is proven by the #166 section below.
+  mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-toolon-reply.txt" &
   local lease_toolon_sub=$!
   sleep 1
-  mqtt_pub "toolguard/request/tool-on" \
-    "{\"card\":\"${card}\",\"tool_id\":\"${tool}\"}" || true
+  mqtt_pub "resource/request/scan" \
+    "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
   wait "${lease_toolon_sub}" || true
 
   # Window 2: same coordinator, same rules, and the answer has to change -- for
@@ -2100,17 +2104,22 @@ stage_lease() {
 
   # The first plug confirms: relay_on true. This, not the lease having been
   # sent, is what the second stage waits for.
-  mqtt_pub "toolguard/request/power" \
-    "{\"tool_id\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.3,\"relay_on\":true}" || true
+  mqtt_pub "resource/request/power" \
+    "{\"resource\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.3,\"relay_on\":true}" || true
 
   # Window 2a: inside the second stage's 3 s start delay -- still nothing.
   mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2a.txt"
-  # Window 2b: past it -- granted.
+  # Window 2b: past it -- granted. Captured on BOTH names (#182): the alias the
+  # windows have always watched, and the resource-shaped topic, in parallel.
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2b-resource.txt" &
+  local lease_resource_sub=$!
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2b.txt"
+  wait "${lease_resource_sub}" || true
 
-  # The member signs off. First stage refused at once; second runs on 3 s.
-  mqtt_pub "toolguard/request/tool-off" \
-    "{\"card\":\"${card}\",\"tool_id\":\"${tool}\"}" || true
+  # The member signs off, on the resource-shaped stop (#182). First stage
+  # refused at once; second runs on 3 s.
+  mqtt_pub "resource/request/stop" \
+    "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
   mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2c.txt"
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2d.txt"
 

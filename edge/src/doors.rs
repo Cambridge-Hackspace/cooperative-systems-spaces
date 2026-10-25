@@ -252,6 +252,18 @@ impl DoorsState {
     }
 
     /// Number of doors currently cached. Useful for `/status` / logging.
+    /// Whether this edge holds a compiled door by that id (#182): how a
+    /// resource-shaped scan tells a door from a tool while the two caches
+    /// still exist.
+    pub fn knows(&self, door_id: Uuid) -> bool {
+        self.inner
+            .read()
+            .unwrap()
+            .doors
+            .iter()
+            .any(|d| d.id == door_id)
+    }
+
     pub fn len(&self) -> usize {
         self.inner.read().map(|g| g.doors.len()).unwrap_or(0)
     }

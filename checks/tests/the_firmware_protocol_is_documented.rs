@@ -1197,6 +1197,21 @@ enum Payload {
 /// oracle must not do: the question is whether the *document* matches, and that
 /// needs an independent statement of which source answers for which row.
 const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
+    // The resource-shaped wire (#182). One reply for every kind of resource;
+    // the `toolguard/*` and `door/*` rows below are its aliases for one release.
+    (
+        "resource/response/scan",
+        Payload::Struct(WIRE, "LocalScanReply"),
+    ),
+    (
+        "resource/response/stop",
+        Payload::Handler("handle_tool_off"),
+    ),
+    (
+        "resource/response/usage",
+        Payload::Handler("handle_tool_log"),
+    ),
+    ("resource/response/power", Payload::Handler("handle_power")),
     // A struct since #166, where it was a `json!` literal in three places.
     // `Handler` here would now read a body that builds no literal at all --
     // which is an empty key set, and an empty key set compares equal to
@@ -1234,6 +1249,21 @@ const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
 /// the only topic under this heading with no payload, so the exclusion covers
 /// exactly it.
 const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
+    // The resource-shaped wire (#182); the rows after it are its aliases.
+    ("resource/request/scan", Payload::Struct(WIRE, "LocalScan")),
+    ("resource/request/stop", Payload::Struct(WIRE, "LocalStop")),
+    (
+        "resource/request/usage",
+        Payload::Struct(WIRE, "LocalUsage"),
+    ),
+    (
+        "resource/request/power",
+        Payload::Struct(WIRE, "LocalPower"),
+    ),
+    (
+        "resource/request/alive",
+        Payload::Struct(WIRE, "LocalAliveRequest"),
+    ),
     // Tool-on and tool-off used to share one struct. Tool-off has its own since
     // #179, because its card is optional -- a stop needs no badge -- and a
     // shared type could not say so. Tool-log has had its own since #169.
