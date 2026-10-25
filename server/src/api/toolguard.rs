@@ -182,7 +182,10 @@ pub struct PowerReportRequest {
 /// Request parameters for tool logging
 #[derive(Debug, Deserialize)]
 pub struct ToolLogRequest {
-    pub card: String,
+    /// The card that activated the session, from a device that read one. A
+    /// plug names none (#174); its report is attributed through the tool's
+    /// session instead.
+    pub card: Option<String>,
     pub tool_id: String,
     pub seconds: f32,
     /// Time the device's working signal was asserted, if it senses one (#169).
@@ -215,9 +218,10 @@ impl ToolLogRequestWire {
     }
 
     fn validated(self) -> Result<ToolLogRequest, ApiError> {
-        match (self.card, self.tool_id, self.seconds) {
-            (Some(card), Some(tool_id), Some(seconds)) => Ok(ToolLogRequest {
-                card,
+        match (self.tool_id, self.seconds) {
+            (Some(tool_id), Some(seconds)) => Ok(ToolLogRequest {
+                // Not required either (#174): a plug has no card to name.
+                card: self.card,
                 tool_id,
                 seconds,
                 // Not in the required tuple: a device that senses no working
@@ -227,7 +231,7 @@ impl ToolLogRequestWire {
                 temperature: self.temperature,
             }),
             _ => Err(ApiError::BadRequest(
-                "card, tool_id and seconds are required".to_string(),
+                "tool_id and seconds are required".to_string(),
             )),
         }
     }
@@ -402,7 +406,7 @@ async fn tool_on(
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
     let tool_id = parsed.as_ref().map(ToolRequestWire::borrowed).unwrap_or("");
-    let device_id = authorize_toolguard(&state, &headers, tool_id).await?;
+    let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
         .validated()?;
@@ -415,8 +419,10 @@ async fn tool_on(
     // #120 (#14): authentication already happened in authorize_toolguard above --
     // a device token bound to this tool. #101 slice 6 retired the API-key
     // alternatives, so there is one credential and one place that checks it.
-    // Metered tools face a stricter, narrower gate below (metered_device_ok): the
-    // `power` binding, not merely any binding.
+    // Metered tools had a narrower gate here until #174 -- the `power` binding
+    // -- which made a tool with a separate reader and plug unstartable by badge.
+    // Being bound to the tool is the authorization; the charge is attributed to
+    // the session, not to the device that opened it.
     let tool_lookup = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
 
     // The card's id travels with the user; its *code* does not. The id says
@@ -509,29 +515,11 @@ async fn tool_on(
 
     // Metered tool billing (Phase 2). Money is the LAST gate: training passed
     // above, so a hold is never placed for a member who was not eligible to use
-    // the tool. A metered tool must additionally be addressed by a device bound
-    // to it in the `power` role, so that a charge is attributable to the thing
-    // that actually switches the machine rather than to anything holding a
-    // valid token.
-    //
-    // The denial text used to say "requires its own API key", which outlived the
-    // mechanism: per-tool and global API keys were retired in #101 and the field
-    // is ignored. A firmware author reading that message went looking for a
-    // credential that no longer exists, which is why it now names the binding.
+    // the tool. The charge is attributed to the session this opens -- the
+    // member and the tool -- not to the device that asked (#174): a reader
+    // starts the tool, a plug meters it, and neither needs the other's role.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
-            if !metered_device_ok(&state, device_id, &tool).await? {
-                log_tool_access_denied(
-                    &state,
-                    Some(&user),
-                    &req.tool_id,
-                    "Metered tool requires a power-bound device",
-                )
-                .await?;
-                return Ok(Json(ToolGuardResponse::tool_denied(
-                    "Metered tool requires a power-bound device",
-                )));
-            }
             match billing.open_session(&user, &tool).map_err(ApiError::from)? {
                 crate::tool_billing::ActivationOutcome::Authorized(_) => {}
                 crate::tool_billing::ActivationOutcome::Denied(reason) => {
@@ -595,7 +583,7 @@ async fn tool_off(
 ) -> Result<Json<ToolGuardResponse>, ApiError> {
     let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
     let tool_id = parsed.as_ref().map(ToolRequestWire::borrowed).unwrap_or("");
-    let device_id = authorize_toolguard(&state, &headers, tool_id).await?;
+    let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
         .validated()?;
@@ -636,21 +624,14 @@ async fn tool_off(
 
     // Metered tool billing (Phase 2): settle the open session on stop -- post
     // the actual charge and release the hold; the broadcast below then refreshes
-    // the allow-list with the freed balance. The tool is released regardless of
-    // the key (safety); a mis-keyed stop defers the settle to the sweep rather
-    // than trusting it.
+    // the allow-list with the freed balance. Any device bound to the tool may
+    // stop it, and its stop settles (#174): the reader is the device that knows
+    // the member is done, and until #174 its stop deferred the settle to the
+    // sweep because it was not the `power` device.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
-            if metered_device_ok(&state, device_id, &tool).await? {
-                if let Err(e) = billing.settle_open_session_for_tool(&tool, "settled") {
-                    tracing::error!("tool billing: settle on tool-off failed: {e}");
-                }
-            } else {
-                tracing::warn!(
-                    "tool billing: metered tool-off without the tool's key; deferring \
-                     settle to the sweep for tool_id={}",
-                    req.tool_id
-                );
+            if let Err(e) = billing.settle_open_session_for_tool(&tool, "settled") {
+                tracing::error!("tool billing: settle on tool-off failed: {e}");
             }
         }
     }
@@ -694,7 +675,7 @@ async fn tool_log(
         .as_ref()
         .map(ToolLogRequestWire::borrowed)
         .unwrap_or("");
-    let device_id = authorize_toolguard(&state, &headers, tool_id).await?;
+    let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
         .validated()?;
@@ -711,18 +692,52 @@ async fn tool_log(
     // double-auth gate that stood here (an API key required even from an
     // already-authenticated bound device) is removed. See tool_on.
 
-    // Settle/report path: an already-open session must still close even if the
-    // card was disabled or released mid-use, so both Active and Revoked resolve
-    // to the member here; only a truly unknown code is rejected. (The revoked
-    // fraud signal is raised at tool-on, where access is actually granted.)
-    let (user, card_id) = match resolve_card(&state, &req.card).await? {
-        crate::models::CardResolution::Active { user, card } => {
-            let card_id = card.as_ref().map(|c| c.id);
-            (user, card_id)
-        }
-        crate::models::CardResolution::Revoked { user, card } => (user, Some(card.id)),
-        crate::models::CardResolution::Unknown => {
-            return Ok(Json(ToolGuardResponse::error("Unknown card")))
+    // Who the usage belongs to.
+    //
+    // A device that read a card names it. An already-open session must still
+    // close even if the card was disabled or released mid-use, so both Active
+    // and Revoked resolve to the member here; only a truly unknown code is
+    // rejected. (The revoked fraud signal is raised at tool-on, where access is
+    // actually granted.)
+    //
+    // A device that cannot -- a plug, which only ever receives a lease -- names
+    // the tool alone (#174), and the usage goes to whoever is signed on to it:
+    // the member on the open billing session, or on an unmetered tool the one
+    // who activated it. The server already knows; the plug does not have to.
+    // With nobody signed on there is nothing to attribute to, and the report
+    // is refused the same way a card-named report with no session is.
+    let (user, card_id) = match &req.card {
+        Some(card) => match resolve_card(&state, card).await? {
+            crate::models::CardResolution::Active { user, card } => {
+                let card_id = card.as_ref().map(|c| c.id);
+                (user, card_id)
+            }
+            crate::models::CardResolution::Revoked { user, card } => (user, Some(card.id)),
+            crate::models::CardResolution::Unknown => {
+                return Ok(Json(ToolGuardResponse::error("Unknown card")))
+            }
+        },
+        None => {
+            // Attribution needs the tool, so an unknown tool is refused here;
+            // the card-named path above keeps its own order, card before tool.
+            let Some(tool) = tool.as_ref() else {
+                return Ok(Json(ToolGuardResponse::error("Tool not found")));
+            };
+            match signed_on_user(&state, tool).await? {
+                Some(user) => (user, None),
+                None => {
+                    log_tool_access_denied(
+                        &state,
+                        None,
+                        &req.tool_id,
+                        "Usage report with no card and no open session",
+                    )
+                    .await?;
+                    return Ok(Json(ToolGuardResponse::error(
+                        "No open session for this tool",
+                    )));
+                }
+            }
         }
     };
 
@@ -731,31 +746,22 @@ async fn tool_log(
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
     };
 
-    // Metered tool billing (Phase 2): a billable report must come from a device
-    // bound to this tool in the `power` role and correlate to an open activation
-    // session; a report with no open session (or a negative/absurd value) is
-    // rejected rather than billed. The seconds are validated + capped inside
-    // record_usage / at settle.
+    // Metered tool billing (Phase 2): a billable report must correlate to an
+    // open activation session; a report with no open session (or a
+    // negative/absurd value) is rejected rather than billed. The seconds are
+    // validated + capped inside record_usage / at settle. Until #174 the report
+    // also had to come from the `power` device; now any device bound to the
+    // tool may report, and the guard that matters is the one below.
     if let Some(billing) = &state.tool_billing {
         if billing.enabled() && billing.tool_is_metered(&tool) {
-            if !metered_device_ok(&state, device_id, &tool).await? {
-                log_tool_access_denied(
-                    &state,
-                    Some(&user),
-                    &req.tool_id,
-                    "Metered tool requires a power-bound device",
-                )
-                .await?;
-                return Ok(Json(ToolGuardResponse::error(
-                    "Metered tool requires a power-bound device",
-                )));
-            }
-            // #120/M1: a billable usage report must come from the card of the
-            // member who activated the session -- otherwise a found or stray card
-            // could inflate someone else's billed usage. The open session (not the
-            // tool) holds the activator. Note this guards *reporting*, not
-            // stopping: tool-off stays open to any card so anyone can cut power
-            // for safety.
+            // #120/M1: a billable usage report that names a card must name the
+            // card of the member who activated the session -- otherwise a found
+            // or stray card could inflate someone else's billed usage. The open
+            // session (not the tool) holds the activator. A report naming no
+            // card was attributed FROM that session above, so for it the check
+            // is already satisfied. Note this guards *reporting*, not stopping:
+            // tool-off stays open to any card so anyone can cut power for
+            // safety.
             if let Some(session) = state
                 .db
                 .open_tool_session_for_tool(tool.id)
@@ -1402,9 +1408,10 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
 /// scoped by an explicit binding an administrator made, which is what the rest of
 /// #101 made uniform.
 ///
-/// Returns the authenticated device id, because the metered-billing gate needs to
-/// know WHICH device asked -- see [`metered_device_ok`], which additionally
-/// requires the `power` binding before a charge may be posted.
+/// Returns the authenticated device id, for the callers that need to know WHICH
+/// device asked: the relay rules on the power report and the alive pulse. Until
+/// #174 the metered-billing gate did too, requiring the `power` binding before
+/// a charge could be posted; the charge is attributed to the session now.
 async fn authorize_toolguard(
     state: &AppState,
     headers: &HeaderMap,
@@ -1583,28 +1590,26 @@ async fn authorize_power_report(
     }))
 }
 
-/// A billable report must come from the thing that actually switches the tool: a
-/// device bound to it in the `power` role.
-///
-/// #101 slice 6: this replaces `metered_key_ok`, which demanded the tool's own
-/// `external_api_key` so that one leaked shared key could not post charges for
-/// every tool. The binding gives the same per-tool scoping -- a device bound to
-/// some *other* tool cannot post a charge here -- and it is the stronger of the
-/// two at rest, because a device token is stored hashed (#120/#14) where
-/// `external_api_key` was a plaintext column.
-///
-/// It is also narrower than entry auth on purpose. `authorize_toolguard` accepts
-/// any binding, so a `reader` may start a tool; only the `power` binding may put
-/// money on it.
-async fn metered_device_ok(
+/// Whoever is signed on to a tool, for a usage report that names no card
+/// (#174): the member on the open billing session, or -- on an unmetered tool,
+/// which has no session row -- the member whose activation put it `in_use`.
+/// `None` when the tool is idle: a report then has nobody to go to.
+async fn signed_on_user(
     state: &AppState,
-    device_id: uuid::Uuid,
     tool: &crate::models::Tool,
-) -> Result<bool, ApiError> {
-    state
-        .db
-        .device_is_bound_to_tool_in_role(device_id, tool.id, crate::models::binding_role::POWER)
-        .map_err(ApiError::from)
+) -> Result<Option<crate::models::User>, ApiError> {
+    let member = match state.db.open_tool_session_for_tool(tool.id)? {
+        Some(session) => Some(session.user_id),
+        None if matches!(tool.status, crate::models::ToolStatus::InUse) => state
+            .db
+            .latest_activation(tool.id)?
+            .and_then(|event| event.user_id),
+        None => None,
+    };
+    match member {
+        Some(id) => Ok(state.db.find_user_by_id(id)?),
+        None => Ok(None),
+    }
 }
 
 async fn resolve_card(

@@ -369,6 +369,11 @@ publish  toolguard/request/tool-off  {"card":…,"tool_id":…}
 the stop settles the session. Send `tool-off` on **every** stop, including the
 ugly ones — an un-ended session leaves the tool unusable for the next member.
 
+A plug sends the same `tool-log` with **no `card`** — it never learns one — and
+the server attributes it to whoever is signed on to the tool. So a tool with a
+separate badge reader and plug meters as one box does: the reader starts and
+stops, the plug reports the power it switched.
+
 **Releasing the tool is your job.** The server does have a net under you: a
 session that runs past the tool's cap (`usage_max_session_minutes`, or the
 site's default) plus a grace is returned to `idle` by a periodic sweep, its
@@ -723,7 +728,6 @@ with `tool_on: false`:
 | `Tool is in repair` | status is Repair |
 | `Tool is retired` | status is Retired |
 | `Training required` | the user is not authorized for this specific tool |
-| `Metered tool requires a power-bound device` | the tool bills for usage and your device is not bound to it in the `power` role — see [authentication](#authentication) |
 | *(billing-specific text)* | metered tool, funds or holds unavailable |
 
 ### `POST /api/toolguard/tool-off`
@@ -738,12 +742,21 @@ stop — an un-ended session leaves the tool unusable for the next member.
 
 ### `POST /api/toolguard/tool-log`
 
-JSON body: `card`, `tool_id`, `seconds` (float), optional `active_seconds`
-(float) and `temperature` (float). Requires a device token bound to this tool;
-for a metered tool that binding must be the `power` one.
+JSON body: `tool_id`, `seconds` (float); optional `card`, `active_seconds`
+(float) and `temperature` (float). Requires a device token bound to this tool,
+in any role.
 
 Reports usage. `message` is `Usage logged`. For metered tools this is what gets
 billed; send it before `tool-off`.
+
+**`card` is optional, and who it belongs to is the server's to work out.** A
+device that read a card names it — the card that activated the session, not the
+last card seen. A device that cannot — a plug, which only ever receives a lease —
+omits it, and the usage goes to whoever is signed on to that tool: the open
+session's member, or on an unmetered tool the member whose `tool-on` put it in
+use. The server already knows who is on the tool; the plug does not have to. A
+card-less report when nobody is signed on is refused as `No open session for
+this tool`, like any other report with nothing to bill against.
 
 **Reports accumulate.** Each call adds to the open session rather than replacing
 it, in one atomic statement, so sending periodic increments is both safe and
@@ -764,7 +777,7 @@ and two refusals are specific to this endpoint:
 | `message` | meaning |
 |---|---|
 | `No open session for this tool` | there is no open activation to bill against — `tool-on` never succeeded, or `tool-off` already settled it. Report usage *before* stopping |
-| `This card did not activate the tool` | the `card` in the report is not the card that started the session. Send the card that swiped, not the last card seen |
+| `This card did not activate the tool` | the `card` in the report is not the card that started the session. Send the card that swiped, not the last card seen — or, from a device that reads none, send no card |
 
 Both come back as `status: "error"` with HTTP **200**, like every other refusal.
 
@@ -1165,7 +1178,7 @@ without the other.
 |---|---|
 | `toolguard/request/tool-on` | `{ "card", "tool_id" }` |
 | `toolguard/request/tool-off` | `{ "card", "tool_id" }` |
-| `toolguard/request/tool-log` | `{ "card", "tool_id", "seconds", "active_seconds"?, "temperature"? }` |
+| `toolguard/request/tool-log` | `{ "card"?, "tool_id", "seconds", "active_seconds"?, "temperature"? }` |
 | `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
 | `door/request/scan` | `{ "door_id", "card_id" }` |
 | `kiosk/refresh` | *(none)* — ask the edge to re-push `toolguard/state` |
