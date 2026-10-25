@@ -6909,6 +6909,9 @@ impl DatabaseManager {
                     name: m.name,
                     params: m.params,
                     on_disconnect: m.on_disconnect,
+                    start_stage: m.start_stage,
+                    start_delay_ms: m.start_delay_ms,
+                    run_on_ms: m.run_on_ms,
                 });
         }
 

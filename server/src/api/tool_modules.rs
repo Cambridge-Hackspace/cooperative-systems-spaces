@@ -69,6 +69,16 @@ pub struct CreateModuleRequest {
     pub params: Option<serde_json::Value>,
     #[serde(default)]
     pub on_disconnect: Option<String>,
+    /// #179, `power` bindings only. Bindings in a lower stage must confirm
+    /// they are energized before this one is leased. Default 0.
+    #[serde(default)]
+    pub start_stage: Option<i32>,
+    /// Spin-up after the stage before it confirms (ms). Default 0.
+    #[serde(default)]
+    pub start_delay_ms: Option<i32>,
+    /// Run-on after any denial (ms). Default 0.
+    #[serde(default)]
+    pub run_on_ms: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,6 +146,38 @@ async fn create_module(
         return Err(ApiError::BadRequest("name is required".to_string()));
     }
 
+    // #179: sequencing timings are a property of a thing that switches power.
+    // On any other role they would be stored, shown, and never read -- a
+    // setting that silently does nothing is worse than a refusal naming why.
+    let start_stage = req.start_stage.unwrap_or(0);
+    let start_delay_ms = req.start_delay_ms.unwrap_or(0);
+    let run_on_ms = req.run_on_ms.unwrap_or(0);
+    for (field, value) in [
+        ("start_stage", start_stage),
+        ("start_delay_ms", start_delay_ms),
+        ("run_on_ms", run_on_ms),
+    ] {
+        if value < 0 {
+            return Err(ApiError::BadRequest(format!(
+                "{field} must not be negative"
+            )));
+        }
+        if value != 0 && role != binding_role::POWER {
+            return Err(ApiError::BadRequest(format!(
+                "{field} applies only to a '{}' binding; this one is '{role}'",
+                binding_role::POWER
+            )));
+        }
+    }
+    // An hour is far beyond any spin-up or clearance time; past it the number
+    // is almost certainly in the wrong unit.
+    const MAX_MS: i32 = 3_600_000;
+    if start_delay_ms > MAX_MS || run_on_ms > MAX_MS {
+        return Err(ApiError::BadRequest(format!(
+            "start_delay_ms and run_on_ms are milliseconds and may not exceed {MAX_MS} (one hour)"
+        )));
+    }
+
     // Resolve both FKs first so a missing resource or device is a 400 naming which
     // one, rather than a raw foreign-key 500 from the insert.
     //
@@ -175,6 +217,9 @@ async fn create_module(
         name: req.name.trim().to_string(),
         params: req.params.unwrap_or_else(|| serde_json::json!({})),
         on_disconnect: on_disc,
+        start_stage,
+        start_delay_ms,
+        run_on_ms,
     })?;
 
     audit(
@@ -188,6 +233,9 @@ async fn create_module(
             "role": created.role,
             "name": created.name,
             "on_disconnect": created.on_disconnect,
+            "start_stage": created.start_stage,
+            "start_delay_ms": created.start_delay_ms,
+            "run_on_ms": created.run_on_ms,
         }),
     );
     broadcast(&state).await;

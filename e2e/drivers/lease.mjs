@@ -37,6 +37,22 @@
 //       the same tool never pulses at all, so this grant is also the proof
 //       that a reader's default no longer withholds the tool.
 //
+// #179 added the in-use rule and start sequencing, and a SECOND plug on the
+// tool, bound at stage 1 with a 3 s start delay and a 3 s run-on:
+//
+//   1c. liveness satisfied, nobody signed on -- leases still refuse, with
+//       NotInUse. A lease is for a member at the machine; before #179 a
+//       standalone plug followed the interlocks alone and was on all day.
+//   2.  after a member's tool-on at the edge -- the FIRST stage is granted,
+//       and the second stage gets NO lease at all: it waits for the first to
+//       confirm it energized, and "not yet" is silence, not a refusal.
+//   2a. after the first plug reports relay_on true -- still nothing for the
+//       second, inside its start delay.
+//   2b. two seconds later -- the second stage is granted.
+//   2c. after the member's tool-off -- the first stage is refused at once
+//       (NotInUse) while the second keeps its grant: run-on.
+//   2d. four seconds on -- the second stage's run-on has ended.
+//
 // What this does NOT prove: that a physical relay opens. Nothing here switches
 // hardware. It proves the decision leaves the coordinator correctly addressed
 // and correctly timed; what a module does with it is firmware's half of the
@@ -50,7 +66,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { GET, POST, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { GET, POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
 
@@ -225,9 +241,60 @@ async function setup() {
     'a silent safety sensor is an unobserved condition; the reader default must not have widened to it'
   )
 
+  // #179: a member with a card, so a tool-on at the edge can open a session,
+  // and a second plug behind the first in the start sequence.
+  const member = await account(`lease_member_${tag}`)
+  const card = `LEASE-CARD-${tag}`.toUpperCase()
+  const cardSet = await PUT(`/api/profiles/${member.user.id}`, {
+    token: member.token,
+    body: { profile: { card_id: card } },
+  })
+  assertEq('lease/member-card-set', 200, cardSet.status, cardSet.text.slice(0, 160))
+
+  const plug2 = await claim(`lease-plug2-${tag}`, 'power', '02:00:00:00:83:06')
+  ok('lease/second-plug-registered', !!plug2.id, `register -> ${plug2.status}`)
+  const plug2Binding = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: {
+      resource_id: toolId,
+      device_id: plug2.id,
+      role: 'power',
+      name: `lease plug2 ${tag}`,
+      start_stage: 1,
+      start_delay_ms: 3000,
+      run_on_ms: 3000,
+    },
+  })
+  assertEq('lease/second-plug-bound', 201, plug2Binding.status, plug2Binding.text.slice(0, 200))
+  ok(
+    'lease/sequencing-is-stored-on-the-binding',
+    plug2Binding.json?.data?.start_stage === 1 &&
+      plug2Binding.json?.data?.start_delay_ms === 3000 &&
+      plug2Binding.json?.data?.run_on_ms === 3000,
+    `the binding did not echo the timings: ${JSON.stringify(plug2Binding.json?.data)}`
+  )
+  // The timings are a property of a thing that switches power. On any other
+  // role they would be stored and never read, so they are refused by name.
+  const onReader = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: { resource_id: toolId, device_id: reader.id, role: 'reader', name: `x ${tag}`, run_on_ms: 1000 },
+  })
+  ok(
+    'lease/sequencing-is-refused-on-a-non-power-binding',
+    onReader.status === 400 && /run_on_ms/.test(onReader.text),
+    `expected a 400 naming run_on_ms, got ${onReader.status} ${onReader.text.slice(0, 160)}`
+  )
+  const negative = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: { resource_id: toolId, device_id: plug2.id, role: 'power', name: `y ${tag}`, start_delay_ms: -1 },
+  })
+  assertEq('lease/a-negative-timing-is-refused', 400, negative.status, negative.text.slice(0, 160))
+
   const fixture = {
     tag,
     toolId,
+    plug2Id: plug2.id,
+    card,
     externalId: `lease-${tag}`,
     readerId: reader.id,
     sensorId: sensor.id,
@@ -271,6 +338,10 @@ async function setup() {
   fs.writeFileSync(path.join(STACK_DIR, 'lease-tool-id'), `lease-${tag}`)
   // The sensor's id, for the stage to publish its alive pulse (#170).
   fs.writeFileSync(path.join(STACK_DIR, 'lease-sensor-id'), sensor.id)
+  // #179: the second plug's id and the member's card, for the stage's
+  // pulse, confirmation, tool-on and tool-off.
+  fs.writeFileSync(path.join(STACK_DIR, 'lease-plug2-id'), plug2.id)
+  fs.writeFileSync(path.join(STACK_DIR, 'lease-card'), card)
 
   // The edge's own configuration, written here because this is where the
   // credentials are. `Approved` is the registered state; websocket transport
@@ -330,12 +401,21 @@ async function assertWindows() {
   const after = captured('lease-window-2.txt')
   const stopped = captured('lease-window-3.txt')
   const midway = captured('lease-window-1b.txt')
+  const nobodyOn = captured('lease-window-1c.txt')
+  const inDelay = captured('lease-window-2a.txt')
+  const sequenced = captured('lease-window-2b.txt')
+  const afterStop = captured('lease-window-2c.txt')
+  const runOnOver = captured('lease-window-2d.txt')
+  const toolOnReply = captured('lease-toolon-reply.txt')
 
   ok(
     'lease/windows-were-captured',
-    before !== null && midway !== null && after !== null && stopped !== null,
+    [before, midway, nobodyOn, after, inDelay, sequenced, afterStop, runOnOver, stopped, toolOnReply].every(
+      (w) => w !== null
+    ),
     'one or more capture files is missing; the stage did not run to completion'
   )
+  const ofPlug2 = (rows) => (rows ?? []).filter((r) => r.device_id === fixture.plug2Id)
 
   // ── #161: the SERVER's view of the module, the other side of the same event ─
   //
@@ -523,6 +603,34 @@ async function assertWindows() {
       `has not taken effect.`
   )
 
+  // ── window 1c (#179): alive, interlocked, and nobody signed on ────────────
+  //
+  // Every liveness condition is now satisfied, and the answer must STILL be no:
+  // a lease is for a member at the machine. Before #179 this window granted,
+  // and a standalone plug followed the interlocks alone -- on all day.
+  const idleRefusals = mine(nobodyOn)
+  ok(
+    'lease/leases-still-arrive-with-nobody-signed-on',
+    idleRefusals.length >= 1,
+    `no lease addressed to ${fixture.deviceId} in window 1c (saw ${(nobodyOn ?? []).length} in total)`
+  )
+  ok(
+    'lease/nobody-signed-on-refuses-with-not-in-use',
+    idleRefusals.length > 0 && idleRefusals.every((r) => r.grant === false && r.reason === 'NotInUse'),
+    `with every module alive and nobody signed on, every lease must refuse with NotInUse; got ` +
+      `${JSON.stringify(idleRefusals.map((r) => [r.grant, r.reason]))}`
+  )
+
+  // The tool-on that opens the session, answered by the EDGE from its synced
+  // allow-list. A precondition for everything after it, asserted as one so a
+  // failure here is not read as a sequencing defect three windows later.
+  const reply = (toolOnReply ?? []).find((r) => r.tool_id === fixture.externalId || r.tool_id === fixture.toolId)
+  ok(
+    'lease/the-member-is-authorized-at-the-edge',
+    reply?.authorized === true,
+    `the edge did not authorize the member's card: ${JSON.stringify(toolOnReply)}`
+  )
+
   // ── window 2: one report is enough to change the answer ───────────────────
   const grants = mine(after)
   ok(
@@ -536,6 +644,60 @@ async function assertWindows() {
     grants[grants.length - 1]?.grant,
     'one power report naming the device must be enough to clear ModuleOffline; ' +
       'without the liveness ingest this stays false forever and no tool ever energizes'
+  )
+
+  // ── #179: the second stage waits for the first to CONFIRM ─────────────────
+  //
+  // In window 2 the first plug is leased but has not yet reported its relay
+  // closed, so the second must receive nothing -- silence, not a refusal,
+  // because a refusal would end a reader-and-relay box's session.
+  assertEq(
+    'lease/the-second-stage-waits-for-the-first-to-confirm',
+    0,
+    ofPlug2(after).length,
+    `the second stage was addressed before the first confirmed it energized: ` +
+      `${JSON.stringify(ofPlug2(after))}. A timer stood in for a confirmation, or ` +
+      `the wait was sent as a refusal.`
+  )
+  // 2a: the first plug has confirmed; the second is inside its 3 s start delay.
+  assertEq(
+    'lease/the-second-stage-is-silent-inside-its-start-delay',
+    0,
+    ofPlug2(inDelay).length,
+    `the second stage was leased before its start delay had passed: ${JSON.stringify(ofPlug2(inDelay))}`
+  )
+  // 2b: confirmed and delayed -- granted.
+  const second = ofPlug2(sequenced)
+  ok(
+    'lease/the-second-stage-is-leased-after-confirmation-and-delay',
+    second.length >= 1 && second[second.length - 1]?.grant === true,
+    `the second stage never got its lease after the first confirmed and the delay ran: ` +
+      `${JSON.stringify(second)}`
+  )
+
+  // ── #179: run-on ──────────────────────────────────────────────────────────
+  //
+  // The member signs off. The first stage is refused at once; the second,
+  // with a 3 s run-on, keeps its grant -- and then loses it.
+  const firstAfterStop = mine(afterStop)
+  ok(
+    'lease/a-stop-refuses-the-first-stage-at-once',
+    firstAfterStop.length >= 1 &&
+      firstAfterStop[firstAfterStop.length - 1]?.grant === false &&
+      firstAfterStop[firstAfterStop.length - 1]?.reason === 'NotInUse',
+    `after tool-off the first stage should be refused with NotInUse: ${JSON.stringify(firstAfterStop)}`
+  )
+  const secondAfterStop = ofPlug2(afterStop)
+  ok(
+    'lease/run-on-keeps-the-second-stage-leased-after-the-stop',
+    secondAfterStop.length >= 1 && secondAfterStop.every((r) => r.grant === true),
+    `inside its run-on the second stage must still be granted: ${JSON.stringify(secondAfterStop)}`
+  )
+  const secondLater = ofPlug2(runOnOver)
+  ok(
+    'lease/run-on-ends',
+    secondLater.length >= 1 && secondLater[secondLater.length - 1]?.grant === false,
+    `the run-on never ended: ${JSON.stringify(secondLater)}`
   )
 
   // ── window 3: the inversion ───────────────────────────────────────────────

@@ -928,6 +928,9 @@ diesel::table! {
         on_disconnect -> Text,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        start_stage -> Int4,
+        start_delay_ms -> Int4,
+        run_on_ms -> Int4,
     }
 }
 

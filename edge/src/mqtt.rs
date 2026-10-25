@@ -699,6 +699,20 @@ impl LocalMqttClient {
     /// event as a lease that was never sent: the module's own watchdog expires
     /// and it de-energizes. Retrying a missed renewal would only narrow the
     /// window in which that correct behaviour happens.
+    /// Hand the server's view of which tools are in use to the lease engine
+    /// (#179): a session opened elsewhere -- or ended by an administrator or
+    /// the sweep -- reaches this edge through the sync.
+    pub fn reconcile_sessions(&self, payload: &crate::toolguard::SyncPayload) {
+        let in_use: Vec<String> = payload
+            .tools
+            .iter()
+            .filter(|t| t.status == crate::toolguard::ToolStatus::InUse)
+            .map(|t| t.id.to_string())
+            .collect();
+        self.module_state
+            .reconcile_sessions(&in_use, chrono::Utc::now());
+    }
+
     pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
         match serde_json::to_value(action) {
             Ok(v) => self.publish_local(local::TOOL_LEASE, &v),
@@ -734,6 +748,11 @@ impl LocalMqttClient {
         if self.toolguard_state.tool_requires_online(&req.tool_id) {
             let (authorized, reason) = self.remote_tool_on(&req).await;
             self.publish_tool_on(&req.tool_id, authorized, &reason);
+            if authorized {
+                // The session this edge just opened is what the lease is for (#179).
+                self.module_state
+                    .note_session(&req.tool_id, true, chrono::Utc::now());
+            }
             return;
         }
 
@@ -753,6 +772,11 @@ impl LocalMqttClient {
         };
 
         self.publish_tool_on(&req.tool_id, authorized, &reason);
+        if authorized {
+            // The session this edge just opened is what the lease is for (#179).
+            self.module_state
+                .note_session(&req.tool_id, true, chrono::Utc::now());
+        }
 
         if authorized {
             // Best-effort forward to the remote server so it records the state change
@@ -808,6 +832,14 @@ impl LocalMqttClient {
                  credited as alive by it",
                 req.tool_id
             );
+        }
+
+        // The relay state is what confirms, for start sequencing, that this
+        // device actually energized (#179). Absent is "cannot tell", and a
+        // device that cannot tell can never confirm.
+        if let (Some(device_id), Some(relay_on)) = (req.device_id.as_deref(), req.relay_on) {
+            self.module_state
+                .note_relay_state(device_id, relay_on, chrono::Utc::now());
         }
 
         if let Some(draw) = req.draw_now {
@@ -913,6 +945,9 @@ impl LocalMqttClient {
     async fn handle_tool_off(&self, req: LocalToolRequest) {
         let response_payload = serde_json::json!({ "ok": true });
         self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
+        // The lease ends with the stop, not a sync interval later (#179).
+        self.module_state
+            .note_session(&req.tool_id, false, chrono::Utc::now());
 
         let url = format!("{}/api/toolguard/tool-off", self.remote_instance_url);
         let card = req.card.clone();
@@ -1135,6 +1170,7 @@ pub async fn run_local_mqtt_event_loop(
         loop {
             // Publish any pending state updates first
             while let Ok(payload) = state_rx.try_recv() {
+                local_client.reconcile_sessions(&payload);
                 match serde_json::to_vec(&payload) {
                     Ok(bytes) => local_client.publish_state_bytes(bytes),
                     Err(e) => warn!(

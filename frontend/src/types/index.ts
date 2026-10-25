@@ -868,6 +868,12 @@ export interface DeviceBinding {
   on_disconnect: string
   created_at: string
   updated_at: string
+  /** #179, `power` only: lower stages must confirm they energized first. */
+  start_stage: number
+  /** Spin-up after the stage before it confirms, in ms. */
+  start_delay_ms: number
+  /** Run-on after any denial, in ms. */
+  run_on_ms: number
 }
 
 export interface CreateDeviceBindingRequest {
@@ -877,6 +883,9 @@ export interface CreateDeviceBindingRequest {
   name: string
   params?: Record<string, unknown>
   on_disconnect?: string
+  start_stage?: number
+  start_delay_ms?: number
+  run_on_ms?: number
 }
 
 /** A configured interlock: an AND-ed start precondition or an OR-ed trip. */
@@ -921,6 +930,9 @@ export interface ToolModuleStateTool {
     name: string
     params: Record<string, unknown>
     on_disconnect: string
+    start_stage: number
+    start_delay_ms: number
+    run_on_ms: number
   }>
   interlocks: Array<{
     id: string
