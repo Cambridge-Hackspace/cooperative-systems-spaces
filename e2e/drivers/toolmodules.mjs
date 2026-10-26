@@ -428,6 +428,112 @@ main(async () => {
     })
     assertEq('toolmodules/bind-in-declared-role-is-accepted', 201, rightRoleBind.status)
 
+    // --- the strike profile is a strike's, and a strike must have one (#182) --
+    // `pulse_ms` on any other role is refused by name, as the sequencing
+    // timings are: a setting stored and never read is worse than a refusal.
+    const pulseOnReader = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: {
+        resource_id: wiredToolId,
+        device_id: readerOnlyId,
+        role: 'reader',
+        name: 'reader with a pulse',
+        pulse_ms: 4200,
+      },
+    })
+    assertEq('toolmodules/pulse-on-a-non-strike-is-refused', 400, pulseOnReader.status)
+    ok('toolmodules/pulse-refusal-names-the-field',
+      /pulse_ms/.test(pulseOnReader.text), pulseOnReader.text.slice(0, 200))
+    const holdOnReader = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: {
+        resource_id: wiredToolId,
+        device_id: readerOnlyId,
+        role: 'reader',
+        name: 'reader with a hold',
+        hold_open_access: false,
+      },
+    })
+    assertEq('toolmodules/hold-on-a-non-strike-is-refused', 400, holdOnReader.status)
+
+    // A device that declares the strike role.
+    const strikeInvite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const strikeReg = await POST('/api/devices/register', {
+      body: {
+        device_code: strikeInvite.json?.data?.device_code,
+        name: `latch-${tag}`,
+        capabilities: { roles: ['strike'] },
+        mac_address: '02:00:00:00:83:05',
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    assertEq('toolmodules/a-device-may-declare-strike', 201, strikeReg.status)
+    const strikeDeviceId = strikeReg.json?.data?.device_id ?? strikeReg.json?.device_id
+    // The vocabulary is enforced in both directions: a reader-only device
+    // cannot be bound as a strike either.
+    const strikeOnReader = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: {
+        resource_id: wiredToolId,
+        device_id: readerOnlyId,
+        role: 'strike',
+        name: 'reader as a latch',
+        pulse_ms: 4200,
+      },
+    })
+    assertEq('toolmodules/strike-on-an-undeclared-device-is-refused', 400, strikeOnReader.status)
+    // No pulse: refused, since a latch nobody told how long to open is not a
+    // latch. The site default is for a door with NO strike binding; an authored
+    // one has to say.
+    const strikeNoPulse = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: { resource_id: wiredToolId, device_id: strikeDeviceId, role: 'strike', name: 'latch' },
+    })
+    assertEq('toolmodules/a-strike-needs-a-pulse', 400, strikeNoPulse.status)
+    ok('toolmodules/strike-refusal-names-the-field',
+      /pulse_ms/.test(strikeNoPulse.text), strikeNoPulse.text.slice(0, 200))
+    const strikeTooLong = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: {
+        resource_id: wiredToolId,
+        device_id: strikeDeviceId,
+        role: 'strike',
+        name: 'latch',
+        pulse_ms: 60_001,
+      },
+    })
+    assertEq('toolmodules/a-pulse-over-a-minute-is-refused', 400, strikeTooLong.status)
+    // With one: accepted, with the profile stored and a strike's own
+    // disconnect default (it holds nothing energized, so `ignore`). A strike on
+    // a TOOL is the room case -- nothing about the role is door-specific.
+    const strikeOk = await POST('/api/admin/device-bindings', {
+      token: admin.token,
+      body: {
+        resource_id: wiredToolId,
+        device_id: strikeDeviceId,
+        role: 'strike',
+        name: 'latch',
+        pulse_ms: 4200,
+        hold_open_access: false,
+      },
+    })
+    assertEq('toolmodules/a-strike-with-a-pulse-is-accepted', 201, strikeOk.status)
+    assertEq('toolmodules/strike-pulse-is-stored', 4200, strikeOk.json?.data?.pulse_ms)
+    assertEq('toolmodules/strike-hold-is-stored', false, strikeOk.json?.data?.hold_open_access)
+    assertEq('toolmodules/strike-disconnect-defaults-to-ignore', 'ignore',
+      strikeOk.json?.data?.on_disconnect)
+    // And the snapshot carries it to the edge, on the entry that now says its kind.
+    const snapStrike = await GET('/api/admin/device-bindings/state', T)
+    const strikeEntry = (snapStrike.json?.data?.tools ?? []).find((t) => t.tool_id === wiredToolId)
+    const strikeModule = (strikeEntry?.modules ?? []).find((m) => m.role === 'strike')
+    assertEq('toolmodules/state-carries-the-pulse', 4200, strikeModule?.pulse_ms)
+    assertEq('toolmodules/state-carries-the-hold', false, strikeModule?.hold_open_access)
+    assertEq('toolmodules/state-names-the-kind', 'tool', strikeEntry?.kind)
+
     // An unknown role at registration is rejected, so the vocabulary is enforced
     // at the door rather than stored and tripped over later.
     const badRoleInvite = await POST('/api/admin/devices/invite', {

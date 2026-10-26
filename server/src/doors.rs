@@ -123,12 +123,22 @@ impl DoorService {
             let rules = self.db.list_rules_for_door(door.id)?;
             let (allow, deny) =
                 self.expand_rules(&rules, &cards_by_user, &schedules, tz, &user_levels);
-            let hold_unlock_until = open_access_hold_until_at(&rules, &schedules, tz, Utc::now());
+            // #182: the pulse and the hold are the strike binding's profile. A
+            // latch that cannot be held energized (`hold_open_access: false`)
+            // means the door is never held, whatever its open-access rules say
+            // -- the rules decide who may come in, the binding says what the
+            // hardware can do.
+            let strike = self.strike_profile(door.id)?;
+            let hold_unlock_until = if strike.hold_open_access {
+                open_access_hold_until_at(&rules, &schedules, tz, Utc::now())
+            } else {
+                None
+            };
             compiled.push(CompiledDoor {
                 id: door.id,
                 name: door.name.clone(),
                 enabled: door.enabled,
-                unlock_duration_ms: door.unlock_duration_ms,
+                unlock_duration_ms: strike.pulse_ms,
                 allow_cards: allow.into_iter().collect(),
                 deny_cards: deny.into_iter().collect(),
                 hold_unlock_until,
@@ -199,7 +209,35 @@ impl DoorService {
         }
     }
 
-    /// One-shot unlock command — used by QR check-in and admin remote unlock.
+    /// The strike profile a door is driven with (#182): its `strike` binding's
+    /// pulse and hold, or -- for a door with no strike binding -- the site
+    /// default pulse (`[door] default_unlock_duration_ms`) with the hold
+    /// allowed. That default is what a door got before the latch was a
+    /// binding, so a door that was never given one opens exactly as it did.
+    pub fn strike_profile(
+        &self,
+        door_id: Uuid,
+    ) -> Result<crate::database::StrikeProfile, DatabaseError> {
+        Ok(match self.db.door_strike(door_id)? {
+            Some(profile) => profile,
+            None => crate::database::StrikeProfile {
+                pulse_ms: self.config.get_config().door.default_unlock_duration_ms,
+                hold_open_access: true,
+            },
+        })
+    }
+
+    /// Whether a door's pulse comes from a strike binding or the site default
+    /// (#182); what the admin screen shows beside the number.
+    pub fn strike_source(&self, door_id: Uuid) -> Result<&'static str, DatabaseError> {
+        Ok(if self.db.door_strike(door_id)?.is_some() {
+            "strike"
+        } else {
+            "default"
+        })
+    }
+
+    /// One-shot unlock command -- used by QR check-in and admin remote unlock.
     pub fn publish_unlock(
         &self,
         device_id: Uuid,

@@ -24,7 +24,9 @@ pub mod device_role {
     pub const SENSOR: &str = "sensor";
     pub const EDGE: &str = "edge";
     pub const KIOSK: &str = "kiosk";
-    pub const ALL: [&str; 5] = [READER, POWER, SENSOR, EDGE, KIOSK];
+    /// #182: the device drives a door's latch.
+    pub const STRIKE: &str = "strike";
+    pub const ALL: [&str; 6] = [READER, POWER, SENSOR, EDGE, KIOSK, STRIKE];
 }
 
 /// Device platform enum

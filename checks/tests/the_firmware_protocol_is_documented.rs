@@ -55,6 +55,10 @@ const LOCAL_SECTION: &str = "### The local broker: edge ↔ module";
 fn is_device_facing(template: &str) -> bool {
     template == "/api/toolguard"
         || template.starts_with("/api/toolguard/")
+        // #182: the resource-shaped device path. Added here the moment the
+        // routes were, so a route under it cannot ship undocumented the way
+        // the toolguard ones once did.
+        || template.starts_with("/api/resources/")
         || template == "/api/devices/register"
         || template == "/api/devices/ws"
 }

@@ -40,6 +40,13 @@ fn sql_vocab() -> BTreeSet<String> {
         .collect();
     dirs.sort();
 
+    // The LAST migration that defines the constraint wins: a named constraint is
+    // redefined whole by a later migration (#182 widened it with `strike`), and
+    // the live vocabulary is the latest definition -- the same reading
+    // `text_check_vocabularies_match.rs` gives its needles. Until #182 this
+    // returned on the first match, which would have kept agreeing with a
+    // vocabulary the database no longer enforced.
+    let mut latest: Option<BTreeSet<String>> = None;
     for dir in dirs {
         let Ok(sql) = std::fs::read_to_string(dir.join("up.sql")) else {
             continue;
@@ -58,9 +65,9 @@ fn sql_vocab() -> BTreeSet<String> {
         let end = after
             .find(']')
             .expect("no `]` after `<@` in the roles CHECK");
-        return double_quoted(&after[start..end]);
+        latest = Some(double_quoted(&after[start..end]));
     }
-    panic!("no migration defines the `space_devices_roles_vocab` CHECK constraint");
+    latest.expect("no migration defines the `space_devices_roles_vocab` CHECK constraint")
 }
 
 /// The double-quoted `pub const` string values inside `pub mod <module>`,

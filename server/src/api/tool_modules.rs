@@ -79,6 +79,15 @@ pub struct CreateModuleRequest {
     /// Run-on after any denial (ms). Default 0.
     #[serde(default)]
     pub run_on_ms: Option<i32>,
+    /// #182, `strike` bindings only, and required on them: how long the latch
+    /// is released on a yes (ms).
+    #[serde(default)]
+    pub pulse_ms: Option<i32>,
+    /// #182, `strike` bindings only: whether the latch may be held released
+    /// for an open-access window. Default true; `false` for a latch that
+    /// cannot be held energized.
+    #[serde(default)]
+    pub hold_open_access: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +149,10 @@ async fn create_module(
         // machine. Its silence is still RECORDED (#84 reads `last_seen_at`);
         // it just does not withhold the tool.
         None if role == binding_role::READER => on_disconnect::IGNORE.to_string(),
+        // A STRIKE likewise (#182): it holds nothing energized -- a latch
+        // released for a pulse falls closed on its own -- so a dead strike
+        // is a door that will not open, which `fail_off` could not improve on.
+        None if role == binding_role::STRIKE => on_disconnect::IGNORE.to_string(),
         None => on_disconnect::FAIL_OFF.to_string(),
     };
     if req.name.trim().is_empty() {
@@ -176,6 +189,44 @@ async fn create_module(
         return Err(ApiError::BadRequest(format!(
             "start_delay_ms and run_on_ms are milliseconds and may not exceed {MAX_MS} (one hour)"
         )));
+    }
+
+    // #182: the strike profile is a property of a thing that releases a latch,
+    // by the same rule. A strike with no pulse would be a latch nobody told how
+    // long to open, so on that role the pulse is required rather than defaulted
+    // -- the door module's site default is what a door with NO strike binding
+    // gets, and an authored binding that silently took it would hide that the
+    // administrator never chose.
+    let pulse_ms = req.pulse_ms.unwrap_or(0);
+    let hold_open_access = req.hold_open_access.unwrap_or(true);
+    if role == binding_role::STRIKE {
+        // A minute is far beyond any latch; past it the number is in the wrong
+        // unit, or a hold is wanted, which is what open access is for.
+        const MAX_PULSE_MS: i32 = 60_000;
+        if pulse_ms <= 0 {
+            return Err(ApiError::BadRequest(format!(
+                "a '{}' binding needs pulse_ms: how long the latch is released, in milliseconds",
+                binding_role::STRIKE
+            )));
+        }
+        if pulse_ms > MAX_PULSE_MS {
+            return Err(ApiError::BadRequest(format!(
+                "pulse_ms is milliseconds and may not exceed {MAX_PULSE_MS} (one minute)"
+            )));
+        }
+    } else {
+        if req.pulse_ms.is_some() {
+            return Err(ApiError::BadRequest(format!(
+                "pulse_ms applies only to a '{}' binding; this one is '{role}'",
+                binding_role::STRIKE
+            )));
+        }
+        if req.hold_open_access.is_some() {
+            return Err(ApiError::BadRequest(format!(
+                "hold_open_access applies only to a '{}' binding; this one is '{role}'",
+                binding_role::STRIKE
+            )));
+        }
     }
 
     // Resolve both FKs first so a missing resource or device is a 400 naming which
@@ -220,6 +271,8 @@ async fn create_module(
         start_stage,
         start_delay_ms,
         run_on_ms,
+        pulse_ms,
+        hold_open_access,
     })?;
 
     audit(
@@ -236,30 +289,52 @@ async fn create_module(
             "start_stage": created.start_stage,
             "start_delay_ms": created.start_delay_ms,
             "run_on_ms": created.run_on_ms,
+            "pulse_ms": created.pulse_ms,
+            "hold_open_access": created.hold_open_access,
         }),
     );
     broadcast(&state).await;
     // #101: binding an `edge` coordinator is how a door gets its strike driver
     // now, so the door snapshot has to reach that device -- `broadcast` above only
     // pushes tool module state. Harmless when the device coordinates no doors: the
-    // snapshot is then simply empty.
-    republish_doors_if_edge(&state, &created.role, created.device_id);
+    // snapshot is then simply empty. #182: a `strike` binding changes what that
+    // snapshot says (the pulse, the hold), so it republishes too.
+    republish_doors_for_binding(&state, &created);
 
     Ok((StatusCode::CREATED, Json(ApiResponse::success(created))))
 }
 
-/// Push `doors/state` to a device when an `edge` binding appears or disappears.
+/// Push `doors/state` where a binding changed what it says.
 ///
-/// Moving a door's coordinator is two calls -- delete the old binding, create the
-/// new one -- and each has to tell the device it affects, or the door lingers in
-/// the old device's snapshot and never reaches the new one.
-fn republish_doors_if_edge(state: &AppState, role: &str, device_id: Uuid) {
-    if role != binding_role::EDGE {
-        return;
-    }
+/// An `edge` binding appearing or disappearing: moving a door's coordinator is
+/// two calls -- delete the old binding, create the new one -- and each has to
+/// tell the device it affects, or the door lingers in the old device's snapshot
+/// and never reaches the new one.
+///
+/// A `strike` binding (#182) changes the snapshot's content for its door -- the
+/// pulse and the hold -- and the device that holds that snapshot is the door's
+/// coordinator, not the strike's own device, so it is the coordinator that is
+/// republished to. A door with no coordinator has nobody to tell.
+fn republish_doors_for_binding(state: &AppState, binding: &crate::models::DeviceBinding) {
     if !state.config_manager.get_config().door.enabled {
         return;
     }
+    let device_id = match binding.role.as_str() {
+        r if r == binding_role::EDGE => binding.device_id,
+        r if r == binding_role::STRIKE => match state.db.door_edge_device(binding.resource_id) {
+            Ok(Some(coordinator)) => coordinator,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to find the coordinator of {} to republish doors/state: {}",
+                    binding.resource_id,
+                    e
+                );
+                return;
+            }
+        },
+        _ => return,
+    };
     if let Err(e) = state.door_service.publish_state(device_id) {
         tracing::warn!("Failed to republish doors/state to {}: {}", device_id, e);
     }
@@ -288,7 +363,7 @@ async fn delete_module(
     );
     broadcast(&state).await;
     if let Some(b) = removed {
-        republish_doors_if_edge(&state, &b.role, b.device_id);
+        republish_doors_for_binding(&state, &b);
     }
 
     Ok(Json(ApiResponse::success(DeletedResponse {

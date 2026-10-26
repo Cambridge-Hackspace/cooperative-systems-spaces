@@ -749,6 +749,8 @@ mod tests {
             start_stage: 0,
             start_delay_ms: 0,
             run_on_ms: 0,
+            pulse_ms: 0,
+            hold_open_access: true,
         }
     }
 
@@ -771,6 +773,7 @@ mod tests {
             tools: vec![ToolModuleTool {
                 tool_id: "tool-1".to_string(),
                 external_id: Some("ext-1".to_string()),
+                kind: "tool".to_string(),
                 modules,
                 interlocks,
                 power_fails_safe: true,
@@ -857,6 +860,7 @@ mod tests {
                 ToolModuleTool {
                     tool_id: "tool-1".to_string(),
                     external_id: None,
+                    kind: "tool".to_string(),
                     modules: vec![a],
                     interlocks: vec![],
                     power_fails_safe: true,
@@ -864,6 +868,7 @@ mod tests {
                 ToolModuleTool {
                     tool_id: "tool-2".to_string(),
                     external_id: None,
+                    kind: "tool".to_string(),
                     modules: vec![b],
                     interlocks: vec![],
                     power_fails_safe: true,
@@ -1267,6 +1272,7 @@ mod tests {
             tools: vec![ToolModuleTool {
                 tool_id: "tool-1".to_string(),
                 external_id: Some("ext-1".to_string()),
+                kind: "tool".to_string(),
                 modules: vec![binding("m1", "power", "hold_last")],
                 interlocks: vec![rule(KIND_TRIP, "door_open", true, 0)],
                 power_fails_safe: true,

@@ -22,60 +22,90 @@ pub struct ToolGuardResponse {
     pub tool_on: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_off: Option<bool>,
+    /// The resource-shaped answer to a scan (#182): present on the
+    /// `/api/resources/{id}/scan` reply and nowhere else. `tool_on` is the same
+    /// bit under its alias name, on the alias path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorized: Option<bool>,
+    /// On a yes for a resource with a `strike` binding (#182): the pulse the
+    /// scanning device may release the latch for. Absent on a no, and on a
+    /// resource with no latch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<css_lib::wire::LocalStrike>,
 }
 
 impl ToolGuardResponse {
+    fn bare(status: &str, message: Option<String>) -> Self {
+        Self {
+            status: status.to_string(),
+            message,
+            tool_on: None,
+            tool_off: None,
+            authorized: None,
+            strike: None,
+        }
+    }
+
     fn ok() -> Self {
-        Self {
-            status: "ok".to_string(),
-            message: None,
-            tool_on: None,
-            tool_off: None,
-        }
+        Self::bare("ok", None)
     }
 
-    fn ok_with_message(message: impl Into<String>) -> Self {
-        Self {
-            status: "ok".to_string(),
-            message: Some(message.into()),
-            tool_on: None,
-            tool_off: None,
-        }
+    pub(crate) fn ok_with_message(message: impl Into<String>) -> Self {
+        Self::bare("ok", Some(message.into()))
     }
 
-    fn error(message: impl Into<String>) -> Self {
-        Self {
-            status: "error".to_string(),
-            message: Some(message.into()),
-            tool_on: None,
-            tool_off: None,
-        }
+    pub(crate) fn error(message: impl Into<String>) -> Self {
+        Self::bare("error", Some(message.into()))
     }
 
     fn tool_authorized() -> Self {
         Self {
-            status: "ok".to_string(),
-            message: Some("Tool authorized".to_string()),
             tool_on: Some(true),
-            tool_off: None,
+            ..Self::bare("ok", Some("Tool authorized".to_string()))
         }
     }
 
     fn tool_denied(reason: impl Into<String>) -> Self {
         Self {
-            status: "error".to_string(),
-            message: Some(reason.into()),
             tool_on: Some(false),
-            tool_off: None,
+            ..Self::bare("error", Some(reason.into()))
         }
     }
 
     fn tool_off_ok() -> Self {
         Self {
-            status: "ok".to_string(),
-            message: Some("Tool deactivated".to_string()),
-            tool_on: None,
             tool_off: Some(true),
+            ..Self::bare("ok", Some("Tool deactivated".to_string()))
+        }
+    }
+
+    /// A yes on the resource path (#182), carrying the strike pulse when the
+    /// resource has a latch.
+    pub(crate) fn resource_authorized(strike: Option<css_lib::wire::LocalStrike>) -> Self {
+        Self {
+            authorized: Some(true),
+            strike,
+            ..Self::bare("ok", Some("Authorized".to_string()))
+        }
+    }
+
+    /// A no on the resource path (#182).
+    pub(crate) fn resource_denied(reason: impl Into<String>) -> Self {
+        Self {
+            authorized: Some(false),
+            ..Self::bare("error", Some(reason.into()))
+        }
+    }
+
+    /// The alias reply restated for the resource path (#182): `tool_on`
+    /// becomes `authorized`, so one activation function serves both names and
+    /// the two cannot drift.
+    pub(crate) fn as_resource_reply(self) -> Self {
+        Self {
+            authorized: self.tool_on,
+            tool_on: None,
+            tool_off: None,
+            ..self
         }
     }
 }
@@ -461,11 +491,27 @@ async fn tool_on(
     // the session, not to the device that opened it.
     let tool_lookup = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
 
+    Ok(Json(
+        activate_tool(&state, tool_lookup, &req.card, &req.tool_id).await?,
+    ))
+}
+
+/// Open a session on a tool for a card: the decision and everything that
+/// follows a yes. One function behind both names (#182) -- the
+/// `/api/toolguard/tool-on` alias and `/api/resources/{id}/scan` -- so the two
+/// cannot drift. The caller has authenticated the device and resolved the tool;
+/// `tool_name` is the id the caller used, for the audit trail.
+pub(crate) async fn activate_tool(
+    state: &AppState,
+    tool_lookup: Option<crate::models::Tool>,
+    card: &str,
+    tool_name: &str,
+) -> Result<ToolGuardResponse, ApiError> {
     // The card's id travels with the user; its *code* does not. The id says
     // which credential was presented -- everything an operator reading the
     // event needs -- without writing a person's physical identifier into a row
     // that outlives the session and lands in every backup (#107, #108).
-    let (user, card_id) = match resolve_card(&state, &req.card).await? {
+    let (user, card_id) = match resolve_card(state, card).await? {
         crate::models::CardResolution::Active { user, card } => {
             // Record the presentation on the card that opened the tool.
             let card_id = card.as_ref().map(|c| c.id);
@@ -478,61 +524,52 @@ async fn tool_on(
             // Known credential deliberately not active — deny, but raise the
             // distinct fraud-signal event (a found/stolen card, or a member on
             // hold), separate from the quiet unknown-card denial below.
-            log_revoked_card_presented(&state, &user, &card, &req.tool_id).await?;
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Card revoked").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Card not authorized")));
+            log_revoked_card_presented(state, &user, &card, &tool_name).await?;
+            log_tool_access_denied(state, Some(&user), &tool_name, "Card revoked").await?;
+            return Ok(ToolGuardResponse::tool_denied("Card not authorized"));
         }
         crate::models::CardResolution::Unknown => {
-            log_tool_access_denied(&state, None, &req.tool_id, "Unknown card").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Unknown card")));
+            log_tool_access_denied(state, None, &tool_name, "Unknown card").await?;
+            return Ok(ToolGuardResponse::tool_denied("Unknown card"));
         }
     };
 
     if !user.is_active {
-        log_tool_access_denied(&state, Some(&user), &req.tool_id, "User is not active").await?;
-        return Ok(Json(ToolGuardResponse::tool_denied("User is not active")));
+        log_tool_access_denied(state, Some(&user), &tool_name, "User is not active").await?;
+        return Ok(ToolGuardResponse::tool_denied("User is not active"));
     }
 
     let tool = match tool_lookup {
         Some(t) => t,
         None => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool not found").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Tool not found")));
+            log_tool_access_denied(state, Some(&user), &tool_name, "Tool not found").await?;
+            return Ok(ToolGuardResponse::tool_denied("Tool not found"));
         }
     };
 
     match tool.status {
         crate::models::ToolStatus::Idle => {}
         crate::models::ToolStatus::InUse => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use")
+            log_tool_access_denied(state, Some(&user), &tool_name, "Tool is already in use")
                 .await?;
-            return Ok(Json(ToolGuardResponse::tool_denied(
-                "Tool is already in use",
-            )));
+            return Ok(ToolGuardResponse::tool_denied("Tool is already in use"));
         }
         crate::models::ToolStatus::Maintenance => {
-            log_tool_access_denied(
-                &state,
-                Some(&user),
-                &req.tool_id,
-                "Tool is under maintenance",
-            )
-            .await?;
-            return Ok(Json(ToolGuardResponse::tool_denied(
-                "Tool is under maintenance",
-            )));
+            log_tool_access_denied(state, Some(&user), &tool_name, "Tool is under maintenance")
+                .await?;
+            return Ok(ToolGuardResponse::tool_denied("Tool is under maintenance"));
         }
         crate::models::ToolStatus::Broken => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is broken").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Tool is broken")));
+            log_tool_access_denied(state, Some(&user), &tool_name, "Tool is broken").await?;
+            return Ok(ToolGuardResponse::tool_denied("Tool is broken"));
         }
         crate::models::ToolStatus::Repair => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is in repair").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Tool is in repair")));
+            log_tool_access_denied(state, Some(&user), &tool_name, "Tool is in repair").await?;
+            return Ok(ToolGuardResponse::tool_denied("Tool is in repair"));
         }
         crate::models::ToolStatus::Retired => {
-            log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is retired").await?;
-            return Ok(Json(ToolGuardResponse::tool_denied("Tool is retired")));
+            log_tool_access_denied(state, Some(&user), &tool_name, "Tool is retired").await?;
+            return Ok(ToolGuardResponse::tool_denied("Tool is retired"));
         }
     }
 
@@ -545,8 +582,8 @@ async fn tool_on(
             ApiError::InternalServerError(format!("Failed to check tool authorization: {}", e))
         })?;
     if !authorized {
-        log_tool_access_denied(&state, Some(&user), &req.tool_id, "Training required").await?;
-        return Ok(Json(ToolGuardResponse::tool_denied("Training required")));
+        log_tool_access_denied(state, Some(&user), &tool_name, "Training required").await?;
+        return Ok(ToolGuardResponse::tool_denied("Training required"));
     }
 
     // Metered tool billing (Phase 2). Money is the LAST gate: training passed
@@ -559,8 +596,8 @@ async fn tool_on(
             match billing.open_session(&user, &tool).map_err(ApiError::from)? {
                 crate::tool_billing::ActivationOutcome::Authorized(_) => {}
                 crate::tool_billing::ActivationOutcome::Denied(reason) => {
-                    log_tool_access_denied(&state, Some(&user), &req.tool_id, &reason).await?;
-                    return Ok(Json(ToolGuardResponse::tool_denied(&reason)));
+                    log_tool_access_denied(state, Some(&user), &tool_name, &reason).await?;
+                    return Ok(ToolGuardResponse::tool_denied(&reason));
                 }
             }
         }
@@ -576,10 +613,8 @@ async fn tool_on(
         .try_activate_tool(tool.id)
         .map_err(|e| ApiError::InternalServerError(format!("Failed to activate tool: {}", e)))?;
     if !activated {
-        log_tool_access_denied(&state, Some(&user), &req.tool_id, "Tool is already in use").await?;
-        return Ok(Json(ToolGuardResponse::tool_denied(
-            "Tool is already in use",
-        )));
+        log_tool_access_denied(state, Some(&user), &tool_name, "Tool is already in use").await?;
+        return Ok(ToolGuardResponse::tool_denied("Tool is already in use"));
     }
 
     use crate::models::NewToolEvent;
@@ -590,12 +625,9 @@ async fn tool_on(
         new_status: Some(crate::models::ToolStatus::InUse),
         user_id: Some(user.id),
         actor_id: Some(user.id),
-        notes: Some(format!(
-            "Activated via ToolGuard (tool_id: {})",
-            req.tool_id
-        )),
+        notes: Some(format!("Activated via ToolGuard (tool_id: {})", tool_name)),
         scan_data: Some(serde_json::json!({
-            "toolguard_id": req.tool_id,
+            "toolguard_id": tool_name,
             "card_id": card_id,
         })),
     };
@@ -603,12 +635,12 @@ async fn tool_on(
         ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
     })?;
 
-    log_tool_activated(&state, &user, tool.id, &req.tool_id).await?;
+    log_tool_activated(state, &user, tool.id, &tool_name).await?;
 
     // Broadcast updated state over MQTT
-    broadcast_toolguard_state(&state).await;
+    broadcast_toolguard_state(state).await;
 
-    Ok(Json(ToolGuardResponse::tool_authorized()))
+    Ok(ToolGuardResponse::tool_authorized())
 }
 
 /// POST /api/toolguard/tool-off
@@ -631,6 +663,21 @@ async fn tool_off(
     // double-auth gate that stood here (an API key required even from an
     // already-authenticated bound device) is removed. See tool_on.
 
+    Ok(Json(
+        deactivate_tool(&state, tool, req.card.as_deref(), &req.tool_id).await?,
+    ))
+}
+
+/// End a tool's session: a stop, with or without a badge (#179). One function
+/// behind both names (#182) -- `/api/toolguard/tool-off` and
+/// `/api/resources/{id}/stop`. The caller has authenticated the device and
+/// resolved the tool; `tool_name` is the id the caller used, for the trail.
+pub(crate) async fn deactivate_tool(
+    state: &AppState,
+    tool: Option<crate::models::Tool>,
+    card: Option<&str>,
+    tool_name: &str,
+) -> Result<ToolGuardResponse, ApiError> {
     // Who stopped it, when a card was presented. An already-open session must
     // still close even if the card was disabled or released mid-use, so both
     // Active and Revoked resolve to the member here; only a truly unknown code
@@ -642,15 +689,15 @@ async fn tool_off(
     // there is a session; a stop on an idle tool is recorded against nobody and
     // still returns the tool to idle, so a stop that lands late is harmless
     // rather than refused.
-    let (user, card_id): (Option<crate::models::User>, Option<Uuid>) = match &req.card {
-        Some(card) => match resolve_card(&state, card).await? {
+    let (user, card_id): (Option<crate::models::User>, Option<Uuid>) = match card {
+        Some(card) => match resolve_card(state, card).await? {
             crate::models::CardResolution::Active { user, card } => {
                 let card_id = card.as_ref().map(|c| c.id);
                 (Some(user), card_id)
             }
             crate::models::CardResolution::Revoked { user, card } => (Some(user), Some(card.id)),
             crate::models::CardResolution::Unknown => {
-                return Ok(Json(ToolGuardResponse::error("Unknown card")))
+                return Ok(ToolGuardResponse::error("Unknown card"))
             }
         },
         None => (None, None),
@@ -658,11 +705,11 @@ async fn tool_off(
 
     let tool = match tool {
         Some(t) => t,
-        None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
+        None => return Ok(ToolGuardResponse::error("Tool not found")),
     };
     let user = match user {
         Some(u) => Some(u),
-        None => signed_on_user(&state, &tool).await?,
+        None => signed_on_user(state, &tool).await?,
     };
 
     state
@@ -694,29 +741,29 @@ async fn tool_off(
         new_status: Some(crate::models::ToolStatus::Idle),
         user_id: user.as_ref().map(|u| u.id),
         actor_id: user.as_ref().map(|u| u.id),
-        notes: Some(if req.card.is_some() {
-            format!("Deactivated via ToolGuard (tool_id: {})", req.tool_id)
+        notes: Some(if card.is_some() {
+            format!("Deactivated via ToolGuard (tool_id: {})", tool_name)
         } else {
             format!(
                 "Deactivated via ToolGuard with no card -- a stop (tool_id: {})",
-                req.tool_id
+                tool_name
             )
         }),
         scan_data: Some(serde_json::json!({
-            "toolguard_id": req.tool_id,
+            "toolguard_id": tool_name,
             "card_id": card_id,
-            "cardless": req.card.is_none(),
+            "cardless": card.is_none(),
         })),
     };
     state.db.create_tool_event(&event).map_err(|e| {
         ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
     })?;
 
-    log_tool_deactivated(&state, user.as_ref(), tool.id, &req.tool_id).await?;
+    log_tool_deactivated(state, user.as_ref(), tool.id, &tool_name).await?;
 
-    broadcast_toolguard_state(&state).await;
+    broadcast_toolguard_state(state).await;
 
-    Ok(Json(ToolGuardResponse::tool_off_ok()))
+    Ok(ToolGuardResponse::tool_off_ok())
 }
 
 /// POST /api/toolguard/tool-log
@@ -747,6 +794,17 @@ async fn tool_log(
     // double-auth gate that stood here (an API key required even from an
     // already-authenticated bound device) is removed. See tool_on.
 
+    Ok(Json(report_tool_usage(&state, tool, &req).await?))
+}
+
+/// Record a usage report against a tool's session. One function behind both
+/// names (#182) -- `/api/toolguard/tool-log` and `/api/resources/{id}/usage`.
+/// The caller has authenticated the device and resolved the tool.
+pub(crate) async fn report_tool_usage(
+    state: &AppState,
+    tool: Option<crate::models::Tool>,
+    req: &ToolLogRequest,
+) -> Result<ToolGuardResponse, ApiError> {
     // Who the usage belongs to.
     //
     // A device that read a card names it. An already-open session must still
@@ -762,35 +820,33 @@ async fn tool_log(
     // With nobody signed on there is nothing to attribute to, and the report
     // is refused the same way a card-named report with no session is.
     let (user, card_id) = match &req.card {
-        Some(card) => match resolve_card(&state, card).await? {
+        Some(card) => match resolve_card(state, card).await? {
             crate::models::CardResolution::Active { user, card } => {
                 let card_id = card.as_ref().map(|c| c.id);
                 (user, card_id)
             }
             crate::models::CardResolution::Revoked { user, card } => (user, Some(card.id)),
             crate::models::CardResolution::Unknown => {
-                return Ok(Json(ToolGuardResponse::error("Unknown card")))
+                return Ok(ToolGuardResponse::error("Unknown card"))
             }
         },
         None => {
             // Attribution needs the tool, so an unknown tool is refused here;
             // the card-named path above keeps its own order, card before tool.
             let Some(tool) = tool.as_ref() else {
-                return Ok(Json(ToolGuardResponse::error("Tool not found")));
+                return Ok(ToolGuardResponse::error("Tool not found"));
             };
-            match signed_on_user(&state, tool).await? {
+            match signed_on_user(state, tool).await? {
                 Some(user) => (user, None),
                 None => {
                     log_tool_access_denied(
-                        &state,
+                        state,
                         None,
                         &req.tool_id,
                         "Usage report with no card and no open session",
                     )
                     .await?;
-                    return Ok(Json(ToolGuardResponse::error(
-                        "No open session for this tool",
-                    )));
+                    return Ok(ToolGuardResponse::error("No open session for this tool"));
                 }
             }
         }
@@ -798,7 +854,7 @@ async fn tool_log(
 
     let tool = match tool {
         Some(t) => t,
-        None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
+        None => return Ok(ToolGuardResponse::error("Tool not found")),
     };
 
     // Metered tool billing (Phase 2): a billable report must correlate to an
@@ -824,15 +880,15 @@ async fn tool_log(
             {
                 if session.user_id != user.id {
                     log_tool_access_denied(
-                        &state,
+                        state,
                         Some(&user),
                         &req.tool_id,
                         "Usage report from a card that did not activate this session",
                     )
                     .await?;
-                    return Ok(Json(ToolGuardResponse::error(
+                    return Ok(ToolGuardResponse::error(
                         "This card did not activate the tool",
-                    )));
+                    ));
                 }
             }
             let applied = billing
@@ -840,15 +896,13 @@ async fn tool_log(
                 .map_err(ApiError::from)?;
             if !applied {
                 log_tool_access_denied(
-                    &state,
+                    state,
                     Some(&user),
                     &req.tool_id,
                     "Usage report without an open session (or invalid seconds)",
                 )
                 .await?;
-                return Ok(Json(ToolGuardResponse::error(
-                    "No open session for this tool",
-                )));
+                return Ok(ToolGuardResponse::error("No open session for this tool"));
             }
         }
     }
@@ -878,7 +932,7 @@ async fn tool_log(
     })?;
 
     log_tool_usage(
-        &state,
+        state,
         &user,
         tool.id,
         &req.tool_id,
@@ -888,7 +942,7 @@ async fn tool_log(
     )
     .await?;
 
-    Ok(Json(ToolGuardResponse::ok_with_message("Usage logged")))
+    Ok(ToolGuardResponse::ok_with_message("Usage logged"))
 }
 
 /// POST /api/toolguard/power-report - record a tool's latest power reading.
@@ -1762,7 +1816,7 @@ async fn signed_on_user(
     }
 }
 
-async fn resolve_card(
+pub(crate) async fn resolve_card(
     state: &AppState,
     card: &str,
 ) -> Result<crate::models::CardResolution, ApiError> {
@@ -1777,7 +1831,7 @@ async fn resolve_card(
 /// Emit the distinct high-signal audit event for a known-but-revoked
 /// (disabled/released) card presented at a tool. Denial is handled separately;
 /// this event exists purely as a hook for later fraud alerting.
-async fn log_revoked_card_presented(
+pub(crate) async fn log_revoked_card_presented(
     state: &AppState,
     user: &crate::models::User,
     card: &crate::models::UserCard,
@@ -1807,7 +1861,7 @@ async fn log_revoked_card_presented(
     Ok(())
 }
 
-async fn find_tool_by_toolguard_id(
+pub(crate) async fn find_tool_by_toolguard_id(
     state: &AppState,
     toolguard_id: &str,
 ) -> Result<Option<crate::models::Tool>, ApiError> {

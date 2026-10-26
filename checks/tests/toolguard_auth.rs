@@ -85,7 +85,40 @@ const AUTHORIZERS: &[&str] = &[
     "authorize_toolguard",
     "authorize_power_report",
     "authorize_alive",
+    // #182: the resource-shaped path's authorizer, in api/resources.rs. Same
+    // rule as `authorize_toolguard` -- the credential first, then the binding
+    // -- and the same proof: it has to reach the primitive.
+    "authorize_resource",
 ];
+
+/// The resource-shaped device path (#182): `/api/resources/{id}/{scan,stop,
+/// usage}`, registered by `resource_routes()` in api/resources.rs. Held to the
+/// rule this file exists for, from the moment the routes were added rather
+/// than after the first unauthenticated one.
+const RESOURCE_EXPECTED: &[(&str, Auth)] = &[
+    ("scan", Auth::Required),
+    ("stop", Auth::Required),
+    ("usage", Auth::Required),
+];
+
+const TOOLGUARD_SRC: &str = "server/src/api/toolguard.rs";
+const RESOURCES_SRC: &str = "server/src/api/resources.rs";
+
+/// Both device-facing API files as one text, so a walk from a handler in one
+/// can reach the primitive in the other. Function names are unique across the
+/// two (asserted, since `handler_body` takes the first match).
+fn device_api_src() -> String {
+    let a = read(TOOLGUARD_SRC);
+    let b = read(RESOURCES_SRC);
+    for name in AUTHORIZERS {
+        let sig = format!("async fn {name}(");
+        assert!(
+            !(a.contains(&sig) && b.contains(&sig)),
+            "`{name}` is defined in both device API files; the walk would take the first"
+        );
+    }
+    format!("{a}\n{b}")
+}
 
 /// The one that actually reads the credential. Everything else in
 /// [`AUTHORIZERS`] has to reach this, which
@@ -171,6 +204,33 @@ fn the_routing_table_registers_exactly_the_handlers_this_check_knows_about() {
     );
 }
 
+#[test]
+fn the_resource_routing_table_registers_exactly_the_handlers_this_check_knows_about() {
+    let src = read(RESOURCES_SRC);
+    let routes_start = src
+        .find("pub fn resource_routes()")
+        .expect("resource_routes() must exist");
+    let routes = &src[routes_start..];
+    let routes = &routes[..routes.find("\n}").expect("unterminated resource_routes()")];
+
+    for (handler, _) in RESOURCE_EXPECTED {
+        assert!(
+            routes.contains(&format!("({handler})")),
+            "handler `{handler}` is no longer registered by resource_routes(); \
+             either it moved or this check is now watching a route that does not exist"
+        );
+    }
+    let registered = routes.matches(".route(").count();
+    assert_eq!(
+        registered,
+        RESOURCE_EXPECTED.len(),
+        "resource_routes() registers {registered} routes but this check knows about {}. \
+         A new resource endpoint must be added to RESOURCE_EXPECTED with its \
+         authentication requirement stated.",
+        RESOURCE_EXPECTED.len()
+    );
+}
+
 /// Walk the call graph from `name`, following only names on `authorizers`, and
 /// say whether `primitive` is reached.
 ///
@@ -215,7 +275,7 @@ fn reaches(src: &str, name: &str, authorizers: &[&str], primitive: &str) -> bool
 /// on the list's word.
 #[test]
 fn every_authorizer_reaches_the_primitive() {
-    let src = read("server/src/api/toolguard.rs");
+    let src = device_api_src();
 
     let hollow: Vec<&str> = AUTHORIZERS
         .iter()
@@ -296,14 +356,23 @@ async fn beta(req: Request) -> Response {
 
 #[test]
 fn every_toolguard_handler_authenticates_its_caller() {
-    let src = read("server/src/api/toolguard.rs");
+    let src = read(TOOLGUARD_SRC);
+    assert_handlers_authenticate(&src, EXPECTED);
+}
 
-    let unauthenticated: Vec<&str> = EXPECTED
+#[test]
+fn every_resource_handler_authenticates_its_caller() {
+    let src = read(RESOURCES_SRC);
+    assert_handlers_authenticate(&src, RESOURCE_EXPECTED);
+}
+
+fn assert_handlers_authenticate(src: &str, expected: &[(&str, Auth)]) {
+    let unauthenticated: Vec<&str> = expected
         .iter()
         .filter(|(_, auth)| *auth == Auth::Required)
         .map(|(name, _)| *name)
         .filter(|name| {
-            let body = code_only(handler_body(&src, name));
+            let body = code_only(handler_body(src, name));
             !AUTHORIZERS.iter().any(|a| body.contains(a))
         })
         .collect();
@@ -393,11 +462,20 @@ fn a_cardless_report_is_attributed_through_the_tools_session() {
          is still in use, which would bill the last member for the next one's time."
     );
 
+    // #182: the body of tool_log is `report_tool_usage`, shared with the
+    // resource path, so the attribution is asserted of the function that does
+    // it and the alias is asserted to reach that function.
     let log = handler_body(&src, "tool_log");
     assert!(
-        log.contains("signed_on_user"),
-        "tool_log no longer consults signed_on_user: a report naming no card has \
-         nobody to go to and a plug cannot meter anything."
+        code_only(log).contains("report_tool_usage"),
+        "tool_log no longer reports through report_tool_usage; the alias and \
+         the resource path can now drift."
+    );
+    let report = handler_body(&src, "report_tool_usage");
+    assert!(
+        report.contains("signed_on_user"),
+        "report_tool_usage no longer consults signed_on_user: a report naming no \
+         card has nobody to go to and a plug cannot meter anything."
     );
 }
 
@@ -410,7 +488,16 @@ fn a_cardless_report_is_attributed_through_the_tools_session() {
 #[test]
 fn the_tool_handlers_do_not_gate_on_the_power_role() {
     let src = read("server/src/api/toolguard.rs");
-    for handler in ["tool_on", "tool_off", "tool_log"] {
+    // #182: the aliases and the functions behind them, since the aliases are
+    // one line each now and the role check would live in the function.
+    for handler in [
+        "tool_on",
+        "tool_off",
+        "tool_log",
+        "activate_tool",
+        "deactivate_tool",
+        "report_tool_usage",
+    ] {
         let body = handler_body(&src, handler);
         assert!(
             !body.contains("binding_role::POWER"),

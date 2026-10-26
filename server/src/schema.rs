@@ -611,7 +611,6 @@ diesel::table! {
         name -> Varchar,
         location -> Nullable<Text>,
         description -> Nullable<Text>,
-        unlock_duration_ms -> Int4,
         enabled -> Bool,
         created_by -> Nullable<Uuid>,
         created_at -> Timestamptz,
@@ -931,6 +930,8 @@ diesel::table! {
         start_stage -> Int4,
         start_delay_ms -> Int4,
         run_on_ms -> Int4,
+        pulse_ms -> Int4,
+        hold_open_access -> Bool,
     }
 }
 
