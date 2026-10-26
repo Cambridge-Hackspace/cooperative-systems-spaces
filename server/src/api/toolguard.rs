@@ -87,6 +87,15 @@ pub struct ToolRequest {
     pub tool_id: String,
 }
 
+/// A stop. `card` is optional (#179): a stop is a safety act and needs no
+/// badge, so a device that read none -- a plug with a stop button, a sensor,
+/// an automation on the local broker -- names the tool alone.
+#[derive(Debug, Deserialize)]
+pub struct ToolStopRequest {
+    pub card: Option<String>,
+    pub tool_id: String,
+}
+
 /// What actually arrives on the wire, before anything is known to be present.
 ///
 /// Every field is optional and the struct is validated *after* authentication,
@@ -128,6 +137,17 @@ impl ToolRequestWire {
             _ => Err(ApiError::BadRequest(
                 "card and tool_id are required".to_string(),
             )),
+        }
+    }
+
+    /// The same body as a stop, where the card is optional (#179).
+    fn validated_for_stop(self) -> Result<ToolStopRequest, ApiError> {
+        match self.tool_id {
+            Some(tool_id) => Ok(ToolStopRequest {
+                card: self.card,
+                tool_id,
+            }),
+            None => Err(ApiError::BadRequest("tool_id is required".to_string())),
         }
     }
 }
@@ -602,7 +622,7 @@ async fn tool_off(
     let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
     let req = parsed
         .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
-        .validated()?;
+        .validated_for_stop()?;
 
     tracing::info!("Tool off request: tool_id={}", req.tool_id);
 
@@ -611,24 +631,38 @@ async fn tool_off(
     // double-auth gate that stood here (an API key required even from an
     // already-authenticated bound device) is removed. See tool_on.
 
-    // Settle/report path: an already-open session must still close even if the
-    // card was disabled or released mid-use, so both Active and Revoked resolve
-    // to the member here; only a truly unknown code is rejected. (The revoked
-    // fraud signal is raised at tool-on, where access is actually granted.)
-    let (user, card_id) = match resolve_card(&state, &req.card).await? {
-        crate::models::CardResolution::Active { user, card } => {
-            let card_id = card.as_ref().map(|c| c.id);
-            (user, card_id)
-        }
-        crate::models::CardResolution::Revoked { user, card } => (user, Some(card.id)),
-        crate::models::CardResolution::Unknown => {
-            return Ok(Json(ToolGuardResponse::error("Unknown card")))
-        }
+    // Who stopped it, when a card was presented. An already-open session must
+    // still close even if the card was disabled or released mid-use, so both
+    // Active and Revoked resolve to the member here; only a truly unknown code
+    // is rejected. (The revoked fraud signal is raised at tool-on, where access
+    // is actually granted.)
+    //
+    // With NO card (#179) the stop goes through regardless: a stop is a safety
+    // act and needs no badge. The session's own member is the one recorded, if
+    // there is a session; a stop on an idle tool is recorded against nobody and
+    // still returns the tool to idle, so a stop that lands late is harmless
+    // rather than refused.
+    let (user, card_id): (Option<crate::models::User>, Option<Uuid>) = match &req.card {
+        Some(card) => match resolve_card(&state, card).await? {
+            crate::models::CardResolution::Active { user, card } => {
+                let card_id = card.as_ref().map(|c| c.id);
+                (Some(user), card_id)
+            }
+            crate::models::CardResolution::Revoked { user, card } => (Some(user), Some(card.id)),
+            crate::models::CardResolution::Unknown => {
+                return Ok(Json(ToolGuardResponse::error("Unknown card")))
+            }
+        },
+        None => (None, None),
     };
 
     let tool = match tool {
         Some(t) => t,
         None => return Ok(Json(ToolGuardResponse::error("Tool not found"))),
+    };
+    let user = match user {
+        Some(u) => Some(u),
+        None => signed_on_user(&state, &tool).await?,
     };
 
     state
@@ -658,22 +692,27 @@ async fn tool_off(
         event_type: "deactivated".to_string(),
         old_status: Some(tool.status.clone()),
         new_status: Some(crate::models::ToolStatus::Idle),
-        user_id: Some(user.id),
-        actor_id: Some(user.id),
-        notes: Some(format!(
-            "Deactivated via ToolGuard (tool_id: {})",
-            req.tool_id
-        )),
+        user_id: user.as_ref().map(|u| u.id),
+        actor_id: user.as_ref().map(|u| u.id),
+        notes: Some(if req.card.is_some() {
+            format!("Deactivated via ToolGuard (tool_id: {})", req.tool_id)
+        } else {
+            format!(
+                "Deactivated via ToolGuard with no card -- a stop (tool_id: {})",
+                req.tool_id
+            )
+        }),
         scan_data: Some(serde_json::json!({
             "toolguard_id": req.tool_id,
             "card_id": card_id,
+            "cardless": req.card.is_none(),
         })),
     };
     state.db.create_tool_event(&event).map_err(|e| {
         ApiError::InternalServerError(format!("Failed to create tool event: {}", e))
     })?;
 
-    log_tool_deactivated(&state, &user, tool.id, &req.tool_id).await?;
+    log_tool_deactivated(&state, user.as_ref(), tool.id, &req.tool_id).await?;
 
     broadcast_toolguard_state(&state).await;
 
@@ -1845,7 +1884,7 @@ async fn log_tool_activated(
 
 async fn log_tool_deactivated(
     state: &AppState,
-    user: &crate::models::User,
+    user: Option<&crate::models::User>,
     tool_id: Uuid,
     toolguard_id: &str,
 ) -> Result<(), ApiError> {
@@ -1854,13 +1893,14 @@ async fn log_tool_deactivated(
         "toolguard_id": toolguard_id,
         "action": "deactivated",
     });
-    let user_id = user.id;
+    // A card-less stop on an idle tool has nobody to record (#179).
+    let user_id = user.map(|u| u.id);
     if let Err(e) = state
         .audit_logger
         .log_event(
             crate::models::AuditEventType::ToolDeactivated,
-            Some(user_id),
-            Some(user_id),
+            user_id,
+            user_id,
             details,
             None,
             None,
