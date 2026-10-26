@@ -53,6 +53,26 @@
 //       (NotInUse) while the second keeps its grant: run-on.
 //   2d. four seconds on -- the second stage's run-on has ended.
 //
+// #182 made a door, a tool and a room the same resource, and the ROOM rides
+// this stage because it is the one that runs css-edge against the broker. A
+// door with this edge as coordinator, a latch box bound as reader and strike
+// (pulse 4200), a power binding of its own and an until_stopped session
+// profile; beside it a momentary front door with a 2000 ms strike:
+//
+//   R1. a badge at the room -- authorized, with strike 4200, on the resource
+//       reply topic AND on the deprecated door alias, which no stage had
+//       ever driven before.
+//   R2. the room's plug is leased while the session is open, long after the
+//       pulse.
+//   R3. a card-less stop naming the room -- the plug is refused at once with
+//       NotInUse: the coordinator ended the session it held for the room.
+//   R4. a badge at the front door -- authorized with strike 2000, and nothing
+//       leased (the latch is no power device; the stopped room stays refused).
+//   R5. a card nobody holds, at the room -- refused with the door policy's
+//       reason and no strike.
+//   And the server's event log for the room has the grant and the refusal, as
+//   rfid, from the edge's signed doors/event.
+//
 // What this does NOT prove: that a physical relay opens. Nothing here switches
 // hardware. It proves the decision leaves the coordinator correctly addressed
 // and correctly timed; what a module does with it is firmware's half of the
@@ -66,7 +86,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { GET, POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { GET, PATCH, POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
 
@@ -146,6 +166,13 @@ async function setup() {
     return {
       id: reg.json?.data?.device_id ?? reg.json?.device_id,
       token: reg.json?.data?.auth_token ?? reg.json?.auth_token,
+      // #120 (#121): the per-device command-channel key, handed out once at
+      // registration. An edge signs its doors/event with it, and the server
+      // REFUSES an unsigned event from a device it minted a key for -- so an
+      // edge configured without the key it was given reports no door event
+      // that is ever recorded. Found by #182's room windows, the first time an
+      // e2e stage drove the local door wire at all.
+      commandKey: reg.json?.data?.mqtt_config?.command_key ?? null,
       status: reg.status,
       text: reg.text,
     }
@@ -154,6 +181,9 @@ async function setup() {
   const edge = await claim(`lease-edge-${tag}`, 'edge', '02:00:00:00:83:01')
   ok('lease/edge-registered', !!edge.id, `register -> ${edge.status} ${edge.text.slice(0, 160)}`)
   ok('lease/edge-got-a-token', !!edge.token, 'registration must return an auth_token')
+  // The precondition for the room's event-log arms: with no key the server
+  // would accept unsigned events and those arms would prove less than they say.
+  ok('lease/edge-holds-a-command-key', !!edge.commandKey, 'registration must hand an edge its command key')
 
   const plug = await claim(`lease-plug-${tag}`, 'power', '02:00:00:00:83:02')
   ok('lease/plug-registered', !!plug.id, `register -> ${plug.status} ${plug.text.slice(0, 160)}`)
@@ -290,9 +320,99 @@ async function setup() {
   })
   assertEq('lease/a-negative-timing-is-refused', 400, negative.status, negative.text.slice(0, 160))
 
+  // ── the room (#182 step 5) ────────────────────────────────────────────────
+  //
+  // A door, a tool and a room are the same resource with different bindings,
+  // and this is the room: a DOOR with a coordinator (this same edge), a latch
+  // box bound as `reader` and `strike`, a power binding of its own, and a
+  // session profile of `until_stopped`. A badge at it pulses the latch AND
+  // leases the room's power until somebody stops it. Beside it a plain door --
+  // `momentary`, the default -- whose badge is a pulse and nothing more. Both
+  // ride this stage because it is the one stage that runs css-edge against a
+  // local broker, and the two doors are decided by that edge from the compiled
+  // snapshot it holds, which the stage republishes to it once it is up.
+  const claimRoles = async (name, roles, mac) => {
+    const invite = await POST('/api/admin/devices/invite', {
+      token: admin.token,
+      body: { expires_in_hours: 1 },
+    })
+    const reg = await POST('/api/devices/register', {
+      body: {
+        device_code: invite.json?.data?.device_code,
+        name,
+        capabilities: { roles },
+        mac_address: mac,
+        software_version: '0.0.0-e2e',
+        platform: 'linux',
+      },
+    })
+    return { id: reg.json?.data?.device_id ?? reg.json?.device_id, status: reg.status, text: reg.text }
+  }
+  const mkPlace = async (name) => {
+    const res = await POST('/api/admin/places', {
+      token: admin.token,
+      body: { name: `${name}-${tag}`, place_type: 'Outside', is_special: true },
+    })
+    return res.json?.data?.id
+  }
+  const outside = await mkPlace('lease-outside')
+  const inside = await mkPlace('lease-inside')
+  ok('lease/room-places-created', !!outside && !!inside, 'two places for the doors to connect')
+  const mkDoor = async (name) => {
+    const res = await POST('/api/admin/doors', {
+      token: admin.token,
+      body: { name: `${name}-${tag}`, place_id_from: outside, place_id_to: inside },
+    })
+    return { id: res.json?.data?.id, status: res.status, text: res.text }
+  }
+  const room = await mkDoor('lease-room')
+  const front = await mkDoor('lease-front')
+  ok('lease/room-doors-created', !!room.id && !!front.id, `${room.status} ${front.status}`)
+  const latch = await claimRoles(`lease-latch-${tag}`, ['reader', 'strike'], '02:00:00:00:83:07')
+  ok('lease/latch-registered', !!latch.id, `register -> ${latch.status} ${latch.text.slice(0, 160)}`)
+  const roomPlug = await claim(`lease-room-plug-${tag}`, 'power', '02:00:00:00:83:08')
+  ok('lease/room-plug-registered', !!roomPlug.id, `register -> ${roomPlug.status}`)
+  const bind = (body) => POST('/api/admin/device-bindings', { token: admin.token, body })
+  const roomBindings = await Promise.all([
+    bind({ resource_id: room.id, device_id: edge.id, role: 'edge', name: `room coordinator ${tag}` }),
+    bind({ resource_id: room.id, device_id: latch.id, role: 'reader', name: `room reader ${tag}` }),
+    bind({ resource_id: room.id, device_id: latch.id, role: 'strike', name: `room latch ${tag}`, pulse_ms: 4200 }),
+    // `ignore` on disconnect: this stage's liveness arms are the tool's, and a
+    // room plug that was never heard from would otherwise be refused for a
+    // reason that has nothing to do with the room.
+    bind({ resource_id: room.id, device_id: roomPlug.id, role: 'power', name: `room plug ${tag}`, on_disconnect: 'ignore' }),
+    bind({ resource_id: front.id, device_id: edge.id, role: 'edge', name: `front coordinator ${tag}` }),
+    bind({ resource_id: front.id, device_id: latch.id, role: 'reader', name: `front reader ${tag}` }),
+    bind({ resource_id: front.id, device_id: latch.id, role: 'strike', name: `front latch ${tag}`, pulse_ms: 2000 }),
+  ])
+  ok(
+    'lease/room-wired',
+    roomBindings.every((b) => b.status === 201),
+    roomBindings.map((b) => `${b.status} ${b.text.slice(0, 80)}`).join(' | ')
+  )
+  const roomed = await PATCH(`/api/admin/resources/${room.id}`, {
+    token: admin.token,
+    body: { session_profile: 'until_stopped' },
+  })
+  assertEq('lease/room-is-until-stopped', 200, roomed.status, roomed.text.slice(0, 160))
+  // The member may enter both. `create_door` seeds a standing staff grant,
+  // which a member does not satisfy, so the user rule is what admits them.
+  for (const door of [room, front]) {
+    const rule = await POST(`/api/admin/doors/${door.id}/rules`, {
+      token: admin.token,
+      body: { kind: 'user', value: member.user.id, effect: 'allow' },
+    })
+    ok(`lease/room-rule-${door.id === room.id ? 'room' : 'front'}`, rule.status === 201, rule.text.slice(0, 120))
+  }
+
   const fixture = {
     tag,
     toolId,
+    roomId: room.id,
+    frontId: front.id,
+    latchId: latch.id,
+    roomPlugId: roomPlug.id,
+    memberId: member.user.id,
     plug2Id: plug2.id,
     card,
     externalId: `lease-${tag}`,
@@ -342,6 +462,9 @@ async function setup() {
   // pulse, confirmation, tool-on and tool-off.
   fs.writeFileSync(path.join(STACK_DIR, 'lease-plug2-id'), plug2.id)
   fs.writeFileSync(path.join(STACK_DIR, 'lease-card'), card)
+  // #182: the two doors' ids, for the room windows.
+  fs.writeFileSync(path.join(STACK_DIR, 'lease-room-id'), room.id)
+  fs.writeFileSync(path.join(STACK_DIR, 'lease-front-id'), front.id)
 
   // The edge's own configuration, written here because this is where the
   // credentials are. `Approved` is the registered state; websocket transport
@@ -358,6 +481,10 @@ calendar_sync_interval_secs = 300
 # card offline, which would make the lease stage's tool-on path fail for a
 # reason that has nothing to do with leases.
 card_device_pepper = "${devicePepper}"
+# The command-channel key registration handed this edge (#121): doors/event
+# goes upstream signed with it, and the server refuses an unsigned one from a
+# device that holds a key.
+command_key = "${edge.commandKey ?? ''}"
 
 # Renew twice per TTL so a single lost message cannot cut a running tool, and
 # keep both well under the stage's observation windows.
@@ -739,8 +866,131 @@ async function assertWindows() {
   )
 }
 
+// ── the room: the snapshot reaches the edge ──────────────────────────────────
+//
+// The server pushes `doors/state` to a door's coordinator when the door
+// changes, and the room was wired before the edge existed to receive it. So
+// once the edge is up the stage asks for it again; the shell then waits for the
+// edge to log the snapshot, which is what makes the room windows a test of the
+// decision and not of a race.
+async function republish() {
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'))
+  const admin = await adminAccount('lease_admin')
+  for (const [label, id] of [
+    ['room', fixture.roomId],
+    ['front', fixture.frontId],
+  ]) {
+    const r = await POST(`/api/admin/doors/${id}/republish`, { token: admin.token })
+    assertEq(`lease/${label}-snapshot-republished`, 200, r.status, r.text.slice(0, 160))
+  }
+}
+
+async function assertRoom(fixture) {
+  const roomScan = captured('lease-room-scan.txt')
+  const roomUnlock = captured('lease-room-unlock.txt')
+  const roomLeased = captured('lease-room-leased.txt')
+  const roomStopped = captured('lease-room-stopped.txt')
+  const frontScan = captured('lease-front-scan.txt')
+  const frontLeases = captured('lease-front-leases.txt')
+  const roomDenied = captured('lease-room-denied.txt')
+  ok(
+    'lease/room-windows-were-captured',
+    [roomScan, roomUnlock, roomLeased, roomStopped, frontScan, frontLeases, roomDenied].every((w) => w !== null),
+    'one or more room capture files is missing; the stage did not run its room section'
+  )
+  const forRoom = (rows) => (rows ?? []).filter((r) => r.resource === fixture.roomId || r.door_id === fixture.roomId)
+  const forFront = (rows) => (rows ?? []).filter((r) => r.resource === fixture.frontId)
+  const ofRoomPlug = (rows) => (rows ?? []).filter((r) => r.device_id === fixture.roomPlugId)
+
+  // The precondition first: the edge answered the badge at all. A silent edge
+  // must present as that, not as a missing lease three assertions later.
+  const yes = forRoom(roomScan)
+  ok('lease/the-room-answers-a-badge', yes.length >= 1, `no resource/response/scan named the room: ${JSON.stringify(roomScan).slice(0, 300)}`)
+  ok(
+    'lease/the-room-grants-the-member-with-the-strike-pulse',
+    yes.length >= 1 && yes[0].authorized === true && yes[0]?.strike?.pulse_ms === 4200,
+    `expected authorized with strike 4200: ${JSON.stringify(yes[0])}`
+  )
+  // The same answer on the deprecated door alias, which no e2e stage had ever
+  // driven: the local door wire gets its first oracle here, on both names.
+  const alias = forRoom(roomUnlock)
+  ok(
+    'lease/the-alias-unlock-says-the-same',
+    alias.length >= 1 && alias[0].granted === true && alias[0].duration_ms === 4200,
+    `door/response/unlock should mirror the scan reply: ${JSON.stringify(alias[0])}`
+  )
+
+  // The room: a session until a stop, so the room's own plug is leased long
+  // after the 4.2 s pulse is over.
+  const leased = ofRoomPlug(roomLeased)
+  ok(
+    'lease/the-rooms-power-is-leased-while-the-session-is-open',
+    leased.length >= 1 && leased.every((r) => r.grant === true),
+    `the room plug should be granted in every lease after the badge: ${JSON.stringify(leased).slice(0, 300)}`
+  )
+  // The latch box's stop button: a card-less stop names the room, and the
+  // edge ends the session it holds for it -- the server does not track a
+  // door's session, so this is the edge's to end.
+  const stopped = ofRoomPlug(roomStopped)
+  ok(
+    'lease/a-cardless-stop-closes-the-room',
+    stopped.length >= 1 && stopped[stopped.length - 1].grant === false && stopped[stopped.length - 1].reason === 'NotInUse',
+    `after the stop the room plug should be refused with NotInUse: ${JSON.stringify(stopped).slice(0, 300)}`
+  )
+
+  // The plain door: a yes is a pulse, and leases nothing -- not even the room
+  // plug, whose session is over.
+  const frontYes = forFront(frontScan)
+  ok(
+    'lease/a-momentary-door-grants-with-its-own-pulse',
+    frontYes.length >= 1 && frontYes[0].authorized === true && frontYes[0]?.strike?.pulse_ms === 2000,
+    `expected authorized with strike 2000: ${JSON.stringify(frontYes[0])}`
+  )
+  ok(
+    'lease/a-momentary-door-leases-nothing',
+    (frontLeases ?? []).every((r) => r.device_id !== fixture.latchId) &&
+      ofRoomPlug(frontLeases).every((r) => r.grant === false),
+    `a door with no power binding must lease nothing, and the stopped room must stay refused: ${JSON.stringify(frontLeases).slice(0, 300)}`
+  )
+
+  // A card nobody holds, at the room: refused with the door policy's own
+  // reason, and no pulse.
+  const denied = forRoom(roomDenied)
+  ok(
+    'lease/a-stranger-is-refused-at-the-room',
+    denied.length >= 1 && denied[0].authorized === false && denied[0].strike === undefined,
+    `expected a refusal with no strike: ${JSON.stringify(denied[0])}`
+  )
+  ok(
+    'lease/the-refusal-gives-the-door-policys-reason',
+    denied.length >= 1 && /not authorized/i.test(String(denied[0].reason ?? '')),
+    `got ${JSON.stringify(denied[0]?.reason)}`
+  )
+
+  // The server's record of what happened at the door: the edge's signed
+  // doors/event reached it, once per presentation, as rfid.
+  const admin = await adminAccount('lease_admin')
+  const events = await GET(`/api/admin/doors/${fixture.roomId}/events`, { token: admin.token })
+  const rows = (events.json?.data?.events ?? events.json?.data ?? []).filter((e) => e.method === 'rfid')
+  ok(
+    'lease/the-rooms-grant-is-in-its-event-log',
+    rows.some((e) => e.granted === true && e.user_id === fixture.memberId),
+    `expected an rfid grant naming the member: ${JSON.stringify(rows).slice(0, 300)}`
+  )
+  ok(
+    'lease/the-rooms-refusal-is-in-its-event-log',
+    rows.some((e) => e.granted === false),
+    `expected an rfid refusal: ${JSON.stringify(rows).slice(0, 300)}`
+  )
+}
+
 main(async () => {
   if (phase === 'setup') return setup()
-  if (phase === 'assert') return assertWindows()
+  if (phase === 'republish') return republish()
+  if (phase === 'assert') {
+    await assertWindows()
+    if (!fs.existsSync(SKIPPED)) await assertRoom(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')))
+    return
+  }
   record('lease/driver-phase', 'fail', `unknown phase ${JSON.stringify(phase)}`)
 })
