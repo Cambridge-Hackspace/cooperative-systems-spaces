@@ -740,6 +740,9 @@ everywhere here: a registered device token, bound to the resource **in any
 role**. A device bound to nothing you name gets `401`, whether or not the
 resource exists.
 
+`css-edge` speaks this path to the server: a badge it decides locally is
+reported on it, and a badge the server must decide is asked on it.
+
 What happens is **by kind**, not by path. A tool's scan runs exactly the code
 `tool-on` runs, so the alias and the resource path cannot drift; a door's scan
 runs the door's own policy through the one access engine, writes the same
@@ -1092,6 +1095,7 @@ gate it; the poll fallback for the MQTT `module/state` push.
       "tool_id": "7c9e6679-…",
       "external_id": "laser-01",
       "kind": "tool",
+      "session_profile": "until_stopped",
       "power_fails_safe": true,
       "modules": [
         {
@@ -1155,6 +1159,15 @@ Field by field:
   coordinator orders the leases when a tool has several `power` bindings. You
   do nothing with them: they describe when your lease will *arrive* and how
   long it may *outlive* a stop. See [start sequencing](#start-sequencing-and-run-on).
+- **`session_profile`** — how a session on this resource ends: `momentary`
+  (a yes is the strike pulse and the session is over when the pulse is — the
+  door as we know it) or `until_stopped` (until a stop: a badge, a stop button,
+  a sensor, the sweep — the tool as we know it, and the room: a door whose
+  `power` bindings stay leased until somebody stops it). Defaulted by kind,
+  changed by an administrator under Resource Wiring. The coordinator reads it;
+  a module does nothing with it beyond knowing that a lease on an
+  `until_stopped` resource outlives the badge and one on a `momentary` resource
+  does not.
 - **`pulse_ms`**, **`hold_open_access`** — a `strike` binding's profile: how
   long the latch is released on a yes (what arrives as `strike.pulse_ms` in a
   scan reply and as `duration_ms` / `unlock_duration_ms` on the door topics),

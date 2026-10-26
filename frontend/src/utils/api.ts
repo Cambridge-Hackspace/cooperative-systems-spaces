@@ -543,6 +543,13 @@ export const toolModulesApi = withErrorGuard({
   },
 })
 
+/** #182: resource-level attributes, whatever the kind. */
+export const resourcesApi = withErrorGuard({
+  update(id: string, body: import('@/types').UpdateResourceRequest) {
+    return apiClient.patch<import('@/types').ResourceSummary>(`/admin/resources/${id}`, body)
+  },
+})
+
 export const powerApi = withErrorGuard({
   config() {
     return apiClient.get<import('@/types').PowerConfig>('/admin/power/config')

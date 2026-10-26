@@ -50,6 +50,24 @@
             </span>
           </div>
 
+          <!--
+            #182: how a session on this resource ends is the resource's to say,
+            whatever its kind. A door set to "until stopped" keeps its power
+            bindings leased until somebody stops it: the room.
+          -->
+          <label class="flex items-center gap-2 text-sm">
+            <span class="text-base-content/70">Session</span>
+            <select
+              class="select select-bordered select-xs"
+              :value="profileOf(tool)"
+              :data-testid="`profile-${tool.tool_id}`"
+              @change="setProfile(tool, ($event.target as HTMLSelectElement).value)"
+            >
+              <option value="momentary">momentary (ends with the strike pulse)</option>
+              <option value="until_stopped">until stopped</option>
+            </select>
+          </label>
+
           <p v-if="hasPower(tool) && !tool.power_fails_safe" class="text-sm text-base-content/70">
             No power module bound to this tool reaches a safe state on its own when it loses
             contact. Cuts still work while the link is up, but treat them as a mitigation rather
@@ -156,7 +174,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
-import { doorsApi, toolModulesApi, toolsApi } from '@/utils/api'
+import { doorsApi, resourcesApi, toolModulesApi, toolsApi } from '@/utils/api'
 import type { Door, ToolModuleStateTool } from '@/types'
 import type { Tool } from '@/types/tools'
 
@@ -182,6 +200,23 @@ function resourceName(t: ToolModuleStateTool): string {
       ? doors.value.find((d) => d.id === t.tool_id)
       : catalog.value.find((c) => c.id === t.tool_id)
   return match?.name ?? t.external_id ?? t.tool_id
+}
+
+/** The profile as shipped, or the kind's default from a server that predates it. */
+function profileOf(t: ToolModuleStateTool): string {
+  if (t.session_profile) return t.session_profile
+  return t.kind === 'door' ? 'momentary' : 'until_stopped'
+}
+
+async function setProfile(t: ToolModuleStateTool, profile: string) {
+  if (profile !== 'momentary' && profile !== 'until_stopped') return
+  const r = await resourcesApi.update(t.tool_id, { session_profile: profile })
+  if (r.success) {
+    t.session_profile = profile
+    error.value = ''
+  } else {
+    error.value = r.error || 'The session profile was not changed'
+  }
 }
 
 /**

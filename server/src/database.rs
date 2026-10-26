@@ -1756,10 +1756,10 @@ impl DatabaseManager {
                 .returning(crate::models::Tool::as_returning())
                 .get_result(conn)?;
             diesel::insert_into(resources::table)
-                .values(crate::models::NewResource {
-                    id: created.id,
-                    kind: crate::models::ResourceKind::Tool.as_str().to_string(),
-                })
+                .values(crate::models::NewResource::of_kind(
+                    created.id,
+                    crate::models::ResourceKind::Tool,
+                ))
                 .execute(conn)?;
             Ok(created)
         })
@@ -3358,6 +3358,54 @@ impl DatabaseManager {
         resources::table
             .select((resources::id, resources::kind))
             .load::<(uuid::Uuid, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every resource's `(kind, session_profile)` (#182), for the wiring snapshot.
+    pub fn resource_profiles(&self) -> Result<Vec<(uuid::Uuid, String, String)>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        resources::table
+            .select((resources::id, resources::kind, resources::session_profile))
+            .load::<(uuid::Uuid, String, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// One resource row, or `None`.
+    pub fn get_resource(
+        &self,
+        resource_id: uuid::Uuid,
+    ) -> Result<Option<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        resources::table
+            .find(resource_id)
+            .select(crate::models::Resource::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Set a resource's session profile (#182). `None` when no such resource.
+    /// The caller validates the vocabulary; the CHECK constraint is the backstop.
+    pub fn update_resource_session_profile(
+        &self,
+        resource_id: uuid::Uuid,
+        profile: &str,
+    ) -> Result<Option<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        diesel::update(resources::table.find(resource_id))
+            .set((
+                resources::session_profile.eq(profile),
+                resources::updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::Resource::as_returning())
+            .get_result(&mut conn)
+            .optional()
             .map_err(DatabaseError::Diesel)
     }
 
@@ -5323,10 +5371,10 @@ impl DatabaseManager {
                 .returning(crate::models::Door::as_returning())
                 .get_result(conn)?;
             diesel::insert_into(resources::table)
-                .values(crate::models::NewResource {
-                    id: created.id,
-                    kind: crate::models::ResourceKind::Door.as_str().to_string(),
-                })
+                .values(crate::models::NewResource::of_kind(
+                    created.id,
+                    crate::models::ResourceKind::Door,
+                ))
                 .execute(conn)?;
 
             // A door is `Restricted`: with no rule at all it denies EVERYONE,
@@ -6939,8 +6987,11 @@ impl DatabaseManager {
         let interlocks = self.list_tool_interlocks()?;
         let external: std::collections::HashMap<uuid::Uuid, Option<String>> =
             self.tool_external_ids()?.into_iter().collect();
-        let kinds: std::collections::HashMap<uuid::Uuid, String> =
-            self.resource_kinds()?.into_iter().collect();
+        let profiles: std::collections::HashMap<uuid::Uuid, (String, String)> = self
+            .resource_profiles()?
+            .into_iter()
+            .map(|(id, kind, profile)| (id, (kind, profile)))
+            .collect();
 
         // BTreeMap so the snapshot is ordered and therefore diffable between
         // builds; an unordered snapshot would churn on every rebuild.
@@ -6948,10 +6999,14 @@ impl DatabaseManager {
         let entry_for = |id: uuid::Uuid| css_lib::wire::ToolModuleTool {
             tool_id: id.to_string(),
             external_id: external.get(&id).cloned().flatten(),
-            kind: kinds
+            kind: profiles
                 .get(&id)
-                .cloned()
+                .map(|(kind, _)| kind.clone())
                 .unwrap_or_else(|| crate::models::ResourceKind::Tool.as_str().to_string()),
+            session_profile: profiles
+                .get(&id)
+                .map(|(_, profile)| profile.clone())
+                .unwrap_or_default(),
             modules: Vec::new(),
             interlocks: Vec::new(),
             power_fails_safe: false,

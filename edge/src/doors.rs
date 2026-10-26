@@ -264,6 +264,19 @@ impl DoorsState {
             .any(|d| d.id == door_id)
     }
 
+    /// The pulse a compiled door's latch is released for (#182): what the
+    /// server put in `unlock_duration_ms`, which since #182 is the door's
+    /// `strike` binding's `pulse_ms` or the site default.
+    pub fn pulse_of(&self, door_id: Uuid) -> Option<i32> {
+        self.inner
+            .read()
+            .ok()?
+            .doors
+            .iter()
+            .find(|d| d.id == door_id)
+            .map(|d| d.unlock_duration_ms)
+    }
+
     pub fn len(&self) -> usize {
         self.inner.read().map(|g| g.doors.len()).unwrap_or(0)
     }

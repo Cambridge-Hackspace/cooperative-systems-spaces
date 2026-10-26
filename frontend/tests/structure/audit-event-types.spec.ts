@@ -139,7 +139,10 @@ describe('the audit filter against the server enum', () => {
       // IS offered -- like revoked_card_presented, it is a signal that a device
       // is not doing its job, and a signal nobody can isolate in the log is not
       // loud. So it does not count here.
-    ).toBe(105)
+      // 105 -> 106: #182 added resource_updated -- an administrator changing a
+      // resource-level attribute (the session profile). A facility-configuration
+      // record like the binding events, so it joins the unfiltered set.
+    ).toBe(106)
   })
 
   // Named separately because these are the ones that matter in an

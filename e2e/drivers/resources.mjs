@@ -26,7 +26,7 @@
 // latch. The edge's translation of the local-broker scan onto this path is step
 // 3 of #182 and is not driven here.
 
-import { GET, POST, account, adminAccount, assertEq, ok, main, record } from './lib.mjs'
+import { GET, POST, PATCH as fetchPatch, account, adminAccount, assertEq, ok, main, record } from './lib.mjs'
 
 const TOOL_EXT = 'RES-TOOL-1'
 const CARD = 'RES-CARD-0001'
@@ -264,6 +264,48 @@ main(async () => {
   assertEq('resources/door-usage-is-refused', 'error', doorUsage.json?.status)
   assertEq('resources/door-usage-refusal-names-the-session', 'No open session for this resource',
     doorUsage.json?.message)
+
+  // --- 6b. the session profile is the resource's to say (#182 step 3) -------
+  // Defaulted by kind -- a door's session is the pulse, a tool's lasts until a
+  // stop -- and changeable by an administrator: a door set to `until_stopped`
+  // is the room. The wiring snapshot carries it to the coordinator.
+  const PATCH = (p, o) => fetchPatch(p, o)
+  const wiringBefore = (await GET('/api/admin/device-bindings/state', T)).json?.data?.tools ?? []
+  assertEq('resources/door-profile-defaults-to-momentary', 'momentary',
+    wiringBefore.find((t) => t.tool_id === door.id)?.session_profile)
+  assertEq('resources/tool-profile-defaults-to-until-stopped', 'until_stopped',
+    wiringBefore.find((t) => t.tool_id === toolId)?.session_profile)
+  const badProfile = await PATCH(`/api/admin/resources/${door.id}`, {
+    token: admin.token,
+    body: { session_profile: 'forever' },
+  })
+  assertEq('resources/an-unknown-profile-is-400', 400, badProfile.status, badProfile.text.slice(0, 200))
+  const nothing = await PATCH(`/api/admin/resources/${door.id}`, { token: admin.token, body: {} })
+  assertEq('resources/an-empty-change-is-400', 400, nothing.status)
+  const asMember = await PATCH(`/api/admin/resources/${door.id}`, {
+    token: member.token,
+    body: { session_profile: 'until_stopped' },
+  })
+  ok('resources/a-member-cannot-set-a-profile', asMember.status === 401 || asMember.status === 403,
+    `-> ${asMember.status}`)
+  const nowhereProfile = await PATCH('/api/admin/resources/00000000-0000-4000-8000-00000000dead', {
+    token: admin.token,
+    body: { session_profile: 'until_stopped' },
+  })
+  assertEq('resources/an-unknown-resource-is-404', 404, nowhereProfile.status)
+  const roomed = await PATCH(`/api/admin/resources/${door.id}`, {
+    token: admin.token,
+    body: { session_profile: 'until_stopped' },
+  })
+  assertEq('resources/a-door-may-be-until-stopped', 200, roomed.status, roomed.text.slice(0, 200))
+  assertEq('resources/the-change-is-reported', 'until_stopped', roomed.json?.data?.session_profile)
+  const wiringAfter = (await GET('/api/admin/device-bindings/state', T)).json?.data?.tools ?? []
+  assertEq('resources/the-wiring-snapshot-carries-the-profile', 'until_stopped',
+    wiringAfter.find((t) => t.tool_id === door.id)?.session_profile)
+  const audited = await GET('/api/admin/audit-logs?event_type=resource_updated&per_page=50', T)
+  ok('resources/the-change-is-audited',
+    (audited.json?.data ?? []).some((l) => String(l.event_data?.resource_id ?? '') === door.id),
+    JSON.stringify(audited.json?.data ?? audited.text).slice(0, 300))
 
   // --- 7. the credential rule -------------------------------------------------
   const wrongDevice = await scan(door.id, reader.token, CARD)

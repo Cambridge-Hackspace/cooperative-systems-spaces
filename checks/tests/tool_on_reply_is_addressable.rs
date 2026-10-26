@@ -114,8 +114,11 @@ fn faults(edge_source: &str) -> Vec<String> {
              defined and never used, so the tool-on reply is published by something else."
         ));
     }
+    // `&req.resource` is the same id under the resource-shaped request (#182):
+    // the one scan path answers every badge, and its request names the
+    // resource, which for a tool is exactly what `tool_id` was.
     for site in &sites {
-        if !site.contains("&req.tool_id") {
+        if !site.contains("&req.tool_id") && !site.contains("&req.resource") {
             out.push(format!(
                 "a publish_tool_on call does not pass the request's own tool_id: {site}\n\
                  The reply would name a tool the caller did not ask about, which is \

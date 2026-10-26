@@ -188,6 +188,7 @@ diesel::table! {
         kind -> Text,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        session_profile -> Text,
     }
 }
 

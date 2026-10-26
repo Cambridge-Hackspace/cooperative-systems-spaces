@@ -26,6 +26,7 @@ use std::collections::BTreeSet;
 
 const MODULES: &str = "server/src/models/tool_modules.rs";
 const TOOLS: &str = "server/src/models/tools.rs";
+const RESOURCES: &str = "server/src/models/resources.rs";
 
 /// The contents of the last `up.sql`, in diesel's order, containing `needle`.
 ///
@@ -114,7 +115,7 @@ fn quoted(s: &str, q: char) -> BTreeSet<String> {
 /// not all belong to one model: `usage_basis` is a property of a tool, not of a
 /// binding, and putting it in `tool_modules.rs` to satisfy this table would be
 /// the test deciding where production code lives.
-const VOCABULARIES: [(&str, &str, &str, &str); 7] = [
+const VOCABULARIES: [(&str, &str, &str, &str); 8] = [
     // Widened with `edge` by the door-coordinator fold, via a named constraint.
     (
         MODULES,
@@ -160,6 +161,14 @@ const VOCABULARIES: [(&str, &str, &str, &str); 7] = [
         "usage_basis",
         "usage_basis",
         "ADD COLUMN usage_basis",
+    ),
+    // #182: how a session on a resource ends -- a property of the resource,
+    // whatever its kind.
+    (
+        RESOURCES,
+        "session_profile",
+        "session_profile",
+        "ADD COLUMN session_profile",
     ),
 ];
 

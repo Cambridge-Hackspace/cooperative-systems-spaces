@@ -202,6 +202,16 @@ async fn main() -> Result<()> {
             // remote → local (server-issued unlocks → local relay).
             // `doors_event_*` flows local → remote (scans → server audit log).
             let doors_state = DoorsState::new();
+            // The one cache (#182): what every badge is decided against and
+            // where every session this edge opens lives. The three ingests
+            // above keep writing where they always did; this is what reads them.
+            use css_edge::resources::TickAction;
+            let resource_cache = css_edge::resources::ResourceCache::new(
+                Arc::clone(&module_state),
+                Arc::clone(&doors_state),
+                Arc::clone(&toolguard_state),
+                Arc::clone(&power_state),
+            );
             let (doors_unlock_tx, doors_unlock_rx) =
                 tokio::sync::mpsc::unbounded_channel::<css_edge::doors::UnlockCommand>();
             let (doors_event_tx, doors_event_rx) =
@@ -355,7 +365,6 @@ async fn main() -> Result<()> {
                     Arc::clone(&power_state),
                     remote_instance_url.clone(),
                     remote_auth_token.clone(),
-                    Arc::clone(&doors_state),
                     doors_event_tx.clone(),
                     Arc::clone(&module_state),
                     // #120 (#121): command-channel key for signing outbound events.
@@ -363,6 +372,7 @@ async fn main() -> Result<()> {
                         .command_key
                         .as_ref()
                         .map(|s| s.clone().into_bytes()),
+                    Arc::clone(&resource_cache),
                 )
                 .await
                 {
@@ -394,38 +404,12 @@ async fn main() -> Result<()> {
                                 });
                             }
 
-                            // Open Access hold: keep the strike energized while a
-                            // door's window is live. Driven off this device's own
-                            // clock, so it self-locks on a server disconnect; the
-                            // relay firmware only understands the momentary unlock,
-                            // so we re-send it faster than it elapses and simply
-                            // stop at the window end (the strike auto-relocks --
-                            // fail-secure). See doors::hold_pulses_at.
-                            {
-                                let lc = Arc::clone(&local_client);
-                                let ds = Arc::clone(&doors_state);
-                                let refresh_secs = css_edge::doors::HOLD_REFRESH_SECS;
-                                let refresh = chrono::Duration::seconds(refresh_secs as i64);
-                                tokio::spawn(async move {
-                                    let mut ticker = interval(Duration::from_secs(refresh_secs));
-                                    loop {
-                                        ticker.tick().await;
-                                        for (door_id, duration_ms) in
-                                            ds.hold_pulses_at(chrono::Utc::now(), refresh)
-                                        {
-                                            lc.publish_doors_hold(door_id, duration_ms);
-                                        }
-                                    }
-                                });
-                            }
-
-                            // ── Module lease watchdog (#83) ──────────────────
+                            // ── The one loop (#83, #182) ─────────────────────
                             // The coordinator half of the lease, and the only
-                            // thing that delivers what `ModuleState::tick`
-                            // decides. Until this loop existed the interlock
-                            // engine ran nowhere: rules were cached, evaluated
-                            // by nothing, and no module was ever granted or
-                            // refused anything.
+                            // thing that delivers what the engine decides. Until
+                            // this loop existed the interlock engine ran nowhere:
+                            // rules were cached, evaluated by nothing, and no
+                            // module was ever granted or refused anything.
                             //
                             // There is no "stop" message and no retry. A module
                             // de-energizes because renewals stopped arriving,
@@ -436,13 +420,23 @@ async fn main() -> Result<()> {
                             // promise nobody is still making. That inversion is
                             // the design; see FIRMWARE.md, "Authorization is a
                             // lease, not a command".
+                            //
+                            // The Open Access hold rides the same pass (#182):
+                            // a held door's strike is kept energized by
+                            // re-sending the momentary unlock faster than it
+                            // elapses, at the hold cadence, driven off this
+                            // device's own clock so it self-locks on a server
+                            // disconnect and simply stops at the window end.
                             {
                                 let lc = Arc::clone(&local_client);
-                                let ms = Arc::clone(&module_state);
+                                let cache = Arc::clone(&resource_cache);
                                 let ttl =
                                     chrono::Duration::milliseconds(app_config.module_lease_ttl_ms);
                                 let offline =
                                     chrono::Duration::milliseconds(app_config.module_offline_ms);
+                                let hold_refresh = chrono::Duration::seconds(
+                                    css_edge::doors::HOLD_REFRESH_SECS as i64,
+                                );
                                 let period = Duration::from_millis(
                                     app_config.module_lease_interval_ms.max(1),
                                 );
@@ -450,8 +444,16 @@ async fn main() -> Result<()> {
                                     let mut ticker = interval(period);
                                     loop {
                                         ticker.tick().await;
-                                        for action in ms.tick(chrono::Utc::now(), ttl, offline) {
-                                            lc.publish_tool_lease(&action);
+                                        let now = chrono::Utc::now();
+                                        for action in cache.tick(now, ttl, offline, hold_refresh) {
+                                            match action {
+                                                TickAction::Lease(lease) => {
+                                                    lc.publish_tool_lease(&lease)
+                                                }
+                                                TickAction::Hold { resource, pulse_ms } => {
+                                                    lc.publish_doors_hold(resource, pulse_ms)
+                                                }
+                                            }
                                         }
                                     }
                                 });

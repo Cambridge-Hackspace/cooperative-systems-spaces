@@ -347,6 +347,9 @@ pub enum AuditEventType {
     // Tool module bindings + safety interlocks (#83)
     ToolModuleCreated,
     ToolModuleDeleted,
+    /// #182: an administrator changed a resource-level attribute -- today the
+    /// session profile.
+    ResourceUpdated,
     ToolInterlockCreated,
     ToolInterlockDeleted,
     // Bypass detection (#84). Transition events, not level events: a module
@@ -591,6 +594,7 @@ impl AuditEventType {
             Self::PlaceDeleted => "place_deleted",
             Self::ToolModuleCreated => "tool_module_created",
             Self::ToolModuleDeleted => "tool_module_deleted",
+            Self::ResourceUpdated => "resource_updated",
             Self::ToolInterlockCreated => "tool_interlock_created",
             Self::ToolInterlockDeleted => "tool_interlock_deleted",
             Self::ToolModuleSilent => "tool_module_silent",
@@ -741,6 +745,7 @@ impl AuditEventType {
             PlaceDeleted,
             ToolModuleCreated,
             ToolModuleDeleted,
+            ResourceUpdated,
             ToolInterlockCreated,
             ToolInterlockDeleted,
             ToolModuleSilent,
@@ -880,9 +885,8 @@ impl AuditEventType {
             | DoorUnlockedCard | DoorUnlockedQr | DoorUnlockedAdmin | DoorUnlockDenied
             | DoorCheckinRecorded => Category::Door,
             PlaceCreated | PlaceUpdated | PlaceMoved | PlaceDeleted => Category::Place,
-            ToolModuleCreated | ToolModuleDeleted | ToolInterlockCreated | ToolInterlockDeleted => {
-                Category::Module
-            }
+            ToolModuleCreated | ToolModuleDeleted | ResourceUpdated | ToolInterlockCreated
+            | ToolInterlockDeleted => Category::Module,
             ToolModuleSilent
             | ToolModuleReturned
             | UnauthorizedPowerDetected
@@ -1047,6 +1051,7 @@ impl AuditEventType {
             | PlaceDeleted
             | ToolModuleCreated
             | ToolModuleDeleted
+            | ResourceUpdated
             | ToolInterlockCreated
             | ToolInterlockDeleted
             | PowerCircuitCreated

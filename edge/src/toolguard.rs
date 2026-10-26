@@ -224,6 +224,22 @@ impl ToolGuardState {
         AccessResult::Authorized
     }
 
+    /// The UUID of a tool the allow-list names, by external id or UUID string
+    /// (#182): how the one cache tells that a name it holds no wiring for is
+    /// still a tool.
+    pub fn tool_uuid(&self, tool_id_str: &str) -> Option<Uuid> {
+        let guard = self.inner.read().unwrap();
+        guard.as_ref().and_then(|state| {
+            state
+                .tools
+                .iter()
+                .find(|t| {
+                    t.external_id.as_deref() == Some(tool_id_str) || t.id.to_string() == tool_id_str
+                })
+                .map(|t| t.id)
+        })
+    }
+
     /// Whether the server flagged this tool as requiring online (synchronous)
     /// actuation -- a metered tool under `actuation_mode = OnlineSynchronous`.
     /// The edge must then ask the server before energizing it rather than
