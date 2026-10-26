@@ -624,11 +624,21 @@ async function assertWindows() {
   // The tool-on that opens the session, answered by the EDGE from its synced
   // allow-list. A precondition for everything after it, asserted as one so a
   // failure here is not read as a sequencing defect three windows later.
-  const reply = (toolOnReply ?? []).find((r) => r.tool_id === fixture.externalId || r.tool_id === fixture.toolId)
+  // #182: the scan went out on `resource/request/scan` and the reply is read
+  // from `resource/response/scan`, so this is also the proof that the
+  // resource-shaped wire reaches the edge's decision and comes back named.
+  const reply = (toolOnReply ?? []).find(
+    (r) => r.resource === fixture.externalId || r.resource === fixture.toolId
+  )
   ok(
     'lease/the-member-is-authorized-at-the-edge',
     reply?.authorized === true,
-    `the edge did not authorize the member's card: ${JSON.stringify(toolOnReply)}`
+    `the edge did not authorize the member's card on the resource wire: ${JSON.stringify(toolOnReply)}`
+  )
+  ok(
+    'lease/a-tool-scan-reply-carries-no-strike',
+    reply !== undefined && reply.strike === undefined,
+    `a tool is not a latch; its scan reply must carry no strike: ${JSON.stringify(reply)}`
   )
 
   // ── window 2: one report is enough to change the answer ───────────────────
@@ -673,6 +683,21 @@ async function assertWindows() {
     second.length >= 1 && second[second.length - 1]?.grant === true,
     `the second stage never got its lease after the first confirmed and the delay ran: ` +
       `${JSON.stringify(second)}`
+  )
+  // #182: the same leases, on the resource-shaped topic, captured in parallel
+  // with window 2b. `resource` names the tool where the alias says `tool_id`;
+  // everything else is the same message. Without this the new topic could be
+  // declared and never published, and a device built to the new wire would
+  // wait for a lease that never comes.
+  const mirrored = captured('lease-window-2b-resource.txt') ?? []
+  const mirroredPlug2 = mirrored.filter((r) => r.device_id === fixture.plug2Id)
+  ok(
+    'lease/the-lease-is-published-on-the-resource-topic-too',
+    mirroredPlug2.length >= 1 &&
+      mirroredPlug2.every((r) => r.resource === fixture.toolId && typeof r.ttl_ms === 'number') &&
+      mirroredPlug2[mirroredPlug2.length - 1]?.grant === true,
+    `resource/lease did not mirror the grant: ${JSON.stringify(mirroredPlug2)} (alias window had ` +
+      `${second.length})`
   )
 
   // ── #179: run-on ──────────────────────────────────────────────────────────

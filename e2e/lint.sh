@@ -22,6 +22,18 @@ run() { # run <label> <command...>
 
 mapfile -t scripts < <(git ls-files '*.sh')
 
+# The list comes from git, and a process substitution's failure is invisible
+# to `set -e`: when `git ls-files` cannot find a repository the array is simply
+# empty. That happened -- a worktree's `.git` is a pointer file, and a copy of
+# the tree made without the directory it points at has no repository -- and the
+# result was shellcheck printing its usage and the no-backdoors check announcing
+# a clean tree it had not looked at. An empty corpus is a failure of the gate,
+# not a pass of it.
+if [[ ${#scripts[@]} -eq 0 ]]; then
+  echo 'e2e/lint.sh: git ls-files found no shell scripts -- not a git repository here?' >&2
+  exit 1
+fi
+
 # The versions, printed rather than assumed.
 #
 # Neither linter is pinned in either environment: a workstation has whatever it

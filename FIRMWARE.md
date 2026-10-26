@@ -1234,29 +1234,61 @@ shared by the edge, the kiosk and the test tools. The oracle named at the top of
 this file holds this table and that module to each other, so neither can move
 without the other.
 
+**One wire, resource-shaped.** A door, a tool and a room are the same thing on
+this broker: a **resource** a badge is presented to, whose **bindings** decide
+what follows a yes. So there is one scan, one stop, one usage report, one power
+report and one lease, each naming the `resource` — its UUID or its short
+external id, resolved the way a tool id always has been. The older topic
+families — the ones beginning `toolguard` and `door` — are **aliases**: the edge still accepts them
+and still publishes its answers on them, for **one release**, after which they
+go. New firmware speaks the resource topics; existing firmware has a release to
+move.
+
 **Module → edge** (the edge subscribes):
 
 | topic | payload |
 |---|---|
-| `toolguard/request/tool-on` | `{ "card", "tool_id" }` |
-| `toolguard/request/tool-off` | `{ "card"?, "tool_id" }` |
-| `toolguard/request/tool-log` | `{ "card"?, "tool_id", "seconds", "active_seconds"?, "temperature"? }` |
-| `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
-| `toolguard/request/alive` | `{ "device_id" }` |
-| `door/request/scan` | `{ "door_id", "card_id" }` |
-| `kiosk/refresh` | *(none)* — ask the edge to re-push `toolguard/state` |
+| `resource/request/scan` | `{ "resource", "card" }` — a badge presented to a resource |
+| `resource/request/stop` | `{ "resource", "card"? }` — end the session; a stop needs no badge |
+| `resource/request/usage` | `{ "resource", "card"?, "seconds"?, "active_seconds"?, "temperature"? }` |
+| `resource/request/power` | `{ "resource", "device_id"?, "relay_on"?, "draw_now"?, "voltage_now"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
+| `resource/request/alive` | `{ "device_id" }` |
+| `kiosk/refresh` | *(none)* — ask the edge to re-push the allow-list |
 
 **Edge → module** (the edge publishes):
 
 | topic | payload |
 |---|---|
-| `toolguard/response/tool-on` | `{ "tool_id": string, "authorized": bool, "reason": string }` |
-| `toolguard/response/tool-off` | `{ "ok": true }` |
-| `toolguard/response/tool-log` | `{ "ok": true }` |
-| `toolguard/response/power` | `{ "ok": true }` — an ack, nothing more |
-| `door/response/unlock` | `{ "door_id", "granted", "duration_ms", "reason" }` — a momentary unlock |
-| `toolguard/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
-| `toolguard/lease` | permission for one power module to stay energized — see [the lease](#authorization-is-a-lease-not-a-command) |
+| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds |
+| `resource/response/stop` | `{ "ok": true }` |
+| `resource/response/usage` | `{ "ok": true }` |
+| `resource/response/power` | `{ "ok": true }` — an ack, nothing more |
+| `resource/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
+| `resource/lease` | `{ "resource", "device_id", "grant", "ttl_ms", "reason" }` — see [the lease](#authorization-is-a-lease-not-a-command) |
+
+**Aliases, deprecated — one release.** Each row below is the same message under
+its old name. The edge subscribes to the requests and publishes the responses
+alongside the resource topics, and logs a deprecation warning the first time an
+old topic is heard from.
+
+| alias (module → edge) | payload | is now |
+|---|---|---|
+| `toolguard/request/tool-on` | `{ "card", "tool_id" }` | `resource/request/scan` |
+| `toolguard/request/tool-off` | `{ "card"?, "tool_id" }` | `resource/request/stop` |
+| `toolguard/request/tool-log` | `{ "card"?, "tool_id", "seconds", "active_seconds"?, "temperature"? }` | `resource/request/usage` |
+| `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` | `resource/request/power` |
+| `toolguard/request/alive` | `{ "device_id" }` | `resource/request/alive` |
+| `door/request/scan` | `{ "door_id", "card_id" }` | `resource/request/scan` |
+
+| alias (edge → module) | payload | is now |
+|---|---|---|
+| `toolguard/response/tool-on` | `{ "tool_id": string, "authorized": bool, "reason": string }` | `resource/response/scan` |
+| `toolguard/response/tool-off` | `{ "ok": true }` | `resource/response/stop` |
+| `toolguard/response/tool-log` | `{ "ok": true }` | `resource/response/usage` |
+| `toolguard/response/power` | `{ "ok": true }` — an ack, nothing more | `resource/response/power` |
+| `door/response/unlock` | `{ "door_id", "granted", "duration_ms", "reason" }` — a momentary unlock | `resource/response/scan`, with `strike` |
+| `toolguard/state` | the allow-list | `resource/state` |
+| `toolguard/lease` | permission for one power module to stay energized | `resource/lease` |
 
 Three things about this table that cost time if you learn them the hard way:
 
