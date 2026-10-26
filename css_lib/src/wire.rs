@@ -68,11 +68,21 @@ pub struct ToolModuleStatePayload {
     pub tools: Vec<ToolModuleTool>,
 }
 
-/// One tool's wiring: the modules bound to it and the rules that gate it.
+/// One resource's wiring: the modules bound to it and the rules that gate it.
+///
+/// #182: every resource with a binding appears -- a door with a coordinator and
+/// a strike as much as a tool with a plug. `kind` says which; the field names
+/// (`tool_id`, `tools`) are the wire's history and stay for the alias release.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolModuleTool {
+    /// The resource's UUID. Named for the wire's history; a door's id goes here
+    /// too.
     pub tool_id: String,
     pub external_id: Option<String>,
+    /// `tool` | `door` (#182). Absent on a pre-#182 server, which sent only
+    /// tools -- hence the default.
+    #[serde(default = "kind_tool")]
+    pub kind: String,
     pub modules: Vec<DeviceBinding>,
     pub interlocks: Vec<ToolInterlockRule>,
     /// Whether every power module bound to this tool reaches a safe state on its
@@ -97,9 +107,10 @@ pub struct ToolModuleTool {
 pub struct DeviceBinding {
     pub id: String,
     pub device_id: String,
-    /// `reader` | `power` | `sensor` | `edge`. `edge` is load-bearing, not an
-    /// afterthought: it is the role a coordinator holds on a resource, and
-    /// `authorize_power_report` requires it to accept a relayed report.
+    /// `reader` | `power` | `sensor` | `edge` | `strike`. `edge` is load-bearing,
+    /// not an afterthought: it is the role a coordinator holds on a resource, and
+    /// `authorize_power_report` requires it to accept a relayed report. `strike`
+    /// (#182) is a door's latch as a binding, with `pulse_ms` as its profile.
     pub role: String,
     pub name: String,
     /// Role-specific configuration (gpio pin, receptacle id, sensor input, ...).
@@ -123,6 +134,25 @@ pub struct DeviceBinding {
     /// that dies still lapses every lease at its TTL.
     #[serde(default)]
     pub run_on_ms: i32,
+    /// For a `strike` binding (#182): how long the latch is released on a yes,
+    /// in ms. The value a door firmware receives as `strike.pulse_ms` in its
+    /// scan reply. Zero on every other role.
+    #[serde(default)]
+    pub pulse_ms: i32,
+    /// For a `strike` binding (#182): whether the latch is held released for the
+    /// whole of an open-access window (`hold_unlock_until` in `doors/state`), or
+    /// only pulsed per badge. A latch that cannot be held energized says
+    /// `false`, and the door is then never held.
+    #[serde(default = "hold_open_access_default")]
+    pub hold_open_access: bool,
+}
+
+fn kind_tool() -> String {
+    "tool".to_string()
+}
+
+fn hold_open_access_default() -> bool {
+    true
 }
 
 /// One configured interlock: an AND-ed start precondition or an OR-ed trip.

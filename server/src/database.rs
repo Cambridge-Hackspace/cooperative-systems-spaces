@@ -609,6 +609,16 @@ impl DatabaseManager {
 }
 
 /// Connection pool status information
+/// A door's strike profile (#182), read off its `strike` binding(s). See
+/// `DatabaseManager::door_strike`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrikeProfile {
+    /// How long the latch is released on a yes, in ms.
+    pub pulse_ms: i32,
+    /// Whether the latch may be held released for an open-access window.
+    pub hold_open_access: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct PoolStatus {
     pub connections: u32,
@@ -3337,6 +3347,52 @@ impl DatabaseManager {
             .first::<uuid::Uuid>(&mut conn)
             .optional()
             .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every resource's `kind`, for building a snapshot without one query per
+    /// entry (#182).
+    pub fn resource_kinds(&self) -> Result<Vec<(uuid::Uuid, String)>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        resources::table
+            .select((resources::id, resources::kind))
+            .load::<(uuid::Uuid, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The strike profile of a door (#182): the pulse its latch is released for
+    /// on a yes, and whether it is held for an open-access window. `None` when
+    /// the door has no `strike` binding, in which case the caller uses the site
+    /// default pulse and the hold is allowed.
+    ///
+    /// Several strike bindings on one resource (a room with two latches) share
+    /// one pulse on the wire today: the earliest binding's. The hold is the
+    /// conjunction -- an administrator who says one latch must not be held has
+    /// said the door must not be, since the device holds what the snapshot tells
+    /// it to and the snapshot is per door.
+    pub fn door_strike(
+        &self,
+        resource_id: uuid::Uuid,
+    ) -> Result<Option<StrikeProfile>, DatabaseError> {
+        use crate::schema::device_bindings;
+
+        let mut conn = self.get_connection()?;
+        let rows = device_bindings::table
+            .filter(device_bindings::resource_id.eq(resource_id))
+            .filter(device_bindings::role.eq(crate::models::binding_role::STRIKE))
+            .order(device_bindings::created_at.asc())
+            .select((device_bindings::pulse_ms, device_bindings::hold_open_access))
+            .load::<(i32, bool)>(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        let first = match rows.first() {
+            Some((pulse, _)) => *pulse,
+            None => return Ok(None),
+        };
+        Ok(Some(StrikeProfile {
+            pulse_ms: first,
+            hold_open_access: rows.iter().all(|(_, hold)| *hold),
+        }))
     }
 
     /// A device's declared `capabilities` blob, or `None` if no such device
@@ -6865,9 +6921,15 @@ impl DatabaseManager {
     /// The `module/state` snapshot (#83): every tool that has at least one module
     /// bound or one interlock defined, with its wiring and rules.
     ///
-    /// Only wired tools appear. A tool with no bindings has nothing for the edge
-    /// to coordinate, and sending an empty entry for every tool in the space
-    /// would make the common case (few wired tools) pay for the rare one.
+    /// Only wired resources appear. A resource with no bindings has nothing for
+    /// the edge to coordinate, and sending an empty entry for every tool in the
+    /// space would make the common case (few wired resources) pay for the rare
+    /// one.
+    ///
+    /// #182: every resource with a binding is in it -- a door with a coordinator
+    /// and a strike as much as a tool with a plug -- each entry naming its
+    /// `kind`. Until #182 doors were skipped here, which left the one actuator a
+    /// door has invisible to the device holding it.
     pub fn module_state_snapshot(
         &self,
     ) -> Result<css_lib::wire::ToolModuleStatePayload, DatabaseError> {
@@ -6877,30 +6939,28 @@ impl DatabaseManager {
         let interlocks = self.list_tool_interlocks()?;
         let external: std::collections::HashMap<uuid::Uuid, Option<String>> =
             self.tool_external_ids()?.into_iter().collect();
+        let kinds: std::collections::HashMap<uuid::Uuid, String> =
+            self.resource_kinds()?.into_iter().collect();
 
         // BTreeMap so the snapshot is ordered and therefore diffable between
         // builds; an unordered snapshot would churn on every rebuild.
-        let mut by_tool: BTreeMap<uuid::Uuid, css_lib::wire::ToolModuleTool> = BTreeMap::new();
+        let mut by_resource: BTreeMap<uuid::Uuid, css_lib::wire::ToolModuleTool> = BTreeMap::new();
+        let entry_for = |id: uuid::Uuid| css_lib::wire::ToolModuleTool {
+            tool_id: id.to_string(),
+            external_id: external.get(&id).cloned().flatten(),
+            kind: kinds
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| crate::models::ResourceKind::Tool.as_str().to_string()),
+            modules: Vec::new(),
+            interlocks: Vec::new(),
+            power_fails_safe: false,
+        };
 
         for m in modules {
-            // #101: `device_bindings` now also holds a door's `edge` coordinator.
-            // This snapshot is the TOOL wiring, so a binding whose resource is not
-            // a tool is skipped -- otherwise doors would arrive in the edge's
-            // module-state payload as tools with no external_id, and the
-            // coordinator would try to interlock them. `external` is keyed by
-            // every tool id, so membership in it is exactly "this is a tool".
-            if !external.contains_key(&m.resource_id) {
-                continue;
-            }
-            by_tool
+            by_resource
                 .entry(m.resource_id)
-                .or_insert_with(|| css_lib::wire::ToolModuleTool {
-                    tool_id: m.resource_id.to_string(),
-                    external_id: external.get(&m.resource_id).cloned().flatten(),
-                    modules: Vec::new(),
-                    interlocks: Vec::new(),
-                    power_fails_safe: false,
-                })
+                .or_insert_with(|| entry_for(m.resource_id))
                 .modules
                 .push(css_lib::wire::DeviceBinding {
                     id: m.id.to_string(),
@@ -6912,6 +6972,8 @@ impl DatabaseManager {
                     start_stage: m.start_stage,
                     start_delay_ms: m.start_delay_ms,
                     run_on_ms: m.run_on_ms,
+                    pulse_ms: m.pulse_ms,
+                    hold_open_access: m.hold_open_access,
                 });
         }
 
@@ -6919,15 +6981,9 @@ impl DatabaseManager {
         // from what it holds; shipping a rule it must remember not to apply is a
         // second place for the enabled/disabled decision to be got wrong.
         for i in interlocks.into_iter().filter(|i| i.enabled) {
-            by_tool
+            by_resource
                 .entry(i.tool_id)
-                .or_insert_with(|| css_lib::wire::ToolModuleTool {
-                    tool_id: i.tool_id.to_string(),
-                    external_id: external.get(&i.tool_id).cloned().flatten(),
-                    modules: Vec::new(),
-                    interlocks: Vec::new(),
-                    power_fails_safe: false,
-                })
+                .or_insert_with(|| entry_for(i.tool_id))
                 .interlocks
                 .push(css_lib::wire::ToolInterlockRule {
                     id: i.id.to_string(),
@@ -6947,10 +7003,14 @@ impl DatabaseManager {
         // off each power binding's device rather than the binding's `params`. A
         // device we cannot load contributes nothing -- the deny-biased default --
         // and `power_can_fail_safe` treats an empty set as "not fail-safe".
-        let mut tools: Vec<css_lib::wire::ToolModuleTool> = by_tool.into_values().collect();
+        let mut tools: Vec<css_lib::wire::ToolModuleTool> = by_resource.into_values().collect();
         for t in tools.iter_mut() {
             let mut power: Vec<css_lib::capabilities::ModuleCapabilities> = Vec::new();
-            for m in t.modules.iter().filter(|m| m.role == "power") {
+            for m in t
+                .modules
+                .iter()
+                .filter(|m| m.role == crate::models::binding_role::POWER)
+            {
                 if let Ok(device_id) = uuid::Uuid::parse_str(&m.device_id) {
                     if let Some(v) = self.space_device_capabilities(device_id)? {
                         power

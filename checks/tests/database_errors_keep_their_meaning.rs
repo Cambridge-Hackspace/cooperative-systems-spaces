@@ -105,6 +105,11 @@ const BUDGET: &[(&str, usize)] = &[
     // cache, which retired one blanket 500 along the way.
     ("profiles.rs", 4),
     ("responses.rs", 0),
+    // #182: the resource-shaped device path. Its one site re-raises a 500 from
+    // the credential primitive unchanged, so a database fault during
+    // authentication is not reported as a credential problem -- the same line
+    // `authorize_toolguard` carries.
+    ("resources.rs", 1),
     ("schedules.rs", 3),
     // 0. Every handler propagates with `?`: a missing tool/device on a binding
     // is a 400 naming the field, an unknown id on a delete is a 404 decided from

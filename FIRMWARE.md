@@ -74,11 +74,15 @@ usually, an `external_id` — the short string your firmware is configured with
 and sends as `tool_id`. Both are accepted wherever a tool is named; the
 `external_id` is matched first.
 
-**Door.** A resource whose access is a strike rather than a relay. A door names
-two places (it connects them) and is driven by exactly one device bound to it in
-the **`edge`** role — its coordinator. That binding is how the server knows where
-to send `doors/unlock`; a door with no `edge` binding is authored but drives
-nothing, and an unlock for it is logged and published to nobody.
+**Door.** A resource whose actuator is a latch rather than a relay. A door names
+two places (it connects them). Its coordinator is the one device bound to it in
+the **`edge`** role — that binding is how the server knows where to send
+`doors/unlock` and `doors/state`; a door with no `edge` binding is authored but
+drives nothing, and an unlock for it is logged and published to nobody. Its
+latch is a device bound in the **`strike`** role, whose profile is the pulse
+(`pulse_ms`) and whether the latch is held released for an open-access window
+(`hold_open_access`). A door with no `strike` binding opens for the site default
+pulse; a door, a tool and a room differ only in which bindings they have.
 
 A door decides access through the same rules a tool does, including the
 `open_access` latch that holds the strike released during a scheduled window. A
@@ -231,9 +235,10 @@ discovering after the first power cut that you cannot get back in.
 ### Step 2 — have an administrator bind you to something
 
 Registration gets you a token. A token alone authorizes nothing that names a
-tool. At **`/admin/facility`** → *Tool Wiring*, an administrator binds your
-device to a tool **in a role** — `reader`, `power` or `sensor`. A door is bound
-the same way, in the `edge` role, at *Doors*.
+tool. At **`/admin/facility`** → *Resource Wiring* (or on the tool's or door's
+own page), an administrator binds your device to a resource **in a role** —
+`reader`, `power`, `sensor` or `strike`. A door's coordinator is bound the same
+way, in the `edge` role, at *Doors*, and its latch as a `strike` with its pulse.
 
 Until that happens, `tool-on` will refuse you, and the refusal looks exactly
 like a credential problem. If you are building for a metered tool, the binding
@@ -437,13 +442,17 @@ for plugs that predate the pulse.
 A door is the same model with a different output, and two differences that
 matter:
 
-- You publish `door/request/scan` `{"door_id","card_id"}` and act on
-  `door/response/unlock` `{"door_id","granted","duration_ms","reason"}` — a
-  *momentary* release, not a state. **Release only when `granted` is `true`**,
-  the same rule as `authorized` on the tool path: a refusal arrives on this same
-  topic with `granted: false`, and `reason` is for humans. `duration_ms` is `0`
-  on a refusal, so firmware that pulses it blindly happens not to open the door
-  — do not rely on that, check `granted`.
+- You publish `resource/request/scan` `{"resource","card"}` and act on
+  `resource/response/scan` `{"resource","authorized","reason","strike"}` — on a
+  yes for a door, `strike.pulse_ms` is how long to release the latch: a
+  *momentary* release, not a state. **Release only when `authorized` is `true`
+  and `strike` is present**: a refusal arrives on this same topic with
+  `authorized: false` and no `strike`, and `reason` is for humans. (The
+  deprecated `door/request/scan` / `door/response/unlock` pair says the same
+  thing as `granted` and `duration_ms`; `duration_ms` is `0` on a refusal, so
+  firmware that pulses it blindly happens not to open the door — do not rely on
+  that, check `granted`.) The pulse is the door's `strike` binding's `pulse_ms`,
+  which an administrator sets under Resource Wiring.
 - A door's `doors/unlock` command from the server **may carry a `sig`**, and if
   your device holds a `command_key` you must verify it and ignore the command if
   it does not check out. See [signed commands](#signed-commands).
@@ -684,13 +693,18 @@ Most endpoints return `ToolGuardResponse`:
   "status": "ok" | "error",
   "message": "human-readable, may be absent",
   "tool_on":  true | false,
-  "tool_off": true
+  "tool_off": true,
+  "authorized": true | false,
+  "strike": { "pulse_ms": 4200 }
 }
 ```
 
-`message`, `tool_on` and `tool_off` are omitted rather than null when they do not
-apply. **Branch on `status` and `tool_on`, never on `message`** — message text is
-for humans and changes.
+`message`, `tool_on`, `tool_off`, `authorized` and `strike` are omitted rather
+than null when they do not apply. `tool_on` and `tool_off` are the alias
+endpoints' fields; `authorized` and `strike` are the resource path's (see
+[the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)).
+**Branch on `status` and `tool_on` (or `authorized`), never on `message`** —
+message text is for humans and changes.
 
 ### Denials are 200, not 4xx
 
@@ -711,7 +725,73 @@ who is not allowed to use it. **`tool_on: true` is the only thing that means
 
 No authentication. Returns `{"status":"ok"}`. Use it for reachability checks.
 
+### The resource path: one vocabulary for a badge at anything
+
+A door, a tool and a room are the same thing to a device: a **resource** a card
+is presented to, whose bindings decide what follows a yes. The three routes
+below are that one vocabulary; the `tool-on` / `tool-off` / `tool-log` routes
+that follow are **aliases** of them, kept for one release, and documented
+because every shipped device speaks them today. New firmware should speak the
+resource path.
+
+`{id}` is the resource's UUID, or for a tool its short `external_id` — matched
+the way `tool_id` always was, external id first. The credential is the same as
+everywhere here: a registered device token, bound to the resource **in any
+role**. A device bound to nothing you name gets `401`, whether or not the
+resource exists.
+
+What happens is **by kind**, not by path. A tool's scan runs exactly the code
+`tool-on` runs, so the alias and the resource path cannot drift; a door's scan
+runs the door's own policy through the one access engine, writes the same
+access-event row a badge reported by the edge writes (method `rfid`), and
+answers with the pulse its `strike` binding says. Denials are `200` here as
+everywhere.
+
+#### `POST /api/resources/{id}/scan`
+
+JSON body: `card`. A badge presented to the resource.
+
+Answers `authorized: true` on a yes, and — for a resource with a `strike`
+binding — `strike: { "pulse_ms": … }`, the pulse the device may release its
+latch for. A tool's yes opens its session and leases its `power` bindings as
+`tool-on` does; a door's yes is the pulse. **The reply is the actuation**:
+nothing is pushed to the door's coordinator for a scan answered here, so a
+reader that also holds the latch releases it from this reply, as a plug closes
+its relay from a lease.
+
+A tool answers with the same denial messages as `tool-on` (the table there). A
+door answers with its own:
+
+| `message` | meaning |
+|---|---|
+| `Unknown card` | the card resolves to no user |
+| `Card not authorized` | the card is known but disabled or released |
+| `No matching access rule` | no allow rule for this member (doors are restricted by default) |
+| `Denied by access rule` | a deny rule matched |
+| `Door is disabled` | the door is authored but switched off |
+| `Account inactive` | membership lapsed |
+| `Door module is disabled in server configuration` | `[door] enabled = false` on the server |
+
+#### `POST /api/resources/{id}/stop`
+
+JSON body: optional `card`. End the resource's session; **a stop needs no
+badge**, exactly as `tool-off` says. On a tool this is `tool-off`. A door has no
+session to end (its session is the pulse, over before anyone could ask), so a
+stop on one is the late stop the tool path already accepts: `status: "ok"`,
+`No session to end`, recorded against nobody.
+
+#### `POST /api/resources/{id}/usage`
+
+JSON body: `seconds`; optional `card`, `active_seconds`, `temperature`. A usage
+report, exactly as `tool-log` says. On a door it is refused with
+`No open session for this resource`: there is no session for the time to belong
+to.
+
 ### `POST /api/toolguard/tool-on`
+
+**Deprecated alias** of [`POST /api/resources/{id}/scan`](#post-apiresourcesidscan)
+for a tool, kept for one release; the reply says `tool_on` where the resource
+path says `authorized`.
 
 JSON body: `card`, `tool_id`. Requires a device token bound to this tool.
 
@@ -741,6 +821,9 @@ with `tool_on: false`:
 
 ### `POST /api/toolguard/tool-off`
 
+**Deprecated alias** of [`POST /api/resources/{id}/stop`](#post-apiresourcesidstop)
+for a tool, kept for one release.
+
 JSON body: `tool_id`; optional `card`. Requires a device token bound to this
 tool, in any role.
 
@@ -760,6 +843,9 @@ field for an unknown card or a missing tool. Send it anyway on every stop — an
 un-ended session leaves the tool unusable for the next member.
 
 ### `POST /api/toolguard/tool-log`
+
+**Deprecated alias** of [`POST /api/resources/{id}/usage`](#post-apiresourcesidusage)
+for a tool, kept for one release.
 
 JSON body: `tool_id`, `seconds` (float); optional `card`, `active_seconds`
 (float) and `temperature` (float). Requires a device token bound to this tool,
@@ -1005,6 +1091,7 @@ gate it; the poll fallback for the MQTT `module/state` push.
     {
       "tool_id": "7c9e6679-…",
       "external_id": "laser-01",
+      "kind": "tool",
       "power_fails_safe": true,
       "modules": [
         {
@@ -1016,7 +1103,9 @@ gate it; the poll fallback for the MQTT `module/state` push.
           "on_disconnect": "fail_off",
           "start_stage": 0,
           "start_delay_ms": 0,
-          "run_on_ms": 0
+          "run_on_ms": 0,
+          "pulse_ms": 0,
+          "hold_open_access": true
         }
       ],
       "interlocks": [
@@ -1036,10 +1125,12 @@ gate it; the poll fallback for the MQTT `module/state` push.
 }
 ```
 
-Only tools with at least one module bound or one interlock defined appear. Every
-id is a **string**, including the UUIDs, and `tool_id` is the UUID while
-`external_id` is the short name — match the way you match elsewhere:
-`external_id` first, then the UUID string.
+Only resources with at least one module bound or one interlock defined appear
+— a door with a coordinator and a strike as much as a tool with a plug, each
+saying its `kind` (`tool` or `door`). Every id is a **string**, including the
+UUIDs, and `tool_id` is the resource's UUID whatever its kind (the field is
+named for the wire's history) while `external_id` is a tool's short name —
+match the way you match elsewhere: `external_id` first, then the UUID string.
 
 **Find yourself by `device_id`.** The snapshot describes every module on every
 tool you coordinate, not just you; a module reads its own row and ignores the
@@ -1047,9 +1138,11 @@ rest.
 
 Field by field:
 
-- **`role`** — `reader`, `power`, `sensor` or `edge`. The first three are a
-  module's place in a tool's chain; `edge` is the coordinator binding, and it is
-  what a **door** requires (a door with no `edge` binding drives nothing).
+- **`role`** — `reader`, `power`, `sensor`, `edge` or `strike`. The first
+  three are a module's place in a tool's chain; `edge` is the coordinator
+  binding, and it is what a **door** requires to be driven at all (a door with
+  no `edge` binding drives nothing); `strike` is the device holding a door's
+  latch, with the two fields below as its profile.
 - **`params`** — your role-specific configuration, authored by the
   administrator: which GPIO drives the relay, which receptacle you are, which
   input a sensor reads. The shape is deliberately open, because it belongs to
@@ -1062,6 +1155,12 @@ Field by field:
   coordinator orders the leases when a tool has several `power` bindings. You
   do nothing with them: they describe when your lease will *arrive* and how
   long it may *outlive* a stop. See [start sequencing](#start-sequencing-and-run-on).
+- **`pulse_ms`**, **`hold_open_access`** — a `strike` binding's profile: how
+  long the latch is released on a yes (what arrives as `strike.pulse_ms` in a
+  scan reply and as `duration_ms` / `unlock_duration_ms` on the door topics),
+  and whether it may be held released for an open-access window. `false` means
+  a latch that cannot be held energized, and the door's `hold_unlock_until` is
+  then never set. Zero and `true` on every other role.
 - **`power_fails_safe`** — a property of the *tool*, not of you: whether every
   power module bound to it reaches a safe state unaided. See
   [`power_fails_safe`](#power_fails_safe).
@@ -1186,6 +1285,9 @@ coordinates.
   push never arrives — which is the fail-secure behaviour, and the one place in
   this protocol where you need real time.
 - `enabled: false` means the door is authored but must not open.
+- `unlock_duration_ms` is the door's `strike` binding's `pulse_ms` — the site
+  default for a door with no strike binding — and `hold_unlock_until` is only
+  ever set when that binding's `hold_open_access` allows it.
 
 ### Payloads: `doors/unlock` (server → device)
 

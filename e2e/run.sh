@@ -81,8 +81,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # the server, it drives its own scratch database, and it opens no HTTP session at
 # all -- so it claims no address and nothing in it cares where the admin comes
 # from.
-STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -1542,6 +1542,37 @@ stage_doors() {
 
   collect_server_log
   emit_junit doors "driver=doors.mjs"
+}
+
+# ===========================================================================
+# resources -- the resource path: one vocabulary for a badge at anything (#182)
+# ===========================================================================
+# `POST /api/resources/{id}/scan`, `/stop` and `/usage` are the one device
+# vocabulary a tool and a door share; tool-on / tool-off / tool-log are aliases
+# of them for one release. The driver proves the path for BOTH kinds and across
+# the alias boundary: a tool's scan opens the session tool-on opens and the two
+# names close each other's sessions; a door's scan runs the door's own policy
+# and a yes carries the pulse of its `strike` binding (the site default for a
+# door with none); every presentation at the door is in its access-event log;
+# a device bound to one resource is 401 at another.
+#
+# It asserts nothing about a latch moving: the pulse is in the reply.
+stage_resources() {
+  cases_begin resources
+  stack_paths
+
+  if ! server_ready; then
+    record_case "resources/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit resources
+    return 1
+  fi
+  record_case "resources/stack-is-up" ok
+
+  run_node resources.mjs >"${OUT}/logs/resources.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit resources "driver=resources.mjs"
 }
 
 # ===========================================================================

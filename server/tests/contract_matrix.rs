@@ -346,7 +346,12 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // the two #48 edge power endpoints (power-state poll + power-trip), the
     // #83 module-state poll, and the #170 alive pulse -- all InlineAuth (a
     // device token or a per-tool/global API key).
-    assert_eq!(device_routes, 11, "device-authenticated routes");
+    // 14: #182 adds the resource-shaped device path -- `/api/resources/{id}/
+    // scan`, `/stop` and `/usage` -- behind the same device-token-plus-binding
+    // rule as the toolguard routes (checks/tests/toolguard_auth.rs holds them
+    // to it). The three tool aliases they replace stay for one release, so the
+    // surface is wider by exactly three until the aliases go.
+    assert_eq!(device_routes, 14, "device-authenticated routes");
     // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
     // (GET/PUT/DELETE), all authenticated by the session credential. Like the
     // device surface, only their shape checks are reachable offline; their
@@ -387,14 +392,16 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // MFA view and two removals (#151, Admin).
     assert_eq!(jwt_routes, 219, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 219 * 7 + (11 + 6) * 3);
+    assert_eq!(asserted_pairs(), 219 * 7 + (14 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
     // on its contents by looking it up.
     let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
+    // 80 = (14 device + 6 cmi5) routes x 4 content-rejected credentials (#182
+    // moved this from 68 with the three resource routes).
     assert_eq!(
-        deferred, 68,
+        deferred, 80,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

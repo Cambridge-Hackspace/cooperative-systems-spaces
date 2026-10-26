@@ -354,6 +354,47 @@ main(async () => {
   })
   assertEq('doors/coordinator-must-declare-the-edge-role', 400, wrongCap.status)
 
+  // --- the latch is a strike binding (#182) ---------------------------------
+  // A door with no strike binding opens for the site default pulse, and says
+  // so; a strike binding with its own pulse replaces that, and the door's
+  // summary reads the binding. `unlock_duration_ms` is no longer a door
+  // setting, and sending it is refused by name rather than dropped.
+  const beforeStrike = await GET(`/api/admin/doors/${doorD.id}`, T)
+  assertEq('doors/pulse-defaults-without-a-strike', 'default',
+    beforeStrike.json?.data?.pulse_source)
+  ok('doors/default-pulse-is-a-number',
+    Number.isInteger(beforeStrike.json?.data?.pulse_ms) && beforeStrike.json.data.pulse_ms > 0,
+    `pulse_ms=${beforeStrike.json?.data?.pulse_ms}`)
+  const movedSetting = await PATCH(`/api/admin/doors/${doorD.id}`, {
+    token: admin.token,
+    body: { unlock_duration_ms: 4200 },
+  })
+  assertEq('doors/unlock-duration-is-refused-by-name', 400, movedSetting.status)
+  ok('doors/unlock-duration-refusal-says-where-it-went',
+    /strike/.test(movedSetting.text), movedSetting.text.slice(0, 200))
+  const latch = await mkDevice('door-latch', ['strike'], '02:00:00:00:85:03')
+  const strikeBound = await POST('/api/admin/device-bindings', {
+    token: admin.token,
+    body: {
+      resource_id: doorD.id,
+      device_id: latch.id,
+      role: 'strike',
+      name: 'front latch',
+      pulse_ms: 4200,
+    },
+  })
+  assertEq('doors/a-door-can-be-bound-a-strike', 201, strikeBound.status)
+  const afterStrike = await GET(`/api/admin/doors/${doorD.id}`, T)
+  assertEq('doors/pulse-comes-from-the-strike', 'strike', afterStrike.json?.data?.pulse_source)
+  assertEq('doors/pulse-is-the-strikes', 4200, afterStrike.json?.data?.pulse_ms)
+  // The snapshot the edge receives names the door too now, by kind.
+  const wiring = await GET('/api/admin/device-bindings/state', T)
+  const doorEntry = (wiring.json?.data?.tools ?? []).find((t) => t.tool_id === doorD.id)
+  assertEq('doors/a-door-appears-in-the-wiring-snapshot', 'door', doorEntry?.kind)
+  ok('doors/the-wiring-snapshot-carries-the-strike',
+    (doorEntry?.modules ?? []).some((m) => m.role === 'strike' && m.pulse_ms === 4200),
+    JSON.stringify(doorEntry?.modules ?? []).slice(0, 200))
+
   // --- a door binding does not widen the TOOL sync scope (#101 slice 5) ------
   // The toolguard payload hands a device the tools it may actuate and the card
   // digests of the members authorized for them. Its scope is the device's

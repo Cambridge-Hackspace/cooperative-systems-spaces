@@ -16,10 +16,15 @@ use uuid::Uuid;
 ///
 /// `reader` / `power` / `sensor` are a tool's access chain; `edge` is the local
 /// coordinator that drives a door's strike, which used to be the ad-hoc
-/// `doors.edge_device_id` column. Every value here must also be a declarable
-/// `device_role` (a device cannot be bound in a role it does not claim) --
-/// `checks/tests/device_capabilities_agree.rs` asserts that containment, and
-/// `text_check_vocabularies_match.rs` asserts this set equals the SQL CHECK.
+/// `doors.edge_device_id` column. `strike` (#182) is the latch itself expressed
+/// as a binding: the device that releases a door for a moment on a yes, with
+/// the pulse length and the open-access hold as its profile -- what
+/// `doors.unlock_duration_ms` used to be, now on the device that does it, so a
+/// door, a tool and a room are the same resource with different bindings.
+/// Every value here must also be a declarable `device_role` (a device cannot be
+/// bound in a role it does not claim) -- `checks/tests/device_capabilities_agree.rs`
+/// asserts that containment, and `text_check_vocabularies_match.rs` asserts this
+/// set equals the SQL CHECK.
 ///
 /// Was `module_role`, renamed when `edge` joined: a coordinator is not a module.
 pub mod binding_role {
@@ -27,7 +32,8 @@ pub mod binding_role {
     pub const POWER: &str = "power";
     pub const SENSOR: &str = "sensor";
     pub const EDGE: &str = "edge";
-    pub const ALL: [&str; 4] = [READER, POWER, SENSOR, EDGE];
+    pub const STRIKE: &str = "strike";
+    pub const ALL: [&str; 5] = [READER, POWER, SENSOR, EDGE, STRIKE];
 }
 
 /// Fail-safe behaviour when a module loses its link (#83 sec 6).
@@ -106,6 +112,14 @@ pub struct DeviceBinding {
     pub start_delay_ms: i32,
     /// Keep this binding leased this long after any denial.
     pub run_on_ms: i32,
+    /// `strike` only (#182): how long the latch is released on a yes, in ms.
+    /// Zero on every other role. Appended last: positional Queryable.
+    pub pulse_ms: i32,
+    /// `strike` only (#182): whether this latch is held released for the whole
+    /// of an open-access window, or only pulsed on each badge. A latch that
+    /// cannot be held energized says `false`, and the door's `hold_unlock_until`
+    /// is then never set.
+    pub hold_open_access: bool,
 }
 
 /// A new device binding for insertion.
@@ -122,6 +136,8 @@ pub struct NewDeviceBinding {
     pub start_stage: i32,
     pub start_delay_ms: i32,
     pub run_on_ms: i32,
+    pub pulse_ms: i32,
+    pub hold_open_access: bool,
 }
 
 /// A configurable safety interlock rule for a tool.

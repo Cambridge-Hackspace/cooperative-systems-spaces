@@ -21,7 +21,6 @@ pub struct Door {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub unlock_duration_ms: i32,
     pub enabled: bool,
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -37,7 +36,6 @@ pub struct NewDoor {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub unlock_duration_ms: i32,
     pub enabled: bool,
     pub created_by: Option<Uuid>,
     /// Required on insert; every new door must connect two places (use a
@@ -53,7 +51,6 @@ pub struct UpdateDoor {
     pub name: Option<String>,
     pub location: Option<Option<String>>,
     pub description: Option<Option<String>>,
-    pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     pub updated_at: Option<DateTime<Utc>>,
     /// PATCH-style: `Some(uuid)` = set; `None` = leave alone. Setting to

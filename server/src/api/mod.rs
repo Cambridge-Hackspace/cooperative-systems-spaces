@@ -18,6 +18,7 @@ pub mod places;
 pub mod power;
 pub mod profiles;
 pub mod rbac_admin;
+pub mod resources;
 pub mod responses;
 pub mod schedules;
 pub mod stripe;
@@ -46,6 +47,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/cmi5", cmi5::cmi5_router())
         .nest("/config", config::config_routes())
         .nest("/toolguard", toolguard::toolguard_routes())
+        .nest("/resources", resources::resource_routes())
         .nest("/calendar", calendar::calendar_routes())
         .nest("/pages", pages::pages_routes())
         .nest("/devices", devices::devices_routes())

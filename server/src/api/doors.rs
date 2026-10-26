@@ -63,7 +63,13 @@ pub struct DoorSummary {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
-    pub unlock_duration_ms: i32,
+    /// #182: the pulse the door's latch is released for, in ms. Read off the
+    /// door's `strike` binding; the site default when it has none. Was the
+    /// door's own `unlock_duration_ms`, which is now the strike's `pulse_ms`.
+    pub pulse_ms: i32,
+    /// Where `pulse_ms` came from: `strike` (a binding an administrator
+    /// authored) or `default` (`[door] default_unlock_duration_ms`).
+    pub pulse_source: &'static str,
     pub enabled: bool,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
@@ -71,21 +77,23 @@ pub struct DoorSummary {
     pub place_id_to: Option<Uuid>,
 }
 
-impl From<Door> for DoorSummary {
-    fn from(d: Door) -> Self {
-        Self {
-            id: d.id,
-            name: d.name,
-            location: d.location,
-            description: d.description,
-            unlock_duration_ms: d.unlock_duration_ms,
-            enabled: d.enabled,
-            created_at: d.created_at,
-            updated_at: d.updated_at,
-            place_id_from: d.place_id_from,
-            place_id_to: d.place_id_to,
-        }
-    }
+/// A door as the admin screen sees it: the row plus its effective pulse (#182).
+fn summarize(state: &AppState, d: Door) -> Result<DoorSummary, ApiError> {
+    let pulse_ms = state.door_service.strike_profile(d.id)?.pulse_ms;
+    let pulse_source = state.door_service.strike_source(d.id)?;
+    Ok(DoorSummary {
+        id: d.id,
+        name: d.name,
+        location: d.location,
+        description: d.description,
+        pulse_ms,
+        pulse_source,
+        enabled: d.enabled,
+        created_at: d.created_at,
+        updated_at: d.updated_at,
+        place_id_from: d.place_id_from,
+        place_id_to: d.place_id_to,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +108,11 @@ pub struct CreateDoorRequest {
     pub name: String,
     pub location: Option<String>,
     pub description: Option<String>,
+    /// #182: refused by name. The pulse lives on the door's `strike` binding
+    /// now (`POST /api/admin/device-bindings` with `role: "strike"` and
+    /// `pulse_ms`); a client still sending it here would otherwise have its
+    /// setting silently dropped.
+    #[serde(default)]
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     /// Required. Use a special place (e.g. `Outside`) for exterior doors.
@@ -113,6 +126,8 @@ pub struct UpdateDoorRequest {
     pub name: Option<String>,
     pub location: Option<Option<String>>,
     pub description: Option<Option<String>>,
+    /// #182: refused by name; see `CreateDoorRequest`.
+    #[serde(default)]
     pub unlock_duration_ms: Option<i32>,
     pub enabled: Option<bool>,
     /// PATCH-style: `Some` = set; absent = leave alone. Doors can no longer
@@ -346,12 +361,12 @@ async fn door_checkin(
         // Publish the unlock command if a coordinator is bound (#101: an `edge`
         // binding rather than a column).
         if let Some(device_id) = state.db.door_edge_device(door.id)? {
-            if let Err(e) = state.door_service.publish_unlock(
-                device_id,
-                door.id,
-                door.unlock_duration_ms,
-                "qr_checkin",
-            ) {
+            let pulse_ms = state.door_service.strike_profile(door.id)?.pulse_ms;
+            if let Err(e) =
+                state
+                    .door_service
+                    .publish_unlock(device_id, door.id, pulse_ms, "qr_checkin")
+            {
                 tracing::warn!("Failed to publish doors/unlock: {}", e);
             }
         } else {
@@ -405,12 +420,27 @@ async fn door_checkin(
 // Admin handlers
 // ---------------------------------------------------------------------------
 
+/// #182: the one setting that moved off the door, refused rather than ignored.
+fn refuse_moved_duration(sent: Option<i32>) -> Result<(), ApiError> {
+    if sent.is_some() {
+        return Err(ApiError::BadRequest(
+            "unlock_duration_ms is no longer a door setting: the pulse is the door's \
+             'strike' binding's pulse_ms (Resource Wiring)"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 async fn list_doors(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let doors = state.db.list_doors()?;
-    let resp: Vec<DoorSummary> = doors.into_iter().map(DoorSummary::from).collect();
+    let resp: Vec<DoorSummary> = doors
+        .into_iter()
+        .map(|d| summarize(&state, d))
+        .collect::<Result<_, _>>()?;
     Ok(Json(ApiResponse::success(resp)))
 }
 
@@ -422,14 +452,11 @@ async fn create_door(
     if req.name.trim().is_empty() {
         return Err(ApiError::BadRequest("name is required".to_string()));
     }
-    let cfg = state.config_manager.get_config();
+    refuse_moved_duration(req.unlock_duration_ms)?;
     let new_door = NewDoor {
         name: req.name,
         location: req.location,
         description: req.description,
-        unlock_duration_ms: req
-            .unlock_duration_ms
-            .unwrap_or(cfg.door.default_unlock_duration_ms),
         enabled: req.enabled.unwrap_or(true),
         created_by: Some(admin.0.id),
         place_id_from: req.place_id_from,
@@ -443,10 +470,8 @@ async fn create_door(
         serde_json::json!({ "door_id": door.id, "name": door.name }),
     );
     maybe_publish_state(&state, &door);
-    Ok((
-        StatusCode::CREATED,
-        Json(ApiResponse::success(DoorSummary::from(door))),
-    ))
+    let summary = summarize(&state, door)?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::success(summary))))
 }
 
 async fn get_door(
@@ -457,7 +482,7 @@ async fn get_door(
     let door = state.db.get_door(id)?;
     let rules = state.db.list_rules_for_door(door.id)?;
     Ok(Json(ApiResponse::success(DoorDetail {
-        door: DoorSummary::from(door),
+        door: summarize(&state, door)?,
         rules,
     })))
 }
@@ -468,11 +493,11 @@ async fn update_door(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateDoorRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    refuse_moved_duration(req.unlock_duration_ms)?;
     let changes = UpdateDoor {
         name: req.name,
         location: req.location,
         description: req.description,
-        unlock_duration_ms: req.unlock_duration_ms,
         enabled: req.enabled,
         updated_at: Some(Utc::now()),
         place_id_from: req.place_id_from,
@@ -490,7 +515,8 @@ async fn update_door(
     // and the new device when it moves. So this republishes only to the door's
     // own coordinator.
     maybe_publish_state(&state, &door);
-    Ok(Json(ApiResponse::success(DoorSummary::from(door))))
+    let summary = summarize(&state, door)?;
+    Ok(Json(ApiResponse::success(summary)))
 }
 
 async fn delete_door(
@@ -586,12 +612,10 @@ async fn admin_unlock(
         .db
         .door_edge_device(id)?
         .ok_or_else(|| ApiError::BadRequest("Door has no edge device bound".to_string()))?;
-    state.door_service.publish_unlock(
-        device_id,
-        door.id,
-        door.unlock_duration_ms,
-        "admin_remote",
-    )?;
+    let pulse_ms = state.door_service.strike_profile(door.id)?.pulse_ms;
+    state
+        .door_service
+        .publish_unlock(device_id, door.id, pulse_ms, "admin_remote")?;
 
     // Record an access event + audit so the action is visible.
     let _ = state.db.insert_door_access_event(&NewDoorAccessEvent {

@@ -44,7 +44,7 @@
         :class="{ 'tab-active': tab === 'wiring' }"
         @click="setTab('wiring')"
       >
-        Tool Wiring
+        Resource Wiring
       </a>
       <a role="tab" class="tab" :class="{ 'tab-active': tab === 'graph' }" @click="setTab('graph')">
         Graph
@@ -56,7 +56,7 @@
       <DoorManagement v-else-if="tab === 'doors'" embedded />
       <ScheduleManagement v-else-if="tab === 'schedules'" embedded />
       <PowerManagement v-else-if="tab === 'power'" embedded />
-      <ToolWiringManagement v-else-if="tab === 'wiring'" embedded />
+      <ResourceWiring v-else-if="tab === 'wiring'" embedded />
       <FacilityGraph v-else />
     </KeepAlive>
   </div>
@@ -69,7 +69,7 @@ import PlaceManagement from './PlaceManagement.vue'
 import DoorManagement from './DoorManagement.vue'
 import ScheduleManagement from './ScheduleManagement.vue'
 import PowerManagement from './PowerManagement.vue'
-import ToolWiringManagement from './ToolWiringManagement.vue'
+import ResourceWiring from './ResourceWiring.vue'
 // Lazy-load the graph view — cytoscape is ~150 KB gzipped and only matters
 // when the user actually opens the Graph tab.
 const FacilityGraph = defineAsyncComponent(() => import('./FacilityGraph.vue'))

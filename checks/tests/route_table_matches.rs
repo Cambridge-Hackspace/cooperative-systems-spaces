@@ -236,6 +236,12 @@ fn guard_of(src: &str, handler: &str) -> String {
         "module_state",
         // #170: the alive pulse, authenticated by `authorize_alive`.
         "alive",
+        // #182: the resource-shaped device path (api/resources.rs), authenticated
+        // by `authorize_resource`; checks/tests/toolguard_auth.rs holds all
+        // three to it.
+        "scan",
+        "stop",
+        "usage",
     ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();

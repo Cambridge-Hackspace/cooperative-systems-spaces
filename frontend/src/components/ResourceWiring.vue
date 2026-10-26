@@ -1,9 +1,10 @@
 <template>
   <div :class="embedded ? '' : 'container mx-auto px-4 py-8'">
     <div v-if="!embedded" class="mb-6">
-      <h1 class="text-3xl font-bold mb-1">Tool Wiring</h1>
+      <h1 class="text-3xl font-bold mb-1">Resource Wiring</h1>
       <p class="text-base-content/70">
-        Which devices read, switch and watch each tool, and the interlocks that gate them.
+        Which devices read, switch, latch and watch each resource -- a door, a tool, a room -- and
+        the interlocks that gate them.
       </p>
     </div>
 
@@ -16,18 +17,23 @@
     <!-- Guarded on `!error`: a failed load leaves the list empty, and showing
          the empty state next to the error would report a server failure as a
          fact about the space. -->
-    <div v-else-if="wiredTools.length === 0 && !error" class="alert">
+    <div v-else-if="wired.length === 0 && !error" class="alert">
       <span>
-        No tool has modules bound yet. Bind a reader, a power controller or a sensor to a tool to
-        start.
+        No resource has a device bound yet. Bind a reader, a power controller, a strike or a sensor
+        to a tool or a door to start.
       </span>
     </div>
 
     <div v-else class="space-y-6">
-      <div v-for="tool in wiredTools" :key="tool.tool_id" class="card bg-base-200 shadow">
+      <div v-for="tool in wired" :key="tool.tool_id" class="card bg-base-200 shadow">
         <div class="card-body">
           <div class="flex items-center justify-between gap-4 flex-wrap">
-            <h2 class="card-title">{{ toolName(tool) }}</h2>
+            <h2 class="card-title">
+              {{ resourceName(tool) }}
+              <span class="badge badge-ghost" :data-testid="`kind-${tool.tool_id}`">{{
+                tool.kind
+              }}</span>
+            </h2>
             <!--
               The fail-safe verdict is stated plainly rather than hidden behind a
               tooltip. A tool whose plug cannot de-energize itself is one where
@@ -35,6 +41,7 @@
               is authoring rules for it needs to know that while they do it.
             -->
             <span
+              v-if="hasPower(tool)"
               class="badge"
               :class="tool.power_fails_safe ? 'badge-success' : 'badge-warning'"
               :data-testid="`fail-safe-${tool.tool_id}`"
@@ -43,7 +50,7 @@
             </span>
           </div>
 
-          <p v-if="!tool.power_fails_safe" class="text-sm text-base-content/70">
+          <p v-if="hasPower(tool) && !tool.power_fails_safe" class="text-sm text-base-content/70">
             No power module bound to this tool reaches a safe state on its own when it loses
             contact. Cuts still work while the link is up, but treat them as a mitigation rather
             than an interlock.
@@ -61,6 +68,7 @@
                 <th>On disconnect</th>
                 <th>Start</th>
                 <th>Run-on</th>
+                <th>Pulse</th>
               </tr>
             </thead>
             <tbody>
@@ -85,6 +93,18 @@
                   <template v-if="m.role === 'power' && m.run_on_ms">{{
                     seconds(m.run_on_ms)
                   }}</template>
+                  <span v-else class="text-base-content/50">—</span>
+                </td>
+                <td class="whitespace-nowrap" :data-testid="`pulse-${m.id}`">
+                  <!--
+                    #182: a strike's profile. The hold is stated either way,
+                    because a latch that is NOT held during open access is the
+                    one an administrator authoring a window needs to know about.
+                  -->
+                  <template v-if="m.role === 'strike'">
+                    {{ seconds(m.pulse_ms ?? 0) }},
+                    {{ m.hold_open_access === false ? 'not held' : 'held' }} for open access
+                  </template>
                   <span v-else class="text-base-content/50">—</span>
                 </td>
               </tr>
@@ -136,39 +156,57 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
-import { toolModulesApi, toolsApi } from '@/utils/api'
-import type { ToolModuleStateTool } from '@/types'
+import { doorsApi, toolModulesApi, toolsApi } from '@/utils/api'
+import type { Door, ToolModuleStateTool } from '@/types'
 import type { Tool } from '@/types/tools'
 
 defineProps<{ embedded?: boolean }>()
 
 const loading = ref(true)
 const error = ref('')
-const tools = ref<ToolModuleStateTool[]>([])
+const resources = ref<ToolModuleStateTool[]>([])
 const catalog = ref<Tool[]>([])
+const doors = ref<Door[]>([])
 
-const wiredTools = computed(() => tools.value)
+const wired = computed(() => resources.value)
 
-/** Prefer the tool's real name; fall back to whatever identifier we have. */
 /** `1500` → `1.5 s`: the timings are stored in ms and read in seconds. */
 function seconds(ms: number): string {
   return `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`
 }
 
-function toolName(t: ToolModuleStateTool): string {
-  const match = catalog.value.find((c) => c.id === t.tool_id)
+/** Prefer the resource's real name; fall back to whatever identifier we have. */
+function resourceName(t: ToolModuleStateTool): string {
+  const match =
+    t.kind === 'door'
+      ? doors.value.find((d) => d.id === t.tool_id)
+      : catalog.value.find((c) => c.id === t.tool_id)
   return match?.name ?? t.external_id ?? t.tool_id
+}
+
+/**
+ * The fail-safe verdict is about power modules. A door with a strike and a
+ * coordinator has none, and "cannot fail safe" on it would be a warning about
+ * a plug it does not have.
+ */
+function hasPower(t: ToolModuleStateTool): boolean {
+  return t.modules.some((m) => m.role === 'power')
 }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [snapshot, all] = await Promise.all([toolModulesApi.state(), toolsApi.getTools()])
-    if (snapshot?.success && snapshot.data) tools.value = snapshot.data.tools ?? []
+    const [snapshot, all, allDoors] = await Promise.all([
+      toolModulesApi.state(),
+      toolsApi.getTools(),
+      doorsApi.list(),
+    ])
+    if (snapshot?.success && snapshot.data) resources.value = snapshot.data.tools ?? []
     if (all?.success && all.data) catalog.value = all.data
+    if (allDoors?.success && allDoors.data) doors.value = allDoors.data
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load tool wiring'
+    error.value = e instanceof Error ? e.message : 'Failed to load resource wiring'
   } finally {
     loading.value = false
   }

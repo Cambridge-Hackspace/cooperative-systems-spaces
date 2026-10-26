@@ -341,7 +341,14 @@ export interface Door {
   name: string
   location: string | null
   description: string | null
-  unlock_duration_ms: number
+  /**
+   * #182: the pulse the door's latch is released for, in ms -- read off the
+   * door's `strike` binding, or the site default when it has none. Was the
+   * door's own `unlock_duration_ms`.
+   */
+  pulse_ms: number
+  /** Where `pulse_ms` came from. */
+  pulse_source: 'strike' | 'default'
   enabled: boolean
   created_at: string
   updated_at: string
@@ -382,7 +389,6 @@ export interface CreateDoorRequest {
   name: string
   location?: string | null
   description?: string | null
-  unlock_duration_ms?: number
   enabled?: boolean
   /** Required. Use a special place (e.g. `Outside`) for exterior doors. */
   place_id_from: string
@@ -395,7 +401,6 @@ export interface UpdateDoorRequest {
   /** Pass `null` to clear; omit to leave unchanged. */
   location?: string | null
   description?: string | null
-  unlock_duration_ms?: number
   enabled?: boolean
   /** PATCH-style: set to a real place ID (special places included).
       Doors can no longer be set to `null` — model exterior with a
@@ -860,7 +865,7 @@ export interface DeviceBinding {
   /** #101: the resource (a tool, and from slice 4b a door) this binds to. */
   resource_id: string
   device_id: string
-  /** `reader` | `power` | `sensor` */
+  /** `reader` | `power` | `sensor` | `edge` | `strike` */
   role: string
   name: string
   params: Record<string, unknown>
@@ -874,6 +879,10 @@ export interface DeviceBinding {
   start_delay_ms: number
   /** Run-on after any denial, in ms. */
   run_on_ms: number
+  /** #182, `strike` only: how long the latch is released on a yes, in ms. */
+  pulse_ms: number
+  /** #182, `strike` only: held released for an open-access window, or pulsed only. */
+  hold_open_access: boolean
 }
 
 export interface CreateDeviceBindingRequest {
@@ -886,6 +895,10 @@ export interface CreateDeviceBindingRequest {
   start_stage?: number
   start_delay_ms?: number
   run_on_ms?: number
+  /** #182, required on a `strike` binding, refused on any other. */
+  pulse_ms?: number
+  /** #182, `strike` only. */
+  hold_open_access?: boolean
 }
 
 /** A configured interlock: an AND-ed start precondition or an OR-ed trip. */
@@ -919,10 +932,16 @@ export interface CreateToolInterlockRequest {
   enabled?: boolean
 }
 
-/** One tool's wiring as the edge receives it. */
+/**
+ * One resource's wiring as the edge receives it. #182: a door with bindings
+ * appears here too, named by `kind`; `tool_id` is the resource's UUID whatever
+ * its kind (the field name is the wire's history).
+ */
 export interface ToolModuleStateTool {
   tool_id: string
   external_id: string | null
+  /** `tool` | `door` */
+  kind: string
   modules: Array<{
     id: string
     device_id: string
@@ -933,6 +952,8 @@ export interface ToolModuleStateTool {
     start_stage: number
     start_delay_ms: number
     run_on_ms: number
+    pulse_ms: number
+    hold_open_access: boolean
   }>
   interlocks: Array<{
     id: string

@@ -105,15 +105,45 @@
           </span>
         </div>
 
+        <!--
+          #182: the latch is a `strike` binding on the device that releases it,
+          with the pulse and the open-access hold as its profile. A door with no
+          strike binding opens for the site default pulse.
+        -->
         <div class="form-control mb-3">
-          <label class="label"><span class="label-text">Unlock duration (ms)</span></label>
-          <input
-            v-model.number="form.unlock_duration_ms"
-            type="number"
-            min="500"
-            max="60000"
-            class="input input-bordered"
-          />
+          <label class="label"><span class="label-text">Strike device</span></label>
+          <select v-model="form.strike_device_id" class="select select-bordered">
+            <option :value="null">— None (site default pulse) —</option>
+            <option v-for="dev in devices" :key="dev.id" :value="dev.id">
+              {{ dev.name }} ({{ shortId(dev.id) }})
+            </option>
+          </select>
+          <span class="label-text-alt mt-1 text-base-content/60">
+            The device that releases the latch. Its pulse and open-access hold are a strike binding,
+            also shown under Resource Wiring.
+          </span>
+        </div>
+        <div v-if="form.strike_device_id" class="grid grid-cols-2 gap-3 mb-3">
+          <div class="form-control">
+            <label class="label"><span class="label-text">Pulse (ms)</span></label>
+            <input
+              v-model.number="form.pulse_ms"
+              type="number"
+              min="1"
+              max="60000"
+              class="input input-bordered"
+            />
+          </div>
+          <div class="form-control">
+            <label class="label cursor-pointer justify-start gap-3 mt-7">
+              <input
+                v-model="form.hold_open_access"
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm"
+              />
+              <span class="label-text">Hold open during open access</span>
+            </label>
+          </div>
         </div>
 
         <div class="form-control mb-3">
@@ -190,7 +220,16 @@
           <!-- Read-only summary -->
           <div v-if="!editingInline" class="space-y-2 text-sm">
             <div><strong>Edge device:</strong> {{ deviceLabel(edgeDeviceFor(detail.id)) }}</div>
-            <div><strong>Unlock duration:</strong> {{ detail.unlock_duration_ms }} ms</div>
+            <div>
+              <strong>Strike pulse:</strong> {{ detail.pulse_ms }} ms
+              <span class="text-base-content/60">
+                ({{
+                  detail.pulse_source === 'strike'
+                    ? 'strike binding on ' + deviceLabel(strikeDeviceFor(detail.id))
+                    : 'site default; no strike binding'
+                }})
+              </span>
+            </div>
             <div><strong>Status:</strong> {{ detail.enabled ? 'Enabled' : 'Disabled' }}</div>
             <div>
               <strong>From:</strong>
@@ -233,16 +272,31 @@
 
             <div class="grid grid-cols-2 gap-3">
               <div class="form-control">
-                <label class="label py-1"
-                  ><span class="label-text">Unlock duration (ms)</span></label
-                >
-                <input
-                  v-model.number="form.unlock_duration_ms"
-                  type="number"
-                  min="500"
-                  max="60000"
-                  class="input input-bordered input-sm"
-                />
+                <label class="label py-1"><span class="label-text">Strike device</span></label>
+                <select v-model="form.strike_device_id" class="select select-bordered select-sm">
+                  <option :value="null">— None (site default pulse) —</option>
+                  <option v-for="dev in devices" :key="dev.id" :value="dev.id">
+                    {{ dev.name }} ({{ shortId(dev.id) }})
+                  </option>
+                </select>
+                <template v-if="form.strike_device_id">
+                  <label class="label py-1"><span class="label-text">Pulse (ms)</span></label>
+                  <input
+                    v-model.number="form.pulse_ms"
+                    type="number"
+                    min="1"
+                    max="60000"
+                    class="input input-bordered input-sm"
+                  />
+                  <label class="label cursor-pointer justify-start gap-3 py-1">
+                    <input
+                      v-model="form.hold_open_access"
+                      type="checkbox"
+                      class="toggle toggle-primary toggle-sm"
+                    />
+                    <span class="label-text">Hold open during open access</span>
+                  </label>
+                </template>
               </div>
               <div class="form-control">
                 <label class="label cursor-pointer justify-start gap-3 mt-7">
@@ -480,6 +534,16 @@ const devices = ref<Array<{ id: string; name: string }>>([])
  * single request and the binding remains the single source of truth.
  */
 const edgeBindings = ref<Array<{ id: string; resource_id: string; device_id: string }>>([])
+/** #182: a door's latch is a `strike` binding, loaded with the coordinators. */
+const strikeBindings = ref<
+  Array<{
+    id: string
+    resource_id: string
+    device_id: string
+    pulse_ms: number
+    hold_open_access: boolean
+  }>
+>([])
 const users = ref<User[]>([])
 const places = ref<Place[]>([])
 
@@ -493,7 +557,14 @@ const form = ref<{
    * picker's selection, reconciled into an `edge` device binding on save.
    */
   edge_device_id: string | null
-  unlock_duration_ms: number
+  /**
+   * #182: UI-only, like the coordinator. The door's latch is a `strike`
+   * binding on this device, carrying the pulse and the open-access hold;
+   * reconciled on save. `null` = no strike binding, site default pulse.
+   */
+  strike_device_id: string | null
+  pulse_ms: number
+  hold_open_access: boolean
   enabled: boolean
   /** Required — `''` means "not picked yet", which fails validation on save. */
   place_id_from: string
@@ -502,7 +573,9 @@ const form = ref<{
   name: '',
   location: null,
   edge_device_id: null,
-  unlock_duration_ms: 5000,
+  strike_device_id: null,
+  pulse_ms: 5000,
+  hold_open_access: true,
   enabled: true,
   place_id_from: '',
   place_id_to: '',
@@ -555,6 +628,20 @@ function edgeDeviceFor(doorId: string): string | null {
 /** The binding row itself, needed to move or remove a coordinator. */
 function edgeBindingIdFor(doorId: string): string | null {
   return edgeBindings.value.find((b) => b.resource_id === doorId)?.id ?? null
+}
+
+/** #182: the device holding this door's latch, via its `strike` binding. */
+function strikeDeviceFor(doorId: string): string | null {
+  return strikeBindings.value.find((b) => b.resource_id === doorId)?.device_id ?? null
+}
+
+function strikeBindingFor(doorId: string) {
+  return strikeBindings.value.find((b) => b.resource_id === doorId) ?? null
+}
+
+/** Whether the latch is held for open access; a door with no strike is. */
+function strikeHoldFor(doorId: string): boolean {
+  return strikeBindingFor(doorId)?.hold_open_access ?? true
 }
 
 function deviceLabel(id: string | null) {
@@ -614,9 +701,52 @@ async function loadEdgeBindings() {
     edgeBindings.value = all
       .filter((b) => b.role === 'edge')
       .map((b) => ({ id: b.id, resource_id: b.resource_id, device_id: b.device_id }))
+    strikeBindings.value = all
+      .filter((b) => b.role === 'strike')
+      .map((b) => ({
+        id: b.id,
+        resource_id: b.resource_id,
+        device_id: b.device_id,
+        pulse_ms: b.pulse_ms ?? 0,
+        hold_open_access: b.hold_open_access ?? true,
+      }))
   } catch {
     edgeBindings.value = []
+    strikeBindings.value = []
   }
+}
+
+/**
+ * #182: make the door's `strike` binding match the form (`strike_device_id`
+ * null = no strike binding; the door then opens for the site default pulse).
+ *
+ * A binding's profile is not editable in place, so a changed pulse or hold is
+ * delete-then-create like a moved coordinator. The server refuses a device that
+ * does not declare `strike`, and that refusal is shown rather than swallowed:
+ * the door would otherwise look configured and open for the default.
+ */
+async function reconcileStrikeBinding(doorId: string, doorName: string) {
+  const want = form.value.strike_device_id
+  const current = strikeBindingFor(doorId)
+  const same =
+    current !== null &&
+    want === current.device_id &&
+    form.value.pulse_ms === current.pulse_ms &&
+    form.value.hold_open_access === current.hold_open_access
+  if (same || (current === null && want === null)) return
+  if (current) await toolModulesApi.removeModule(current.id)
+  if (want) {
+    const r = await toolModulesApi.createModule({
+      resource_id: doorId,
+      device_id: want,
+      role: 'strike',
+      name: `${doorName} strike`,
+      pulse_ms: form.value.pulse_ms,
+      hold_open_access: form.value.hold_open_access,
+    })
+    if (!r.success) notify(r.error || 'The strike binding was refused', false)
+  }
+  await loadEdgeBindings()
 }
 
 /**
@@ -660,7 +790,9 @@ function openNew() {
     name: '',
     location: null,
     edge_device_id: null,
-    unlock_duration_ms: 5000,
+    strike_device_id: null,
+    pulse_ms: 5000,
+    hold_open_access: true,
     enabled: true,
     place_id_from: first,
     place_id_to: first,
@@ -695,7 +827,6 @@ async function saveDoor() {
     const r = await doorsApi.create({
       name: form.value.name,
       location: form.value.location,
-      unlock_duration_ms: form.value.unlock_duration_ms,
       enabled: form.value.enabled,
       place_id_from: form.value.place_id_from,
       place_id_to: form.value.place_id_to,
@@ -703,6 +834,7 @@ async function saveDoor() {
     if (r.success) {
       if (r.data) {
         await reconcileEdgeBinding(r.data.id, r.data.name, form.value.edge_device_id)
+        await reconcileStrikeBinding(r.data.id, r.data.name)
       }
       notify('Door created')
       showForm.value = false
@@ -763,7 +895,9 @@ function beginInlineEdit() {
     name: detail.value.name,
     location: detail.value.location,
     edge_device_id: edgeDeviceFor(detail.value.id),
-    unlock_duration_ms: detail.value.unlock_duration_ms,
+    strike_device_id: strikeDeviceFor(detail.value.id),
+    pulse_ms: detail.value.pulse_ms,
+    hold_open_access: strikeHoldFor(detail.value.id),
     enabled: detail.value.enabled,
     place_id_from: detail.value.place_id_from ?? '',
     place_id_to: detail.value.place_id_to ?? '',
@@ -792,7 +926,6 @@ async function saveInline() {
     const r = await doorsApi.update(detail.value.id, {
       name: form.value.name,
       location: form.value.location,
-      unlock_duration_ms: form.value.unlock_duration_ms,
       enabled: form.value.enabled,
       place_id_from: form.value.place_id_from,
       place_id_to: form.value.place_id_to,
@@ -800,6 +933,7 @@ async function saveInline() {
     if (r.success) {
       // #101: the coordinator moves through the bindings endpoint, not the door.
       await reconcileEdgeBinding(detail.value.id, form.value.name, form.value.edge_device_id)
+      await reconcileStrikeBinding(detail.value.id, form.value.name)
       notify('Door saved')
       editingInline.value = false
       await loadDoors()
