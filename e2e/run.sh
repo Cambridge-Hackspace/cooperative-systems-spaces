@@ -2010,6 +2010,12 @@ stage_health() {
 # asserted last, after the first has proven leases were flowing, so an empty
 # window means withdrawal rather than "this never worked".
 #
+# #182: the ROOM rides here too -- a door with this edge as coordinator, a latch
+# box, a power binding and an until_stopped profile, plus a momentary front
+# door -- driven through the same scan topic as the tool and asserted by the
+# same driver (its R1-R5 windows). The first time the local door wire, on
+# either name, has had an oracle.
+#
 # This is the first stage to run an *authenticated* edge. The devices stage runs
 # an Unauthenticated one on purpose, which starts a web server and nothing else.
 stage_lease() {
@@ -2153,6 +2159,61 @@ stage_lease() {
     "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
   mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2c.txt"
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2d.txt"
+
+  # ---- the room (#182): a door, a tool and a room through the same topics --
+  #
+  # The same edge, the same broker, the same scan topic. The room is a DOOR
+  # with a coordinator, a latch box bound as reader and strike, a power binding
+  # of its own and an until_stopped session profile; the front door is a plain
+  # momentary one. Both are decided by css-edge from the compiled door snapshot,
+  # which the stage republishes now that the edge is connected to receive it.
+  local room front
+  room="$(cat "${STACK_DIR}/lease-room-id")"
+  front="$(cat "${STACK_DIR}/lease-front-id")"
+  run_node lease.mjs republish >"${OUT}/logs/lease-republish.log" 2>&1 || true
+  absorb_driver_cases || true
+  if wait_for "css-edge to receive the door snapshot" 30 edge_logged "Doors state updated"; then
+    record_case "lease/edge-received-the-door-snapshot" ok
+  else
+    record_case "lease/edge-received-the-door-snapshot" fail \
+      "css-edge never logged a doors/state snapshot; the room windows below cannot be about the decision"
+  fi
+
+  # R1: a badge at the room. Captured on both reply names: the resource topic,
+  # and the deprecated door alias that no stage had ever driven.
+  mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-room-scan.txt" &
+  local room_scan_sub=$!
+  mqtt_sub "door/response/unlock" 4 "${STACK_DIR}/lease-room-unlock.txt" &
+  local room_unlock_sub=$!
+  sleep 1
+  mqtt_pub "resource/request/scan" \
+    "{\"card\":\"${card}\",\"resource\":\"${room}\"}" || true
+  wait "${room_scan_sub}" || true
+  wait "${room_unlock_sub}" || true
+
+  # R2: the pulse is over inside this window; the room's power is not.
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-room-leased.txt"
+
+  # R3: the latch box's stop button -- a stop with no card, naming the room.
+  mqtt_pub "resource/request/stop" "{\"resource\":\"${room}\"}" || true
+  mqtt_sub "toolguard/lease" 3 "${STACK_DIR}/lease-room-stopped.txt"
+
+  # R4: the plain door: a pulse, and nothing leased.
+  mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-front-scan.txt" &
+  local front_scan_sub=$!
+  sleep 1
+  mqtt_pub "resource/request/scan" \
+    "{\"card\":\"${card}\",\"resource\":\"${front}\"}" || true
+  wait "${front_scan_sub}" || true
+  mqtt_sub "toolguard/lease" 3 "${STACK_DIR}/lease-front-leases.txt"
+
+  # R5: a card nobody holds, at the room.
+  mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-room-denied.txt" &
+  local room_denied_sub=$!
+  sleep 1
+  mqtt_pub "resource/request/scan" \
+    "{\"card\":\"E2E-NOSUCHCARD-182\",\"resource\":\"${room}\"}" || true
+  wait "${room_denied_sub}" || true
 
   # ---- the tool-on reply must name the tool it answers (#166) --------------
   #

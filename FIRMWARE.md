@@ -437,22 +437,39 @@ If you switch power, also publish `toolguard/request/power` periodically with
 your `device_id` — that is your telemetry, and it counts as being alive too,
 for plugs that predate the pulse.
 
-### Step 7 — doors, if that is what you are building
+### Step 7 — a latch, and a room
 
-A door is the same model with a different output, and two differences that
-matter:
+A door is not a different model. It is a resource whose actuator is a latch
+rather than a relay, and the latch is a binding like any other: a device bound
+in the **`strike`** role, whose profile is the pulse (`pulse_ms`) and whether
+it is held for an open-access window (`hold_open_access`). The same scan,
+the same reply, the same stop.
 
 - You publish `resource/request/scan` `{"resource","card"}` and act on
   `resource/response/scan` `{"resource","authorized","reason","strike"}` — on a
-  yes for a door, `strike.pulse_ms` is how long to release the latch: a
-  *momentary* release, not a state. **Release only when `authorized` is `true`
-  and `strike` is present**: a refusal arrives on this same topic with
-  `authorized: false` and no `strike`, and `reason` is for humans. (The
-  deprecated `door/request/scan` / `door/response/unlock` pair says the same
-  thing as `granted` and `duration_ms`; `duration_ms` is `0` on a refusal, so
-  firmware that pulses it blindly happens not to open the door — do not rely on
-  that, check `granted`.) The pulse is the door's `strike` binding's `pulse_ms`,
-  which an administrator sets under Resource Wiring.
+  yes for a resource with a latch, `strike.pulse_ms` is how long to release
+  it: a *momentary* release, not a state. **Release only when `authorized` is
+  `true` and `strike` is present**: a refusal arrives on this same topic with
+  `authorized: false` and no `strike`, and `reason` is for humans. A device
+  with a latch that gets a yes with no `strike` releases nothing — the
+  resource has no strike binding yet — and should say so in its log rather
+  than guess a duration. (The deprecated `door/request/scan` /
+  `door/response/unlock` pair says the same thing as `granted` and
+  `duration_ms`; `duration_ms` is `0` on a refusal, so firmware that pulses it
+  blindly happens not to open the door — do not rely on that, check
+  `granted`.)
+- A latch is never leased and never held for a session. On a device that
+  drives a latch and gates no power — a door box — the session is the pulse:
+  over when the latch closes again, with no usage and no stop sent for it.
+- **The room.** A door whose `session_profile` is `until_stopped`, with a
+  strike *and* `power` bindings: a badge pulses the latch and the coordinator
+  leases the room's power until something stops it — a stop button on the
+  door box, which sends the card-less `resource/request/stop` naming the room,
+  exactly as a plug's does. The coordinator ends the session it holds for the
+  room; the server keeps no record of a door's session, so that stop is the
+  coordinator's to honour. A door left on `momentary` (the default) leases
+  nothing beyond the pulse. The profile is the administrator's, under Resource
+  Wiring; a device does nothing different for either.
 - A door's `doors/unlock` command from the server **may carry a `sig`**, and if
   your device holds a `command_key` you must verify it and ignore the command if
   it does not check out. See [signed commands](#signed-commands).
