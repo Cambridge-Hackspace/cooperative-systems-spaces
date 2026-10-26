@@ -32,6 +32,32 @@ impl ResourceKind {
             ResourceKind::Tool => "tool",
         }
     }
+
+    /// The session profile a resource of this kind gets unless an administrator
+    /// says otherwise (#182): a door's session is the pulse, a tool's lasts
+    /// until it is stopped. A default by kind, not a rule -- a door that holds
+    /// a room's power until a stop is `until_stopped`, and nothing about the
+    /// kind forbids it.
+    pub fn default_session_profile(self) -> &'static str {
+        match self {
+            ResourceKind::Door => session_profile::MOMENTARY,
+            ResourceKind::Tool => session_profile::UNTIL_STOPPED,
+        }
+    }
+}
+
+/// How a session on a resource ends (#182). Stored as `resources.session_profile`
+/// text, matching the SQL `CHECK`; `checks/tests/text_check_vocabularies_match.rs`
+/// holds the two to each other.
+///
+/// `momentary`: a yes is the strike pulse and the session is over when the pulse
+/// is -- the door as we know it. `until_stopped`: the session lasts until a stop
+/// (a badge, a stop button, a sensor, the sweep) -- the tool as we know it, and
+/// the room: a door whose power bindings stay leased until somebody stops it.
+pub mod session_profile {
+    pub const MOMENTARY: &str = "momentary";
+    pub const UNTIL_STOPPED: &str = "until_stopped";
+    pub const ALL: [&str; 2] = [MOMENTARY, UNTIL_STOPPED];
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize)]
@@ -43,6 +69,9 @@ pub struct Resource {
     pub kind: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// `momentary` | `until_stopped`; see [`session_profile`]. Appended last:
+    /// positional Queryable.
+    pub session_profile: String,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -53,4 +82,16 @@ pub struct NewResource {
     /// is supplied rather than defaulted.
     pub id: Uuid,
     pub kind: String,
+    pub session_profile: String,
+}
+
+impl NewResource {
+    /// A resource of `kind` with the session profile its kind defaults to.
+    pub fn of_kind(id: Uuid, kind: ResourceKind) -> Self {
+        Self {
+            id,
+            kind: kind.as_str().to_string(),
+            session_profile: kind.default_session_profile().to_string(),
+        }
+    }
 }

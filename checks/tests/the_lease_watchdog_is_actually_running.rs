@@ -53,6 +53,8 @@ fn edge_production_sources() -> Vec<(&'static str, String)> {
         "edge/src/power.rs",
         "edge/src/doors.rs",
         "edge/src/toolguard.rs",
+        // #182: the one cache; its `tick` is what main's loop calls.
+        "edge/src/resources.rs",
         "edge/src/web_server.rs",
         "edge/src/lib.rs",
     ];

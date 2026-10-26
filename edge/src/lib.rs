@@ -18,6 +18,7 @@ pub mod modules;
 pub mod mqtt;
 pub mod power;
 pub mod registration;
+pub mod resources;
 pub mod static_files;
 pub mod system_info;
 pub mod toolguard;

@@ -31,6 +31,9 @@ use std::sync::RwLock;
 use chrono::{DateTime, Duration, Utc};
 use css_lib::wire::{DeviceBinding, ToolInterlockRule, ToolModuleStatePayload, ToolModuleTool};
 
+/// The strike's role, for the pulse a resource's latch is released for.
+const ROLE_STRIKE: &str = "strike";
+
 /// Interlock kinds, as they arrive on the wire.
 const KIND_START_GATE: &str = "start_gate";
 const KIND_TRIP: &str = "trip";
@@ -100,6 +103,32 @@ impl Decision {
     }
 }
 
+/// A session this edge opened on a resource (#179, #182).
+#[derive(Debug, Clone, Copy)]
+struct Session {
+    /// When it opened -- the basis for the grace a local session outranks a
+    /// stale sync by.
+    opened: DateTime<Utc>,
+    /// When it ends on its own, for a `momentary` resource: the strike pulse's
+    /// end. `None` for an `until_stopped` resource, whose session lasts until a
+    /// stop or the server says it is over.
+    ends_at: Option<DateTime<Utc>>,
+}
+
+/// What this edge holds about a resource's wiring, resolved by either name
+/// (#182): what the one cache answers `resolve` with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceWiring {
+    /// The resource's UUID, as a string.
+    pub id: String,
+    /// `tool` | `door`.
+    pub kind: String,
+    /// `momentary` | `until_stopped`, or empty from a server that predates it.
+    pub session_profile: String,
+    /// The pulse of the resource's `strike` binding, if it has one.
+    pub strike_pulse_ms: Option<i32>,
+}
+
 /// One condition's latest reading for one tool.
 #[derive(Debug, Clone, Copy)]
 struct Reading {
@@ -123,7 +152,7 @@ struct Inner {
     module_seen: HashMap<String, DateTime<Utc>>,
     /// Sessions this edge authorized itself, by tool key: when each opened.
     /// Authoritative at once; the server's view reconciles them later.
-    local_sessions: HashMap<String, DateTime<Utc>>,
+    local_sessions: HashMap<String, Session>,
     /// Tools the server's last sync said are in use, by tool key.
     synced_in_use: HashSet<String>,
     /// How long a locally opened session outranks a sync that says idle. A
@@ -174,14 +203,37 @@ impl ModuleState {
     /// the server's synced claim for the tool, so a lease ends with the stop
     /// rather than a sync interval later.
     pub fn note_session(&self, tool: &str, open: bool, now: DateTime<Utc>) {
-        let mut inner = self.inner.write().expect("module lock");
-        let key = Self::tool_key(&inner, tool);
         if open {
-            inner.local_sessions.insert(key, now);
+            self.open_session(tool, now, None);
         } else {
-            inner.local_sessions.remove(&key);
-            inner.synced_in_use.remove(&key);
+            self.close_session(tool);
         }
+    }
+
+    /// Open a session on a resource (#182): `ends_at` is `None` for an
+    /// `until_stopped` resource and the strike pulse's end for a `momentary`
+    /// one, whose session is over when the pulse is -- a lease on its power
+    /// bindings, if it has any, lasts exactly that long.
+    pub fn open_session(&self, resource: &str, now: DateTime<Utc>, ends_at: Option<DateTime<Utc>>) {
+        let mut inner = self.inner.write().expect("module lock");
+        let key = Self::tool_key(&inner, resource);
+        inner.local_sessions.insert(
+            key,
+            Session {
+                opened: now,
+                ends_at,
+            },
+        );
+    }
+
+    /// End a session on this edge's own say-so: a stop. Also drops the
+    /// server's synced claim for the resource, so a lease ends with the stop
+    /// rather than a sync interval later.
+    pub fn close_session(&self, resource: &str) {
+        let mut inner = self.inner.write().expect("module lock");
+        let key = Self::tool_key(&inner, resource);
+        inner.local_sessions.remove(&key);
+        inner.synced_in_use.remove(&key);
     }
 
     /// The server's view of which tools are in use, from a sync (#179).
@@ -190,16 +242,35 @@ impl ModuleState {
     /// grace that the server does not list: an administrator released the
     /// tool, or the session sweep did, and this edge was not the one told.
     /// A younger local session is kept -- the sync may predate the swipe.
-    pub fn reconcile_sessions(&self, in_use_tool_ids: &[String], now: DateTime<Utc>) {
+    ///
+    /// Only for resources the server REPORTS sessions on (#182): `tracked` is
+    /// every tool the sync names. A session on a resource the sync says nothing
+    /// about -- a door held until a stop -- is this edge's to end, by a stop or
+    /// by its own `ends_at`, and a sync that does not mention it is not a sync
+    /// that says it is over.
+    pub fn reconcile_sessions(
+        &self,
+        in_use_tool_ids: &[String],
+        tracked_tool_ids: &[String],
+        now: DateTime<Utc>,
+    ) {
         let mut inner = self.inner.write().expect("module lock");
         let synced: HashSet<String> = in_use_tool_ids
             .iter()
             .map(|t| Self::tool_key(&inner, t))
             .collect();
+        let tracked: HashSet<String> = tracked_tool_ids
+            .iter()
+            .map(|t| Self::tool_key(&inner, t))
+            .collect();
         let grace = inner.local_session_grace;
-        inner
-            .local_sessions
-            .retain(|key, opened| synced.contains(key) || now - *opened < grace);
+        inner.local_sessions.retain(|key, session| {
+            // A momentary session that has run out is gone whoever tracks it.
+            if session.ends_at.is_some_and(|end| now >= end) {
+                return false;
+            }
+            !tracked.contains(key) || synced.contains(key) || now - session.opened < grace
+        });
         inner.synced_in_use = synced;
     }
 
@@ -213,9 +284,14 @@ impl ModuleState {
             .insert(device_id.to_string(), (relay_on, now));
     }
 
-    /// Whether the tool is in use as far as this edge knows.
-    fn in_use(inner: &Inner, tool_key: &str) -> bool {
-        inner.synced_in_use.contains(tool_key) || inner.local_sessions.contains_key(tool_key)
+    /// Whether the resource is in use as far as this edge knows, as of `now`:
+    /// the server says so, or a session this edge opened has not ended.
+    fn in_use(inner: &Inner, tool_key: &str, now: DateTime<Utc>) -> bool {
+        inner.synced_in_use.contains(tool_key)
+            || inner
+                .local_sessions
+                .get(tool_key)
+                .is_some_and(|s| s.ends_at.is_none_or(|end| now < end))
     }
 
     /// The snapshot's key for a tool named either way, or the name itself when
@@ -465,7 +541,7 @@ impl ModuleState {
         // Last, after the safety arms, so a refusal's reason names the hazard
         // when there is one: a silent sensor is still the thing to go and look
         // at, whether or not anyone is signed on.
-        if !Self::in_use(&inner, &tool_key) {
+        if !Self::in_use(&inner, &tool_key, now) {
             return Decision::Deny(Denial::NotInUse);
         }
 
@@ -708,6 +784,25 @@ impl ModuleState {
             .map(|s| s.tools.iter().map(|t| t.tool_id.clone()).collect())
             .unwrap_or_default()
     }
+
+    /// What this edge holds about a resource named either way (#182): its id,
+    /// kind, session profile and strike pulse, or `None` when no wiring for it
+    /// has arrived.
+    pub fn resource(&self, name: &str) -> Option<ResourceWiring> {
+        let inner = self.inner.read().expect("module lock");
+        let snapshot = inner.snapshot.as_ref()?;
+        let wiring = Self::resolve(snapshot, name)?;
+        Some(ResourceWiring {
+            id: wiring.tool_id.clone(),
+            kind: wiring.kind.clone(),
+            session_profile: wiring.session_profile.clone(),
+            strike_pulse_ms: wiring
+                .modules
+                .iter()
+                .find(|m| m.role == ROLE_STRIKE && m.pulse_ms > 0)
+                .map(|m| m.pulse_ms),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -774,6 +869,7 @@ mod tests {
                 tool_id: "tool-1".to_string(),
                 external_id: Some("ext-1".to_string()),
                 kind: "tool".to_string(),
+                session_profile: String::new(),
                 modules,
                 interlocks,
                 power_fails_safe: true,
@@ -861,6 +957,7 @@ mod tests {
                     tool_id: "tool-1".to_string(),
                     external_id: None,
                     kind: "tool".to_string(),
+                    session_profile: String::new(),
                     modules: vec![a],
                     interlocks: vec![],
                     power_fails_safe: true,
@@ -869,6 +966,7 @@ mod tests {
                     tool_id: "tool-2".to_string(),
                     external_id: None,
                     kind: "tool".to_string(),
+                    session_profile: String::new(),
                     modules: vec![b],
                     interlocks: vec![],
                     power_fails_safe: true,
@@ -1273,6 +1371,7 @@ mod tests {
                 tool_id: "tool-1".to_string(),
                 external_id: Some("ext-1".to_string()),
                 kind: "tool".to_string(),
+                session_profile: String::new(),
                 modules: vec![binding("m1", "power", "hold_last")],
                 interlocks: vec![rule(KIND_TRIP, "door_open", true, 0)],
                 power_fails_safe: true,
@@ -1355,9 +1454,9 @@ mod tests {
         // reaches this edge through the sync.
         let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
         s.note_device_seen("dev-a", t0());
-        s.reconcile_sessions(&["tool-1".to_string()], t0());
+        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0());
         assert!(s.evaluate("tool-1", t0(), timeout()).is_allowed());
-        s.reconcile_sessions(&[], t0() + ms(1));
+        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + ms(1));
         assert_eq!(
             s.evaluate("tool-1", t0() + ms(1), timeout()),
             Decision::Deny(Denial::NotInUse)
@@ -1372,14 +1471,14 @@ mod tests {
         let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
         s.note_device_seen("dev-a", t0());
         s.note_session("tool-1", true, t0());
-        s.reconcile_sessions(&[], t0() + ms(1_000));
+        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + ms(1_000));
         assert!(
             s.evaluate("tool-1", t0() + ms(1_000), timeout())
                 .is_allowed(),
             "a stale sync undid a swipe a second old"
         );
         s.note_device_seen("dev-a", t0() + Duration::seconds(31));
-        s.reconcile_sessions(&[], t0() + Duration::seconds(31));
+        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + Duration::seconds(31));
         assert_eq!(
             s.evaluate("tool-1", t0() + Duration::seconds(31), timeout()),
             Decision::Deny(Denial::NotInUse),
@@ -1391,7 +1490,7 @@ mod tests {
     fn a_local_stop_ends_the_lease_without_waiting_for_a_sync() {
         let s = state_with(vec![plug("a", 0, 0, 0)], vec![]);
         s.note_device_seen("dev-a", t0());
-        s.reconcile_sessions(&["tool-1".to_string()], t0());
+        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0());
         s.note_session("tool-1", false, t0() + ms(500));
         assert_eq!(
             s.evaluate("tool-1", t0() + ms(500), timeout()),

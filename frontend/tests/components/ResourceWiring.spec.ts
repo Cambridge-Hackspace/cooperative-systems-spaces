@@ -29,11 +29,13 @@ const toolModules = vi.hoisted(() => ({
 }))
 const tools = vi.hoisted(() => ({ getTools: vi.fn() }))
 const doors = vi.hoisted(() => ({ list: vi.fn() }))
+const resources = vi.hoisted(() => ({ update: vi.fn() }))
 
 vi.mock('@/utils/api', () => ({
   toolModulesApi: toolModules,
   toolsApi: tools,
   doorsApi: doors,
+  resourcesApi: resources,
 }))
 
 import ResourceWiring from '@/components/ResourceWiring.vue'
@@ -84,6 +86,7 @@ function doorEntry() {
     tool_id: 'door-1',
     external_id: null,
     kind: 'door',
+    session_profile: 'momentary',
     modules: [
       {
         id: 'e1',
@@ -146,6 +149,38 @@ describe('ResourceWiring', () => {
     expect(cell).toContain('not held')
     // The coordinator row has no pulse to show.
     expect(w.get('[data-testid="pulse-e1"]').text()).toBe('—')
+  })
+
+  it('offers the session profile per resource and sends a change to the server (#182)', async () => {
+    const snap = snapshot()
+    snap.data.tools.push(doorEntry())
+    toolModules.state.mockResolvedValue(snap)
+    resources.update.mockResolvedValue({
+      success: true,
+      data: { id: 'door-1', kind: 'door', session_profile: 'until_stopped' },
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    const select = w.get('[data-testid="profile-door-1"]')
+    expect((select.element as HTMLSelectElement).value).toBe('momentary')
+    // A server that predates the field sends '' and the kind's default shows.
+    expect((w.get('[data-testid="profile-tool-1"]').element as HTMLSelectElement).value).toBe(
+      'until_stopped'
+    )
+    await select.setValue('until_stopped')
+    await flushPromises()
+    expect(resources.update).toHaveBeenCalledWith('door-1', { session_profile: 'until_stopped' })
+    expect((select.element as HTMLSelectElement).value).toBe('until_stopped')
+  })
+
+  it('shows the refusal when the server declines a profile change', async () => {
+    resources.update.mockResolvedValue({ success: false, error: 'session_profile must be one of' })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    await w.get('[data-testid="profile-tool-1"]').setValue('momentary')
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(true)
+    expect(w.text()).toContain('session_profile must be one of')
   })
 
   it('does not warn about power on a resource that has no power binding', async () => {

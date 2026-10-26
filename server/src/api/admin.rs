@@ -87,6 +87,9 @@ pub fn admin_routes() -> Router<AppState> {
             "/tool-interlocks",
             crate::api::tool_modules::admin_interlock_routes(),
         )
+        // #182: resource-level attributes, whatever the kind (the session
+        // profile first).
+        .nest("/resources", crate::api::resources::admin_routes())
         .nest("/tool-tiers", crate::api::tool_tiers::admin_routes())
         .nest("/schedules", crate::api::schedules::admin_routes())
         .nest("/home-links", crate::api::home_links::admin_routes())

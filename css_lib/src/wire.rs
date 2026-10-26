@@ -83,6 +83,12 @@ pub struct ToolModuleTool {
     /// tools -- hence the default.
     #[serde(default = "kind_tool")]
     pub kind: String,
+    /// How a session on this resource ends (#182): `momentary` (over when the
+    /// strike pulse is -- the door as we know it) or `until_stopped` (until a
+    /// stop -- the tool, and the room). Empty on a server that predates it,
+    /// which a consumer reads as the kind's default.
+    #[serde(default)]
+    pub session_profile: String,
     pub modules: Vec<DeviceBinding>,
     pub interlocks: Vec<ToolInterlockRule>,
     /// Whether every power module bound to this tool reaches a safe state on its

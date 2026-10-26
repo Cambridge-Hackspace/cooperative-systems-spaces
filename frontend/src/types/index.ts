@@ -942,6 +942,8 @@ export interface ToolModuleStateTool {
   external_id: string | null
   /** `tool` | `door` */
   kind: string
+  /** `momentary` | `until_stopped` (#182); `''` from a server that predates it. */
+  session_profile: string
   modules: Array<{
     id: string
     device_id: string
@@ -972,4 +974,15 @@ export interface ToolModuleStateTool {
 export interface ToolModuleStateSnapshot {
   as_of: string
   tools: ToolModuleStateTool[]
+}
+
+/** #182: what an administrator may set on a resource whatever its kind. */
+export interface UpdateResourceRequest {
+  session_profile?: 'momentary' | 'until_stopped'
+}
+
+export interface ResourceSummary {
+  id: string
+  kind: string
+  session_profile: string
 }

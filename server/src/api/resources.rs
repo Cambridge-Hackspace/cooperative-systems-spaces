@@ -32,13 +32,16 @@
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use axum::routing::post;
+use axum::routing::{patch, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::errors::ApiError;
+use crate::api::responses::ApiResponse;
 use crate::api::toolguard::{self, ToolGuardResponse, ToolLogRequest};
+use crate::auth::AdminUser;
+use crate::models::{session_profile, AuditEventType, NewAuditLog};
 use crate::AppState;
 
 pub fn resource_routes() -> Router<AppState> {
@@ -46,6 +49,78 @@ pub fn resource_routes() -> Router<AppState> {
         .route("/{id}/scan", post(scan))
         .route("/{id}/stop", post(stop))
         .route("/{id}/usage", post(usage))
+}
+
+/// The resource-level attributes an administrator sets, whatever the kind
+/// (#182). Mounted at `/api/admin/resources`.
+pub fn admin_routes() -> Router<AppState> {
+    Router::new().route("/{id}", patch(update_resource))
+}
+
+// ---------------------------------------------------------------------------
+// Administration: what is true of a resource regardless of its kind
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateResourceRequest {
+    /// `momentary` | `until_stopped`; see `models::resources::session_profile`.
+    #[serde(default)]
+    pub session_profile: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResourceSummary {
+    pub id: Uuid,
+    pub kind: String,
+    pub session_profile: String,
+}
+
+/// PATCH /api/admin/resources/{id}
+///
+/// The session profile is the first resource-level attribute, and the one the
+/// coordinator reads: a door set to `until_stopped` keeps its session -- and
+/// its power bindings leased -- until somebody stops it, which is the room.
+async fn update_resource(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateResourceRequest>,
+) -> Result<Json<ApiResponse<ResourceSummary>>, ApiError> {
+    let Some(profile) = req.session_profile.as_deref() else {
+        return Err(ApiError::BadRequest(
+            "nothing to change: send session_profile".to_string(),
+        ));
+    };
+    let profile =
+        crate::api::tool_modules::one_of(profile, &session_profile::ALL, "session_profile")?;
+    let Some(updated) = state.db.update_resource_session_profile(id, &profile)? else {
+        return Err(ApiError::NotFound("Resource not found".to_string()));
+    };
+
+    let log = NewAuditLog {
+        event_type: AuditEventType::ResourceUpdated.as_str().to_string(),
+        user_id: Some(admin.0.id),
+        actor_id: Some(admin.0.id),
+        event_data: serde_json::json!({
+            "resource_id": updated.id,
+            "kind": updated.kind,
+            "session_profile": updated.session_profile,
+        }),
+        ip_address: None,
+        user_agent: None,
+    };
+    if let Err(e) = state.db.create_audit_log(&log) {
+        tracing::error!("Failed to write resource_updated audit log: {}", e);
+    }
+    // The profile travels in the wiring snapshot, and the coordinator acts on
+    // it, so the change reaches it now rather than at the next poll.
+    toolguard::broadcast_module_state(&state).await;
+
+    Ok(Json(ApiResponse::success(ResourceSummary {
+        id: updated.id,
+        kind: updated.kind,
+        session_profile: updated.session_profile,
+    })))
 }
 
 // ---------------------------------------------------------------------------

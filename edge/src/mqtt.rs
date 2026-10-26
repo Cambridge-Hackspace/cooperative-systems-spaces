@@ -13,12 +13,11 @@ use css_lib::wire::{
 };
 
 use crate::config::{Config, MqttConfig};
-use crate::doors::{
-    self, Decision, DoorsEvent, DoorsState, LocalScanRequest, LocalUnlockResponse, UnlockCommand,
-};
+use crate::doors::{self, DoorsEvent, LocalScanRequest, LocalUnlockResponse, UnlockCommand};
 use crate::edge_inbound::EdgeInbound;
 use crate::power::PowerState;
 use crate::registration::{get_auth_token, get_device_id};
+use crate::resources::{Kind, ResourceCache, ScanDecision};
 use crate::system_info::get_system_info;
 use crate::toolguard::ToolGuardState;
 
@@ -449,8 +448,6 @@ pub struct LocalMqttClient {
     remote_auth_token: String,
     http_client: Client,
     refresh_notify: Arc<tokio::sync::Notify>,
-    /// Shared decision cache populated by remote `doors/state` snapshots.
-    doors_state: Arc<DoorsState>,
     /// Forwards local scan outcomes back to the server as `doors/event`. The
     /// receiver is consumed by a task in `main`.
     doors_event_tx: DoorsEventSender,
@@ -460,6 +457,9 @@ pub struct LocalMqttClient {
     /// #120 (#121): per-device command-channel HMAC key, used to sign outbound
     /// `doors/event`. `None` on a legacy device -> events go unsigned.
     command_key: Option<Vec<u8>>,
+    /// The one cache (#182): what a badge at anything is decided against, and
+    /// where every session this edge opens lives.
+    cache: Arc<ResourceCache>,
 }
 
 impl LocalMqttClient {
@@ -470,10 +470,10 @@ impl LocalMqttClient {
         power_state: Arc<PowerState>,
         remote_instance_url: String,
         remote_auth_token: String,
-        doors_state: Arc<DoorsState>,
         doors_event_tx: DoorsEventSender,
         module_state: Arc<crate::modules::ModuleState>,
         command_key: Option<Vec<u8>>,
+        cache: Arc<ResourceCache>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
@@ -516,10 +516,10 @@ impl LocalMqttClient {
                 remote_auth_token,
                 http_client: Client::new(),
                 refresh_notify: Arc::new(tokio::sync::Notify::new()),
-                doors_state,
                 doors_event_tx,
                 module_state,
                 command_key,
+                cache,
             },
             rx,
         ))
@@ -708,37 +708,27 @@ impl LocalMqttClient {
         }
     }
 
-    /// Decide an RFID scan against the local cache, publish a response back
-    /// to the hardware, and forward the outcome to the server as `doors/event`.
+    /// The deprecated door alias (#182): `door/request/scan` is a scan.
     async fn handle_door_scan(&self, req: LocalScanRequest) {
-        // #120 (#122/H3): the server ships door allow/deny lists as card
-        // wire-digests, so match on the digest of the swipe, not the raw code.
-        // No digester configured -> empty token -> matches nothing -> deny
-        // (fail-closed, as the tool path does without a pepper). The raw code
-        // still travels upstream below for server-side resolution.
-        let scan_token = self
-            .toolguard_state
-            .wire_digest_hex(&req.card_id)
-            .unwrap_or_default();
-        let (granted, duration_ms, reason) = match self.doors_state.decide(req.door_id, &scan_token)
-        {
-            Decision::Allow { duration_ms } => (true, duration_ms, None),
-            Decision::Deny(why) => (false, 0, Some(why.to_string())),
-        };
+        self.handle_scan(LocalScan {
+            resource: req.door_id.to_string(),
+            card: req.card_id,
+        })
+        .await;
+    }
 
-        // Tell the local relay controller what to do.
-        let response = LocalUnlockResponse {
-            door_id: req.door_id,
-            granted,
-            duration_ms,
-            reason: reason.clone(),
-        };
-        self.publish_unlock(&response);
-
-        // Tell the server what just happened (audit log, webhook, etc.).
+    /// Tell the server what happened at a door (audit log, webhook, etc.): the
+    /// signed `doors/event` the server's door path records.
+    fn report_door_event(
+        &self,
+        door_id: uuid::Uuid,
+        card: String,
+        granted: bool,
+        reason: Option<String>,
+    ) {
         let mut event = doors::DoorsEvent {
-            door_id: req.door_id,
-            card_id: Some(req.card_id),
+            door_id,
+            card_id: Some(card),
             granted,
             reason,
             source: "rfid",
@@ -791,29 +781,99 @@ impl LocalMqttClient {
         }
     }
 
-    /// A card presented to a resource on the resource-shaped wire (#182).
+    /// A card presented to a resource (#182): the one path, whatever the
+    /// resource is and whichever topic the badge arrived on.
     ///
-    /// The edge holds two caches today -- doors and tools -- and the resource
-    /// is whichever one knows it. Finishing #101 collapses them into one; until
-    /// then this is the one place the split is visible, and it is a lookup,
-    /// not a second decision path: each branch is the handler its alias topic
-    /// has always reached.
+    /// One decision ([`ResourceCache::decide`]), one session opened on a yes
+    /// with the resource's profile, one reply -- published on the resource
+    /// topic and, for one release, on the alias the resource's kind used to
+    /// answer on -- and one report upstream: a door's goes as the signed
+    /// `doors/event` the server's door path records; a tool's opens the
+    /// session on the server's resource path. A tool the server insists on
+    /// deciding itself is asked over that same path, and refused if it cannot
+    /// be asked.
     async fn handle_scan(&self, req: LocalScan) {
-        if let Ok(door_id) = uuid::Uuid::parse_str(&req.resource) {
-            if self.doors_state.knows(door_id) {
-                self.handle_door_scan(LocalScanRequest {
-                    door_id,
-                    card_id: req.card,
-                })
-                .await;
-                return;
+        let now = chrono::Utc::now();
+        let kind = self
+            .cache
+            .resolve(&req.resource)
+            .map(|r| r.kind)
+            .unwrap_or(Kind::Tool);
+        let (authorized, reason, strike_ms) = match self.cache.decide(&req.resource, &req.card, now)
+        {
+            ScanDecision::Allow { strike_ms } => (true, "authorized".to_string(), strike_ms),
+            ScanDecision::Deny(why) => (false, why, None),
+            ScanDecision::AskServer => self.remote_scan(&req).await,
+        };
+
+        self.publish_scan_reply(&req, kind, authorized, &reason, strike_ms);
+
+        if authorized {
+            // The session this edge just opened is what a lease is for (#179),
+            // and the resource's profile says how long it lasts (#182).
+            self.cache.open_session(&req.resource, now);
+        }
+
+        match kind {
+            Kind::Door => {
+                if let Ok(door_id) = uuid::Uuid::parse_str(&req.resource) {
+                    let why = (!authorized).then(|| reason.clone());
+                    self.report_door_event(door_id, req.card, authorized, why);
+                }
+            }
+            Kind::Tool => {
+                // Decided here: best-effort forward so the server opens the
+                // session (and, for a metered tool in edge-local mode, places
+                // the hold and re-broadcasts). Decided by the server: it
+                // already has.
+                if authorized && !self.toolguard_state.tool_requires_online(&req.resource) {
+                    self.forward_scan(req.resource.clone(), req.card.clone());
+                }
             }
         }
-        self.handle_tool_on(LocalToolRequest {
-            card: req.card,
-            tool_id: req.resource,
-        })
-        .await;
+    }
+
+    /// The one reply to a scan, on the resource topic and on the alias the
+    /// resource's kind used to answer on (#182, one release).
+    fn publish_scan_reply(
+        &self,
+        req: &LocalScan,
+        kind: Kind,
+        authorized: bool,
+        reason: &str,
+        strike_ms: Option<i32>,
+    ) {
+        match (kind, uuid::Uuid::parse_str(&req.resource)) {
+            (Kind::Door, Ok(door_id)) => self.publish_unlock(&LocalUnlockResponse {
+                door_id,
+                granted: authorized,
+                duration_ms: strike_ms.unwrap_or(0),
+                reason: (!authorized).then(|| reason.to_string()),
+            }),
+            // The request's own name, echoed: a reply names the resource that
+            // was asked about, or a module cannot tell it from its neighbour's.
+            _ => self.publish_tool_on(&req.resource, authorized, reason, strike_ms),
+        }
+    }
+
+    /// Open a tool's session on the server after a local yes: the resource
+    /// path (#182), fire-and-forget as the alias forward always was.
+    fn forward_scan(&self, resource: String, card: String) {
+        let url = format!(
+            "{}/api/resources/{}/scan",
+            self.remote_instance_url, resource
+        );
+        let token = self.remote_auth_token.clone();
+        let http = self.http_client.clone();
+        tokio::spawn(async move {
+            // A JSON body, not a query string: the card identifies a person
+            // and a URL is written down by every proxy and access log it
+            // passes through (#107).
+            let body = serde_json::json!({ "card": card });
+            if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
+                warn!("Failed to forward scan to remote: {}", e);
+            }
+        });
     }
 
     /// Say once per alias topic that it is on its way out (#182). Once, not
@@ -861,14 +921,7 @@ impl LocalMqttClient {
     /// (#179): a session opened elsewhere -- or ended by an administrator or
     /// the sweep -- reaches this edge through the sync.
     pub fn reconcile_sessions(&self, payload: &crate::toolguard::SyncPayload) {
-        let in_use: Vec<String> = payload
-            .tools
-            .iter()
-            .filter(|t| t.status == crate::toolguard::ToolStatus::InUse)
-            .map(|t| t.id.to_string())
-            .collect();
-        self.module_state
-            .reconcile_sessions(&in_use, chrono::Utc::now());
+        self.cache.reconcile(payload, chrono::Utc::now());
     }
 
     pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
@@ -894,70 +947,13 @@ impl LocalMqttClient {
         self.refresh_notify.notify_waiters();
     }
 
+    /// The deprecated tool alias (#182): `toolguard/request/tool-on` is a scan.
     async fn handle_tool_on(&self, req: LocalToolRequest) {
-        use crate::toolguard::AccessResult;
-
-        // Power lockout (#48) is a hard, fail-secure deny checked first: a tool
-        // whose circuit tripped or that the server locked stays refused even if
-        // the server is now unreachable (the lockout is sticky in the cache).
-        if self.power_state.is_locked(&req.tool_id) {
-            self.publish_tool_on(&req.tool_id, false, "Tool is locked out (power)");
-            return;
-        }
-
-        // Metered tools under online-synchronous actuation: the server is the
-        // authority. Ask it (and place the hold) BEFORE energizing; if it is
-        // unreachable, deny -- fail closed, because we cannot safely bill offline.
-        if self.toolguard_state.tool_requires_online(&req.tool_id) {
-            let (authorized, reason) = self.remote_tool_on(&req).await;
-            self.publish_tool_on(&req.tool_id, authorized, &reason);
-            if authorized {
-                // The session this edge just opened is what the lease is for (#179).
-                self.module_state
-                    .note_session(&req.tool_id, true, chrono::Utc::now());
-            }
-            return;
-        }
-
-        // Otherwise decide locally from the cached allow-list (offline-capable),
-        // then best-effort forward so the server records it (and, for metered
-        // tools in edge-local mode, places the hold and re-broadcasts).
-        let result = self.toolguard_state.check_access(&req.card, &req.tool_id);
-
-        let (authorized, reason) = match &result {
-            AccessResult::Authorized => (true, "authorized".to_string()),
-            AccessResult::UnknownCard => (false, "Unknown card".to_string()),
-            AccessResult::UserInactive => (false, "User is not active".to_string()),
-            AccessResult::ToolNotAuthorized => {
-                (false, "Tool not authorized for this user".to_string())
-            }
-            AccessResult::ToolUnavailable(s) => (false, format!("Tool unavailable: {}", s)),
-        };
-
-        self.publish_tool_on(&req.tool_id, authorized, &reason);
-        if authorized {
-            // The session this edge just opened is what the lease is for (#179).
-            self.module_state
-                .note_session(&req.tool_id, true, chrono::Utc::now());
-        }
-
-        if authorized {
-            // Best-effort forward to the remote server so it records the state change
-            let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
-            let card = req.card.clone();
-            let tool_id = req.tool_id.clone();
-            let token = self.remote_auth_token.clone();
-            let http = self.http_client.clone();
-            tokio::spawn(async move {
-                // A JSON body, not a query string: the card identifies a
-                // person and a URL is written down by every proxy and access
-                // log it passes through (#107).
-                let body = serde_json::json!({ "card": card, "tool_id": tool_id });
-                if let Err(e) = http.post(&url).bearer_auth(&token).json(&body).send().await {
-                    warn!("Failed to forward tool-on to remote: {}", e);
-                }
-            });
-        }
+        self.handle_scan(LocalScan {
+            resource: req.tool_id,
+            card: req.card,
+        })
+        .await;
     }
 
     /// A firmware power reading (#48): record it for edge-local aggregation, trip
@@ -1062,12 +1058,16 @@ impl LocalMqttClient {
         );
     }
 
-    /// Synchronously ask the server to authorize (and hold) a metered activation.
-    /// Returns `(authorized, reason)`. Any transport or non-2xx error is a denial
-    /// -- fail closed.
-    async fn remote_tool_on(&self, req: &LocalToolRequest) -> (bool, String) {
-        let url = format!("{}/api/toolguard/tool-on", self.remote_instance_url);
-        let body = serde_json::json!({ "card": req.card, "tool_id": req.tool_id });
+    /// Synchronously ask the server to decide a scan (and, for a metered tool,
+    /// place the hold) on its resource path (#182). Returns `(authorized,
+    /// reason, strike_ms)`. Any transport or non-2xx error is a denial -- fail
+    /// closed.
+    async fn remote_scan(&self, req: &LocalScan) -> (bool, String, Option<i32>) {
+        let url = format!(
+            "{}/api/resources/{}/scan",
+            self.remote_instance_url, req.resource
+        );
+        let body = serde_json::json!({ "card": req.card });
         match self
             .http_client
             .post(&url)
@@ -1078,11 +1078,12 @@ impl LocalMqttClient {
         {
             Ok(resp) => match resp.json::<serde_json::Value>().await {
                 Ok(body) => {
-                    // The server's ToolGuardResponse for tool-on is
-                    // { status, message, tool_on }: tool_on == true means
-                    // authorized, and message carries the denial reason.
+                    // The server's envelope for a scan is { status, message,
+                    // authorized, strike? }; `tool_on` is the same bit under
+                    // the alias name, read in case an older server answers.
                     let authorized = body
-                        .get("tool_on")
+                        .get("authorized")
+                        .or_else(|| body.get("tool_on"))
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
                     let reason = body
@@ -1090,13 +1091,18 @@ impl LocalMqttClient {
                         .and_then(|v| v.as_str())
                         .unwrap_or(if authorized { "authorized" } else { "denied" })
                         .to_string();
-                    (authorized, reason)
+                    let strike_ms = body
+                        .get("strike")
+                        .and_then(|s| s.get("pulse_ms"))
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32);
+                    (authorized, reason, strike_ms)
                 }
-                Err(e) => (false, format!("server response unreadable: {e}")),
+                Err(e) => (false, format!("server response unreadable: {e}"), None),
             },
             Err(e) => {
-                warn!("online-sync tool-on to remote failed: {}", e);
-                (false, "server unreachable".to_string())
+                warn!("online-sync scan to remote failed: {}", e);
+                (false, "server unreachable".to_string(), None)
             }
         }
     }
@@ -1106,16 +1112,17 @@ impl LocalMqttClient {
         self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
         self.publish_local(local::STOP_RESPONSE, &response_payload);
         // The lease ends with the stop, not a sync interval later (#179).
-        self.module_state
-            .note_session(&req.tool_id, false, chrono::Utc::now());
+        self.cache.close_session(&req.tool_id);
 
-        let url = format!("{}/api/toolguard/tool-off", self.remote_instance_url);
+        let url = format!(
+            "{}/api/resources/{}/stop",
+            self.remote_instance_url, req.tool_id
+        );
         let card = req.card.clone();
-        let tool_id = req.tool_id.clone();
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         tokio::spawn(async move {
-            let mut body = serde_json::json!({ "tool_id": tool_id });
+            let mut body = serde_json::json!({});
             // Forwarded only when the device sent one (#179); the server ends
             // the open session either way.
             if let Some(c) = card {
@@ -1174,18 +1181,17 @@ impl LocalMqttClient {
         self.publish_local(local::TOOL_LOG_RESPONSE, &response_payload);
         self.publish_local(local::USAGE_RESPONSE, &response_payload);
 
-        let url = format!("{}/api/toolguard/tool-log", self.remote_instance_url);
+        let url = format!(
+            "{}/api/resources/{}/usage",
+            self.remote_instance_url, req.tool_id
+        );
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         let card = req.card.clone();
-        let tool_id = req.tool_id.clone();
         let temperature = req.temperature;
         let active_seconds = req.active_seconds;
         tokio::spawn(async move {
-            let mut body = serde_json::json!({
-                "tool_id": tool_id,
-                "seconds": seconds,
-            });
+            let mut body = serde_json::json!({ "seconds": seconds });
             // Forwarded only when the module sent one. A plug names no card
             // (#174); the server attributes its report through the tool's
             // session, and an invented card here would be refused as unknown.
@@ -1237,7 +1243,13 @@ impl LocalMqttClient {
     /// answer from the answer to the reader at the next machine -- these topics
     /// carry no device id and are not namespaced, so without it every reply is
     /// addressed to everyone.
-    fn publish_tool_on(&self, tool_id: &str, authorized: bool, reason: &str) {
+    fn publish_tool_on(
+        &self,
+        tool_id: &str,
+        authorized: bool,
+        reason: &str,
+        strike_ms: Option<i32>,
+    ) {
         let payload = LocalToolOnResponse {
             tool_id: tool_id.to_string(),
             authorized,
@@ -1247,8 +1259,13 @@ impl LocalMqttClient {
             Ok(v) => self.publish_local(local::TOOL_ON_RESPONSE, &v),
             Err(e) => warn!("Failed to serialize tool-on response: {}", e),
         }
-        // The same answer, resource-shaped (#182).
-        match serde_json::to_value(LocalScanReply::from_tool(&payload)) {
+        // The same answer, resource-shaped (#182) -- with the pulse when the
+        // resource has a latch, which the alias cannot say.
+        let mut reply = LocalScanReply::from_tool(&payload);
+        if authorized {
+            reply.strike = strike_ms.map(|pulse_ms| css_lib::wire::LocalStrike { pulse_ms });
+        }
+        match serde_json::to_value(reply) {
             Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
             Err(e) => warn!("Failed to serialize scan reply: {}", e),
         }

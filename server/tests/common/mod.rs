@@ -265,6 +265,7 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/toolguard/tool-off", Guard::InlineAuth), // toolguard::tool_off
     R("POST", "/api/toolguard/tool-on", Guard::InlineAuth), // toolguard::tool_on
     // #182: the resource-shaped device path; one path for a badge at any resource.
+    R("PATCH", "/api/admin/resources/00000000-0000-4000-8000-000000000001", Guard::Admin), // resources::update_resource
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/scan", Guard::InlineAuth), // resources::scan
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/stop", Guard::InlineAuth), // resources::stop
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/usage", Guard::InlineAuth), // resources::usage
