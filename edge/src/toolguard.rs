@@ -49,6 +49,19 @@ pub struct SyncPayload {
     pub users: Vec<SyncUser>,
 }
 
+/// A sync payload as it reached this edge: the payload, and when this edge
+/// SENT the request it answers, on this edge's clock -- `None` for one that
+/// arrived by push. Beside the wire struct rather than in it, because it is
+/// not on the wire. A sync is as old as its request, not as new as its
+/// arrival: under load an answer takes a second to come back, and a stop this
+/// edge performed in that second is newer than anything the answer says. The
+/// lease engine uses this to tell the two apart (see `reconcile_sessions`).
+#[derive(Debug, Clone)]
+pub struct SyncArrival {
+    pub payload: SyncPayload,
+    pub requested_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 // ── Access check result ───────────────────────────────────────────────────────
 
 #[derive(Debug, PartialEq)]
@@ -65,7 +78,7 @@ pub enum AccessResult {
 pub struct ToolGuardState {
     inner: Arc<RwLock<Option<SyncPayload>>>,
     /// Fired on every state change so consumers (e.g. local MQTT publisher) can react.
-    notify_tx: Option<std::sync::mpsc::SyncSender<SyncPayload>>,
+    notify_tx: Option<std::sync::mpsc::SyncSender<SyncArrival>>,
     /// Broadcast channel for WebSocket clients — sends serialized JSON on every state change.
     ws_tx: broadcast::Sender<String>,
     /// The device pepper (#109), so a swipe can be hashed the same way the
@@ -97,7 +110,7 @@ impl ToolGuardState {
     /// Create a state cache that sends a copy of each new payload to the returned receiver.
     pub fn new_with_notify(
         card_digester: Option<Arc<css_lib::card_crypto::CardDigester>>,
-    ) -> (Self, std::sync::mpsc::Receiver<SyncPayload>) {
+    ) -> (Self, std::sync::mpsc::Receiver<SyncArrival>) {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let (ws_tx, _) = broadcast::channel(16);
         (
@@ -118,11 +131,23 @@ impl ToolGuardState {
 
     /// Replace the cached state with a freshly received sync payload.
     pub fn apply_sync(&self, payload: SyncPayload) {
+        self.apply_sync_at(payload, None);
+    }
+
+    /// The same, saying when the payload was asked for (`None`: it was pushed).
+    pub fn apply_sync_at(
+        &self,
+        payload: SyncPayload,
+        requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
         let mut guard = self.inner.write().unwrap();
         *guard = Some(payload.clone());
         drop(guard);
         if let Some(tx) = &self.notify_tx {
-            let _ = tx.try_send(payload.clone());
+            let _ = tx.try_send(SyncArrival {
+                payload: payload.clone(),
+                requested_at,
+            });
         }
         if let Ok(json) = serde_json::to_string(&payload) {
             let _ = self.ws_tx.send(json);
@@ -133,6 +158,19 @@ impl ToolGuardState {
     pub fn apply_sync_bytes(&self, bytes: &[u8]) -> Result<(), serde_json::Error> {
         let payload: SyncPayload = serde_json::from_slice(bytes)?;
         self.apply_sync(payload);
+        Ok(())
+    }
+
+    /// The same, for a payload this edge asked for: `requested_at` is when the
+    /// request went out, so the lease engine can weigh the answer against
+    /// what this edge did while it was in flight.
+    pub fn apply_sync_bytes_requested_at(
+        &self,
+        bytes: &[u8],
+        requested_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), serde_json::Error> {
+        let payload: SyncPayload = serde_json::from_slice(bytes)?;
+        self.apply_sync_at(payload, Some(requested_at));
         Ok(())
     }
 

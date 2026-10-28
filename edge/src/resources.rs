@@ -265,14 +265,19 @@ impl ResourceCache {
     }
 
     /// End a session on a resource: a stop, from anything bound to it.
-    pub fn close_session(&self, name: &str) {
-        self.wiring.close_session(name);
+    pub fn close_session(&self, name: &str, now: DateTime<Utc>) {
+        self.wiring.close_session(name, now);
     }
 
     /// Hand the server's view of its sessions to the engine (#179): which
     /// tools it says are in use, and which tools it reports on at all -- a
     /// session on anything else is this edge's to end.
-    pub fn reconcile(&self, payload: &SyncPayload, now: DateTime<Utc>) {
+    pub fn reconcile(
+        &self,
+        payload: &SyncPayload,
+        now: DateTime<Utc>,
+        requested_at: Option<DateTime<Utc>>,
+    ) {
         let in_use: Vec<String> = payload
             .tools
             .iter()
@@ -280,7 +285,11 @@ impl ResourceCache {
             .map(|t| t.id.to_string())
             .collect();
         let tracked: Vec<String> = payload.tools.iter().map(|t| t.id.to_string()).collect();
-        self.wiring.reconcile_sessions(&in_use, &tracked, now);
+        // A polled payload is as old as its request; a pushed one is taken as
+        // of its arrival, which is the best that can be said of it.
+        let as_of = requested_at.unwrap_or(now);
+        self.wiring
+            .reconcile_sessions(&in_use, &tracked, now, as_of);
     }
 
     /// One pass of the one loop: every lease the engine decides this pass, and
@@ -586,11 +595,11 @@ mod tests {
             }],
             users: vec![],
         };
-        c.reconcile(&sync, t0() + Duration::minutes(10));
+        c.reconcile(&sync, t0() + Duration::minutes(10), None);
         let later = c.tick(t0() + Duration::minutes(10), ttl, timeout, refresh);
         assert_eq!(leases_for(&later, "dev-room-plug"), vec![true]);
         // The stop ends it at once.
-        c.close_session(&door);
+        c.close_session(&door, t0() + Duration::minutes(10));
         let stopped = c.tick(
             t0() + Duration::minutes(10) + Duration::seconds(1),
             ttl,
@@ -627,7 +636,7 @@ mod tests {
             users: vec![],
         };
         // Within the grace the local session outranks the stale sync.
-        c.reconcile(&sync_idle, t0() + Duration::seconds(5));
+        c.reconcile(&sync_idle, t0() + Duration::seconds(5), None);
         assert_eq!(
             leases_for(
                 &c.tick(t0() + Duration::seconds(5), ttl, timeout, refresh),
@@ -636,7 +645,7 @@ mod tests {
             vec![true]
         );
         // Past it, a sync saying idle about a TRACKED tool retires it.
-        c.reconcile(&sync_idle, t0() + Duration::seconds(60));
+        c.reconcile(&sync_idle, t0() + Duration::seconds(60), None);
         assert_eq!(
             leases_for(
                 &c.tick(t0() + Duration::seconds(60), ttl, timeout, refresh),
