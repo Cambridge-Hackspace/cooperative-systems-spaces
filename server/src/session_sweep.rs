@@ -22,7 +22,9 @@ use uuid::Uuid;
 
 use crate::config::ConfigManager;
 use crate::database::{DatabaseError, DatabaseManager};
-use crate::models::{AuditEventType, NewAuditLog, NewToolEvent, Tool, ToolStatus};
+use crate::models::{
+    session_closed_by, AuditEventType, NewAuditLog, NewToolEvent, ResourceSession, Tool, ToolStatus,
+};
 use crate::tool_billing::{abandoned_cutoff, session_cap_minutes, ToolBillingService};
 
 pub struct SessionSweep {
@@ -66,6 +68,46 @@ impl SessionSweep {
             }
             self.release(&tool, since, cap, grace, activation.and_then(|e| e.user_id))?;
             released += 1;
+        }
+
+        // #190: rooms. A door's `until_stopped` session has no cap of its own,
+        // so it gets the site default, as a tool with none set does; past it
+        // plus the grace, the room was walked out of with its power on.
+        for session in rooms_to_release(
+            &self.db.open_resource_sessions()?,
+            &self.db.resource_kinds()?,
+            abandoned_cutoff(default_cap, grace, now),
+        ) {
+            if let Some(closed) = self
+                .db
+                .close_resource_session(session.resource_id, session_closed_by::SWEEP)?
+            {
+                warn!(
+                    "session sweep: released room {} (in use since {}, cap {default_cap} min + \
+                     {grace} min grace); nothing stopped it",
+                    closed.resource_id, closed.opened_at
+                );
+                let audit = NewAuditLog {
+                    event_type: AuditEventType::ResourceSessionReleasedBySweep
+                        .as_str()
+                        .to_string(),
+                    user_id: closed.user_id,
+                    actor_id: None,
+                    event_data: serde_json::json!({
+                        "resource_id": closed.resource_id,
+                        "kind": "door",
+                        "in_use_since": closed.opened_at,
+                        "cap_minutes": default_cap,
+                        "grace_minutes": grace,
+                    }),
+                    ip_address: None,
+                    user_agent: None,
+                };
+                if let Err(e) = self.db.create_audit_log(&audit) {
+                    error!("session sweep: failed to write audit resource_session_released_by_sweep: {e}");
+                }
+                released += 1;
+            }
         }
 
         // Billing sessions whose tool is somehow no longer `in_use`: settled on
@@ -150,5 +192,61 @@ impl SessionSweep {
             error!("session sweep: failed to write audit tool_released_by_sweep: {e}");
         }
         Ok(())
+    }
+}
+
+/// Which open sessions the sweep ends: a door's (a tool's session is swept
+/// through `tools.status`, above), open since before `cutoff`. Pure, so the
+/// decision has a test that needs no database (#190).
+pub fn rooms_to_release<'a>(
+    open: &'a [ResourceSession],
+    kinds: &[(Uuid, String)],
+    cutoff: DateTime<Utc>,
+) -> Vec<&'a ResourceSession> {
+    let doors: std::collections::HashSet<Uuid> = kinds
+        .iter()
+        .filter(|(_, kind)| kind == crate::models::ResourceKind::Door.as_str())
+        .map(|(id, _)| *id)
+        .collect();
+    open.iter()
+        .filter(|s| doors.contains(&s.resource_id) && s.opened_at < cutoff)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(resource: u128, opened_min_ago: i64, now: DateTime<Utc>) -> ResourceSession {
+        ResourceSession {
+            id: Uuid::from_u128(0xF000 + resource),
+            resource_id: Uuid::from_u128(resource),
+            user_id: Some(Uuid::from_u128(0xAB)),
+            device_id: None,
+            opened_at: now - chrono::Duration::minutes(opened_min_ago),
+            closed_at: None,
+            closed_by: None,
+        }
+    }
+
+    #[test]
+    fn the_sweep_ends_a_rooms_session_past_the_cap_and_nothing_else() {
+        let now = Utc::now();
+        let kinds = vec![
+            (Uuid::from_u128(1), "door".to_string()),
+            (Uuid::from_u128(2), "door".to_string()),
+            (Uuid::from_u128(3), "tool".to_string()),
+        ];
+        let open = vec![
+            session(1, 200, now), // a room, long abandoned
+            session(2, 5, now),   // a room, in use
+            session(3, 200, now), // a tool's record, were one ever written: not this path's
+        ];
+        let cutoff = abandoned_cutoff(120, 60, now);
+        let released: Vec<Uuid> = rooms_to_release(&open, &kinds, cutoff)
+            .into_iter()
+            .map(|s| s.resource_id)
+            .collect();
+        assert_eq!(released, vec![Uuid::from_u128(1)]);
     }
 }

@@ -47,6 +47,7 @@ pub const PLAIN: &[(&str, &str)] = &[
     ("power_circuits", "locked_out_by"),
     ("profile_config_versions", "created_by"),
     ("schedules", "created_by"),
+    ("resource_sessions", "user_id"),
     ("space_device_auth_requests", "created_by"),
     ("tool_events", "user_id"),
     ("tool_events", "actor_id"),
@@ -446,10 +447,17 @@ pub fn plan(
     }
     let open_sql =
         "SELECT count(*) AS n FROM tool_usage_sessions WHERE status = 'open' AND user_id = $1";
-    if count(conn, open_sql, s)? > 0 && count(conn, open_sql, a)? > 0 {
+    // #190: a room's session counts the same way; it is a session on a resource
+    // either way, and both move to the survivor.
+    let open_rooms_sql =
+        "SELECT count(*) AS n FROM resource_sessions WHERE closed_at IS NULL AND user_id = $1";
+    let open_for = |conn: &mut PgConnection, who: Uuid| -> QueryResult<i64> {
+        Ok(count(conn, open_sql, who)? + count(conn, open_rooms_sql, who)?)
+    };
+    if open_for(conn, s)? > 0 && open_for(conn, a)? > 0 {
         warnings.push(MergeWarning::new(
             "open_sessions_both",
-            "both accounts have a tool session open right now; both move to the survivor",
+            "both accounts have a tool or room session open right now; both move to the survivor",
         ));
     }
     let tiers = count2(

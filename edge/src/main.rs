@@ -334,12 +334,20 @@ async fn main() -> Result<()> {
                     loop {
                         ticker.tick().await;
                         let url = format!("{}/api/toolguard/module-state", instance_url);
+                        // Stamped before the request, as the allow-list poll
+                        // is: a room this edge stops while the answer is in
+                        // flight is newer than the answer (#190).
+                        let requested_at = chrono::Utc::now();
                         match client.get(&url).bearer_auth(&auth_token).send().await {
                             Ok(resp) if resp.status().is_success() => {
                                 match resp.json::<css_lib::wire::ToolModuleStatePayload>().await {
                                     Ok(payload) => {
                                         let wired = payload.tools.len();
-                                        modules.apply_state(payload);
+                                        modules.apply_state_at(
+                                            payload,
+                                            Some(requested_at),
+                                            chrono::Utc::now(),
+                                        );
                                         info!(
                                             "Module state synced from remote ({} wired tool(s))",
                                             wired

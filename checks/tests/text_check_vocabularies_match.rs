@@ -115,7 +115,7 @@ fn quoted(s: &str, q: char) -> BTreeSet<String> {
 /// not all belong to one model: `usage_basis` is a property of a tool, not of a
 /// binding, and putting it in `tool_modules.rs` to satisfy this table would be
 /// the test deciding where production code lives.
-const VOCABULARIES: [(&str, &str, &str, &str); 8] = [
+const VOCABULARIES: [(&str, &str, &str, &str); 9] = [
     // Widened with `edge` by the door-coordinator fold, via a named constraint.
     (
         MODULES,
@@ -169,6 +169,14 @@ const VOCABULARIES: [(&str, &str, &str, &str); 8] = [
         "session_profile",
         "session_profile",
         "ADD COLUMN session_profile",
+    ),
+    // #190: who ended a resource session -- a device's stop, the sweep, an
+    // administrator.
+    (
+        RESOURCES,
+        "session_closed_by",
+        "closed_by",
+        "resource_sessions_closed_by_check",
     ),
 ];
 

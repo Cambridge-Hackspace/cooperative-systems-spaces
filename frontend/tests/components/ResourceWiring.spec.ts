@@ -29,7 +29,7 @@ const toolModules = vi.hoisted(() => ({
 }))
 const tools = vi.hoisted(() => ({ getTools: vi.fn() }))
 const doors = vi.hoisted(() => ({ list: vi.fn() }))
-const resources = vi.hoisted(() => ({ update: vi.fn() }))
+const resources = vi.hoisted(() => ({ update: vi.fn(), sessions: vi.fn(), stop: vi.fn() }))
 
 vi.mock('@/utils/api', () => ({
   toolModulesApi: toolModules,
@@ -124,6 +124,7 @@ describe('ResourceWiring', () => {
       success: true,
       data: [{ id: 'door-1', name: 'Front door' }],
     })
+    resources.sessions.mockResolvedValue({ success: true, data: [] })
   })
 
   it('names a door from the door list and labels its kind (#182)', async () => {
@@ -255,5 +256,44 @@ describe('ResourceWiring', () => {
     expect(w.find('[role="alert"]').exists()).toBe(true)
     expect(w.text()).toContain('server exploded')
     expect(w.text()).not.toContain('No resource has a device bound yet')
+  })
+
+  it('shows an open session with who holds it, and ends it from the platform (#190)', async () => {
+    resources.sessions.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          resource_id: 'tool-1',
+          kind: 'tool',
+          user_id: 'u-1',
+          username: 'ada',
+          full_name: 'Ada Lovelace',
+          opened_at: '2026-10-28T10:00:00Z',
+          device_id: null,
+        },
+      ],
+    })
+    resources.stop.mockResolvedValue({
+      success: true,
+      data: { resource_id: 'tool-1', kind: 'tool', ended: true },
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    const session = w.find('[data-testid="session-tool-1"]')
+    expect(session.exists(), 'the open session must be shown on its resource').toBe(true)
+    expect(session.text()).toContain('Ada Lovelace')
+    await w.find('[data-testid="end-session-tool-1"]').trigger('click')
+    await flushPromises()
+    expect(resources.stop).toHaveBeenCalledWith('tool-1')
+    expect(
+      w.find('[data-testid="session-tool-1"]').exists(),
+      'once ended, the session must no longer be shown'
+    ).toBe(false)
+  })
+
+  it('shows no session on a resource the platform lists none for (#190)', async () => {
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    expect(w.find('[data-testid="session-tool-1"]').exists()).toBe(false)
   })
 })

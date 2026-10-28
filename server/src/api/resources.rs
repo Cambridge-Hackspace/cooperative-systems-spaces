@@ -32,7 +32,7 @@
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use axum::routing::{patch, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -41,7 +41,7 @@ use crate::api::errors::ApiError;
 use crate::api::responses::ApiResponse;
 use crate::api::toolguard::{self, ToolGuardResponse, ToolLogRequest};
 use crate::auth::AdminUser;
-use crate::models::{session_profile, AuditEventType, NewAuditLog};
+use crate::models::{session_closed_by, session_profile, AuditEventType, NewAuditLog};
 use crate::AppState;
 
 pub fn resource_routes() -> Router<AppState> {
@@ -54,7 +54,11 @@ pub fn resource_routes() -> Router<AppState> {
 /// The resource-level attributes an administrator sets, whatever the kind
 /// (#182). Mounted at `/api/admin/resources`.
 pub fn admin_routes() -> Router<AppState> {
-    Router::new().route("/{id}", patch(update_resource))
+    Router::new()
+        .route("/{id}", patch(update_resource))
+        // #190: the open sessions on every resource, and ending one.
+        .route("/sessions", get(list_open_sessions))
+        .route("/{id}/stop", post(admin_stop))
 }
 
 // ---------------------------------------------------------------------------
@@ -270,10 +274,22 @@ async fn stop(
                 .await?
                 .as_resource_reply()
         }
-        // A door has no session to end yet (its session is the pulse, over by
-        // the time anyone could ask), so a stop on it is the late stop the
-        // tool path already accepts: harmless, and recorded against nobody.
-        Resource::Door(_) => ToolGuardResponse::ok_with_message("No session to end"),
+        // #190: a door's `until_stopped` session ends here, as a tool's does;
+        // a momentary door never had one past its pulse, and a stop on it is
+        // the late stop the tool path already accepts: harmless, and recorded
+        // against nobody.
+        Resource::Door(door) => {
+            match state
+                .db
+                .close_resource_session(door.id, session_closed_by::STOP)?
+            {
+                Some(_) => {
+                    toolguard::broadcast_module_state(&state).await;
+                    ToolGuardResponse::ok_with_message("Session ended")
+                }
+                None => ToolGuardResponse::ok_with_message("No session to end"),
+            }
+        }
     };
     Ok(Json(reply))
 }
@@ -424,6 +440,22 @@ async fn scan_door(
             reason.unwrap_or_else(|| "Denied".to_string()),
         ));
     }
+    // #190: a yes on an `until_stopped` door opens a session the platform
+    // keeps -- what a tool's yes has always done through `tools.status`. A
+    // momentary door's session is the pulse, over by the time anyone could
+    // ask; nothing is recorded for it beyond the access event above. A second
+    // badge at a room in use joins the open session rather than failing.
+    let profile = state
+        .db
+        .get_resource(door.id)?
+        .map(|r| r.session_profile)
+        .unwrap_or_default();
+    if profile == session_profile::UNTIL_STOPPED {
+        state
+            .db
+            .open_resource_session(door.id, user_id, Some(device_id))?;
+        toolguard::broadcast_module_state(state).await;
+    }
     // The pulse is the strike binding's profile, or the site default for a
     // door nobody gave a strike (#182). A door is never without one: a reader
     // that also holds the latch needs a number, and the default is what the
@@ -434,4 +466,128 @@ async fn scan_door(
             pulse_ms: strike.pulse_ms,
         },
     )))
+}
+
+// ---------------------------------------------------------------------------
+// Sessions, whatever the kind (#190)
+// ---------------------------------------------------------------------------
+
+/// One open session as the platform shows it, whatever the resource's kind
+/// (#190): a door's from `resource_sessions`, a tool's from `tools.status` and
+/// its activation event, which is where a tool's session still lives.
+#[derive(Debug, Serialize)]
+pub struct OpenSessionView {
+    pub resource_id: Uuid,
+    pub kind: String,
+    pub user_id: Option<Uuid>,
+    pub username: Option<String>,
+    pub full_name: Option<String>,
+    pub opened_at: chrono::DateTime<chrono::Utc>,
+    pub device_id: Option<Uuid>,
+}
+
+/// GET /api/admin/resources/sessions -- every resource in use, with who.
+async fn list_open_sessions(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<ApiResponse<Vec<OpenSessionView>>>, ApiError> {
+    let mut views: Vec<OpenSessionView> = Vec::new();
+    for s in state.db.open_resource_sessions()? {
+        views.push(OpenSessionView {
+            resource_id: s.resource_id,
+            kind: crate::models::ResourceKind::Door.as_str().to_string(),
+            user_id: s.user_id,
+            username: None,
+            full_name: None,
+            opened_at: s.opened_at,
+            device_id: s.device_id,
+        });
+    }
+    for tool in state.db.get_inuse_tools()? {
+        let activation = state.db.latest_activation(tool.id)?;
+        views.push(OpenSessionView {
+            resource_id: tool.id,
+            kind: crate::models::ResourceKind::Tool.as_str().to_string(),
+            user_id: activation.as_ref().and_then(|e| e.user_id),
+            username: None,
+            full_name: None,
+            opened_at: activation
+                .as_ref()
+                .map_or(tool.updated_at, |e| e.created_at),
+            device_id: None,
+        });
+    }
+    let ids: Vec<Uuid> = views.iter().filter_map(|v| v.user_id).collect();
+    let names: std::collections::HashMap<Uuid, (String, String)> = state
+        .db
+        .user_names(&ids)?
+        .into_iter()
+        .map(|(id, username, full_name)| (id, (username, full_name)))
+        .collect();
+    for v in views.iter_mut() {
+        if let Some((username, full_name)) = v.user_id.and_then(|id| names.get(&id)) {
+            v.username = Some(username.clone());
+            v.full_name = Some(full_name.clone());
+        }
+    }
+    views.sort_by(|a, b| a.opened_at.cmp(&b.opened_at));
+    Ok(Json(ApiResponse::success(views)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionEnded {
+    pub resource_id: Uuid,
+    pub kind: String,
+    /// False when nothing was open: a late stop is harmless, and says so.
+    pub ended: bool,
+}
+
+/// POST /api/admin/resources/{id}/stop -- end a resource's open session from
+/// the platform, whatever its kind (#190). A tool's is ended the way a device's
+/// card-less stop ends it; a door's by closing the record the badge opened.
+async fn admin_stop(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<SessionEnded>>, ApiError> {
+    let Some(resource) = find_resource(&state, &id).await? else {
+        return Err(ApiError::NotFound("Resource not found".to_string()));
+    };
+    let (resource_id, kind, ended) = match resource {
+        Resource::Tool(tool) => {
+            let was_in_use = tool.status == crate::models::ToolStatus::InUse;
+            let tool_id = tool.id;
+            toolguard::deactivate_tool(&state, Some(tool), None, &id).await?;
+            (tool_id, "tool", was_in_use)
+        }
+        Resource::Door(door) => {
+            let closed = state
+                .db
+                .close_resource_session(door.id, session_closed_by::ADMIN)?;
+            if closed.is_some() {
+                toolguard::broadcast_module_state(&state).await;
+            }
+            (door.id, "door", closed.is_some())
+        }
+    };
+    let log = NewAuditLog {
+        event_type: AuditEventType::ResourceSessionEnded.as_str().to_string(),
+        user_id: Some(admin.0.id),
+        actor_id: Some(admin.0.id),
+        event_data: serde_json::json!({
+            "resource_id": resource_id,
+            "kind": kind,
+            "ended": ended,
+        }),
+        ip_address: None,
+        user_agent: None,
+    };
+    if let Err(e) = state.db.create_audit_log(&log) {
+        tracing::error!("Failed to write resource_session_ended audit log: {}", e);
+    }
+    Ok(Json(ApiResponse::success(SessionEnded {
+        resource_id,
+        kind: kind.to_string(),
+        ended,
+    })))
 }

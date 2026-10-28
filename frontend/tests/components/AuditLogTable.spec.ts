@@ -259,7 +259,7 @@ describe('the event-type filter', () => {
   // transactional-email options came with six, so the ratchet there still reads
   // 57. An option added without a server variant would be caught by the other
   // file's first test instead.
-  it('offers thirty-one of the event types the server can write', async () => {
+  it('offers thirty-three of the event types the server can write', async () => {
     const w = await table()
     const offered = w
       .findAll('select option')
@@ -289,8 +289,10 @@ describe('the event-type filter', () => {
         'To thirty with alert_heartbeat: "when did it last beat" is the whole point of it. ' +
         'To thirty-one with tool_released_by_sweep (#173): a tool the server had to take back ' +
         'is a device that did not release it, and "which tools keep needing that" must be ' +
-        'askable of the log.'
-    ).toHaveLength(31)
+        'askable of the log. To thirty-three with resource_session_ended and ' +
+        'resource_session_released_by_sweep (#190): a room an administrator had to end or ' +
+        'the sweep had to take back is the same question asked of a door.'
+    ).toHaveLength(33)
   })
 
   it('titles every option it does offer', async () => {

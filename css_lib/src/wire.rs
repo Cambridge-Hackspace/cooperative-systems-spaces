@@ -89,6 +89,14 @@ pub struct ToolModuleTool {
     /// which a consumer reads as the kind's default.
     #[serde(default)]
     pub session_profile: String,
+    /// Whether a session is open on this resource as the server knows it
+    /// (#190): a tool `in_use`, or a door whose `until_stopped` session a badge
+    /// opened and nothing has yet ended -- a stop, the sweep, an administrator.
+    /// The coordinator reconciles its own sessions against this the way it
+    /// does against the allow-list's tool status; a module does nothing with
+    /// it. Absent on a server that predates it.
+    #[serde(default)]
+    pub in_use: bool,
     pub modules: Vec<DeviceBinding>,
     pub interlocks: Vec<ToolInterlockRule>,
     /// Whether every power module bound to this tool reaches a safe state on its
