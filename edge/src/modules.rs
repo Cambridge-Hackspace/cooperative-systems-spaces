@@ -40,6 +40,12 @@ const KIND_TRIP: &str = "trip";
 
 /// Module roles.
 const ROLE_POWER: &str = "power";
+/// A device that only senses the machine. It is leased like a power binding
+/// so that it knows there is a session to meter (its firmware opens its meter
+/// on a lease and closes it when the lease lapses), but it switches nothing,
+/// so none of the power rules -- start stages, run-on, relay confirmation --
+/// apply to it. See [`ModuleState::tick`].
+const ROLE_SENSOR: &str = "sensor";
 /// The coordinator's own binding on a resource. Never a liveness subject -- see
 /// [`ModuleState::offline_fail_off`].
 const ROLE_EDGE: &str = "edge";
@@ -159,6 +165,9 @@ struct Inner {
     /// sync in flight when the member swiped still carries the old status; one
     /// arriving after this is the server's considered answer.
     local_session_grace: Duration,
+    /// When this edge last ended a session on each resource, by key. What a
+    /// sync's claim of "in use" is weighed against: see `reconcile_sessions`.
+    local_stops: HashMap<String, DateTime<Utc>>,
     /// When each tool's decision last turned Allow; absent while denied. The
     /// threshold a relay confirmation must be newer than, and the clock a
     /// first-stage delay counts from.
@@ -187,6 +196,7 @@ impl ModuleState {
         Self {
             inner: RwLock::new(Inner {
                 local_session_grace: Duration::seconds(30),
+                local_stops: HashMap::new(),
                 ..Inner::default()
             }),
         }
@@ -206,7 +216,7 @@ impl ModuleState {
         if open {
             self.open_session(tool, now, None);
         } else {
-            self.close_session(tool);
+            self.close_session(tool, now);
         }
     }
 
@@ -217,6 +227,7 @@ impl ModuleState {
     pub fn open_session(&self, resource: &str, now: DateTime<Utc>, ends_at: Option<DateTime<Utc>>) {
         let mut inner = self.inner.write().expect("module lock");
         let key = Self::tool_key(&inner, resource);
+        inner.local_stops.remove(&key);
         inner.local_sessions.insert(
             key,
             Session {
@@ -229,11 +240,14 @@ impl ModuleState {
     /// End a session on this edge's own say-so: a stop. Also drops the
     /// server's synced claim for the resource, so a lease ends with the stop
     /// rather than a sync interval later.
-    pub fn close_session(&self, resource: &str) {
+    pub fn close_session(&self, resource: &str, now: DateTime<Utc>) {
         let mut inner = self.inner.write().expect("module lock");
         let key = Self::tool_key(&inner, resource);
         inner.local_sessions.remove(&key);
         inner.synced_in_use.remove(&key);
+        // Remembered, so a sync that was already in flight when this happened
+        // cannot bring the session back: see `reconcile_sessions`.
+        inner.local_stops.insert(key, now);
     }
 
     /// The server's view of which tools are in use, from a sync (#179).
@@ -248,22 +262,40 @@ impl ModuleState {
     /// about -- a door held until a stop -- is this edge's to end, by a stop or
     /// by its own `ends_at`, and a sync that does not mention it is not a sync
     /// that says it is over.
+    ///
+    /// **And a sync is as old as its request.** `as_of` is when the payload was
+    /// asked for, on this edge's clock. The edge polls every few seconds and
+    /// under load an answer takes a second to come back; a stop this edge
+    /// performed in that second is newer than anything the answer says, and
+    /// the answer's "in use" is the session that stop just ended, not a new
+    /// one. Taken at face value it reopened the session: on a live battery
+    /// the plug and the sensor were refused for two ticks after a stop and
+    /// then granted again for five seconds, until the next poll said idle --
+    /// a machine re-energized after its member signed off. So a resource this
+    /// edge stopped after `as_of` is not in use whatever the sync says. One
+    /// stopped before `as_of` is: the server has seen the stop, and an "in
+    /// use" after it is a session someone else opened.
     pub fn reconcile_sessions(
         &self,
         in_use_tool_ids: &[String],
         tracked_tool_ids: &[String],
         now: DateTime<Utc>,
+        as_of: DateTime<Utc>,
     ) {
         let mut inner = self.inner.write().expect("module lock");
+        let grace = inner.local_session_grace;
+        // Old stops are forgotten: nothing is weighed against them once every
+        // answer in flight at the time has long since arrived.
+        inner.local_stops.retain(|_, at| now - *at < grace);
         let synced: HashSet<String> = in_use_tool_ids
             .iter()
             .map(|t| Self::tool_key(&inner, t))
+            .filter(|key| !inner.local_stops.get(key).is_some_and(|at| *at > as_of))
             .collect();
         let tracked: HashSet<String> = tracked_tool_ids
             .iter()
             .map(|t| Self::tool_key(&inner, t))
             .collect();
-        let grace = inner.local_session_grace;
         inner.local_sessions.retain(|key, session| {
             // A momentary session that has run out is gone whoever tracks it.
             if session.ends_at.is_some_and(|end| now >= end) {
@@ -642,8 +674,19 @@ impl ModuleState {
     /// decision can be tested without a broker. The caller is responsible for
     /// delivering them.
     ///
-    /// A tool with no power module yields no action: there is nothing to hold
-    /// on, so there is nothing to renew.
+    /// A tool with no power module and no sensor yields no action: there is
+    /// nothing to hold on and nothing to meter, so there is nothing to renew.
+    ///
+    /// **A sensor binding is leased too**, and more simply than a power one.
+    /// To a device that only senses, a lease carries no safety meaning; it is
+    /// "there is a session on this resource, meter now", and its lapse closes
+    /// the meter. So a sensor is granted whenever the tool is allowed -- from
+    /// the first tick, in no stage, with no delay, and it confirms nothing and
+    /// blocks nothing -- and refused the moment the tool is not, with no
+    /// run-on: run-on is for a machine that must spin down, and a sensor's
+    /// time after the session ended is nobody's to bill. Until this existed a
+    /// sensor bound on its own never received a lease, so a tool metered by a
+    /// separate sensing device reported no time at all.
     ///
     /// **Start sequencing and run-on (#179)** are decided here, per binding,
     /// from the tool's one decision:
@@ -685,6 +728,13 @@ impl ModuleState {
             // Stage, then name: a stable order for the commands and for the
             // "who is blocking" answer, independent of how bindings were made.
             power.sort_by(|a, b| (a.start_stage, &a.name).cmp(&(b.start_stage, &b.name)));
+            let mut sensors: Vec<DeviceBinding> = wiring
+                .modules
+                .iter()
+                .filter(|m| m.role == ROLE_SENSOR)
+                .cloned()
+                .collect();
+            sensors.sort_by(|a, b| a.name.cmp(&b.name));
             let ttl_ms = ttl.num_milliseconds().max(0);
             let lease = |device_id: &str, grant: bool, reason: Option<String>| LeaseAction {
                 tool_id: tool.clone(),
@@ -729,6 +779,11 @@ impl ModuleState {
                         inner.granted_since.entry(b.id.clone()).or_insert(now);
                         out.push(lease(&b.device_id, true, None));
                     }
+                    // Sensors: leased outright. Nothing above applies to a
+                    // device that switches nothing.
+                    for b in &sensors {
+                        out.push(lease(&b.device_id, true, None));
+                    }
                 }
                 Decision::Deny(denial) => {
                     if inner.allowed_since.remove(&tool_key).is_some() {
@@ -754,6 +809,10 @@ impl ModuleState {
                             inner.granted_since.remove(&b.id);
                             out.push(lease(&b.device_id, false, Some(format!("{denial:?}"))));
                         }
+                    }
+                    // Sensors: refused at once, run-on or not.
+                    for b in &sensors {
+                        out.push(lease(&b.device_id, false, Some(format!("{denial:?}"))));
                     }
                 }
             }
@@ -1331,27 +1390,122 @@ mod tests {
         s.observe("tool-1", "door_open", false, t0());
 
         let actions = s.tick(t0(), Duration::seconds(30), timeout());
-        // One action, for the one power module -- the sensor is not something a
-        // lease is held on.
-        assert_eq!(actions.len(), 1);
+        // Two actions: the power module, and the sensor -- which is leased too,
+        // so that it knows there is a session to meter. (This pin used to say
+        // one, "the sensor is not something a lease is held on", and that is
+        // how a separately-sensed tool came to report no time: see the sensor
+        // arms below.) Power first, then sensors.
+        assert_eq!(actions.len(), 2, "{actions:?}");
         assert_eq!(actions[0].device_id, "dev-m1");
         assert!(actions[0].grant);
         assert_eq!(actions[0].ttl_ms, 30_000);
+        assert_eq!(actions[1].device_id, "dev-m2");
+        assert!(actions[1].grant);
         assert!(s.lease_valid("tool-1", t0()));
 
         // The door opens.
         s.observe("tool-1", "door_open", true, t0());
         let actions = s.tick(t0(), Duration::seconds(30), timeout());
-        assert_eq!(actions.len(), 1);
+        assert_eq!(actions.len(), 2, "{actions:?}");
         assert!(!actions[0].grant, "an open door must revoke the lease");
         assert!(actions[0].reason.is_some(), "a refusal must say why");
+        assert!(!actions[1].grant, "and the sensor's lease with it");
         assert!(!s.lease_valid("tool-1", t0()));
     }
 
     #[test]
-    fn a_tool_with_no_power_module_yields_no_lease_action() {
-        let s = state_with(vec![binding("m2", "sensor", "ignore")], vec![]);
+    fn a_tool_with_nothing_to_hold_on_or_meter_yields_no_lease_action() {
+        // A reader alone: it switches nothing and measures nothing. (This arm
+        // used to use a sensor and assert the same -- which is exactly how a
+        // separately-sensed tool came to report no time at all.)
+        let s = state_with(vec![binding("m2", "reader", "ignore")], vec![]);
         assert!(s.tick(t0(), Duration::seconds(30), timeout()).is_empty());
+    }
+
+    // ── A sensor bound on its own ────────────────────────────────────────────
+    //
+    // A device that only senses the machine is a must-have on its own: its
+    // firmware meters while it holds a lease and reports card-less increments
+    // the server attributes to the session. Without a lease it never opens its
+    // meter, so the lease has to reach it.
+
+    #[test]
+    fn a_sensor_on_its_own_is_leased_while_the_tool_is_allowed_and_refused_when_it_is_not() {
+        let s = state_with(vec![binding("s", "sensor", "ignore")], vec![]);
+        let out = ticked(&s, t0());
+        assert_eq!(
+            grant_for(&out, "s"),
+            Some(true),
+            "a sensor bound alone got no lease, so it will never meter: {out:?}"
+        );
+        // The member signs off: refused at once, and the reason travels.
+        s.note_session("tool-1", false, t0() + ms(500));
+        let out = ticked(&s, t0() + ms(1_000));
+        let l = for_dev(&out, "s").expect("a refusal, not silence");
+        assert!(!l.grant, "{out:?}");
+        assert_eq!(l.reason.as_deref(), Some("NotInUse"));
+
+        // And nobody on from the start: refused, never granted.
+        let idle = state_nobody_on(vec![binding("s", "sensor", "ignore")], vec![]);
+        assert_eq!(grant_for(&ticked(&idle, t0()), "s"), Some(false));
+    }
+
+    #[test]
+    fn a_sensor_is_leased_from_the_first_tick_and_never_blocks_a_stage() {
+        // Two staged plugs and a sensor that, if it were a stage, would sit in
+        // front of both and confirm nothing. It must be leased at once and the
+        // plugs must sequence exactly as they would without it.
+        let mut sensor = binding("s", "sensor", "ignore");
+        sensor.start_stage = 0;
+        sensor.start_delay_ms = 5_000;
+        let s = state_with(vec![plug("a", 1, 0, 0), plug("b", 2, 0, 0), sensor], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.note_device_seen("dev-b", t0());
+        let out = ticked(&s, t0());
+        assert_eq!(
+            grant_for(&out, "s"),
+            Some(true),
+            "no stage, no delay: {out:?}"
+        );
+        assert_eq!(
+            grant_for(&out, "a"),
+            Some(true),
+            "the sensor is not a stage in front of a: {out:?}"
+        );
+        assert_eq!(
+            for_dev(&out, "b"),
+            None,
+            "b still waits for a to confirm: {out:?}"
+        );
+        s.note_relay_state("dev-a", true, t0() + ms(500));
+        let out = ticked(&s, t0() + ms(1_000));
+        assert_eq!(
+            grant_for(&out, "b"),
+            Some(true),
+            "the sensor confirms nothing and must block nothing: {out:?}"
+        );
+        assert_eq!(grant_for(&out, "s"), Some(true));
+    }
+
+    #[test]
+    fn a_sensor_gets_no_run_on() {
+        let mut sensor = binding("s", "sensor", "ignore");
+        sensor.run_on_ms = 30_000;
+        let s = state_with(vec![plug("a", 0, 0, 3_000), sensor], vec![]);
+        s.note_device_seen("dev-a", t0());
+        ticked(&s, t0());
+        s.note_session("tool-1", false, t0() + ms(500));
+        let out = ticked(&s, t0() + ms(1_000));
+        assert_eq!(
+            grant_for(&out, "a"),
+            Some(true),
+            "the plug runs on: {out:?}"
+        );
+        assert_eq!(
+            grant_for(&out, "s"),
+            Some(false),
+            "a sensor's time after the session is nobody's to bill: {out:?}"
+        );
     }
 
     #[test]
@@ -1454,12 +1608,49 @@ mod tests {
         // reaches this edge through the sync.
         let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
         s.note_device_seen("dev-a", t0());
-        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0());
+        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0(), t0());
         assert!(s.evaluate("tool-1", t0(), timeout()).is_allowed());
-        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + ms(1));
+        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + ms(1), t0() + ms(1));
         assert_eq!(
             s.evaluate("tool-1", t0() + ms(1), timeout()),
             Decision::Deny(Denial::NotInUse)
+        );
+    }
+
+    #[test]
+    fn a_sync_requested_before_a_stop_does_not_reopen_the_session() {
+        // Found on a live battery: the member signed off, the plug and the
+        // sensor were refused for two ticks, and then granted again for five
+        // seconds -- the poll that had gone out just before the stop came back
+        // just after it, still saying in use, and was believed.
+        let s = state_with(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        assert!(s.evaluate("tool-1", t0(), timeout()).is_allowed());
+        s.note_session("tool-1", false, t0() + Duration::seconds(10));
+        // Requested a second before the stop, arriving a second after it.
+        s.reconcile_sessions(
+            &["tool-1".to_string()],
+            &["tool-1".to_string()],
+            t0() + Duration::seconds(11),
+            t0() + Duration::seconds(9),
+        );
+        assert_eq!(
+            s.evaluate("tool-1", t0() + Duration::seconds(11), timeout()),
+            Decision::Deny(Denial::NotInUse),
+            "a sync that predates the stop brought the session back"
+        );
+        // Requested after the stop: the server has seen it, so an "in use"
+        // now is a session someone else opened, and it counts.
+        s.reconcile_sessions(
+            &["tool-1".to_string()],
+            &["tool-1".to_string()],
+            t0() + Duration::seconds(16),
+            t0() + Duration::seconds(16),
+        );
+        assert!(
+            s.evaluate("tool-1", t0() + Duration::seconds(16), timeout())
+                .is_allowed(),
+            "a genuine session opened elsewhere after our stop was ignored"
         );
     }
 
@@ -1471,14 +1662,24 @@ mod tests {
         let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
         s.note_device_seen("dev-a", t0());
         s.note_session("tool-1", true, t0());
-        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + ms(1_000));
+        s.reconcile_sessions(
+            &[],
+            &["tool-1".to_string()],
+            t0() + ms(1_000),
+            t0() + ms(1_000),
+        );
         assert!(
             s.evaluate("tool-1", t0() + ms(1_000), timeout())
                 .is_allowed(),
             "a stale sync undid a swipe a second old"
         );
         s.note_device_seen("dev-a", t0() + Duration::seconds(31));
-        s.reconcile_sessions(&[], &["tool-1".to_string()], t0() + Duration::seconds(31));
+        s.reconcile_sessions(
+            &[],
+            &["tool-1".to_string()],
+            t0() + Duration::seconds(31),
+            t0() + Duration::seconds(31),
+        );
         assert_eq!(
             s.evaluate("tool-1", t0() + Duration::seconds(31), timeout()),
             Decision::Deny(Denial::NotInUse),
@@ -1490,7 +1691,7 @@ mod tests {
     fn a_local_stop_ends_the_lease_without_waiting_for_a_sync() {
         let s = state_with(vec![plug("a", 0, 0, 0)], vec![]);
         s.note_device_seen("dev-a", t0());
-        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0());
+        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0(), t0());
         s.note_session("tool-1", false, t0() + ms(500));
         assert_eq!(
             s.evaluate("tool-1", t0() + ms(500), timeout()),

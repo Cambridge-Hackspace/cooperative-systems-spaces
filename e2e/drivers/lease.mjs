@@ -543,6 +543,7 @@ async function assertWindows() {
     'one or more capture files is missing; the stage did not run to completion'
   )
   const ofPlug2 = (rows) => (rows ?? []).filter((r) => r.device_id === fixture.plug2Id)
+  const ofSensor = (rows) => (rows ?? []).filter((r) => r.device_id === fixture.sensorId)
 
   // ── #161: the SERVER's view of the module, the other side of the same event ─
   //
@@ -825,6 +826,42 @@ async function assertWindows() {
       mirroredPlug2[mirroredPlug2.length - 1]?.grant === true,
     `resource/lease did not mirror the grant: ${JSON.stringify(mirroredPlug2)} (alias window had ` +
       `${second.length})`
+  )
+
+  // ── A sensor bound on its own gets the lease too ──────────────────────────
+  //
+  // A device that only senses the machine meters while it holds a lease and
+  // reports card-less time the server puts on the session. Until this, the
+  // edge leased `power` bindings only, so a separately-sensed tool reported
+  // no time at all and nothing in this stage noticed: the sensor was here for
+  // its silence (1b) and its alive pulse (2), never for a lease of its own.
+  // Four windows, so the claim is made from both sides and across the session:
+  // refused with nobody on, granted the moment the member is, granted while
+  // the second plug is still held in its start delay (a sensor is no stage),
+  // refused at once after the stop (a sensor gets no run-on).
+  const sensorIdle = ofSensor(nobodyOn)
+  ok(
+    'lease/a-sensor-is-refused-with-nobody-signed-on',
+    sensorIdle.length >= 1 && sensorIdle.every((r) => r.grant === false && r.reason === 'NotInUse'),
+    `the sensor must be refused with NotInUse while nobody is signed on: ${JSON.stringify(sensorIdle)}`
+  )
+  const sensorOn = ofSensor(after)
+  ok(
+    'lease/a-sensor-is-leased-once-the-member-is-signed-on',
+    sensorOn.length >= 1 && sensorOn[sensorOn.length - 1]?.grant === true,
+    `no grant reached the sensor in window 2, so it would never open its meter: ${JSON.stringify(sensorOn)}`
+  )
+  const sensorInDelay = ofSensor(inDelay)
+  ok(
+    'lease/a-sensor-is-no-stage-and-is-leased-while-the-second-stage-waits',
+    sensorInDelay.length >= 1 && sensorInDelay.every((r) => r.grant === true),
+    `inside the second stage's start delay the sensor must already hold its lease: ${JSON.stringify(sensorInDelay)}`
+  )
+  const sensorAfterStop = ofSensor(afterStop)
+  ok(
+    'lease/a-sensor-is-refused-at-once-after-the-stop',
+    sensorAfterStop.length >= 1 && sensorAfterStop.every((r) => r.grant === false),
+    `a sensor gets no run-on; after tool-off every lease to it must refuse: ${JSON.stringify(sensorAfterStop)}`
   )
 
   // ── #179: run-on ──────────────────────────────────────────────────────────

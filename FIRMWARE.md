@@ -359,6 +359,15 @@ Authorization got the tool started. Staying on is a **lease**, renewed on
 3. When the timer expires, de-energize. Nobody will tell you to.
 4. `grant: false` means de-energize now. It is a courtesy, not the mechanism.
 
+A device bound in the `sensor` role receives the same leases, and to it they
+mean one thing: **there is a session on this resource — meter now.** It is
+granted from the first renewal after the yes, in no start stage and with no
+delay, and refused the moment the session ends, with no run-on. Open your meter
+on a grant, note the machine working while the lease stands, and report what
+accrued (Step 6) with no `card` when it lapses; the server puts it on the
+session. A sensor bound on its own, with no `power` binding on the tool at all,
+is a supported shape and the reason the lease reaches it.
+
 *The mistake here:* implementing `grant: false` and omitting the timer. That
 firmware stays on forever the moment the edge dies, which is the exact failure
 the design exists to prevent. See [the lease](#authorization-is-a-lease-not-a-command).
@@ -773,8 +782,8 @@ JSON body: `card`. A badge presented to the resource.
 
 Answers `authorized: true` on a yes, and — for a resource with a `strike`
 binding — `strike: { "pulse_ms": … }`, the pulse the device may release its
-latch for. A tool's yes opens its session and leases its `power` bindings as
-`tool-on` does; a door's yes is the pulse. **The reply is the actuation**:
+latch for. A tool's yes opens its session and leases its `power` and `sensor`
+bindings as `tool-on` does; a door's yes is the pulse. **The reply is the actuation**:
 nothing is pushed to the door's coordinator for a scan answered here, so a
 reader that also holds the latch releases it from this reply, as a plug closes
 its relay from a lease.

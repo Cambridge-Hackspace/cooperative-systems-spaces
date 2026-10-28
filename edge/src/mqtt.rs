@@ -920,8 +920,9 @@ impl LocalMqttClient {
     /// Hand the server's view of which tools are in use to the lease engine
     /// (#179): a session opened elsewhere -- or ended by an administrator or
     /// the sweep -- reaches this edge through the sync.
-    pub fn reconcile_sessions(&self, payload: &crate::toolguard::SyncPayload) {
-        self.cache.reconcile(payload, chrono::Utc::now());
+    pub fn reconcile_sessions(&self, arrival: &crate::toolguard::SyncArrival) {
+        self.cache
+            .reconcile(&arrival.payload, chrono::Utc::now(), arrival.requested_at);
     }
 
     pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
@@ -1112,7 +1113,7 @@ impl LocalMqttClient {
         self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
         self.publish_local(local::STOP_RESPONSE, &response_payload);
         // The lease ends with the stop, not a sync interval later (#179).
-        self.cache.close_session(&req.tool_id);
+        self.cache.close_session(&req.tool_id, chrono::Utc::now());
 
         let url = format!(
             "{}/api/resources/{}/stop",
@@ -1353,16 +1354,16 @@ impl LocalMqttClient {
 pub async fn run_local_mqtt_event_loop(
     rx: mqtt::Receiver<Option<mqtt::Message>>,
     local_client: Arc<LocalMqttClient>,
-    state_rx: std::sync::mpsc::Receiver<crate::toolguard::SyncPayload>,
+    state_rx: std::sync::mpsc::Receiver<crate::toolguard::SyncArrival>,
 ) -> Result<()> {
     info!("Starting local MQTT event loop");
 
     let receiver_task = tokio::task::spawn_blocking(move || {
         loop {
             // Publish any pending state updates first
-            while let Ok(payload) = state_rx.try_recv() {
-                local_client.reconcile_sessions(&payload);
-                match serde_json::to_vec(&payload) {
+            while let Ok(arrival) = state_rx.try_recv() {
+                local_client.reconcile_sessions(&arrival);
+                match serde_json::to_vec(&arrival.payload) {
                     Ok(bytes) => local_client.publish_state_bytes(bytes),
                     Err(e) => warn!(
                         "Failed to serialize toolguard state for local publish: {}",

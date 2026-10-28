@@ -872,4 +872,59 @@ await main(async () => {
       assertEq(`sweep/${c.label}-stopped`, 200, (await toolOff(c.card, c.ext, powerTokens[c.ext])).status)
     }
   }
+
+  // A metered tool with a separate SENSOR: a device bound in the `sensor` role
+  // and nothing else -- it reads no card and switches no power -- reports
+  // card-less time on the session the reader opened, and the charge is its
+  // figure. The server side of the must-have the edge's lease change is the
+  // other half of: the sensor opens its meter on the lease, and what it then
+  // reports has to land. Per-minute again, so only a report can produce the
+  // charge; the plug `createMeteredTool` binds never reports here.
+  //
+  // LAST, after the sweep arms: the ten-minute tool opened at the top must
+  // still be open when the sweep arms look, and every case between the two
+  // spends that budget. This one sat before them once, and the ten-minute
+  // tool was swept at thirteen minutes.
+  {
+    const ext = 'e2e-sense-tool'
+    const created = await createMeteredTool(admin, { externalId: ext, flatFee: null, ratePerMin: '60.00', maxMin: 1 })
+    macSeq += 1
+    const sensor = await boundDevice(admin.token, created.id, {
+      role: 'sensor',
+      name: `billing-sensor-${ext}`,
+      mac: `02:00:00:00:8c:${macSeq.toString(16).padStart(2, '0')}`,
+    })
+    ok('sense/sensor-device-bound', !!sensor.token && sensor.bindStatus === 201, sensor.text)
+    const m = await account('tb_sense')
+    await setCard(m, 'SENSE-CARD')
+    await fund(admin, m, '200.00') // member, balance 190
+    const senseLog = (seconds, active_seconds) =>
+      POST('/api/toolguard/tool-log', { token: sensor.token, body: { tool_id: ext, seconds, active_seconds } })
+    const sessionOf = async (member) =>
+      (await GET(`/api/admin/tool-billing/users/${member.user.id}/sessions`, { token: admin.token }))
+        .json?.data?.[0]
+
+    const orphan = await senseLog(1.0, 1.0)
+    assertEq('sense/a-cardless-report-with-nobody-signed-on-is-refused', 'error', orphan.json?.status,
+      `usage was attributed to nobody: ${JSON.stringify(orphan.json)}`)
+    const on = await toolOn('SENSE-CARD', ext, readerTokens[ext])
+    ok('sense/the-reader-starts-the-tool', on.json?.tool_on === true, JSON.stringify(on.json))
+    // Both figures a sensing device has: the held one (`seconds`) and the raw
+    // one (`active_seconds`). The default basis bills the held one.
+    const report = await senseLog(1.0, 0.5)
+    assertEq('sense/the-sensor-reports-with-no-card', 'ok', report.json?.status,
+      `the sensor's card-less report was refused: ${JSON.stringify(report.json)}`)
+    await new Promise((r) => setTimeout(r, 2000))
+    assertEq('sense/the-reader-stops', 200, (await toolOff('SENSE-CARD', ext, readerTokens[ext])).status)
+    const s = await sessionOf(m)
+    ok('sense/the-charge-is-the-sensors-figure',
+      s?.status === 'settled' && Math.abs(Number(s?.charged_amount) - 1.0) < 1e-9,
+      `expected a settled session charged 1.00 from the sensor's report: ${JSON.stringify(s)}`)
+    ok(
+      'sense/the-ledger-agrees',
+      toolBillingHonored({ balance: 189, held: 0, available: 189, nonNegative: true }, await view(m)) === null,
+      JSON.stringify(await view(m)),
+    )
+  }
+
 })

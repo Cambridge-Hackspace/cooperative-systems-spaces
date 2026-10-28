@@ -262,9 +262,16 @@ async fn main() -> Result<()> {
                     loop {
                         ticker.tick().await;
                         let url = format!("{}/api/toolguard/sync", instance_url);
+                        // Taken before the request, not after the response:
+                        // the answer describes the server as of the request
+                        // at the latest, and a stop this edge performs while
+                        // it is in flight is newer than anything in it.
+                        let requested_at = chrono::Utc::now();
                         match client.get(&url).bearer_auth(&auth_token).send().await {
                             Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                                Ok(bytes) => match state.apply_sync_bytes(&bytes) {
+                                Ok(bytes) => match state
+                                    .apply_sync_bytes_requested_at(&bytes, requested_at)
+                                {
                                     Ok(()) => info!("ToolGuard state synced from remote"),
                                     Err(e) => {
                                         warn!("Failed to parse toolguard sync response: {}", e)
