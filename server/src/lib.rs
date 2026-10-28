@@ -60,6 +60,7 @@ pub mod session_sweep;
 pub mod shutdown;
 pub mod stripe;
 pub mod tool_billing;
+pub mod toolguard_broadcast;
 pub mod user_merge;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -133,6 +134,9 @@ pub struct AppState {
     /// Metered tool-billing service (Phase 2). `None` when the module is
     /// disabled; the toolguard and admin paths check for it before running.
     pub tool_billing: Option<Arc<ToolBillingService>>,
+    /// The one task that republishes ToolGuard allow-lists (#180): every
+    /// caller files a request here and returns; see `api::toolguard::Broadcaster`.
+    pub toolguard_broadcast: Arc<crate::api::toolguard::Broadcaster>,
     /// The alert heartbeat (#87): always present; a zero interval only stops
     /// the ticker, the admin "beat now" still works.
     pub alert_heartbeat: Arc<crate::alerts::HeartbeatService>,

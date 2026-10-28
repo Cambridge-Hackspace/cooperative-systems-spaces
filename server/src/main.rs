@@ -484,6 +484,7 @@ async fn main() -> Result<(), anyhow::Error> {
         None
     };
 
+    let toolguard_broadcast = Arc::new(css_server::api::toolguard::Broadcaster::new());
     let app_state = AppState {
         card_cipher: card_cipher.clone(),
         shutdown: shutdown.clone(),
@@ -507,7 +508,20 @@ async fn main() -> Result<(), anyhow::Error> {
         groupsio_sync,
         membership,
         tool_billing,
+        toolguard_broadcast: toolguard_broadcast.clone(),
     };
+
+    // The allow-list fan-out (#180): one task drains the requests every
+    // handler files, a bounded time after the first of a burst, and publishes
+    // to the devices the batch concerns. Tracked, so a publish in flight at
+    // shutdown completes and a request pending at shutdown still goes out.
+    {
+        let fan_out_state = app_state.clone();
+        let broadcaster = toolguard_broadcast.clone();
+        shutdown.spawn(async move {
+            broadcaster.run(fan_out_state).await;
+        });
+    }
 
     // The session sweep (#173): returns a tool nobody released to `idle` once
     // its session has run past its own cap plus a grace, settling any open

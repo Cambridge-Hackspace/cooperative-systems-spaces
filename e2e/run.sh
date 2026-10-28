@@ -1894,10 +1894,17 @@ stage_journeys() {
   fi
   record_case "journeys/stack-is-up" ok
 
+  # Timed (#180): this stage is the battery's wall clock, because its fuzzer
+  # drives tool-on/off and each used to wait for a whole-site fan-out --
+  # 25 and 54 minutes in the two batteries before the fix. Recorded, not
+  # thresholded: it also scales with the iteration count and the guest.
+  local journeys_started
+  journeys_started=$(date +%s)
   if run_node journeys.mjs; then :; else
     log "journeys driver exited non-zero; its cases are recorded below"
   fi
   absorb_driver_cases
+  record_case "journeys/wall-clock-seconds" ok "$(($(date +%s) - journeys_started))"
 
   emit_junit journeys "seed=${CSS_JOURNEY_SEED:-random}" \
     "iterations=${CSS_JOURNEY_ITERATIONS:-200}"
@@ -2068,8 +2075,20 @@ stage_lease() {
     return 1
   fi
 
+  local wiring_asked wiring_took
+  wiring_asked=$(date +%s)
   if wait_for "css-edge to sync its wiring" 60 edge_logged "Module state synced from remote"; then
     record_case "lease/edge-fetched-its-wiring" ok
+    # #180: the edge's first call at boot used to wait on the whole site's
+    # allow-list fan-out, and this crept from 33 s to past the 60 s wait as
+    # the battery accumulated devices. A number, so a regression is a number.
+    wiring_took=$(($(date +%s) - wiring_asked))
+    if ((wiring_took <= 10)); then
+      record_case "lease/edge-wiring-sync-is-prompt" ok "${wiring_took}s"
+    else
+      record_case "lease/edge-wiring-sync-is-prompt" fail \
+        "css-edge took ${wiring_took}s to sync its wiring; the fan-out is back in the edge's boot path (#180)"
+    fi
   else
     # Worth its own case rather than letting the windows fail obscurely: with no
     # wiring the coordinator has nothing to evaluate, so every window would be

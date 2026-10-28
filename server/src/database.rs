@@ -3349,6 +3349,18 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Every `(device, resource)` binding on the site, for deciding which
+    /// devices a change concerns without one query per device (#180).
+    pub fn device_binding_pairs(&self) -> Result<Vec<(uuid::Uuid, uuid::Uuid)>, DatabaseError> {
+        use crate::schema::device_bindings;
+
+        let mut conn = self.get_connection()?;
+        device_bindings::table
+            .select((device_bindings::device_id, device_bindings::resource_id))
+            .load::<(uuid::Uuid, uuid::Uuid)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Every resource's `kind`, for building a snapshot without one query per
     /// entry (#182).
     pub fn resource_kinds(&self) -> Result<Vec<(uuid::Uuid, String)>, DatabaseError> {

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::errors::ApiError;
+use crate::toolguard_broadcast::{devices_for, Batch, Coalescer, Scope};
 use crate::AppState;
 
 /// Standard ToolGuard API response
@@ -440,22 +441,12 @@ async fn boot_reset(
             tracing::error!("Failed to write audit event: {}", e);
         }
 
-        // Answer first, fan out after. The broadcast rebuilds and publishes the
-        // allow-list for EVERY registered device -- seconds per device on a
-        // site with many -- and this is the first call an edge makes at boot,
-        // awaited inline before it connects to its local broker or fetches its
-        // wiring. Awaiting the fan-out here held an edge's whole startup for as
-        // long as the site had devices; the e2e saw it as an edge that never
-        // synced its wiring within a minute. The reset itself is done and
-        // committed above; the broadcast is a side effect the caller does not
-        // need to wait for.
-        // Tracked, not detached: the stop path waits for it (#102), so a
-        // shutdown mid-broadcast does not leave half the devices on a stale
-        // allow-list.
-        let fan_out = state.clone();
-        state.shutdown.spawn(async move {
-            broadcast_toolguard_state(&fan_out).await;
-        });
+        // Answer first, fan out after. This is the first call an edge makes
+        // at boot, and when the fan-out was awaited inline here it held the
+        // edge's whole startup for as long as the site had devices. Since
+        // #180 every fan-out is a request to one tracked task (see
+        // `Broadcaster`), so this is the same call every other handler makes.
+        broadcast_toolguard_state(&state).await;
     }
 
     Ok(Json(ToolGuardResponse::ok_with_message(format!(
@@ -637,8 +628,8 @@ pub(crate) async fn activate_tool(
 
     log_tool_activated(state, &user, tool.id, &tool_name).await?;
 
-    // Broadcast updated state over MQTT
-    broadcast_toolguard_state(state).await;
+    // The tool's status changed, for the devices bound to it (#180).
+    broadcast_toolguard_state_for_tool(state, tool.id);
 
     Ok(ToolGuardResponse::tool_authorized())
 }
@@ -761,7 +752,7 @@ pub(crate) async fn deactivate_tool(
 
     log_tool_deactivated(state, user.as_ref(), tool.id, &tool_name).await?;
 
-    broadcast_toolguard_state(state).await;
+    broadcast_toolguard_state_for_tool(state, tool.id);
 
     Ok(ToolGuardResponse::tool_off_ok())
 }
@@ -1454,7 +1445,131 @@ fn closed_tool_ids_now(state: &AppState) -> Result<std::collections::HashSet<Uui
 }
 
 /// Broadcast the current toolguard state to all registered devices over MQTT.
+/// How long a burst of requests is gathered before one publish: a swipe and
+/// the stop that follows it a moment later, or a sweep settling ten sessions,
+/// publish once. Counted from the first request in the batch, so a steady
+/// stream still publishes this often.
+pub const BROADCAST_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The one task that republishes ToolGuard allow-lists (#180).
+///
+/// Every handler that used to await `broadcast_toolguard_state` -- and so
+/// answered its swipe only after the whole site had been rebuilt, seconds per
+/// device -- now files a [`Scope`] here and returns. One tracked task drains
+/// the requests [`BROADCAST_WINDOW`] after the first of a burst, merges them
+/// (see [`Coalescer`]), and publishes to the devices the batch concerns (see
+/// [`devices_for`]): a tool-on reaches the devices bound to that tool, a
+/// change to who may use what reaches everyone. The edge's periodic poll of
+/// `/api/toolguard/sync` stays the safety net it always was.
+pub struct Broadcaster {
+    pending: std::sync::Mutex<Coalescer>,
+    wake: tokio::sync::Notify,
+}
+
+impl Default for Broadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Broadcaster {
+    pub fn new() -> Self {
+        Broadcaster {
+            pending: std::sync::Mutex::new(Coalescer::new(BROADCAST_WINDOW)),
+            wake: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// File a request and return. Never blocks on the publish.
+    pub fn request(&self, scope: Scope) {
+        self.pending
+            .lock()
+            .expect("broadcast lock")
+            .note(scope, std::time::Instant::now());
+        self.wake.notify_one();
+    }
+
+    /// Drain until shutdown. Spawned once, tracked, from `main`: a publish in
+    /// flight when shutdown is asked for completes, and a batch still pending
+    /// goes out before the task returns, so no device is left on an
+    /// allow-list the server knew to be stale.
+    pub async fn run(self: std::sync::Arc<Self>, state: AppState) {
+        loop {
+            let due = self.pending.lock().expect("broadcast lock").due_at();
+            let until_due = async {
+                match due {
+                    Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            tokio::select! {
+                _ = state.shutdown.cancelled() => {
+                    let last = self.pending.lock().expect("broadcast lock").take_now();
+                    if let Some(batch) = last {
+                        publish_batch(&state, batch).await;
+                    }
+                    return;
+                }
+                _ = self.wake.notified() => {}
+                _ = until_due => {}
+            }
+            let batch = self
+                .pending
+                .lock()
+                .expect("broadcast lock")
+                .take(std::time::Instant::now());
+            if let Some(batch) = batch {
+                publish_batch(&state, batch).await;
+            }
+        }
+    }
+}
+
+/// Republish the allow-list to every device: who may use what has changed
+/// (a card, training, a merge, a lockout, a sweep). Files a request and
+/// returns; the publish happens on the broadcaster's task (#180).
 pub async fn broadcast_toolguard_state(state: &AppState) {
+    state.toolguard_broadcast.request(Scope::All);
+}
+
+/// Republish to the devices bound to one tool: its status changed (#180).
+pub fn broadcast_toolguard_state_for_tool(state: &AppState, tool_id: Uuid) {
+    state.toolguard_broadcast.request(Scope::Tool(tool_id));
+}
+
+/// One batch, to the devices it concerns.
+async fn publish_batch(state: &AppState, batch: Batch) {
+    if state.mqtt_service.is_none() {
+        return;
+    }
+    let all = match state.db.list_approved_devices() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to list devices for toolguard broadcast: {}", e);
+            return;
+        }
+    };
+    let bindings = match &batch {
+        Batch::All => Vec::new(),
+        Batch::Tools(_) => match state.db.device_binding_pairs() {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Failed to list bindings for toolguard broadcast: {}", e);
+                return;
+            }
+        },
+    };
+    let devices = devices_for(&batch, &all, &bindings);
+    tracing::debug!(
+        "toolguard broadcast: {} device(s) for {:?}",
+        devices.len(),
+        batch
+    );
+    publish_to_devices(state, devices).await;
+}
+
+/// Build and publish the allow-list for each named device, one after another.
+async fn publish_to_devices(state: &AppState, devices: Vec<Uuid>) {
     let mqtt_service = match &state.mqtt_service {
         Some(s) => s.clone(),
         None => return,
@@ -1462,14 +1577,6 @@ pub async fn broadcast_toolguard_state(state: &AppState) {
 
     let config = state.config_manager.get_config();
     let profile_field = config.toolguard.profile_field.clone();
-
-    let devices = match state.db.list_approved_devices() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("Failed to list devices for toolguard broadcast: {}", e);
-            return;
-        }
-    };
 
     for device_id in devices {
         match build_sync_payload(state, device_id, &profile_field).await {
