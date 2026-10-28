@@ -3400,6 +3400,102 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Open a session on a resource (#190), or return the one already open:
+    /// a second badge at a room in use joins the session rather than failing
+    /// the badge. The partial unique index is what makes "already open" a
+    /// race-free fact rather than a read-then-insert.
+    pub fn open_resource_session(
+        &self,
+        resource_id: uuid::Uuid,
+        user_id: Option<uuid::Uuid>,
+        device_id: Option<uuid::Uuid>,
+    ) -> Result<crate::models::ResourceSession, DatabaseError> {
+        use crate::schema::resource_sessions;
+
+        let mut conn = self.get_connection()?;
+        let inserted = diesel::insert_into(resource_sessions::table)
+            .values(&crate::models::NewResourceSession {
+                resource_id,
+                user_id,
+                device_id,
+            })
+            .returning(crate::models::ResourceSession::as_select())
+            .get_result(&mut conn);
+        match inserted {
+            Ok(session) => Ok(session),
+            Err(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UniqueViolation,
+                _,
+            )) => resource_sessions::table
+                .filter(resource_sessions::resource_id.eq(resource_id))
+                .filter(resource_sessions::closed_at.is_null())
+                .select(crate::models::ResourceSession::as_select())
+                .first(&mut conn)
+                .map_err(DatabaseError::Diesel),
+            Err(e) => Err(DatabaseError::Diesel(e)),
+        }
+    }
+
+    /// Close a resource's open session (#190), saying who. `None` when none
+    /// was open, which a late stop is allowed to find.
+    pub fn close_resource_session(
+        &self,
+        resource_id: uuid::Uuid,
+        by: &str,
+    ) -> Result<Option<crate::models::ResourceSession>, DatabaseError> {
+        use crate::schema::resource_sessions;
+
+        let mut conn = self.get_connection()?;
+        diesel::update(
+            resource_sessions::table
+                .filter(resource_sessions::resource_id.eq(resource_id))
+                .filter(resource_sessions::closed_at.is_null()),
+        )
+        .set((
+            resource_sessions::closed_at.eq(diesel::dsl::now),
+            resource_sessions::closed_by.eq(by),
+        ))
+        .returning(crate::models::ResourceSession::as_select())
+        .get_result(&mut conn)
+        .optional()
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every open resource session (#190), oldest first.
+    pub fn open_resource_sessions(
+        &self,
+    ) -> Result<Vec<crate::models::ResourceSession>, DatabaseError> {
+        use crate::schema::resource_sessions;
+
+        let mut conn = self.get_connection()?;
+        resource_sessions::table
+            .filter(resource_sessions::closed_at.is_null())
+            .order(resource_sessions::opened_at.asc())
+            .select(crate::models::ResourceSession::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// `(id, username, full_name)` for the named users, for naming who holds
+    /// a session without a join through a table that has no reason to know
+    /// about sessions.
+    pub fn user_names(
+        &self,
+        ids: &[uuid::Uuid],
+    ) -> Result<Vec<(uuid::Uuid, String, String)>, DatabaseError> {
+        use crate::schema::users::dsl::*;
+
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.get_connection()?;
+        users
+            .filter(id.eq_any(ids))
+            .select((id, username, full_name))
+            .load::<(uuid::Uuid, String, String)>(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// Set a resource's session profile (#182). `None` when no such resource.
     /// The caller validates the vocabulary; the CHECK constraint is the backstop.
     pub fn update_resource_session_profile(
@@ -7041,10 +7137,25 @@ impl DatabaseManager {
 
         // BTreeMap so the snapshot is ordered and therefore diffable between
         // builds; an unordered snapshot would churn on every rebuild.
+        // #190: one "in use" per resource whatever its kind -- a tool's
+        // status, a door's open session -- so the coordinator reconciles a
+        // room the way it reconciles a tool.
+        let in_use: std::collections::HashSet<uuid::Uuid> = self
+            .get_inuse_tools()?
+            .into_iter()
+            .map(|t| t.id)
+            .chain(
+                self.open_resource_sessions()?
+                    .into_iter()
+                    .map(|s| s.resource_id),
+            )
+            .collect();
+
         let mut by_resource: BTreeMap<uuid::Uuid, css_lib::wire::ToolModuleTool> = BTreeMap::new();
         let entry_for = |id: uuid::Uuid| css_lib::wire::ToolModuleTool {
             tool_id: id.to_string(),
             external_id: external.get(&id).cloned().flatten(),
+            in_use: in_use.contains(&id),
             kind: profiles
                 .get(&id)
                 .map(|(kind, _)| kind.clone())

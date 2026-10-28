@@ -548,6 +548,14 @@ export const resourcesApi = withErrorGuard({
   update(id: string, body: import('@/types').UpdateResourceRequest) {
     return apiClient.patch<import('@/types').ResourceSummary>(`/admin/resources/${id}`, body)
   },
+  /** #190: every resource in use, with who opened it. */
+  sessions() {
+    return apiClient.get<import('@/types').OpenSessionView[]>('/admin/resources/sessions')
+  },
+  /** #190: end a resource's open session from the platform. */
+  stop(id: string) {
+    return apiClient.post<import('@/types').SessionEnded>(`/admin/resources/${id}/stop`)
+  },
 })
 
 export const powerApi = withErrorGuard({

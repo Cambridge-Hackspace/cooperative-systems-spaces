@@ -413,6 +413,7 @@ async function setup() {
     latchId: latch.id,
     roomPlugId: roomPlug.id,
     memberId: member.user.id,
+    memberUsername: member.user.username,
     plug2Id: plug2.id,
     card,
     externalId: `lease-${tag}`,
@@ -910,6 +911,39 @@ async function assertWindows() {
 // once the edge is up the stage asks for it again; the shell then waits for the
 // edge to log the snapshot, which is what makes the room windows a test of the
 // decision and not of a race.
+/**
+ * #190: the room's session as the PLATFORM sees it, between the badge and the
+ * stop (`room-open`) and after the stop (`room-closed`). The windows prove the
+ * coordinator leased and released the room's power; this proves the server
+ * kept the record -- the fact the admin screen shows, the sweep acts on and a
+ * restarted coordinator recovers from -- and that it names the member.
+ */
+async function roomSession(expectOpen) {
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'))
+  const admin = await adminAccount('lease_admin')
+  const r = await GET('/api/admin/resources/sessions', { token: admin.token })
+  assertEq('lease/open-sessions-are-listed', 200, r.status, r.text.slice(0, 160))
+  const mine = (r.json?.data ?? []).filter((s) => s.resource_id === fixture.roomId)
+  if (expectOpen) {
+    ok(
+      'lease/the-room-is-in-use-on-the-platform',
+      mine.length === 1 && mine[0].kind === 'door',
+      `after the badge the platform should list exactly one open session on the room: ${JSON.stringify(mine)}`
+    )
+    ok(
+      'lease/the-platform-names-who-opened-the-room',
+      mine[0]?.username === fixture.memberUsername && mine[0]?.user_id === fixture.memberId,
+      `expected ${fixture.memberUsername}: ${JSON.stringify(mine[0])}`
+    )
+  } else {
+    ok(
+      'lease/the-room-is-not-in-use-after-the-stop',
+      mine.length === 0,
+      `after the card-less stop the platform still lists the room: ${JSON.stringify(mine)}`
+    )
+  }
+}
+
 async function republish() {
   const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'))
   const admin = await adminAccount('lease_admin')
@@ -1024,6 +1058,8 @@ async function assertRoom(fixture) {
 main(async () => {
   if (phase === 'setup') return setup()
   if (phase === 'republish') return republish()
+  if (phase === 'room-open') return roomSession(true)
+  if (phase === 'room-closed') return roomSession(false)
   if (phase === 'assert') {
     await assertWindows()
     if (!fs.existsSync(SKIPPED)) await assertRoom(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')))

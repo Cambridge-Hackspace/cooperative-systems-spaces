@@ -48,6 +48,8 @@
           <option value="tool_module_silent">Tool Module Went Silent</option>
           <option value="tool_module_returned">Tool Module Returned</option>
           <option value="tool_released_by_sweep">Tool Released by Sweep</option>
+          <option value="resource_session_ended">Session Ended by Admin</option>
+          <option value="resource_session_released_by_sweep">Room Released by Sweep</option>
           <option value="mqtt_broker_lost">MQTT Broker Lost</option>
           <option value="mqtt_broker_restored">MQTT Broker Restored</option>
           <option value="edge_isolation_reported">Edge Reported Isolation</option>

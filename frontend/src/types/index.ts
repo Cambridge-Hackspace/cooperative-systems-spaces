@@ -944,6 +944,8 @@ export interface ToolModuleStateTool {
   kind: string
   /** `momentary` | `until_stopped` (#182); `''` from a server that predates it. */
   session_profile: string
+  /** A session is open on this resource as the server knows it (#190). */
+  in_use?: boolean
   modules: Array<{
     id: string
     device_id: string
@@ -974,6 +976,24 @@ export interface ToolModuleStateTool {
 export interface ToolModuleStateSnapshot {
   as_of: string
   tools: ToolModuleStateTool[]
+}
+
+/** #190: a resource in use, whatever its kind, and who opened it. */
+export interface OpenSessionView {
+  resource_id: string
+  kind: string
+  user_id: string | null
+  username: string | null
+  full_name: string | null
+  opened_at: string
+  device_id: string | null
+}
+
+/** #190: what ending a session from the platform reports back. */
+export interface SessionEnded {
+  resource_id: string
+  kind: string
+  ended: boolean
 }
 
 /** #182: what an administrator may set on a resource whatever its kind. */

@@ -556,6 +556,9 @@ async fn main() -> Result<(), anyhow::Error> {
                     Ok(n) => {
                         info!("Session sweep released {n} tool(s) nobody had released");
                         css_server::api::toolguard::broadcast_toolguard_state(&sweep_state).await;
+                        // #190: a released room is an `in_use` that changed in the
+                        // wiring snapshot, which is how the coordinator learns it.
+                        css_server::api::toolguard::broadcast_module_state(&sweep_state).await;
                     }
                     Err(e) => warn!("Session sweep failed: {e}"),
                 }

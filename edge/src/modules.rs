@@ -283,18 +283,32 @@ impl ModuleState {
         as_of: DateTime<Utc>,
     ) {
         let mut inner = self.inner.write().expect("module lock");
+        Self::reconcile_tracked(&mut inner, in_use_tool_ids, tracked_tool_ids, now, as_of);
+    }
+
+    /// The reconcile itself, for one source's set of tracked resources: the
+    /// allow-list sync's tools, or the wiring snapshot's `until_stopped`
+    /// doors (#190). Only `tracked` keys are touched, so the two sources do
+    /// not overwrite each other's half of `synced_in_use`.
+    fn reconcile_tracked(
+        inner: &mut Inner,
+        in_use_ids: &[String],
+        tracked_ids: &[String],
+        now: DateTime<Utc>,
+        as_of: DateTime<Utc>,
+    ) {
         let grace = inner.local_session_grace;
         // Old stops are forgotten: nothing is weighed against them once every
         // answer in flight at the time has long since arrived.
         inner.local_stops.retain(|_, at| now - *at < grace);
-        let synced: HashSet<String> = in_use_tool_ids
+        let synced: HashSet<String> = in_use_ids
             .iter()
-            .map(|t| Self::tool_key(&inner, t))
+            .map(|t| Self::tool_key(inner, t))
             .filter(|key| !inner.local_stops.get(key).is_some_and(|at| *at > as_of))
             .collect();
-        let tracked: HashSet<String> = tracked_tool_ids
+        let tracked: HashSet<String> = tracked_ids
             .iter()
-            .map(|t| Self::tool_key(&inner, t))
+            .map(|t| Self::tool_key(inner, t))
             .collect();
         inner.local_sessions.retain(|key, session| {
             // A momentary session that has run out is gone whoever tracks it.
@@ -303,7 +317,8 @@ impl ModuleState {
             }
             !tracked.contains(key) || synced.contains(key) || now - session.opened < grace
         });
-        inner.synced_in_use = synced;
+        inner.synced_in_use.retain(|key| !tracked.contains(key));
+        inner.synced_in_use.extend(synced);
     }
 
     /// A device reported its relay state (#179). This is what confirms, for
@@ -342,8 +357,39 @@ impl ModuleState {
     /// because an admin renamed a binding would clear a latch the tool is
     /// relying on.
     pub fn apply_state(&self, payload: ToolModuleStatePayload) {
+        self.apply_state_at(payload, None, Utc::now());
+    }
+
+    /// The same, saying when the snapshot was asked for (`None`: it was
+    /// pushed, or the caller cannot say).
+    ///
+    /// #190: the snapshot now carries `in_use` per resource, and for a door
+    /// that is the only place the server reports a session -- the allow-list
+    /// sync reports tools only. So a door with an `until_stopped` profile is
+    /// reconciled from here the way a tool is from the sync: tracked by the
+    /// server, in use when it says so, and never reopened by a snapshot that
+    /// was asked for before this edge stopped it.
+    pub fn apply_state_at(
+        &self,
+        payload: ToolModuleStatePayload,
+        requested_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) {
+        let as_of = requested_at.unwrap_or(now);
+        let rooms = |only_in_use: bool| -> Vec<String> {
+            payload
+                .tools
+                .iter()
+                .filter(|t| t.kind == "door" && t.session_profile == "until_stopped")
+                .filter(|t| !only_in_use || t.in_use)
+                .map(|t| t.tool_id.clone())
+                .collect()
+        };
+        let tracked = rooms(false);
+        let in_use = rooms(true);
         let mut inner = self.inner.write().expect("module lock");
         inner.snapshot = Some(payload);
+        Self::reconcile_tracked(&mut inner, &in_use, &tracked, now, as_of);
     }
 
     pub fn apply_state_bytes(&self, bytes: &[u8]) -> Result<(), serde_json::Error> {
@@ -929,6 +975,7 @@ mod tests {
                 external_id: Some("ext-1".to_string()),
                 kind: "tool".to_string(),
                 session_profile: String::new(),
+                in_use: false,
                 modules,
                 interlocks,
                 power_fails_safe: true,
@@ -1017,6 +1064,7 @@ mod tests {
                     external_id: None,
                     kind: "tool".to_string(),
                     session_profile: String::new(),
+                    in_use: false,
                     modules: vec![a],
                     interlocks: vec![],
                     power_fails_safe: true,
@@ -1026,6 +1074,7 @@ mod tests {
                     external_id: None,
                     kind: "tool".to_string(),
                     session_profile: String::new(),
+                    in_use: false,
                     modules: vec![b],
                     interlocks: vec![],
                     power_fails_safe: true,
@@ -1526,6 +1575,7 @@ mod tests {
                 external_id: Some("ext-1".to_string()),
                 kind: "tool".to_string(),
                 session_profile: String::new(),
+                in_use: false,
                 modules: vec![binding("m1", "power", "hold_last")],
                 interlocks: vec![rule(KIND_TRIP, "door_open", true, 0)],
                 power_fails_safe: true,
@@ -1614,6 +1664,55 @@ mod tests {
         assert_eq!(
             s.evaluate("tool-1", t0() + ms(1), timeout()),
             Decision::Deny(Denial::NotInUse)
+        );
+    }
+
+    /// #190: a room's session reaches this edge through the wiring snapshot,
+    /// which is the only place the server reports a door's session.
+    fn room_snapshot(in_use: bool) -> ToolModuleStatePayload {
+        ToolModuleStatePayload {
+            as_of: t0().to_rfc3339(),
+            tools: vec![ToolModuleTool {
+                tool_id: "room-1".to_string(),
+                external_id: None,
+                kind: "door".to_string(),
+                session_profile: "until_stopped".to_string(),
+                in_use,
+                modules: vec![plug("a", 0, 0, 0)],
+                interlocks: vec![],
+                power_fails_safe: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_rooms_session_is_reconciled_from_the_wiring_snapshot() {
+        let s = ModuleState::new();
+        s.apply_state(room_snapshot(true));
+        s.note_device_seen("dev-a", t0());
+        assert!(
+            s.evaluate("room-1", t0(), timeout()).is_allowed(),
+            "the server says the room is in use and the edge did not believe it"
+        );
+        s.apply_state(room_snapshot(false));
+        assert_eq!(
+            s.evaluate("room-1", t0(), timeout()),
+            Decision::Deny(Denial::NotInUse),
+            "the server says the room is free (a sweep, an administrator) and the edge kept leasing"
+        );
+        // The snapshot is weighed like a sync: one asked for before this
+        // edge's own stop cannot bring the session back.
+        s.apply_state(room_snapshot(true));
+        s.note_session("room-1", false, t0() + Duration::seconds(10));
+        s.apply_state_at(
+            room_snapshot(true),
+            Some(t0() + Duration::seconds(9)),
+            t0() + Duration::seconds(11),
+        );
+        assert_eq!(
+            s.evaluate("room-1", t0() + Duration::seconds(11), timeout()),
+            Decision::Deny(Denial::NotInUse),
+            "a stale snapshot reopened a room this edge had just stopped"
         );
     }
 

@@ -350,6 +350,12 @@ pub enum AuditEventType {
     /// #182: an administrator changed a resource-level attribute -- today the
     /// session profile.
     ResourceUpdated,
+    /// #190: an administrator ended a resource's open session from the
+    /// platform -- a room left in use, a tool a member walked away from.
+    ResourceSessionEnded,
+    /// #190: the session sweep ended a room's session past its cap, the way
+    /// `ToolReleasedBySweep` does a tool's. A Warning for the same reason.
+    ResourceSessionReleasedBySweep,
     ToolInterlockCreated,
     ToolInterlockDeleted,
     // Bypass detection (#84). Transition events, not level events: a module
@@ -595,6 +601,8 @@ impl AuditEventType {
             Self::ToolModuleCreated => "tool_module_created",
             Self::ToolModuleDeleted => "tool_module_deleted",
             Self::ResourceUpdated => "resource_updated",
+            Self::ResourceSessionEnded => "resource_session_ended",
+            Self::ResourceSessionReleasedBySweep => "resource_session_released_by_sweep",
             Self::ToolInterlockCreated => "tool_interlock_created",
             Self::ToolInterlockDeleted => "tool_interlock_deleted",
             Self::ToolModuleSilent => "tool_module_silent",
@@ -746,6 +754,8 @@ impl AuditEventType {
             ToolModuleCreated,
             ToolModuleDeleted,
             ResourceUpdated,
+            ResourceSessionEnded,
+            ResourceSessionReleasedBySweep,
             ToolInterlockCreated,
             ToolInterlockDeleted,
             ToolModuleSilent,
@@ -885,7 +895,12 @@ impl AuditEventType {
             | DoorUnlockedCard | DoorUnlockedQr | DoorUnlockedAdmin | DoorUnlockDenied
             | DoorCheckinRecorded => Category::Door,
             PlaceCreated | PlaceUpdated | PlaceMoved | PlaceDeleted => Category::Place,
-            ToolModuleCreated | ToolModuleDeleted | ResourceUpdated | ToolInterlockCreated
+            ToolModuleCreated
+            | ToolModuleDeleted
+            | ResourceUpdated
+            | ResourceSessionEnded
+            | ResourceSessionReleasedBySweep
+            | ToolInterlockCreated
             | ToolInterlockDeleted => Category::Module,
             ToolModuleSilent
             | ToolModuleReturned
@@ -957,7 +972,8 @@ impl AuditEventType {
             | EmailSendFailed
             | SubscriptionPaymentFailed
             | MembershipLastAdminProtected
-            | ToolReleasedBySweep => Severity::Warning,
+            | ToolReleasedBySweep
+            | ResourceSessionReleasedBySweep => Severity::Warning,
             // Refusals, recoveries, and changes to who may do what.
             FailedLoginAttempt
             | MfaLoginFailed
@@ -969,6 +985,7 @@ impl AuditEventType {
             | MqttBrokerRestored
             | EmergencyLockoutCleared
             | DoorUnlockedAdmin
+            | ResourceSessionEnded
             | UserRoleChange
             | UserRoleAssigned
             | UserRoleUnassigned
@@ -1052,6 +1069,8 @@ impl AuditEventType {
             | ToolModuleCreated
             | ToolModuleDeleted
             | ResourceUpdated
+            | ResourceSessionEnded
+            | ResourceSessionReleasedBySweep
             | ToolInterlockCreated
             | ToolInterlockDeleted
             | PowerCircuitCreated

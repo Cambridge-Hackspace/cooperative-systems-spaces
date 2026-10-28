@@ -60,6 +60,43 @@ pub mod session_profile {
     pub const ALL: [&str; 2] = [MOMENTARY, UNTIL_STOPPED];
 }
 
+/// Who ended a resource session (#190). Held to the CHECK on
+/// `resource_sessions.closed_by` by `checks/tests/text_check_vocabularies_match.rs`.
+pub mod session_closed_by {
+    /// A device: the stop button, the badge, the sensor -- a `/stop`.
+    pub const STOP: &str = "stop";
+    /// The session sweep: abandoned past its cap.
+    pub const SWEEP: &str = "sweep";
+    /// An administrator, from Resource Wiring.
+    pub const ADMIN: &str = "admin";
+    pub const ALL: [&str; 3] = [STOP, SWEEP, ADMIN];
+}
+
+/// An access session on a resource of any kind (#190): what a tool has always
+/// had as `tools.status = in_use`, now a record a door can have too. One open
+/// per resource; `closed_at` is `None` while it is.
+#[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize)]
+#[diesel(table_name = crate::schema::resource_sessions)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ResourceSession {
+    pub id: Uuid,
+    pub resource_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub device_id: Option<Uuid>,
+    pub opened_at: DateTime<Utc>,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub closed_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = crate::schema::resource_sessions)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewResourceSession {
+    pub resource_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub device_id: Option<Uuid>,
+}
+
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize)]
 #[diesel(table_name = resources)]
 #[diesel(check_for_backend(diesel::pg::Pg))]

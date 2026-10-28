@@ -1132,6 +1132,7 @@ gate it; the poll fallback for the MQTT `module/state` push.
       "external_id": "laser-01",
       "kind": "tool",
       "session_profile": "until_stopped",
+      "in_use": false,
       "power_fails_safe": true,
       "modules": [
         {
@@ -1204,6 +1205,11 @@ Field by field:
   a module does nothing with it beyond knowing that a lease on an
   `until_stopped` resource outlives the badge and one on a `momentary` resource
   does not.
+- **`in_use`** — whether a session is open on this resource as the server
+  knows it (#190): a tool `in_use`, or a door whose `until_stopped` session a
+  badge opened and nothing has yet ended — a stop, the sweep, an administrator
+  under Resource Wiring. The coordinator reconciles its own sessions against
+  it; a module does nothing with it. Absent on a server that predates it.
 - **`pulse_ms`**, **`hold_open_access`** — a `strike` binding's profile: how
   long the latch is released on a yes (what arrives as `strike.pulse_ms` in a
   scan reply and as `duration_ms` / `unlock_duration_ms` on the door topics),

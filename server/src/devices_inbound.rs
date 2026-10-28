@@ -307,6 +307,37 @@ impl DeviceInbound {
             return;
         }
 
+        // #190: a yes the edge decided at an `until_stopped` door -- a room --
+        // opens a session the platform keeps, exactly as a yes on the HTTP
+        // resource path does (`resources::scan_door`). This is the path a
+        // coordinator's own decision reaches the server by, so without it the
+        // admin screen, the sweep and a restarted coordinator would all say the
+        // room is free while its power is leased. A momentary door's session is
+        // the pulse; nothing is kept for it beyond the access event above. The
+        // wiring snapshot's `in_use` reaches the edge on its next poll; this
+        // handler has no publisher, and the edge already holds the session it
+        // reported.
+        if event.granted {
+            match self.db.get_resource(event.door_id) {
+                Ok(Some(resource))
+                    if resource.session_profile
+                        == crate::models::session_profile::UNTIL_STOPPED =>
+                {
+                    if let Err(e) =
+                        self.db
+                            .open_resource_session(event.door_id, user_id, Some(device_id))
+                    {
+                        error!(
+                            "Failed to open the room's session for door {}: {}",
+                            event.door_id, e
+                        );
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => error!("Failed to read door {}'s profile: {}", event.door_id, e),
+            }
+        }
+
         if let Some((uid, card)) = revoked_card {
             let audit_log = NewAuditLog {
                 event_type: AuditEventType::RevokedCardPresented.as_str().to_string(),

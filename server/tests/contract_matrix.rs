@@ -392,9 +392,11 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // MFA view and two removals (#151, Admin).
     // 220 = 219 + the resource-level attributes route (#182, Admin): the
     // session profile, under /api/admin/resources/{id}.
-    assert_eq!(jwt_routes, 220, "JWT-authenticated routes");
+    // 222 = 220 + the resource-level session routes (#190, Admin): the open
+    // sessions list and the stop, under /api/admin/resources.
+    assert_eq!(jwt_routes, 222, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 220 * 7 + (14 + 6) * 3);
+    assert_eq!(asserted_pairs(), 222 * 7 + (14 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected

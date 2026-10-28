@@ -68,6 +68,30 @@
             </select>
           </label>
 
+          <!--
+            #190: the session as the platform knows it -- a room in use is a
+            fact here now, not only on its coordinator -- and the one action an
+            administrator has on it.
+          -->
+          <div
+            v-if="sessionOf(tool)"
+            class="flex items-center gap-3 flex-wrap text-sm"
+            :data-testid="`session-${tool.tool_id}`"
+          >
+            <span class="badge badge-info">In use</span>
+            <span>
+              by {{ sessionOf(tool)?.full_name || sessionOf(tool)?.username || 'someone' }} since
+              {{ new Date(sessionOf(tool)?.opened_at ?? '').toLocaleString() }}
+            </span>
+            <button
+              class="btn btn-xs btn-outline"
+              :data-testid="`end-session-${tool.tool_id}`"
+              @click="endSession(tool)"
+            >
+              End session
+            </button>
+          </div>
+
           <p v-if="hasPower(tool) && !tool.power_fails_safe" class="text-sm text-base-content/70">
             No power module bound to this tool reaches a safe state on its own when it loses
             contact. Cuts still work while the link is up, but treat them as a mitigation rather
@@ -175,7 +199,7 @@
 import { computed, ref } from 'vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import { doorsApi, resourcesApi, toolModulesApi, toolsApi } from '@/utils/api'
-import type { Door, ToolModuleStateTool } from '@/types'
+import type { Door, OpenSessionView, ToolModuleStateTool } from '@/types'
 import type { Tool } from '@/types/tools'
 
 defineProps<{ embedded?: boolean }>()
@@ -185,6 +209,7 @@ const error = ref('')
 const resources = ref<ToolModuleStateTool[]>([])
 const catalog = ref<Tool[]>([])
 const doors = ref<Door[]>([])
+const sessions = ref<OpenSessionView[]>([])
 
 const wired = computed(() => resources.value)
 
@@ -219,6 +244,21 @@ async function setProfile(t: ToolModuleStateTool, profile: string) {
   }
 }
 
+/** The open session on this resource, if the platform knows of one (#190). */
+function sessionOf(t: ToolModuleStateTool): OpenSessionView | undefined {
+  return sessions.value.find((s) => s.resource_id === t.tool_id)
+}
+
+async function endSession(t: ToolModuleStateTool) {
+  const r = await resourcesApi.stop(t.tool_id)
+  if (r.success) {
+    sessions.value = sessions.value.filter((s) => s.resource_id !== t.tool_id)
+    error.value = ''
+  } else {
+    error.value = r.error || 'The session was not ended'
+  }
+}
+
 /**
  * The fail-safe verdict is about power modules. A door with a strike and a
  * coordinator has none, and "cannot fail safe" on it would be a warning about
@@ -232,14 +272,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [snapshot, all, allDoors] = await Promise.all([
+    const [snapshot, all, allDoors, open] = await Promise.all([
       toolModulesApi.state(),
       toolsApi.getTools(),
       doorsApi.list(),
+      resourcesApi.sessions(),
     ])
     if (snapshot?.success && snapshot.data) resources.value = snapshot.data.tools ?? []
     if (all?.success && all.data) catalog.value = all.data
     if (allDoors?.success && allDoors.data) doors.value = allDoors.data
+    if (open?.success && open.data) sessions.value = open.data
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load resource wiring'
   } finally {

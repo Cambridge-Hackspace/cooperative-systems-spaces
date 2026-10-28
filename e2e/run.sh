@@ -2239,10 +2239,16 @@ stage_lease() {
 
   # R2: the pulse is over inside this window; the room's power is not.
   mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-room-leased.txt"
+  # #190: and the PLATFORM knows the room is in use, and by whom.
+  run_node lease.mjs room-open >"${OUT}/logs/lease-room-open.log" 2>&1 || true
+  absorb_driver_cases || true
 
   # R3: the latch box's stop button -- a stop with no card, naming the room.
   mqtt_pub "resource/request/stop" "{\"resource\":\"${room}\"}" || true
   mqtt_sub "toolguard/lease" 3 "${STACK_DIR}/lease-room-stopped.txt"
+  # #190: and the platform's record is closed by the same stop.
+  run_node lease.mjs room-closed >"${OUT}/logs/lease-room-closed.log" 2>&1 || true
+  absorb_driver_cases || true
 
   # R4: the plain door: a pulse, and nothing leased.
   mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-front-scan.txt" &

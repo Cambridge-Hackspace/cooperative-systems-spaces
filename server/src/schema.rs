@@ -193,6 +193,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    resource_sessions (id) {
+        id -> Uuid,
+        resource_id -> Uuid,
+        user_id -> Nullable<Uuid>,
+        device_id -> Nullable<Uuid>,
+        opened_at -> Timestamptz,
+        closed_at -> Nullable<Timestamptz>,
+        closed_by -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ToolCategory;
     use super::sql_types::ToolStatus;
@@ -986,6 +998,7 @@ diesel::joinable!(schedules -> users (created_by));
 diesel::joinable!(tools -> schedules (schedule_id));
 diesel::joinable!(tools -> resources (id));
 diesel::joinable!(doors -> resources (id));
+diesel::joinable!(resource_sessions -> resources (resource_id));
 diesel::joinable!(home_links -> users (created_by));
 diesel::joinable!(access_rules -> resources (resource_id));
 diesel::joinable!(door_access_events -> doors (door_id));

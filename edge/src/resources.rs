@@ -389,6 +389,7 @@ mod tests {
             external_id: ext.map(str::to_string),
             kind: kind.to_string(),
             session_profile: profile.to_string(),
+            in_use: false,
             modules,
             interlocks: vec![],
             power_fails_safe: true,
