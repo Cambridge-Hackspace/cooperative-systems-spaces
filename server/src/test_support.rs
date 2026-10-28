@@ -156,5 +156,8 @@ pub async fn app_state() -> AppState {
         membership: None,
         // And the tool-billing service: off unless the module is enabled.
         tool_billing: None,
+        // No drain task in tests: requests accumulate and nothing is published,
+        // which is what a state with no MQTT service would do anyway.
+        toolguard_broadcast: Arc::new(crate::api::toolguard::Broadcaster::new()),
     }
 }
