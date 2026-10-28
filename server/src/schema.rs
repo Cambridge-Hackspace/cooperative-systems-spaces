@@ -302,6 +302,8 @@ diesel::table! {
         tier_id -> Nullable<Uuid>,
         source_reference -> Nullable<Text>,
         reported_active_seconds -> Nullable<Numeric>,
+        reported_sensed_seconds -> Nullable<Numeric>,
+        reported_unsensed_seconds -> Nullable<Numeric>,
     }
 }
 

@@ -431,6 +431,16 @@ continuous machine time or only the intervals the beam was on — 30–50% apart
 cannot tell", which is *not* the same as zero, and a zero reads as "the machine
 sat idle".
 
+Sending it also says what you are. On a tool with two devices reporting — a
+plug that switches the power and senses nothing, and a separate device that
+senses the machine — the server keeps their `seconds` apart and bills the
+sensing device's, because a plug's power-on time and a sensor's working time
+are two measurements of one session and their sum is a measurement of nothing.
+The rule is the field: a report that carries `active_seconds` is a sensing
+device's. So send it on every report if you sense, and never if you do not; a
+plug that invented an `active_seconds` would displace the sensor's figure with
+its own.
+
 Do not send a duration in `temperature`. It is recorded and never billed, and
 anything else there is a lie in the audit record.
 
