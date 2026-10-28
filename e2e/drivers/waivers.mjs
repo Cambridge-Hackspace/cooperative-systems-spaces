@@ -31,7 +31,7 @@ const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
 const deviceTokens = {}
 let macSeq = 0
 const toolOn = (ext) =>
-  POST('/api/toolguard/tool-on', { token: deviceTokens[ext], body: { card: CARD, tool_id: ext } })
+  POST(`/api/resources/${ext}/scan`, { token: deviceTokens[ext], body: { card: CARD } })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function createTool(admin, externalId, requiresTraining) {
@@ -96,10 +96,10 @@ main(async () => {
 
   // A non-gated tool (requires_training=false, no steps) is open to any active
   // member — no waiver needed.
-  ok('waivers/open-tool-grants', (await toolOn(OPEN)).json?.tool_on === true, 'open tool denied')
+  ok('waivers/open-tool-grants', (await toolOn(OPEN)).json?.authorized === true, 'open tool denied')
 
   // A requires_training tool with no steps is gated: denied with no waiver.
-  ok('waivers/gated-denies-without-waiver', (await toolOn(GATED)).json?.tool_on === false, 'gated tool granted with no waiver')
+  ok('waivers/gated-denies-without-waiver', (await toolOn(GATED)).json?.authorized === false, 'gated tool granted with no waiver')
 
   // Reason is mandatory.
   const noReason = await grantWaiver(admin, member.user.id, gatedTool.id, '   ')
@@ -109,7 +109,7 @@ main(async () => {
   const granted = await grantWaiver(admin, member.user.id, gatedTool.id, 'migrated from ToolPass')
   assertEq('waivers/granted', 200, granted.status, granted.text.slice(0, 200))
   const waiverId = granted.json?.data?.id
-  ok('waivers/gated-grants-with-waiver', (await toolOn(GATED)).json?.tool_on === true, 'waiver did not open the gated tool')
+  ok('waivers/gated-grants-with-waiver', (await toolOn(GATED)).json?.authorized === true, 'waiver did not open the gated tool')
 
   // The waiver is listed and the grant is audited.
   const list = await GET(`/api/waivers/user/${member.user.id}`, { token: admin.token })
@@ -121,7 +121,7 @@ main(async () => {
   // Revoke -> the gated tool closes again, and the revoke is audited.
   const revoked = await DELETE(`/api/waivers/${waiverId}`, { token: admin.token })
   assertEq('waivers/revoked', 200, revoked.status, revoked.text.slice(0, 200))
-  ok('waivers/gated-denies-after-revoke', (await toolOn(GATED)).json?.tool_on === false, 'gated tool still open after revoke')
+  ok('waivers/gated-denies-after-revoke', (await toolOn(GATED)).json?.authorized === false, 'gated tool still open after revoke')
   await sleep(400)
   ok('waivers/revoke-audited', (await auditCount(admin, 'training_waiver_revoked', member.user.id)) >= 1, 'no training_waiver_revoked')
 })

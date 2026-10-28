@@ -40,9 +40,9 @@ const EXPECTED: &[(&str, Auth)] = &[
     // A static liveness probe. It reads no state, takes no parameters, and
     // returns a constant, so there is nothing for a credential to protect.
     ("api_status", Auth::PublicByDesign),
-    ("tool_on", Auth::Required),
-    ("tool_off", Auth::Required),
-    ("tool_log", Auth::Required),
+    // `tool_on`, `tool_off` and `tool_log` -- the three this file was written
+    // for -- were aliases of the resource path and are gone (#192); their
+    // successors are in RESOURCE_EXPECTED.
     ("sync", Auth::Required),
     ("boot_reset", Auth::Required),
     // #43 power telemetry ingest: reports a tool's latest reading, authenticated
@@ -464,14 +464,16 @@ fn a_cardless_report_is_attributed_through_the_tools_session() {
          is still in use, which would bill the last member for the next one's time."
     );
 
-    // #182: the body of tool_log is `report_tool_usage`, shared with the
-    // resource path, so the attribution is asserted of the function that does
-    // it and the alias is asserted to reach that function.
-    let log = handler_body(&src, "tool_log");
+    // #182: the body of a usage report is `report_tool_usage`, which the
+    // resource path's `usage` handler reaches (#192: the `tool_log` alias that
+    // also reached it is gone), so the attribution is asserted of the function
+    // that does it and the handler is asserted to reach that function.
+    let resources = read("server/src/api/resources.rs");
+    let usage = handler_body(&resources, "usage");
     assert!(
-        code_only(log).contains("report_tool_usage"),
-        "tool_log no longer reports through report_tool_usage; the alias and \
-         the resource path can now drift."
+        code_only(usage).contains("report_tool_usage"),
+        "the resource path's usage handler no longer reports through \
+         report_tool_usage; a report there would go somewhere else."
     );
     let report = handler_body(&src, "report_tool_usage");
     assert!(
@@ -490,16 +492,9 @@ fn a_cardless_report_is_attributed_through_the_tools_session() {
 #[test]
 fn the_tool_handlers_do_not_gate_on_the_power_role() {
     let src = read("server/src/api/toolguard.rs");
-    // #182: the aliases and the functions behind them, since the aliases are
-    // one line each now and the role check would live in the function.
-    for handler in [
-        "tool_on",
-        "tool_off",
-        "tool_log",
-        "activate_tool",
-        "deactivate_tool",
-        "report_tool_usage",
-    ] {
+    // #182: the functions behind the resource path (the aliases that also
+    // reached them are gone, #192); the role check would live in the function.
+    for handler in ["activate_tool", "deactivate_tool", "report_tool_usage"] {
         let body = handler_body(&src, handler);
         assert!(
             !body.contains("binding_role::POWER"),

@@ -39,7 +39,7 @@ pub enum MqttEvent {
         tool_id: String,
         ok: bool,
     },
-    /// Live status update from `toolguard/state`: (tool_id, status_str) pairs
+    /// Live status update from `resource/state`: (tool_id, status_str) pairs
     StateUpdate(Vec<(String, String)>),
     Error(String),
 }
@@ -48,13 +48,10 @@ pub enum MqttEvent {
 
 #[derive(Deserialize)]
 struct ToolOnPayload {
-    /// The tool this is an answer about, echoed by the edge (#166).
-    ///
-    /// `default` so a pre-#166 edge, which sent no such field, still parses --
-    /// it then reads as empty, which is what this did on every reply before the
-    /// edge echoed anything.
-    #[serde(default)]
-    tool_id: String,
+    /// The resource this is an answer about, echoed by the edge (#166): on the
+    /// resource wire (#182, #192) the field is `resource`, and every reply
+    /// carries it.
+    resource: String,
     authorized: bool,
     #[serde(default)]
     reason: String,
@@ -86,7 +83,8 @@ struct SyncPayload {
 // say so -- which is the exact failure the shared vocabulary exists to prevent.
 
 use css_lib::wire::local::{
-    STATE as STATE_TOPIC, TOOL_OFF_RESPONSE as TOOL_OFF_RESP, TOOL_ON_RESPONSE as TOOL_ON_RESP,
+    RESOURCE_STATE as STATE_TOPIC, SCAN_REQUEST, SCAN_RESPONSE as SCAN_RESP, STOP_REQUEST,
+    STOP_RESPONSE as STOP_RESP, USAGE_REQUEST,
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -145,8 +143,8 @@ fn run_loop(
     let _ = evt_tx.send(MqttEvent::Connected);
 
     // Subscribe to response topics and live state
-    let _ = client.subscribe(TOOL_ON_RESP, 1);
-    let _ = client.subscribe(TOOL_OFF_RESP, 1);
+    let _ = client.subscribe(SCAN_RESP, 1);
+    let _ = client.subscribe(STOP_RESP, 1);
     let _ = client.subscribe(STATE_TOPIC, 1);
 
     // Startup: publish tool-off for all known tools
@@ -199,13 +197,13 @@ fn run_loop(
     }
 }
 
-/// Build the local-MQTT request payload the edge expects (`LocalToolRequest`):
-/// `card` and `tool_id` always, `seconds` only when present, so a
-/// non-metered tool still sends the same minimal `{card, tool_id}` as before.
+/// Build the local-MQTT request body the edge expects on the resource wire
+/// (#182, #192): `card` and `resource` always, `seconds` only when present,
+/// so a non-metered tool still sends the minimal `{card, resource}`.
 fn tool_payload(card: &str, tool_id: &str, seconds: Option<f32>) -> String {
     let mut obj = serde_json::Map::new();
     obj.insert("card".to_string(), card.into());
-    obj.insert("tool_id".to_string(), tool_id.into());
+    obj.insert("resource".to_string(), tool_id.into());
     if let Some(s) = seconds {
         obj.insert("seconds".to_string(), s.into());
     }
@@ -214,25 +212,25 @@ fn tool_payload(card: &str, tool_id: &str, seconds: Option<f32>) -> String {
 
 fn publish_tool_on(client: &mqtt::Client, card: &str, tool_id: &str) {
     let payload = tool_payload(card, tool_id, None);
-    let msg = mqtt::Message::new(css_lib::wire::local::TOOL_ON_REQUEST, payload, 1);
+    let msg = mqtt::Message::new(SCAN_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
-        eprintln!("Failed to publish tool-on: {e}");
+        eprintln!("Failed to publish scan: {e}");
     }
 }
 
 fn publish_tool_log(client: &mqtt::Client, card: &str, tool_id: &str, seconds: f32) {
     let payload = tool_payload(card, tool_id, Some(seconds));
-    let msg = mqtt::Message::new(css_lib::wire::local::TOOL_LOG_REQUEST, payload, 1);
+    let msg = mqtt::Message::new(USAGE_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
-        eprintln!("Failed to publish tool-log: {e}");
+        eprintln!("Failed to publish usage: {e}");
     }
 }
 
 fn publish_tool_off(client: &mqtt::Client, card: &str, tool_id: &str) {
     let payload = tool_payload(card, tool_id, None);
-    let msg = mqtt::Message::new(css_lib::wire::local::TOOL_OFF_REQUEST, payload, 1);
+    let msg = mqtt::Message::new(STOP_REQUEST, payload, 1);
     if let Err(e) = client.publish(msg) {
-        eprintln!("Failed to publish tool-off: {e}");
+        eprintln!("Failed to publish stop: {e}");
     }
 }
 
@@ -240,24 +238,23 @@ fn handle_incoming(evt_tx: &Sender<MqttEvent>, msg: &mqtt::Message) {
     let topic = msg.topic();
     let payload = msg.payload();
 
-    if topic == TOOL_ON_RESP {
+    if topic == SCAN_RESP {
         match serde_json::from_slice::<ToolOnPayload>(payload) {
             Ok(p) => {
-                // #166: the edge now names the tool, so the reply carries its
-                // own subject instead of being matched by whatever scan this
-                // UI happened to have outstanding. Empty means a pre-#166
-                // edge; the App's pending_scan fallback still covers that.
+                // #166: the reply names the resource it answers, so it is
+                // matched by its own subject rather than by whatever scan
+                // this UI happened to have outstanding.
                 let _ = evt_tx.send(MqttEvent::ToolOnResponse {
-                    tool_id: p.tool_id,
+                    tool_id: p.resource,
                     authorized: p.authorized,
                     reason: p.reason,
                 });
             }
             Err(e) => {
-                let _ = evt_tx.send(MqttEvent::Error(format!("Bad tool-on response: {e}")));
+                let _ = evt_tx.send(MqttEvent::Error(format!("Bad scan reply: {e}")));
             }
         }
-    } else if topic == TOOL_OFF_RESP {
+    } else if topic == STOP_RESP {
         match serde_json::from_slice::<ToolOffPayload>(payload) {
             Ok(p) => {
                 let _ = evt_tx.send(MqttEvent::ToolOffResponse {

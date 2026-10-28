@@ -445,9 +445,8 @@ mod the_checks_reject_what_they_are_for {
             "`module/state` is a server ↔ device kind and belongs only to `kinds`"
         );
         assert!(
-            local.contains("toolguard/request/tool-on")
-                && !kinds.contains("toolguard/request/tool-on"),
-            "`toolguard/request/tool-on` is a local topic and belongs only to `local`"
+            local.contains("resource/request/scan") && !kinds.contains("resource/request/scan"),
+            "`resource/request/scan` is a local topic and belongs only to `local`"
         );
     }
 
@@ -776,8 +775,9 @@ fn every_wire_payload_field_is_documented() {
     // Payloads a device sends or receives. Each named deliberately: a struct
     // added to the wire has to be added here, and a struct renamed fails in
     // `struct_fields` rather than quietly losing its coverage.
-    let payloads: [(&str, &str); 23] = [
-        (WIRE, "LocalToolOnResponse"),
+    let payloads: [(&str, &str); 24] = [
+        (WIRE, "LocalScanReply"),
+        (WIRE, "LocalStrike"),
         (WIRE, "ToolModuleStatePayload"),
         (WIRE, "ToolModuleTool"),
         (WIRE, "ResourcePolicyPayload"),
@@ -788,7 +788,7 @@ fn every_wire_payload_field_is_documented() {
         (WIRE, "PowerStatePayload"),
         (WIRE, "PowerStateCircuit"),
         (WIRE, "PowerStateTool"),
-        (WIRE, "ToolLeasePayload"),
+        (WIRE, "ResourceLeasePayload"),
         (TOOLGUARD, "ToolGuardResponse"),
         (TOOLGUARD, "ToolGuardSyncPayload"),
         (TOOLGUARD, "ToolGuardSyncTool"),
@@ -1205,41 +1205,18 @@ enum Payload {
 /// needs an independent statement of which source answers for which row.
 const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
     // The resource-shaped wire (#182). One reply for every kind of resource;
-    // the `toolguard/*` and `door/*` rows below are its aliases for one release.
+    // the `toolguard/*` and `door/*` aliases it had for one release are gone
+    // (#192). The scan reply is a struct since #166, where it was a `json!`
+    // literal in three places: `Handler` here would read a body that builds
+    // no literal at all -- an empty key set, which compares equal to anything
+    // the document says.
     (
         "resource/response/scan",
         Payload::Struct(WIRE, "LocalScanReply"),
     ),
-    (
-        "resource/response/stop",
-        Payload::Handler("handle_tool_off"),
-    ),
-    (
-        "resource/response/usage",
-        Payload::Handler("handle_tool_log"),
-    ),
+    ("resource/response/stop", Payload::Handler("handle_stop")),
+    ("resource/response/usage", Payload::Handler("handle_usage")),
     ("resource/response/power", Payload::Handler("handle_power")),
-    // A struct since #166, where it was a `json!` literal in three places.
-    // `Handler` here would now read a body that builds no literal at all --
-    // which is an empty key set, and an empty key set compares equal to
-    // anything the document says.
-    (
-        "toolguard/response/tool-on",
-        Payload::Struct(WIRE, "LocalToolOnResponse"),
-    ),
-    (
-        "toolguard/response/tool-off",
-        Payload::Handler("handle_tool_off"),
-    ),
-    (
-        "toolguard/response/tool-log",
-        Payload::Handler("handle_tool_log"),
-    ),
-    ("toolguard/response/power", Payload::Handler("handle_power")),
-    (
-        "door/response/unlock",
-        Payload::Struct(EDGE_DOORS, "LocalUnlockResponse"),
-    ),
 ];
 
 /// Topic -> the shape a *module publishes* on it, duplicated here deliberately
@@ -1256,7 +1233,7 @@ const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
 /// the only topic under this heading with no payload, so the exclusion covers
 /// exactly it.
 const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
-    // The resource-shaped wire (#182); the rows after it are its aliases.
+    // The resource-shaped wire (#182); its aliases are gone (#192).
     ("resource/request/scan", Payload::Struct(WIRE, "LocalScan")),
     ("resource/request/stop", Payload::Struct(WIRE, "LocalStop")),
     (
@@ -1269,34 +1246,6 @@ const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
     ),
     (
         "resource/request/alive",
-        Payload::Struct(WIRE, "LocalAliveRequest"),
-    ),
-    // Tool-on and tool-off used to share one struct. Tool-off has its own since
-    // #179, because its card is optional -- a stop needs no badge -- and a
-    // shared type could not say so. Tool-log has had its own since #169.
-    (
-        "toolguard/request/tool-on",
-        Payload::Struct(EDGE_MQTT, "LocalToolRequest"),
-    ),
-    (
-        "toolguard/request/tool-off",
-        Payload::Struct(EDGE_MQTT, "LocalToolStopRequest"),
-    ),
-    (
-        "toolguard/request/tool-log",
-        Payload::Struct(WIRE, "LocalToolLogRequest"),
-    ),
-    (
-        "toolguard/request/power",
-        Payload::Struct(EDGE_MQTT, "LocalPowerRequest"),
-    ),
-    (
-        "door/request/scan",
-        Payload::Struct(EDGE_DOORS, "LocalScanRequest"),
-    ),
-    // #170: the liveness pulse every device sends, whatever its role.
-    (
-        "toolguard/request/alive",
         Payload::Struct(WIRE, "LocalAliveRequest"),
     ),
 ];
@@ -1572,17 +1521,17 @@ mod the_payload_row_check_rejects_what_it_is_for {
     #[test]
     fn a_row_naming_a_field_the_wire_does_not_carry_fails() {
         let doc = read(DOC).replace(
-            r#"| `toolguard/response/tool-on` | `{ "tool_id": string, "authorized": bool, "reason": string }` |"#,
-            r#"| `toolguard/response/tool-on` | `{ "status": string, "tool_on": bool }` |"#,
+            r#"| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"? }`"#,
+            r#"| `resource/response/scan` | `{ "status": string, "tool_on": bool }`"#,
         );
-        let documented = documented_payload_fields(&doc, "toolguard/response/tool-on");
-        let actual: BTreeSet<String> = struct_fields(&read(WIRE), "LocalToolOnResponse")
+        let documented = documented_payload_fields(&doc, "resource/response/scan");
+        let actual: BTreeSet<String> = struct_fields(&read(WIRE), "LocalScanReply")
             .into_iter()
             .collect();
 
         assert!(
             !actual.is_empty(),
-            "extracted no fields from LocalToolOnResponse, so the comparison \
+            "extracted no fields from LocalScanReply, so the comparison \
              below is vacuous and this self-test proves nothing"
         );
         assert!(
@@ -1608,19 +1557,17 @@ mod the_payload_row_check_rejects_what_it_is_for {
     #[test]
     fn a_published_field_missing_from_the_row_fails() {
         let wire = read(WIRE).replace(
-            "pub struct LocalToolOnResponse {\n    /// The tool the request named, echoed back unchanged.\n    pub tool_id: String,",
-            "pub struct LocalToolOnResponse {\n    pub retry_after_ms: u32,\n    pub tool_id: String,",
+            "pub struct LocalScanReply {\n    pub resource: String,",
+            "pub struct LocalScanReply {\n    pub retry_after_ms: u32,\n    pub resource: String,",
         );
-        let actual: BTreeSet<String> = struct_fields(&wire, "LocalToolOnResponse")
-            .into_iter()
-            .collect();
+        let actual: BTreeSet<String> = struct_fields(&wire, "LocalScanReply").into_iter().collect();
         assert!(
             actual.contains("retry_after_ms"),
             "the mutant did not apply; the struct's text has changed and this \
              self-test is no longer driving the arm it names"
         );
 
-        let documented = documented_payload_fields(&read(DOC), "toolguard/response/tool-on");
+        let documented = documented_payload_fields(&read(DOC), "resource/response/scan");
         assert!(
             !actual
                 .difference(&documented)

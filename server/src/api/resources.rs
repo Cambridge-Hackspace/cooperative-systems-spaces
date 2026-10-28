@@ -133,10 +133,11 @@ async fn update_resource(
 // Bodies
 // ---------------------------------------------------------------------------
 //
-// Handlers take `Bytes` and parse after authenticating, for the reason
-// `toolguard::ToolRequestWire` gives: an extractor that answers 415 or 422
-// before the handler runs tells an unauthenticated caller what the body looks
-// like.
+// Handlers take `Bytes` and parse after authenticating (#107): an extractor
+// that answers 415 or 422 before the handler runs tells an unauthenticated
+// caller what the body looks like, so a caller holding no credential could
+// probe for valid parameters. Every wire field is optional and validated
+// after the credential check, so such a caller learns exactly one thing.
 
 #[derive(Debug, Deserialize)]
 struct ScanBody {
@@ -252,9 +253,9 @@ async fn scan(
     // The card is deliberately absent from this line (#107).
     tracing::info!("Scan: resource={}", id);
     let reply = match resource {
-        Resource::Tool(tool) => toolguard::activate_tool(&state, Some(tool), &req.card, &id)
-            .await?
-            .as_resource_reply(),
+        Resource::Tool(tool) => {
+            toolguard::activate_tool(&state, Some(tool), &req.card, &id).await?
+        }
         Resource::Door(door) => scan_door(&state, device_id, &door, &req.card).await?,
     };
     Ok(Json(reply))
@@ -272,9 +273,7 @@ async fn stop(
     tracing::info!("Stop: resource={}", id);
     let reply = match resource {
         Resource::Tool(tool) => {
-            toolguard::deactivate_tool(&state, Some(tool), req.card.as_deref(), &id)
-                .await?
-                .as_resource_reply()
+            toolguard::deactivate_tool(&state, Some(tool), req.card.as_deref(), &id).await?
         }
         // #190: a door's `until_stopped` session ends here, as a tool's does;
         // a momentary door never had one past its pulse, and a stop on it is

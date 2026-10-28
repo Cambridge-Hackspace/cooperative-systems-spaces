@@ -205,7 +205,7 @@ reaper test --profile devlive
 It prints a URL, an admin sign-in, and a **firmware fixture**: a tool that needs
 no training (`dev-tool-01`), a member holding card `DEVCARD01`, and an unclaimed
 device invite. See [a server to develop against](#a-server-to-develop-against).
-The fixture is exercised by the seed itself, so if `tool-on` does not work
+The fixture is exercised by the seed itself, so if a scan does not work
 against it, the platform is broken rather than your code — which is worth
 knowing on day one rather than day three.
 
@@ -240,7 +240,7 @@ own page), an administrator binds your device to a resource **in a role** —
 `reader`, `power`, `sensor` or `strike`. A door's coordinator is bound the same
 way, in the `edge` role, at *Doors*, and its latch as a `strike` with its pulse.
 
-Until that happens, `tool-on` will refuse you, and the refusal looks exactly
+Until that happens, a scan will refuse you, and the refusal looks exactly
 like a credential problem. If you are building for a metered tool, the binding
 must be `power`: see [authentication](#authentication).
 
@@ -303,15 +303,15 @@ As a module, you do not call the server. You publish to the **local** broker and
 wait:
 
 ```
-publish  toolguard/request/tool-on   {"card":"DEVCARD01","tool_id":"dev-tool-01"}
-subscribe toolguard/response/tool-on
+publish   resource/request/scan    {"card":"DEVCARD01","resource":"dev-tool-01"}
+subscribe resource/response/scan
 ```
 
 Then — and this is the single most common firmware defect in this protocol —
 **energize only if `authorized` is exactly `true`**:
 
 ```json
-{ "tool_id": "dev-tool-01", "authorized": false, "reason": "Training required" }
+{ "resource": "dev-tool-01", "authorized": false, "reason": "Training required" }
 ```
 
 That is a *successful* request. Over MQTT there is no status code at all, so the
@@ -319,35 +319,34 @@ field is the whole answer. A response arriving is not a yes, a response without
 an `authorized` field is not a yes, and `reason` is for humans — never branch on
 it.
 
-**And check `tool_id` before you read `authorized`.** These topics are not
+**And check `resource` before you read `authorized`.** These topics are not
 namespaced and carry no device id, so every module on the broker receives every
-answer. `tool_id` is the request echoed back, and it is the only thing that makes
-a reply yours: **discard a reply whose `tool_id` is not the one you asked
+answer. `resource` is the request echoed back, and it is the only thing that
+makes a reply yours: **discard a reply whose `resource` is not the one you asked
 about.** Without that check, two readers on one broker take each other's
 verdicts — a yes at one machine starting a session at another where somebody is
 waiting for a no. It is an echo, not a decision, so it belongs in the "is this
 mine" test and never in the "may I" test.
 
-**The field is named differently on the two wires, and this is the one place that
-matters.** On the local broker the edge answers `authorized`; over HTTP the server
-answers `tool_on` inside its envelope (see
-[`POST /api/toolguard/tool-on`](#post-apitoolguardtool-on) and
-[denials are 200, not 4xx](#denials-are-200-not-4xx)). A module speaks the local
-broker and wants `authorized`; a class 2 standalone device calls HTTP and wants
-`tool_on`. Looking for the wrong one finds nothing, and nothing is not permission
-— so the failure is safe but total: a tool that never starts, with no error
-anywhere.
+**The verdict is `authorized` on both wires.** The edge answers it on the local
+broker; the server answers it inside its envelope on
+[`POST /api/resources/{id}/scan`](#post-apiresourcesidscan) (see
+[denials are 200, not 4xx](#denials-are-200-not-4xx)). A `status` of `ok` is not
+a yes, a `message` is not a yes, and absence is not permission — so looking for
+the wrong thing fails safe but total: a tool that never starts, with no error
+anywhere. (Until v0.3 the HTTP alias `tool-on` said `tool_on` instead; it is
+gone.)
 
 If nothing answers, fail closed. A timeout is a no.
 
 ### Step 5 — stay energized only while permitted
 
 Authorization got the tool started. Staying on is a **lease**, renewed on
-`toolguard/lease`, and the renewals stopping *is* the instruction to stop:
+`resource/lease`, and the renewals stopping *is* the instruction to stop:
 
 ```json
-{ "tool_id":"7c9e6679-7425-40de-944b-e07fc1f90ae7", "device_id":"…",
-  "grant":true, "ttl_ms":3000 }
+{ "resource":"7c9e6679-7425-40de-944b-e07fc1f90ae7", "device_id":"…",
+  "grant":true, "ttl_ms":3000, "reason":null }
 ```
 
 1. Filter on `device_id` — every module on the broker sees every lease.
@@ -375,20 +374,20 @@ the design exists to prevent. See [the lease](#authorization-is-a-lease-not-a-co
 ### Step 6 — report, then stop
 
 ```
-publish  toolguard/request/tool-log  {"card":…,"tool_id":…,"seconds":612.5}
-publish  toolguard/request/tool-off  {"card":…,"tool_id":…}
+publish  resource/request/usage  {"card":…,"resource":…,"seconds":612.5}
+publish  resource/request/stop   {"card":…,"resource":…}
 ```
 
-`tool-log` before `tool-off`: on a metered tool the log is what gets billed and
-the stop settles the session. Send `tool-off` on **every** stop, including the
+Usage before the stop: on a metered tool the usage report is what gets billed
+and the stop settles the session. Send the stop on **every** stop, including the
 ugly ones — an un-ended session leaves the tool unusable for the next member.
 
-A plug sends the same `tool-log` with **no `card`** — it never learns one — and
-the server attributes it to whoever is signed on to the tool. The same goes for
-`tool-off`: a stop needs no badge, so a plug's stop button, a sensor, or an
-automation on the local broker ends the session by naming the tool alone. So a tool with a
-separate badge reader and plug meters as one box does: the reader starts and
-stops, the plug reports the power it switched.
+A plug sends the same usage report with **no `card`** — it never learns one —
+and the server attributes it to whoever is signed on to the tool. The same goes
+for the stop: a stop needs no badge, so a plug's stop button, a sensor, or an
+automation on the local broker ends the session by naming the resource alone.
+So a tool with a separate badge reader and plug meters as one box does: the
+reader starts and stops, the plug reports the power it switched.
 
 **Releasing the tool is your job.** The server does have a net under you: a
 session that runs past the tool's cap (`usage_max_session_minutes`, or the
@@ -405,15 +404,15 @@ member's own card, a sensed idle-out, a maximum session.
 *accumulate* — the server adds each one to the session in a single atomic
 statement — so a module that reports every thirty seconds loses one interval to
 a reboot, where one that reports the total at the end loses the whole session.
-A `tool-off` with no `tool-log` before it bills a per-minute tool **nothing**:
+A stop with no usage report before it bills a per-minute tool **nothing**:
 wall clock is only ever a *cap* on reported usage, never a source of it.
 
 **If you sense whether the machine is actually working, say so separately**
 (#169):
 
 ```
-publish  toolguard/request/tool-log
-         {"card":…,"tool_id":…,"seconds":612.5,"active_seconds":404.0}
+publish  resource/request/usage
+         {"card":…,"resource":…,"seconds":612.5,"active_seconds":404.0}
 ```
 
 Two figures, because a working signal gives two honest answers. A laser's
@@ -444,7 +443,7 @@ its own.
 Do not send a duration in `temperature`. It is recorded and never billed, and
 anything else there is a lie in the audit record.
 
-**Whatever you are, publish `toolguard/request/alive` `{ "device_id" }` on a
+**Whatever you are, publish `resource/request/alive` `{ "device_id" }` on a
 timer** — every second or two, well inside the coordinator's 5 s silence
 threshold. It is the liveness contract: a device the coordinator has not heard
 from is a device whose `fail_off` bindings deny their tool a lease, and a device
@@ -452,7 +451,7 @@ the server has not heard from is one its silence detector can never see go
 quiet. A reader and a sensor have no power to report, so this is the only way
 they can be heard from at all.
 
-If you switch power, also publish `toolguard/request/power` periodically with
+If you switch power, also publish `resource/request/power` periodically with
 your `device_id` — that is your telemetry, and it counts as being alive too,
 for plugs that predate the pulse.
 
@@ -472,11 +471,7 @@ the same reply, the same stop.
   `authorized: false` and no `strike`, and `reason` is for humans. A device
   with a latch that gets a yes with no `strike` releases nothing — the
   resource has no strike binding yet — and should say so in its log rather
-  than guess a duration. (The deprecated `door/request/scan` /
-  `door/response/unlock` pair says the same thing as `granted` and
-  `duration_ms`; `duration_ms` is `0` on a refusal, so firmware that pulses it
-  blindly happens not to open the door — do not rely on that, check
-  `granted`.)
+  than guess a duration.
 - A latch is never leased and never held for a session. On a device that
   drives a latch and gates no power — a door box — the session is the pulse:
   over when the latch closes again, with no usage and no stop sent for it.
@@ -502,8 +497,8 @@ these four, with a relay you can watch:
    (3 s by default), with no command telling it to.
 2. **Kill the edge process mid-session.** Same outcome. If it stays on, your
    lease timer is not armed.
-3. **Swipe an unknown card.** You should see `tool_on: false` and the relay must
-   not close for a moment, not even briefly.
+3. **Swipe an unknown card.** You should see `authorized: false` and the relay
+   must not close for a moment, not even briefly.
 4. **Reboot mid-session, then swipe again.** The tool must be usable — which it
    will not be unless step 3's `boot-reset` actually runs.
 
@@ -728,19 +723,17 @@ Most endpoints return `ToolGuardResponse`:
 {
   "status": "ok" | "error",
   "message": "human-readable, may be absent",
-  "tool_on":  true | false,
-  "tool_off": true,
   "authorized": true | false,
   "strike": { "pulse_ms": 4200 }
 }
 ```
 
-`message`, `tool_on`, `tool_off`, `authorized` and `strike` are omitted rather
-than null when they do not apply. `tool_on` and `tool_off` are the alias
-endpoints' fields; `authorized` and `strike` are the resource path's (see
+`message`, `authorized` and `strike` are omitted rather than null when they do
+not apply; `authorized` and `strike` appear only on a scan's reply (see
 [the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)).
-**Branch on `status` and `tool_on` (or `authorized`), never on `message`** —
-message text is for humans and changes.
+**Branch on `status` and `authorized`, never on `message`** — message text is
+for humans and changes. (`tool_on` and `tool_off` were the removed aliases'
+fields.)
 
 ### Denials are 200, not 4xx
 
@@ -750,12 +743,12 @@ A *denial* — unknown card, untrained user, tool already in use, tool broken �
 a successful request with an unsuccessful answer. It returns **HTTP 200** with:
 
 ```json
-{ "status": "error", "message": "Training required", "tool_on": false }
+{ "status": "error", "message": "Training required", "authorized": false }
 ```
 
 Firmware that only checks the HTTP status code will energize a tool for a user
-who is not allowed to use it. **`tool_on: true` is the only thing that means
-"energize".** Absence of `tool_on` is not permission.
+who is not allowed to use it. **`authorized: true` is the only thing that means
+"energize".** Absence of `authorized` is not permission.
 
 ### `GET /api/toolguard` — status probe
 
@@ -765,10 +758,9 @@ No authentication. Returns `{"status":"ok"}`. Use it for reachability checks.
 
 A door, a tool and a room are the same thing to a device: a **resource** a card
 is presented to, whose bindings decide what follows a yes. The three routes
-below are that one vocabulary; the `tool-on` / `tool-off` / `tool-log` routes
-that follow are **aliases** of them, kept for one release, and documented
-because every shipped device speaks them today. New firmware should speak the
-resource path.
+below are that one vocabulary. The `tool-on` / `tool-off` / `tool-log` routes
+under `/api/toolguard` were their aliases for one release (v0.2) and are gone
+(#192): a request to one is `404`.
 
 `{id}` is the resource's UUID, or for a tool its short `external_id` — matched
 the way `tool_id` always was, external id first. The credential is the same as
@@ -779,27 +771,48 @@ resource exists.
 `css-edge` speaks this path to the server: a badge it decides locally is
 reported on it, and a badge the server must decide is asked on it.
 
-What happens is **by kind**, not by path. A tool's scan runs exactly the code
-`tool-on` runs, so the alias and the resource path cannot drift; a door's scan
-runs the door's own policy through the one access engine, writes the same
+What happens is **by kind**, not by path. A tool's scan authorizes the card,
+opens the session and leases the tool's `power` and `sensor` bindings; a door's
+scan runs the door's own policy through the one access engine, writes the same
 access-event row a badge reported by the edge writes (method `rfid`), and
 answers with the pulse its `strike` binding says. Denials are `200` here as
 everywhere.
 
 #### `POST /api/resources/{id}/scan`
 
-JSON body: `card`. A badge presented to the resource.
+JSON body: `card`. A badge presented to the resource. Requires a device token
+bound to this resource.
+
+**A body, not a query string, and that is deliberate.** A card identifies a
+person, and a URL is written down by every proxy, reverse proxy and access log
+it passes through, plus browser history and crash reporters. It is also the
+honest method: this call *changes state*, so it was never a safe `GET`.
 
 Answers `authorized: true` on a yes, and — for a resource with a `strike`
 binding — `strike: { "pulse_ms": … }`, the pulse the device may release its
 latch for. A tool's yes opens its session and leases its `power` and `sensor`
-bindings as `tool-on` does; a door's yes is the pulse. **The reply is the actuation**:
+bindings; a door's yes is the pulse. **The reply is the actuation**:
 nothing is pushed to the door's coordinator for a scan answered here, so a
 reader that also holds the latch releases it from this reply, as a plug closes
 its relay from a lease.
 
-A tool answers with the same denial messages as `tool-on` (the table there). A
-door answers with its own:
+A tool's denial reasons observed in the field, all with `authorized: false`:
+
+| `message` | meaning |
+|---|---|
+| `Unknown card` | the card resolves to no user |
+| `Card not authorized` | the card is known but disabled or released |
+| `User is not active` | membership lapsed |
+| `Tool not found` | no tool with that `tool_id` |
+| `Tool is already in use` | another session is open |
+| `Tool is under maintenance` | status is Maintenance |
+| `Tool is broken` | status is Broken |
+| `Tool is in repair` | status is Repair |
+| `Tool is retired` | status is Retired |
+| `Training required` | the user is not authorized for this specific tool |
+| *(billing-specific text)* | metered tool, funds or holds unavailable |
+
+A door answers with its own:
 
 | `message` | meaning |
 |---|---|
@@ -814,15 +827,26 @@ door answers with its own:
 #### `POST /api/resources/{id}/stop`
 
 JSON body: optional `card`. End the resource's session; **a stop needs no
-badge**, exactly as `tool-off` says. On a tool this is `tool-off`. A door has no
-session to end (its session is the pulse, over before anyone could ask), so a
-stop on one is the late stop the tool path already accepts: `status: "ok"`,
-`No session to end`, recorded against nobody.
+badge** — a plug's stop button, a sensor, or an automation names the resource
+alone and the server ends whatever session is open on it, attributing the stop
+to the member who opened it: `status: "ok"`, `Tool deactivated`. A stop that
+lands late — the tool is already idle — is harmless, not an error:
+`status: "ok"`, `No session to end`. A door has no session to end (its session
+is the pulse, over before anyone could ask), so a stop on one is that same late
+stop, recorded against nobody.
 
 #### `POST /api/resources/{id}/usage`
 
 JSON body: `seconds`; optional `card`, `active_seconds`, `temperature`. A usage
-report, exactly as `tool-log` says. On a door it is refused with
+report against the resource's open session: `seconds` is the figure the device
+reports as billable, `active_seconds` the narrower time its working signal was
+asserted (#169; see [Step 6](#step-6--report-then-stop)), `temperature` is
+recorded and never billed. Reports **accumulate** in one atomic statement, so
+report in increments; each answers `status: "ok"`, `Usage logged`. A report
+that names no `card` is attributed to whoever is signed on (#174); one naming a
+card other than the one that opened the session is refused with
+`This card did not activate the tool`; one with no open session is refused with
+`No open session for this tool`. On a door it is refused with
 `No open session for this resource`: there is no session for the time to belong
 to.
 
@@ -907,107 +931,9 @@ exactly this and these are its words:
 | `Tool unavailable: <status>` | authorized, but `status` is not `idle` |
 
 A tool has no lists and a door no status, so each kind simply never takes the
-arms it cannot. The server's own replies on this path keep the two tables
-above and under `tool-on` until the aliases are removed.
-
-### `POST /api/toolguard/tool-on`
-
-**Deprecated alias** of [`POST /api/resources/{id}/scan`](#post-apiresourcesidscan)
-for a tool, kept for one release; the reply says `tool_on` where the resource
-path says `authorized`.
-
-JSON body: `card`, `tool_id`. Requires a device token bound to this tool.
-
-Authorizes a card against a tool and, if allowed, marks the tool in use.
-
-**A body, not a query string, and that is deliberate.** A card identifies a
-person, and a URL is written down by every proxy, reverse proxy and access log
-it passes through, plus browser history and crash reporters. It is also the
-honest method: this call *changes state*, so it was never a safe `GET`.
-
-Returns `tool_on: true` on success. Denial reasons observed in the field, all
-with `tool_on: false`:
-
-| `message` | meaning |
-|---|---|
-| `Unknown card` | the card resolves to no user |
-| `Card not authorized` | the card is known but disabled or released |
-| `User is not active` | membership lapsed |
-| `Tool not found` | no tool with that `tool_id` |
-| `Tool is already in use` | another session is open |
-| `Tool is under maintenance` | status is Maintenance |
-| `Tool is broken` | status is Broken |
-| `Tool is in repair` | status is Repair |
-| `Tool is retired` | status is Retired |
-| `Training required` | the user is not authorized for this specific tool |
-| *(billing-specific text)* | metered tool, funds or holds unavailable |
-
-### `POST /api/toolguard/tool-off`
-
-**Deprecated alias** of [`POST /api/resources/{id}/stop`](#post-apiresourcesidstop)
-for a tool, kept for one release.
-
-JSON body: `tool_id`; optional `card`. Requires a device token bound to this
-tool, in any role.
-
-Ends the session and returns the tool to Idle. Returns `tool_off: true`.
-
-**A stop needs no badge.** A stop is a safety act: any device bound to the tool
-may send it, and a device that read no card — a plug with a stop button, a
-sensor, an automation on the local broker — omits `card` and names the tool
-alone. The server ends whatever session is open on it and records the stop
-against that session's member; a card-less stop on a tool that is already idle
-is still accepted and recorded against nobody, so a stop that lands late is
-harmless rather than refused. A `card`, when sent, is the card that was
-presented, and an unknown one is refused as before.
-
-Unlike `tool-on`, this endpoint answers `status: "error"` with **no** `tool_off`
-field for an unknown card or a missing tool. Send it anyway on every stop — an
-un-ended session leaves the tool unusable for the next member.
-
-### `POST /api/toolguard/tool-log`
-
-**Deprecated alias** of [`POST /api/resources/{id}/usage`](#post-apiresourcesidusage)
-for a tool, kept for one release.
-
-JSON body: `tool_id`, `seconds` (float); optional `card`, `active_seconds`
-(float) and `temperature` (float). Requires a device token bound to this tool,
-in any role.
-
-Reports usage. `message` is `Usage logged`. For metered tools this is what gets
-billed; send it before `tool-off`.
-
-**`card` is optional, and who it belongs to is the server's to work out.** A
-device that read a card names it — the card that activated the session, not the
-last card seen. A device that cannot — a plug, which only ever receives a lease —
-omits it, and the usage goes to whoever is signed on to that tool: the open
-session's member, or on an unmetered tool the member whose `tool-on` put it in
-use. The server already knows who is on the tool; the plug does not have to. A
-card-less report when nobody is signed on is refused as `No open session for
-this tool`, like any other report with nothing to bill against.
-
-**Reports accumulate.** Each call adds to the open session rather than replacing
-it, in one atomic statement, so sending periodic increments is both safe and
-preferred — see [step 6](#step-6--report-then-stop).
-
-`active_seconds` (#169) is the time your working signal was asserted, as
-distinct from the usage you call billable. Which of the two the charge uses is
-the tool's `usage_basis` setting, not the device's choice; the other is still
-recorded, and on an **unmetered** tool both are kept as statistics with no
-billing involved. Omit it if you sense nothing — absent is "cannot tell", not
-zero. A non-finite or negative `active_seconds` is dropped on its own rather
-than failing the report, so a sensor fault cannot cost a member their real
-usage.
-
-On a **metered** tool the report is checked against the session it belongs to,
-and two refusals are specific to this endpoint:
-
-| `message` | meaning |
-|---|---|
-| `No open session for this tool` | there is no open activation to bill against — `tool-on` never succeeded, or `tool-off` already settled it. Report usage *before* stopping |
-| `This card did not activate the tool` | the `card` in the report is not the card that started the session. Send the card that swiped, not the last card seen — or, from a device that reads none, send no card |
-
-Both come back as `status: "error"` with HTTP **200**, like every other refusal.
+arms it cannot. The server's own replies on the resource path keep the two
+tables above -- a tool's and a door's -- for now: those strings are recorded
+into access events, so they move on their own release.
 
 ### `GET /api/toolguard/sync` — the allow-list
 
@@ -1036,7 +962,7 @@ device:
 `status` is one of `idle`, `in_use`, `maintenance`, `broken`, `repair`,
 `retired` — lower case with underscores, exactly as written here. Only `idle`
 and `in_use` are workable states; the other four mean the tool is out of
-service and `tool-on` will refuse it.
+service and a scan will refuse it.
 
 **`profile_field_digest` is not the card.** It is
 `argon2id(device_pepper, card)`, hex-encoded (#109). To match a swipe, hash the
@@ -1173,7 +1099,7 @@ Who may send it:
 | `Device not found` | the named device was deleted between being bound and pulsing |
 
 A module behind an edge publishes the [MQTT twin](#the-local-broker-edge--module),
-`toolguard/request/alive` `{ "device_id" }`, every second or two, and the edge
+`resource/request/alive` `{ "device_id" }`, every second or two, and the edge
 forwards it here. There is no acknowledgement on the local broker: the lease is
 the feedback, and an ack per pulse would double the traffic to say nothing.
 
@@ -1487,10 +1413,12 @@ this broker: a **resource** a badge is presented to, whose **bindings** decide
 what follows a yes. So there is one scan, one stop, one usage report, one power
 report and one lease, each naming the `resource` — its UUID or its short
 external id, resolved the way a tool id always has been. The older topic
-families — the ones beginning `toolguard` and `door` — are **aliases**: the edge still accepts them
-and still publishes its answers on them, for **one release**, after which they
-go. New firmware speaks the resource topics; existing firmware has a release to
-move.
+families — the ones beginning `toolguard` and `door` — were its **aliases** for
+one release (v0.2) and are gone (#192): the edge does not subscribe to the old
+request names and publishes nothing on the old reply names, so a message on one
+of them reaches nobody and gets no answer. Firmware that still speaks them must
+be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
+`spaces-toolguard-firmware` ≥ v0.2.0 speak the resource wire.
 
 **Module → edge** (the edge subscribes):
 
@@ -1514,38 +1442,14 @@ move.
 | `resource/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
 | `resource/lease` | `{ "resource", "device_id", "grant", "ttl_ms", "reason" }` — see [the lease](#authorization-is-a-lease-not-a-command) |
 
-**Aliases, deprecated — one release.** Each row below is the same message under
-its old name. The edge subscribes to the requests and publishes the responses
-alongside the resource topics, and logs a deprecation warning the first time an
-old topic is heard from.
-
-| alias (module → edge) | payload | is now |
-|---|---|---|
-| `toolguard/request/tool-on` | `{ "card", "tool_id" }` | `resource/request/scan` |
-| `toolguard/request/tool-off` | `{ "card"?, "tool_id" }` | `resource/request/stop` |
-| `toolguard/request/tool-log` | `{ "card"?, "tool_id", "seconds", "active_seconds"?, "temperature"? }` | `resource/request/usage` |
-| `toolguard/request/power` | `{ "tool_id", "device_id"?, "draw_now"?, "voltage_now"?, "relay_on"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` | `resource/request/power` |
-| `toolguard/request/alive` | `{ "device_id" }` | `resource/request/alive` |
-| `door/request/scan` | `{ "door_id", "card_id" }` | `resource/request/scan` |
-
-| alias (edge → module) | payload | is now |
-|---|---|---|
-| `toolguard/response/tool-on` | `{ "tool_id": string, "authorized": bool, "reason": string }` | `resource/response/scan` |
-| `toolguard/response/tool-off` | `{ "ok": true }` | `resource/response/stop` |
-| `toolguard/response/tool-log` | `{ "ok": true }` | `resource/response/usage` |
-| `toolguard/response/power` | `{ "ok": true }` — an ack, nothing more | `resource/response/power` |
-| `door/response/unlock` | `{ "door_id", "granted", "duration_ms", "reason" }` — a momentary unlock | `resource/response/scan`, with `strike` |
-| `toolguard/state` | the allow-list | `resource/state` |
-| `toolguard/lease` | permission for one power module to stay energized | `resource/lease` |
-
 Three things about this table that cost time if you learn them the hard way:
 
 **The response topics do NOT carry the server's envelope — the local wire has its
-own shape, and `tool_on` does not appear on it at all.** The edge decides (from
+own shape, and `status` does not appear on it at all.** The edge decides (from
 its cache, or by asking the server) and answers with its own verdict:
 
 ```json
-{ "tool_id": "dev-tool-01", "authorized": false, "reason": "Training required" }
+{ "resource": "dev-tool-01", "authorized": false, "reason": "Training required" }
 ```
 
 So on the local broker, **energize only if `authorized` is exactly `true`.** The
@@ -1555,12 +1459,12 @@ arriving is not an answer of yes, a response with no `authorized` field is not a
 yes, and `reason` is for humans — never branch on it. If nothing answers, fail
 closed; a timeout is a no.
 
-`tool-off` and `tool-log` answer `{ "ok": true }`, which acknowledges *receipt*
+A stop and a usage report answer `{ "ok": true }`, which acknowledges *receipt*
 and nothing else. It is not a confirmation that the session was settled or the
 usage recorded — the edge forwards both to the server after answering you, and a
 later failure there is invisible on this topic.
 
-**`toolguard/request/power` is the MQTT twin of `POST /api/toolguard/power-report`,**
+**`resource/request/power` is the MQTT twin of `POST /api/toolguard/power-report`,**
 with the same fields and the same rule about `relay_on`: omit it if you cannot
 report relay state, because absent means "cannot report" and `false` means "I
 looked and it is off". The detector needs to tell those apart.
@@ -1572,7 +1476,7 @@ whose binding is `fail_off` — the default for a plug, and the right one — an
 which never sends `device_id` is refused permanently, and from the outside that
 looks identical to a tool that is simply switched off.
 
-**The pulse is the general form of the same thing.** `toolguard/request/alive`
+**The pulse is the general form of the same thing.** `resource/request/alive`
 `{ "device_id" }`, from every device whatever its role. A power report counts as
 alive too, but a reader or a sensor has no power to report, and the server will
 not even accept a relayed power report for a device that holds no `power`
@@ -1582,7 +1486,7 @@ binding defaults follow the same reasoning: a `reader` binding defaults to
 reason to stop a running machine; `power` and `sensor` default to `fail_off`,
 because a silent sensor is an unobserved condition.
 
-**`toolguard/response/power` is an acknowledgement, not an instruction.** It says
+**`resource/response/power` is an acknowledgement, not an instruction.** It says
 your report was received. It is not permission to remain energized, and firmware
 that treats a returning ack as a heartbeat of approval has built exactly the
 fail-open design the [lease](#authorization-is-a-lease-not-a-command) exists to
@@ -1615,15 +1519,15 @@ both transports.
            │
    ┌───────┴───────────────────────────────────────────┐
    │  card presented                                    │
-   │     └─ POST /tool-on  {card, tool_id}              │
-   │          ├─ tool_on: true  → energize              │
-   │          └─ otherwise      → refuse, show message  │
+   │     └─ POST /api/resources/{id}/scan  {card}       │
+   │          ├─ authorized: true → energize            │
+   │          └─ otherwise        → refuse, show message│
    │  while running                                     │
    │     ├─ POST /power-report   (periodically)         │
    │     └─ renew the lease      (see below)            │
    │  session ends                                      │
-   │     ├─ POST /tool-log {…, seconds}                 │
-   │     └─ POST /tool-off {card, tool_id}              │
+   │     ├─ POST /api/resources/{id}/usage {seconds}    │
+   │     └─ POST /api/resources/{id}/stop  {card}       │
    └────────────────────────────────────────────────────┘
 ```
 
@@ -1651,12 +1555,12 @@ a command that, by construction, is not coming.
 
 #### The wire
 
-Leases arrive on the local broker, on `toolguard/lease`, one message per
+Leases arrive on the local broker, on `resource/lease`, one message per
 module per renewal:
 
 ```json
 {
-  "tool_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "resource": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "device_id": "…uuid…",
   "grant": true,
   "ttl_ms": 3000,
@@ -1667,7 +1571,7 @@ module per renewal:
 Filter on `device_id` — every module on the broker sees every lease. Energize
 only while `grant` is `true`, and only for `ttl_ms` after the message **arrived**.
 
-**`tool_id` on this topic is always the tool's UUID, never its `external_id`.**
+**`resource` on this topic is always the resource's UUID, never an `external_id`.**
 Elsewhere in this protocol a tool may be named either way and a *request* you
 send is resolved both ways — but the coordinator builds this field from the
 wiring snapshot, which is keyed by UUID, so there is nothing to resolve. This is
@@ -1706,14 +1610,14 @@ coordinator is the normal case, not the exception.
 
 #### What a lease is not
 
-A lease is not authorization. `tool-on` is what authorizes a *person* to use a
+A lease is not authorization. A scan is what authorizes a *person* to use a
 tool; a lease is what permits a *relay* to remain closed, and it is withheld for
 reasons that have nothing to do with who swiped — a door opened, a sensor went
 quiet, the coordinator lost confidence. Both must hold. Neither implies the
 other.
 
 **And a lease is for a member at the machine.** The coordinator grants one only
-while the tool is **in use** — a session opened by a `tool-on` it answered yes
+while the tool is **in use** — a session opened by a scan it answered yes
 to, or that the server reports — in addition to every interlock and liveness
 condition. A plug bound to a tool nobody has signed on to is refused with
 `NotInUse`, whatever its interlocks say. A plug with no reader on its tool is
@@ -1891,13 +1795,13 @@ are fixed, so your device config does not need editing every morning:
 
 They are all printed when the stage finishes, along with the instance URL.
 
-The fixture is **proved by use, not by assertion**: the seed calls `tool-on` with
-the seeded card and then `tool-off`, and fails the stage if either does not do
-what this document says it does. A fixture that exists in the database but
+The fixture is **proved by use, not by assertion**: the seed scans the seeded
+card at the tool and then stops it, on the resource path, and fails the stage
+if either does not do what this document says it does. A fixture that exists in the database but
 cannot turn a tool on would cost you a morning of debugging firmware against a
 platform that was never going to answer.
 
-The other five tools all require training, so `tool-on` against them answers
+The other five tools all require training, so a scan at them answers
 `Training required` — that is correct behaviour, not a broken seed. Use
 `dev-tool-01`.
 

@@ -42,9 +42,10 @@ const DEVICE_ROUTES = [
   // this row would assert the extractor rather than the credential. The wire
   // structs make every field optional and validate after the credential check
   // precisely so this stays a test of the credential.
-  ['POST', '/api/toolguard/tool-log'],
-  ['POST', '/api/toolguard/tool-off'],
-  ['POST', '/api/toolguard/tool-on'],
+  // #182/#192: the resource path, which replaced the three aliases.
+  ['POST', '/api/resources/00000000-0000-4000-8000-000000000001/usage'],
+  ['POST', '/api/resources/00000000-0000-4000-8000-000000000001/stop'],
+  ['POST', '/api/resources/00000000-0000-4000-8000-000000000001/scan'],
 ]
 
 /**
@@ -174,14 +175,20 @@ main(async () => {
   // silently while widening what may energise a machine, and a key is neither
   // hashed at rest nor scoped by a binding.
   for (const [path, extra] of [
-    ['/api/toolguard/tool-on', {}],
-    ['/api/toolguard/tool-off', {}],
-    ['/api/toolguard/tool-log', { seconds: 1 }],
+    ['/api/resources/t1/scan', {}],
+    ['/api/resources/t1/stop', {}],
+    ['/api/resources/t1/usage', { seconds: 1 }],
   ]) {
     assertEq(`contract/toolguard/${path} does not honour an api_key`, 401,
       (await POST(path, {
-        body: { card: 'AA11', tool_id: 't1', api_key: 'not-a-real-key', ...extra },
+        body: { card: 'AA11', api_key: 'not-a-real-key', ...extra },
       })).status)
+  }
+  // #192: the aliases are not routes any more. 404, not 401: there is nothing
+  // there to refuse a credential for.
+  for (const path of ['/api/toolguard/tool-on', '/api/toolguard/tool-off', '/api/toolguard/tool-log']) {
+    assertEq(`contract/toolguard/${path} is gone`, 404,
+      (await POST(path, { body: { card: 'AA11', tool_id: 't1' } })).status)
   }
 
   // -----------------------------------------------------------------------

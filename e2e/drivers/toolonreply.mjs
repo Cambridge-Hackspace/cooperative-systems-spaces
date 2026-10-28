@@ -1,12 +1,12 @@
-// A tool-on reply must name the tool it is an answer about (#166).
+// A scan reply must name the resource it is an answer about (#166, #192).
 //
-// WHY THIS TIER AND NOT A UNIT TEST. `toolguard/response/tool-on` is published
+// WHY THIS TIER AND NOT A UNIT TEST. `resource/response/scan` is published
 // by the edge from three separate decision paths, and until this driver existed
 // *nothing in e2e subscribed to that topic at all* -- the battery's only MQTT
-// publish was `toolguard/request/power`. So a full green battery said nothing
+// publish was the plug's power report. So a full green battery said nothing
 // whatsoever about the payload a module actually receives, which is the payload
 // that decides whether a machine energizes. `checks/` can prove the field
-// cannot be structurally omitted and that every call site passes `&req.tool_id`;
+// cannot be structurally omitted and that every call site passes `&req.resource`;
 // only this tier can prove the bytes arrive on the wire.
 //
 // THE DEFECT IT GUARDS. The reply used to be `{ authorized, reason }` with
@@ -29,7 +29,7 @@
 // authorization decision is right, or that the two paths not exercised here --
 // a power lockout and the online-synchronous forward -- echo it too. Those are
 // covered structurally in `checks/tests/tool_on_reply_is_addressable.rs`, which
-// asserts all three call sites pass the request's own tool_id. Both tiers
+// asserts every call site passes the request's own resource. Both tiers
 // together are the claim; neither is it alone.
 
 import fs from 'node:fs'
@@ -79,7 +79,7 @@ async function assertEcho() {
     record(
       'toolonreply/the-edge-answers-at-all',
       'fail',
-      `no message captured on toolguard/response/tool-on for ${tool}; ` +
+      `no message captured on resource/response/scan for ${tool}; ` +
         `the edge did not answer, so nothing below is about the echo`,
     )
     return
@@ -97,15 +97,15 @@ async function assertEcho() {
     record('toolonreply/every-reply-is-json', 'ok')
   }
 
-  // 1. The reply names the tool that was asked about.
-  if (own.some((r) => r.tool_id === tool)) {
+  // 1. The reply names the resource that was asked about.
+  if (own.some((r) => r.resource === tool)) {
     record('toolonreply/names-the-tool-asked-about', 'ok', tool)
   } else {
     record(
       'toolonreply/names-the-tool-asked-about',
       'fail',
-      `asked about ${tool}; replies carried tool_id ` +
-        `${JSON.stringify(own.map((r) => r.tool_id ?? null))}. A module cannot ` +
+      `asked about ${tool}; replies carried resource ` +
+        `${JSON.stringify(own.map((r) => r.resource ?? null))}. A module cannot ` +
         `tell this answer from the answer to the reader at the next machine.`,
     )
   }
@@ -134,16 +134,55 @@ async function assertEcho() {
       `no reply captured for the second request (${other}), so assertion 1 ` +
         `cannot be distinguished from an edge echoing a constant`,
     )
-  } else if (notOurs.some((r) => r.tool_id === other)) {
+  } else if (notOurs.some((r) => r.resource === other)) {
     record('toolonreply/the-echo-varies-with-the-request', 'ok', other)
   } else {
     record(
       'toolonreply/the-echo-varies-with-the-request',
       'fail',
-      `asked about ${other}; replies carried tool_id ` +
-        `${JSON.stringify(notOurs.map((r) => r.tool_id ?? null))}. The field is ` +
+      `asked about ${other}; replies carried resource ` +
+        `${JSON.stringify(notOurs.map((r) => r.resource ?? null))}. The field is ` +
         `present but is not the request's own value, which is a reply that is ` +
         `well-formed, consistently wrong, and indistinguishable from a neighbour's.`,
+    )
+  }
+
+  // 4. THE ALIAS IS GONE (#192). The same request on the old tool-on name got
+  //    no answer on the old reply name AND none on the resource reply name,
+  //    inside a window longer than the edge took to answer the request above.
+  //    The capture before this one is the control: the edge was answering a
+  //    second earlier, so emptiness here is the alias being unsubscribed and
+  //    not the edge being dead. Precondition first, so a dead edge presents as
+  //    "nothing answered the real request" and never as a passing absence.
+  const aliasReply = replies('toolon-alias-reply.txt')
+  const aliasLeak = replies('toolon-alias-leak.txt')
+  if (notOurs.length === 0) {
+    record(
+      'toolonreply/the-alias-absence-has-a-control',
+      'fail',
+      'the resource request just before the alias request got no reply, so an empty alias window proves nothing',
+    )
+    return
+  }
+  record('toolonreply/the-alias-absence-has-a-control', 'ok')
+  if (aliasReply.length === 0) {
+    record('toolonreply/the-old-request-topic-gets-no-reply-on-the-old-name', 'ok')
+  } else {
+    record(
+      'toolonreply/the-old-request-topic-gets-no-reply-on-the-old-name',
+      'fail',
+      `toolguard/response/tool-on answered a toolguard/request/tool-on after #192: ` +
+        `${JSON.stringify(aliasReply[0]).slice(0, 200)}`,
+    )
+  }
+  if (aliasLeak.length === 0) {
+    record('toolonreply/the-old-request-topic-gets-no-reply-on-the-new-name', 'ok')
+  } else {
+    record(
+      'toolonreply/the-old-request-topic-gets-no-reply-on-the-new-name',
+      'fail',
+      `a toolguard/request/tool-on was answered on resource/response/scan after #192 -- the ` +
+        `edge still subscribes to the alias: ${JSON.stringify(aliasLeak[0]).slice(0, 200)}`,
     )
   }
 }

@@ -46,10 +46,11 @@ function recordIssuedCode(code) {
 }
 
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString()
+// The resource path (#182): the tool is the resource; the aliases are gone (#192).
 const toolOn = (card) =>
-  POST('/api/toolguard/tool-on', { token: deviceToken, body: { card, tool_id: EXTERNAL_ID } })
+  POST(`/api/resources/${EXTERNAL_ID}/scan`, { token: deviceToken, body: { card } })
 const toolOff = (card) =>
-  POST('/api/toolguard/tool-off', { token: deviceToken, body: { card, tool_id: EXTERNAL_ID } })
+  POST(`/api/resources/${EXTERNAL_ID}/stop`, { token: deviceToken, body: { card } })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function createFreeTool(admin) {
@@ -145,7 +146,7 @@ main(async () => {
   const beforeUse = (await listCards(admin, member.user.id)).find((c) => c.id === active.id)
   ok('cards/last-used-null-before-use', beforeUse && beforeUse.last_used_at == null, JSON.stringify(beforeUse))
   const on1 = await toolOn('CARDS-ACTIVE')
-  ok('cards/active-grants', on1.json?.tool_on === true, JSON.stringify(on1.json))
+  ok('cards/active-grants', on1.json?.authorized === true, JSON.stringify(on1.json))
   assertEq('cards/active-off', 200, (await toolOff('CARDS-ACTIVE')).status)
   const afterUse = (await listCards(admin, member.user.id)).find((c) => c.id === active.id)
   ok('cards/last-used-set-after-use', afterUse && afterUse.last_used_at != null, JSON.stringify(afterUse))
@@ -155,19 +156,19 @@ main(async () => {
 
   // 2. Disabling that card revokes access and raises the fraud signal.
   await disableCard(admin, active.id)
-  ok('cards/disabled-denies', (await toolOn('CARDS-ACTIVE')).json?.tool_on === false, 'disabled granted')
+  ok('cards/disabled-denies', (await toolOn('CARDS-ACTIVE')).json?.authorized === false, 'disabled granted')
   const afterDisable = await waitRevoked(admin, member.user.id, base + 1)
   ok('cards/disabled-raises-fraud-event', afterDisable === base + 1, `expected ${base + 1}, got ${afterDisable}`)
 
   // 3. A released card is likewise denied and raises the signal.
   const released = await issueCard(admin, member.user.id, 'CARDS-RELEASED')
   await releaseCard(admin, released.id)
-  ok('cards/released-denies', (await toolOn('CARDS-RELEASED')).json?.tool_on === false, 'released granted')
+  ok('cards/released-denies', (await toolOn('CARDS-RELEASED')).json?.authorized === false, 'released granted')
   const afterRelease = await waitRevoked(admin, member.user.id, afterDisable + 1)
   ok('cards/released-raises-fraud-event', afterRelease === afterDisable + 1, `got ${afterRelease}`)
 
   // 4. An unknown code is denied quietly: no fraud event, even after a beat.
-  ok('cards/unknown-denies', (await toolOn('CARDS-NEVER-ISSUED')).json?.tool_on === false, 'unknown granted')
+  ok('cards/unknown-denies', (await toolOn('CARDS-NEVER-ISSUED')).json?.authorized === false, 'unknown granted')
   await sleep(750)
   const afterUnknown = await auditCount(admin, 'revoked_card_presented', member.user.id)
   ok('cards/unknown-is-quiet', afterUnknown === afterRelease, `expected ${afterRelease}, got ${afterUnknown}`)
@@ -181,13 +182,13 @@ main(async () => {
   // revokes only that credential, and the others keep working.
   const m1 = await issueCard(admin, member.user.id, 'MULTI-1')
   await issueCard(admin, member.user.id, 'MULTI-2')
-  ok('cards/multi-first-grants', (await toolOn('MULTI-1')).json?.tool_on === true, 'MULTI-1 denied')
+  ok('cards/multi-first-grants', (await toolOn('MULTI-1')).json?.authorized === true, 'MULTI-1 denied')
   await toolOff('MULTI-1')
-  ok('cards/multi-second-grants', (await toolOn('MULTI-2')).json?.tool_on === true, 'MULTI-2 denied')
+  ok('cards/multi-second-grants', (await toolOn('MULTI-2')).json?.authorized === true, 'MULTI-2 denied')
   await toolOff('MULTI-2')
   await disableCard(admin, m1.id)
-  ok('cards/multi-disabled-one-denies', (await toolOn('MULTI-1')).json?.tool_on === false, 'disabled MULTI-1 granted')
-  ok('cards/multi-other-retains-access', (await toolOn('MULTI-2')).json?.tool_on === true, 'MULTI-2 lost access')
+  ok('cards/multi-disabled-one-denies', (await toolOn('MULTI-1')).json?.authorized === false, 'disabled MULTI-1 granted')
+  ok('cards/multi-other-retains-access', (await toolOn('MULTI-2')).json?.authorized === true, 'MULTI-2 lost access')
   await toolOff('MULTI-2')
 
   // 2b/precedence. A released code can be reissued to a DIFFERENT member, and a
@@ -200,7 +201,7 @@ main(async () => {
   })
   ok('cards/reissue-released-code-succeeds', reissue.status === 200, `${reissue.status}: ${reissue.text.slice(0, 150)}`)
   const revBefore = await auditCount(admin, 'revoked_card_presented', member.user.id)
-  ok('cards/reissue-grants-to-new-owner', (await toolOn('REISSUE-X')).json?.tool_on === true, 'reissued code denied')
+  ok('cards/reissue-grants-to-new-owner', (await toolOn('REISSUE-X')).json?.authorized === true, 'reissued code denied')
   await toolOff('REISSUE-X')
   await sleep(500)
   // Active (other) won over released (member): the released owner gets no event.
@@ -219,7 +220,7 @@ main(async () => {
 
   // D. A session already open settles even if its card is revoked mid-use.
   const settle = await issueCard(admin, member.user.id, 'SETTLE')
-  ok('cards/settle-session-open', (await toolOn('SETTLE')).json?.tool_on === true, 'SETTLE did not open')
+  ok('cards/settle-session-open', (await toolOn('SETTLE')).json?.authorized === true, 'SETTLE did not open')
   await disableCard(admin, settle.id)
   const soff = await toolOff('SETTLE')
   ok(

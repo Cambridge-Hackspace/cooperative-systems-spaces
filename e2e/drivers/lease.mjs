@@ -60,7 +60,7 @@
 // profile; beside it a momentary front door with a 2000 ms strike:
 //
 //   R1. a badge at the room -- authorized, with strike 4200, on the resource
-//       reply topic AND on the deprecated door alias, which no stage had
+//       reply topic, with the old door alias watched and silent (#192), which no stage had
 //       ever driven before.
 //   R2. the room's plug is leased while the session is open, long after the
 //       pulse.
@@ -678,7 +678,7 @@ async function assertWindows() {
   ok(
     'lease/refusal-names-the-tool',
     refusals.length > 0 &&
-      refusals.every((r) => r.tool_id === fixture.toolId || r.tool_id === fixture.externalId),
+      refusals.every((r) => r.resource === fixture.toolId),
     refusals.length === 0
       ? 'no leases at all, so nothing names the tool'
       : `lease addressed to the wrong tool: ${JSON.stringify(refusals[0] ?? {})}`
@@ -813,20 +813,21 @@ async function assertWindows() {
     `the second stage never got its lease after the first confirmed and the delay ran: ` +
       `${JSON.stringify(second)}`
   )
-  // #182: the same leases, on the resource-shaped topic, captured in parallel
-  // with window 2b. `resource` names the tool where the alias says `tool_id`;
-  // everything else is the same message. Without this the new topic could be
-  // declared and never published, and a device built to the new wire would
-  // wait for a lease that never comes.
-  const mirrored = captured('lease-window-2b-resource.txt') ?? []
-  const mirroredPlug2 = mirrored.filter((r) => r.device_id === fixture.plug2Id)
+  // #192: the old alias name is silent. Captured in parallel with window 2b,
+  // whose grant above is the control: the coordinator was leasing in this
+  // very window, so an empty alias capture is the alias being gone and not a
+  // broker that said nothing. The precondition is asserted first so a failure
+  // reads as "the control window was empty" rather than as a leak.
+  const aliasWindow = captured('lease-window-2b-alias.txt') ?? []
   ok(
-    'lease/the-lease-is-published-on-the-resource-topic-too',
-    mirroredPlug2.length >= 1 &&
-      mirroredPlug2.every((r) => r.resource === fixture.toolId && typeof r.ttl_ms === 'number') &&
-      mirroredPlug2[mirroredPlug2.length - 1]?.grant === true,
-    `resource/lease did not mirror the grant: ${JSON.stringify(mirroredPlug2)} (alias window had ` +
-      `${second.length})`
+    'lease/the-alias-lease-window-has-a-control',
+    second.length >= 1,
+    'window 2b itself carried no lease, so an empty alias window proves nothing'
+  )
+  ok(
+    'lease/the-old-lease-topic-is-silent',
+    aliasWindow.length === 0,
+    `toolguard/lease still carries leases after #192: ${JSON.stringify(aliasWindow).slice(0, 300)}`
   )
 
   // ── A sensor bound on its own gets the lease too ──────────────────────────
@@ -982,13 +983,12 @@ async function assertRoom(fixture) {
     yes.length >= 1 && yes[0].authorized === true && yes[0]?.strike?.pulse_ms === 4200,
     `expected authorized with strike 4200: ${JSON.stringify(yes[0])}`
   )
-  // The same answer on the deprecated door alias, which no e2e stage had ever
-  // driven: the local door wire gets its first oracle here, on both names.
-  const alias = forRoom(roomUnlock)
+  // #192: the old door alias is silent while the resource topic answered the
+  // same badge (the grant just above is the control).
   ok(
-    'lease/the-alias-unlock-says-the-same',
-    alias.length >= 1 && alias[0].granted === true && alias[0].duration_ms === 4200,
-    `door/response/unlock should mirror the scan reply: ${JSON.stringify(alias[0])}`
+    'lease/the-old-unlock-topic-is-silent',
+    (roomUnlock ?? []).length === 0,
+    `door/response/unlock still answers after #192: ${JSON.stringify(roomUnlock).slice(0, 300)}`
   )
 
   // The room: a session until a stop, so the room's own plug is leased long

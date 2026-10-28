@@ -371,7 +371,7 @@ fn the_scrapers_found_something_to_compare() {
         "/api/auth/login",
         "/api/users/{p}",
         "/api/admin/roster",
-        "/api/toolguard/tool-on",
+        "/api/resources/{p}/scan",
     ] {
         assert!(
             server.contains(expected),
