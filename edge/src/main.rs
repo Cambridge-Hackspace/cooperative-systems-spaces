@@ -9,7 +9,6 @@ use tracing::{error, info, warn};
 // it, so that `edge/tests/` can reach them and so that live-but-binary-private
 // code is not reported as dead.
 use css_edge::config::{generate_sample_config, load_config, AuthStatus};
-use css_edge::doors::DoorsState;
 use css_edge::mqtt::{
     run_local_mqtt_event_loop, run_mqtt_event_loop, EdgeMqttClient, LocalMqttClient,
 };
@@ -198,17 +197,16 @@ async fn main() -> Result<()> {
                     .max(10),
             ));
 
-            // Shared door cache + cross-client bridges. `doors_unlock_*` flows
-            // remote → local (server-issued unlocks → local relay).
-            // `doors_event_*` flows local → remote (scans → server audit log).
-            let doors_state = DoorsState::new();
-            // The one cache (#182): what every badge is decided against and
-            // where every session this edge opens lives. The three ingests
-            // above keep writing where they always did; this is what reads them.
+            // The one cache (#182, #191): what every badge is decided against
+            // and where every session this edge opens lives. The policy and its
+            // two aliases are folded into it; the wiring and the power state
+            // keep writing where they always did and it reads them. The
+            // cross-client bridges: `doors_unlock_*` flows remote → local
+            // (server-issued unlocks → local relay); `doors_event_*` flows
+            // local → remote (scans → server audit log).
             use css_edge::resources::TickAction;
             let resource_cache = css_edge::resources::ResourceCache::new(
                 Arc::clone(&module_state),
-                Arc::clone(&doors_state),
                 Arc::clone(&toolguard_state),
                 Arc::clone(&power_state),
             );
@@ -251,9 +249,10 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // ── Periodic HTTP sync task ──────────────────────────────────────
+            // ── Periodic policy poll (#191): the fallback for the
+            // resource/policy push, and the twin the old sync poll was. ──────
             {
-                let state = Arc::clone(&toolguard_state);
+                let cache = Arc::clone(&resource_cache);
                 let instance_url = remote_instance_url.clone();
                 let auth_token = remote_auth_token.clone();
                 tokio::spawn(async move {
@@ -261,7 +260,7 @@ async fn main() -> Result<()> {
                     let mut ticker = interval(Duration::from_secs(sync_interval_secs));
                     loop {
                         ticker.tick().await;
-                        let url = format!("{}/api/toolguard/sync", instance_url);
+                        let url = format!("{}/api/resources/policy", instance_url);
                         // Taken before the request, not after the response:
                         // the answer describes the server as of the request
                         // at the latest, and a stop this edge performs while
@@ -269,18 +268,23 @@ async fn main() -> Result<()> {
                         let requested_at = chrono::Utc::now();
                         match client.get(&url).bearer_auth(&auth_token).send().await {
                             Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                                Ok(bytes) => match state
-                                    .apply_sync_bytes_requested_at(&bytes, requested_at)
-                                {
-                                    Ok(()) => info!("ToolGuard state synced from remote"),
-                                    Err(e) => {
-                                        warn!("Failed to parse toolguard sync response: {}", e)
+                                Ok(bytes) => {
+                                    match cache.apply_policy_bytes(&bytes, Some(requested_at)) {
+                                        Ok(()) => info!(
+                                            "Resource policy synced from remote ({} resource(s))",
+                                            cache.policy_len()
+                                        ),
+                                        Err(e) => {
+                                            warn!("Failed to parse resource policy response: {}", e)
+                                        }
                                     }
-                                },
-                                Err(e) => warn!("Failed to read toolguard sync body: {}", e),
+                                }
+                                Err(e) => warn!("Failed to read resource policy body: {}", e),
                             },
-                            Ok(resp) => warn!("ToolGuard sync returned HTTP {}", resp.status()),
-                            Err(e) => warn!("ToolGuard sync request failed: {}", e),
+                            Ok(resp) => {
+                                warn!("Resource policy poll returned HTTP {}", resp.status())
+                            }
+                            Err(e) => warn!("Resource policy poll request failed: {}", e),
                         }
                     }
                 });
@@ -485,8 +489,7 @@ async fn main() -> Result<()> {
             // ── Shared inbound dispatcher (used by whichever remote transport runs) ──
             let edge_inbound = std::sync::Arc::new(css_edge::edge_inbound::EdgeInbound {
                 config_manager: config_arc.clone(),
-                toolguard_state: Arc::clone(&toolguard_state),
-                doors_state: Arc::clone(&doors_state),
+                resource_cache: Arc::clone(&resource_cache),
                 power_state: Arc::clone(&power_state),
                 module_state: Arc::clone(&module_state),
                 doors_unlock_tx: doors_unlock_tx.clone(),

@@ -826,7 +826,7 @@ impl LocalMqttClient {
                 // session (and, for a metered tool in edge-local mode, places
                 // the hold and re-broadcasts). Decided by the server: it
                 // already has.
-                if authorized && !self.toolguard_state.tool_requires_online(&req.resource) {
+                if authorized && !self.cache.requires_online(&req.resource) {
                     self.forward_scan(req.resource.clone(), req.card.clone());
                 }
             }

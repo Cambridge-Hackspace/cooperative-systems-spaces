@@ -351,7 +351,9 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // rule as the toolguard routes (checks/tests/toolguard_auth.rs holds them
     // to it). The three tool aliases they replace stay for one release, so the
     // surface is wider by exactly three until the aliases go.
-    assert_eq!(device_routes, 14, "device-authenticated routes");
+    // 15: #191 adds the policy poll, `GET /api/resources/policy`, the one-shape
+    // twin of `GET /api/toolguard/sync`, which stays as its alias for a release.
+    assert_eq!(device_routes, 15, "device-authenticated routes");
     // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
     // (GET/PUT/DELETE), all authenticated by the session credential. Like the
     // device surface, only their shape checks are reachable offline; their
@@ -396,16 +398,17 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // sessions list and the stop, under /api/admin/resources.
     assert_eq!(jwt_routes, 222, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 222 * 7 + (14 + 6) * 3);
+    assert_eq!(asserted_pairs(), 222 * 7 + (15 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
     // on its contents by looking it up.
     let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
-    // 80 = (14 device + 6 cmi5) routes x 4 content-rejected credentials (#182
-    // moved this from 68 with the three resource routes).
+    // 84 = (15 device + 6 cmi5) routes x 4 content-rejected credentials (#182
+    // moved this from 68 with the three resource routes, #191 to 84 with the
+    // policy poll).
     assert_eq!(
-        deferred, 80,
+        deferred, 84,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

@@ -271,6 +271,7 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/scan", Guard::InlineAuth), // resources::scan
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/stop", Guard::InlineAuth), // resources::stop
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/usage", Guard::InlineAuth), // resources::usage
+    R("GET", "/api/resources/policy", Guard::InlineAuth), // resources::policy
     R("GET", "/api/tools", Guard::Staff), // tools::list_tools
     R("POST", "/api/tools", Guard::Staff), // tools::create_tool
     R("DELETE", "/api/tools/00000000-0000-4000-8000-000000000001", Guard::Staff), // tools::delete_tool

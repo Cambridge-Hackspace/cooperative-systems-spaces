@@ -2127,6 +2127,14 @@ stage_lease() {
     emit_junit lease
     return 1
   fi
+  # #191: the policy is the one shape; the edge polls it where it polled the
+  # allow-list. A line here means the server built it and the edge parsed it.
+  if wait_for "css-edge to sync the resource policy" 60 edge_logged "Resource policy synced from remote"; then
+    record_case "lease/edge-synced-the-resource-policy" ok
+  else
+    record_case "lease/edge-synced-the-resource-policy" fail \
+      "css-edge never logged a resource policy sync; every local decision below is from the aliases or nothing"
+  fi
 
   # Written as plain files by the setup driver rather than parsed out of its
   # JSON here: a shell JSON reader is a dependency and a bug surface, and these

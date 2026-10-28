@@ -776,10 +776,13 @@ fn every_wire_payload_field_is_documented() {
     // Payloads a device sends or receives. Each named deliberately: a struct
     // added to the wire has to be added here, and a struct renamed fails in
     // `struct_fields` rather than quietly losing its coverage.
-    let payloads: [(&str, &str); 20] = [
+    let payloads: [(&str, &str); 23] = [
         (WIRE, "LocalToolOnResponse"),
         (WIRE, "ToolModuleStatePayload"),
         (WIRE, "ToolModuleTool"),
+        (WIRE, "ResourcePolicyPayload"),
+        (WIRE, "ResourcePolicy"),
+        (WIRE, "Principal"),
         (WIRE, "DeviceBinding"),
         (WIRE, "ToolInterlockRule"),
         (WIRE, "PowerStatePayload"),

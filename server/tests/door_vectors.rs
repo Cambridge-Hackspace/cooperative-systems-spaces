@@ -6,7 +6,7 @@
 //!   allow/deny card lists published to a device;
 //! * `server/src/doors.rs::evaluate` — the QR check-in path, which decides for
 //!   a known user rather than a card;
-//! * `edge/src/doors.rs::DoorsState::decide` — decides an RFID scan locally,
+//! * `edge/src/resources.rs::ResourceCache::decide` — decides an RFID scan locally,
 //!   from the lists the first one produced.
 //!
 //! None of them is the oracle. `contracts/door_rules.json` is, and it is read
