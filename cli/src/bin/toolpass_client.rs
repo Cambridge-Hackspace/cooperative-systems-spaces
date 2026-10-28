@@ -128,9 +128,7 @@ struct ToolPassResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_on: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_off: Option<bool>,
+    authorized: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -279,13 +277,13 @@ async fn tool_on(
     println!("   Card: {}", card);
     println!("   Tool ID: {}", tool_id);
 
-    let url = format!(
-        "{}/api/toolguard/tool-on?card={}&tool_id={}",
-        server, card, tool_id
-    );
+    // The resource path (#182): the tool is the resource, and the card travels
+    // in a JSON body, never a URL (#107).
+    let url = format!("{}/api/resources/{}/scan", server, tool_id);
     println!("   URL: {}", url);
 
-    let response = with_api_key(client.get(&url), api_key)
+    let response = with_api_key(client.post(&url), api_key)
+        .json(&serde_json::json!({ "card": card }))
         .send()
         .await
         .context("Failed to send request")?;
@@ -301,7 +299,7 @@ async fn tool_on(
 
     match body.status.as_str() {
         "ok" => {
-            if body.tool_on.unwrap_or(false) {
+            if body.authorized.unwrap_or(false) {
                 println!("✅ Tool AUTHORIZED");
                 if let Some(msg) = body.message {
                     println!("   {}", msg);
@@ -332,11 +330,9 @@ async fn tool_off(
     println!("   Card: {}", card);
     println!("   Tool ID: {}", tool_id);
 
-    let url = format!(
-        "{}/api/toolguard/tool-off?card={}&tool_id={}",
-        server, card, tool_id
-    );
-    let response = with_api_key(client.get(&url), api_key)
+    let url = format!("{}/api/resources/{}/stop", server, tool_id);
+    let response = with_api_key(client.post(&url), api_key)
+        .json(&serde_json::json!({ "card": card }))
         .send()
         .await
         .context("Failed to send request")?;
@@ -378,15 +374,13 @@ async fn tool_log(
         println!("   Temperature: {:.1}°C", temp);
     }
 
-    let mut url = format!(
-        "{}/api/toolguard/tool-log?card={}&tool_id={}&seconds={}",
-        server, card, tool_id, seconds
-    );
-
+    let url = format!("{}/api/resources/{}/usage", server, tool_id);
+    let mut report = serde_json::json!({ "card": card, "seconds": seconds });
     if let Some(temp) = temperature {
-        url.push_str(&format!("&temperature={}", temp));
+        report["temperature"] = serde_json::json!(temp);
     }
-    let response = with_api_key(client.get(&url), api_key)
+    let response = with_api_key(client.post(&url), api_key)
+        .json(&report)
         .send()
         .await
         .context("Failed to send request")?;

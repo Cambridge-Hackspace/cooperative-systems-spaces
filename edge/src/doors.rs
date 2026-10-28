@@ -16,15 +16,16 @@
 //! **Remote, edge → server** (subscribed by the server):
 //! - `{namespace}/devices/{device_id}/doors/event`   JSON [`DoorsEvent`]
 //!
-//! **Local, hardware ↔ edge** (separate broker that runs the relay/reader):
-//! - in:  `door/request/scan`    JSON [`LocalScanRequest`]
-//! - out: `door/response/unlock` JSON [`LocalUnlockResponse`]
+//! **Local, hardware ↔ edge**: a door speaks the resource wire like everything
+//! else -- `resource/request/scan` in, `resource/response/scan` out (see
+//! `css_lib::wire::local`). The `door/request/scan` / `door/response/unlock`
+//! pair was its alias for one release and is gone (#192).
 //!
 //! ## Open Access hold (issue #12)
 //!
 //! An Open Access window holds the strike unlocked for its whole duration. The
-//! external relay firmware only understands the momentary `door/response/unlock`
-//! (a `duration_ms` pulse it auto-relocks after), so the edge *holds* a door by
+//! external relay firmware only understands a momentary release (the `strike`
+//! pulse on `resource/response/scan`, which it auto-relocks after), so the edge *holds* a door by
 //! re-sending that pulse faster than it elapses — see [`hold_pulse_ms`] and
 //! [`crate::resources::ResourceCache::tick`]. It is driven off this
 //! device's own clock and simply stops at the window end, so the strike
@@ -69,21 +70,6 @@ pub struct UnlockCommand {
     /// unsigned command parseable.
     #[serde(default)]
     pub sig: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LocalScanRequest {
-    pub door_id: Uuid,
-    pub card_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LocalUnlockResponse {
-    pub door_id: Uuid,
-    pub granted: bool,
-    pub duration_ms: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2147,40 +2147,39 @@ stage_lease() {
   card="$(cat "${STACK_DIR}/lease-card")"
 
   # Window 1: the module has reported nothing, so the lease must be refused.
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1.txt"
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-1.txt"
 
   # One power report, naming the device. This is the liveness ingest: without
   # it a fail_off binding looks permanently silent and is refused forever.
-  mqtt_pub "toolguard/request/power" \
-    "{\"tool_id\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.0}" || true
+  mqtt_pub "resource/request/power" \
+    "{\"resource\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.0}" || true
 
   # The second plug (#179) pulses now, before window 1b, so that the sensor is
   # the ONLY silent fail_off binding in that window and its refusal can name
   # it. The second plug's own liveness is not what 1b is about.
-  mqtt_pub "toolguard/request/alive" "{\"device_id\":\"${plug2}\"}" || true
+  mqtt_pub "resource/request/alive" "{\"device_id\":\"${plug2}\"}" || true
 
   # Window 1b (#170): the plug has reported, and the answer must STILL be no,
   # because the fail_off SENSOR on the same tool has not. This is the
   # discriminating step: it shows the sensor's silence is what denies, rather
   # than the plug's. (The READER on the tool never reports at all, and its
   # default no longer withholds the lease -- window 2 is the proof of that.)
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1b.txt"
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-1b.txt"
 
   # The pulse. A sensor cannot send a power report -- it has no power -- so this
   # is the only way it can be heard from, and the only way a fail_off binding on
-  # a non-power device can ever be satisfied. On the resource-shaped topic
-  # (#182); the plug's power report above went on the alias, so both names are
-  # driven in this stage.
+  # a non-power device can ever be satisfied.
   mqtt_pub "resource/request/alive" "{\"device_id\":\"${sensor}\"}" || true
 
   # Window 1c (#179): every module alive, every interlock satisfied, and NOBODY
   # signed on. The answer must still be no, with NotInUse.
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-1c.txt"
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-1c.txt"
 
   # The member signs on at the edge. The reply is captured so a session that
   # never opened is reported as that, not as a sequencing failure later.
   # A scan on the resource-shaped wire (#182), answered on the resource-shaped
-  # reply topic. The alias pair is proven by the #166 section below.
+  # reply topic. The #166 section below proves the reply's envelope, and that
+  # the alias pair is gone (#192).
   mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-toolon-reply.txt" &
   local lease_toolon_sub=$!
   sleep 1
@@ -2191,7 +2190,7 @@ stage_lease() {
   # Window 2: same coordinator, same rules, and the answer has to change -- for
   # the FIRST stage. The second (#179) must get nothing: it waits for the first
   # to confirm it energized.
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2.txt"
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2.txt"
 
   # The first plug confirms: relay_on true. This, not the lease having been
   # sent, is what the second stage waits for.
@@ -2199,20 +2198,23 @@ stage_lease() {
     "{\"resource\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.3,\"relay_on\":true}" || true
 
   # Window 2a: inside the second stage's 3 s start delay -- still nothing.
-  mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2a.txt"
-  # Window 2b: past it -- granted. Captured on BOTH names (#182): the alias the
-  # windows have always watched, and the resource-shaped topic, in parallel.
-  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2b-resource.txt" &
-  local lease_resource_sub=$!
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2b.txt"
-  wait "${lease_resource_sub}" || true
+  mqtt_sub "resource/lease" 2 "${STACK_DIR}/lease-window-2a.txt"
+  # Window 2b: past it -- granted. Captured on the resource topic, and in
+  # parallel on the old alias name (#192): the alias window must stay EMPTY
+  # while the real one carries the grant, which is the proof the alias is gone
+  # rather than merely undocumented. The grant beside it is what keeps the
+  # empty capture from being a broker that said nothing to anyone.
+  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2b-alias.txt" &
+  local lease_alias_sub=$!
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2b.txt"
+  wait "${lease_alias_sub}" || true
 
   # The member signs off, on the resource-shaped stop (#182). First stage
   # refused at once; second runs on 3 s.
   mqtt_pub "resource/request/stop" \
     "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
-  mqtt_sub "toolguard/lease" 2 "${STACK_DIR}/lease-window-2c.txt"
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2d.txt"
+  mqtt_sub "resource/lease" 2 "${STACK_DIR}/lease-window-2c.txt"
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2d.txt"
 
   # ---- the room (#182): a door, a tool and a room through the same topics --
   #
@@ -2233,8 +2235,10 @@ stage_lease() {
       "css-edge never logged a doors/state snapshot; the room windows below cannot be about the decision"
   fi
 
-  # R1: a badge at the room. Captured on both reply names: the resource topic,
-  # and the deprecated door alias that no stage had ever driven.
+  # R1: a badge at the room. Captured on the resource reply topic, and in
+  # parallel on the old door alias (#192), which must stay empty: the grant on
+  # the resource topic is the control that makes the empty alias window a
+  # proof rather than silence.
   mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-room-scan.txt" &
   local room_scan_sub=$!
   mqtt_sub "door/response/unlock" 4 "${STACK_DIR}/lease-room-unlock.txt" &
@@ -2246,14 +2250,14 @@ stage_lease() {
   wait "${room_unlock_sub}" || true
 
   # R2: the pulse is over inside this window; the room's power is not.
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-room-leased.txt"
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-room-leased.txt"
   # #190: and the PLATFORM knows the room is in use, and by whom.
   run_node lease.mjs room-open >"${OUT}/logs/lease-room-open.log" 2>&1 || true
   absorb_driver_cases || true
 
   # R3: the latch box's stop button -- a stop with no card, naming the room.
   mqtt_pub "resource/request/stop" "{\"resource\":\"${room}\"}" || true
-  mqtt_sub "toolguard/lease" 3 "${STACK_DIR}/lease-room-stopped.txt"
+  mqtt_sub "resource/lease" 3 "${STACK_DIR}/lease-room-stopped.txt"
   # #190: and the platform's record is closed by the same stop.
   run_node lease.mjs room-closed >"${OUT}/logs/lease-room-closed.log" 2>&1 || true
   absorb_driver_cases || true
@@ -2265,7 +2269,7 @@ stage_lease() {
   mqtt_pub "resource/request/scan" \
     "{\"card\":\"${card}\",\"resource\":\"${front}\"}" || true
   wait "${front_scan_sub}" || true
-  mqtt_sub "toolguard/lease" 3 "${STACK_DIR}/lease-front-leases.txt"
+  mqtt_sub "resource/lease" 3 "${STACK_DIR}/lease-front-leases.txt"
 
   # R5: a card nobody holds, at the room.
   mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/lease-room-denied.txt" &
@@ -2296,28 +2300,45 @@ stage_lease() {
   local other_tool="e2e-no-such-tool-166"
   printf '%s' "${other_tool}" >"${STACK_DIR}/toolon-other-id"
 
-  mqtt_sub "toolguard/response/tool-on" 6 "${STACK_DIR}/toolon-reply-own.txt" &
+  mqtt_sub "resource/response/scan" 6 "${STACK_DIR}/toolon-reply-own.txt" &
   local toolon_sub=$!
   sleep 1
-  mqtt_pub "toolguard/request/tool-on" \
-    "{\"card\":\"E2E-NOSUCHCARD-166\",\"tool_id\":\"${tool}\"}" || true
+  mqtt_pub "resource/request/scan" \
+    "{\"card\":\"E2E-NOSUCHCARD-166\",\"resource\":\"${tool}\"}" || true
   wait "${toolon_sub}" || true
 
   # The second request names a tool that exists nowhere. Its own id coming back
   # is what distinguishes an echo from a constant; one request cannot.
-  mqtt_sub "toolguard/response/tool-on" 6 "${STACK_DIR}/toolon-reply-other.txt" &
+  mqtt_sub "resource/response/scan" 6 "${STACK_DIR}/toolon-reply-other.txt" &
   toolon_sub=$!
   sleep 1
-  mqtt_pub "toolguard/request/tool-on" \
-    "{\"card\":\"E2E-NOSUCHCARD-166\",\"tool_id\":\"${other_tool}\"}" || true
+  mqtt_pub "resource/request/scan" \
+    "{\"card\":\"E2E-NOSUCHCARD-166\",\"resource\":\"${other_tool}\"}" || true
   wait "${toolon_sub}" || true
+
+  # ---- the aliases are gone (#192) -----------------------------------------
+  #
+  # The same request on the old tool-on name, with BOTH reply names watched:
+  # nothing may answer on either, within a window longer than the edge takes
+  # to answer the request above. The capture just before this is the control:
+  # the edge was up and answering a scan a second ago, so an empty window is
+  # the alias being gone, not the edge being dead. Asserted by toolonreply.mjs.
+  mqtt_sub "toolguard/response/tool-on" 6 "${STACK_DIR}/toolon-alias-reply.txt" &
+  toolon_sub=$!
+  mqtt_sub "resource/response/scan" 6 "${STACK_DIR}/toolon-alias-leak.txt" &
+  local toolon_leak_sub=$!
+  sleep 1
+  mqtt_pub "toolguard/request/tool-on" \
+    "{\"card\":\"E2E-NOSUCHCARD-166\",\"tool_id\":\"${tool}\"}" || true
+  wait "${toolon_sub}" || true
+  wait "${toolon_leak_sub}" || true
 
   stop_edge
 
   # Window 3: the absence, with time allowed to pass. Opened after the edge is
   # gone and run for longer than the 3000ms TTL, so a module obeying the last
   # lease would already have cut by the time this window closes.
-  mqtt_sub "toolguard/lease" 5 "${STACK_DIR}/lease-window-3.txt"
+  mqtt_sub "resource/lease" 5 "${STACK_DIR}/lease-window-3.txt"
 
   run_node lease.mjs assert >"${OUT}/logs/lease.log" 2>&1 || true
   absorb_driver_cases || true
@@ -2738,11 +2759,11 @@ stage_logs() {
 
     # A positive control on the mechanism itself. If grep cannot find a string
     # that is definitely in this file, then finding no card codes means nothing.
-    if grep -q 'Tool on request' "${log}"; then
+    if grep -q 'Scan: resource=' "${log}"; then
       record_case "logs/the-leak-check-can-find-things" ok
     else
       record_case "logs/the-leak-check-can-find-things" fail \
-        "the log has no 'Tool on request' line, so no swipe reached the server this run and the check below is vacuous"
+        "the log has no 'Scan: resource=' line, so no swipe reached the server this run and the check below is vacuous"
     fi
 
     leaked=""
@@ -3180,9 +3201,9 @@ INVENTORY
   curl -s -o "${OUT}/devseed-toolon.json" \
     -X POST -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${fw_dev_token}" \
-    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\"}" \
-    "${base}/api/toolguard/tool-on" >/dev/null 2>&1
-  if grep -q '"tool_on":true' "${OUT}/devseed-toolon.json" 2>/dev/null; then
+    -d "{\"card\":\"${fw_card}\"}" \
+    "${base}/api/resources/${fw_external_id}/scan" >/dev/null 2>&1
+  if grep -q '"authorized":true' "${OUT}/devseed-toolon.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-on-works" ok
   else
     record_case "devseed/firmware-tool-on-works" fail \
@@ -3196,9 +3217,9 @@ INVENTORY
   curl -s -o "${OUT}/devseed-tooloff.json" \
     -X POST -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${fw_dev_token}" \
-    -d "{\"card\":\"${fw_card}\",\"tool_id\":\"${fw_external_id}\"}" \
-    "${base}/api/toolguard/tool-off" >/dev/null 2>&1
-  if grep -q '"tool_off":true' "${OUT}/devseed-tooloff.json" 2>/dev/null; then
+    -d "{\"card\":\"${fw_card}\"}" \
+    "${base}/api/resources/${fw_external_id}/stop" >/dev/null 2>&1
+  if grep -q '"status":"ok"' "${OUT}/devseed-tooloff.json" 2>/dev/null; then
     record_case "devseed/firmware-tool-off-works" ok
   else
     record_case "devseed/firmware-tool-off-works" fail \

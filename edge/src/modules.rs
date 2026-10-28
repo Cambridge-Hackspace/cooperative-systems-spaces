@@ -95,13 +95,36 @@ pub enum Decision {
     Deny(Denial),
 }
 
-/// What the watchdog decided about one power module's lease this pass.
-///
-/// The same struct that goes on the wire, under its coordinator-side name: this
-/// is what `tick` produces and what `toolguard/lease` carries, and there is no
-/// conversion between them because there is nothing to convert. Firmware
-/// deserializes exactly what the watchdog decided.
-pub use css_lib::wire::ToolLeasePayload as LeaseAction;
+/// What the watchdog decided about one power module's lease this pass: what
+/// `tick` produces and what [`css_lib::wire::ResourceLeasePayload`] carries
+/// to the module on `resource/lease` (#192). The engine names the tool as it
+/// always has; the wire names the resource. Nothing else is converted, so
+/// firmware deserializes exactly what the watchdog decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseAction {
+    /// The tool this lease governs, by UUID.
+    pub tool_id: String,
+    /// The power module the lease is addressed to.
+    pub device_id: String,
+    /// Whether the module may be energized for the next `ttl_ms`.
+    pub grant: bool,
+    /// How long the grant is good for, from receipt.
+    pub ttl_ms: i64,
+    /// Why the lease was refused: a [`Denial`] rendered for the log line.
+    pub reason: Option<String>,
+}
+
+impl From<&LeaseAction> for css_lib::wire::ResourceLeasePayload {
+    fn from(l: &LeaseAction) -> Self {
+        css_lib::wire::ResourceLeasePayload {
+            resource: l.tool_id.clone(),
+            device_id: l.device_id.clone(),
+            grant: l.grant,
+            ttl_ms: l.ttl_ms,
+            reason: l.reason.clone(),
+        }
+    }
+}
 
 impl Decision {
     pub fn is_allowed(&self) -> bool {
@@ -541,7 +564,7 @@ impl ModuleState {
                 // needs no binding to express.
                 //
                 // Not merely redundant -- unsatisfiable. `note_device_seen` is
-                // driven by `toolguard/request/power`, and a coordinator does not
+                // driven by `resource/request/power`, and a coordinator does not
                 // send power reports about itself, so an `edge` binding can never
                 // be seen. With the server's default `on_disconnect = fail_off`,
                 // binding an edge to a tool therefore denied that tool a lease

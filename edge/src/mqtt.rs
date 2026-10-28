@@ -1,19 +1,19 @@
 use anyhow::{Context, Result};
 use paho_mqtt as mqtt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use css_lib::wire::{
-    local, LocalAliveRequest, LocalPower, LocalScan, LocalScanReply, LocalStop,
-    LocalToolLogRequest, LocalToolOnResponse, LocalUsage, ResourceLeasePayload,
+    local, LocalAliveRequest, LocalPower, LocalScan, LocalScanReply, LocalStop, LocalUsage,
+    ResourceLeasePayload,
 };
 
 use crate::config::{Config, MqttConfig};
-use crate::doors::{self, DoorsEvent, LocalScanRequest, LocalUnlockResponse, UnlockCommand};
+use crate::doors::{self, DoorsEvent, UnlockCommand};
 use crate::edge_inbound::EdgeInbound;
 use crate::power::PowerState;
 use crate::registration::{get_auth_token, get_device_id};
@@ -386,60 +386,6 @@ pub async fn run_mqtt_event_loop(
 // edge is one of four crates that speak it, and a private copy per crate is how
 // `toolguard-test-ui` came to be a release behind without anything noticing.
 
-/// Tool-on and tool-off, published by local hardware onto the local broker.
-/// They carry nothing but the card and the tool.
-///
-/// `seconds` and `temperature` used to live here too, because one struct parsed
-/// all three tool topics. Their union is what a per-topic documentation check
-/// sees, so nothing could tell whether tool-on had grown a duration or tool-log
-/// had lost one. Tool-log now has its own named type in `css_lib::wire` (#169)
-/// and this one is exactly the two topics it serves.
-#[derive(Debug, Deserialize)]
-struct LocalToolRequest {
-    card: String,
-    tool_id: String,
-}
-
-/// Tool-off on its own (#179): the card is optional, because a stop is a
-/// safety act and needs no badge. A plug with a stop button, a sensor, or an
-/// automation on the local broker names the tool alone, and the server ends
-/// whatever session is open on it. Tool-on keeps its own type above: it always
-/// names who is asking.
-#[derive(Debug, Deserialize)]
-struct LocalToolStopRequest {
-    #[serde(default)]
-    card: Option<String>,
-    tool_id: String,
-}
-
-/// A firmware power reading on the local broker (#48). The edge records it for
-/// local aggregation, relays it to the server, and (on a local overage) trips.
-#[derive(Debug, Deserialize)]
-struct LocalPowerRequest {
-    tool_id: String,
-    /// Who is reporting. Optional so older firmware still parses, but a module
-    /// that omits it cannot be credited with being alive -- see
-    /// `ModuleState::note_device_seen`.
-    #[serde(default)]
-    device_id: Option<String>,
-    /// The module's own view of its output. `None` means "cannot report", which
-    /// is NOT the same as `false`: the bypass detector treats unknown as
-    /// unknown, and a plug that claimed `false` when it did not know would
-    /// silently disarm the check that exists to catch a bypassed tool.
-    #[serde(default)]
-    relay_on: Option<bool>,
-    #[serde(default)]
-    draw_now: Option<f64>,
-    #[serde(default)]
-    voltage_now: Option<f64>,
-    #[serde(default)]
-    max_voltage: Option<f64>,
-    #[serde(default)]
-    amperage_limit: Option<f64>,
-    #[serde(default)]
-    self_tripped: Option<bool>,
-}
-
 pub struct LocalMqttClient {
     client: mqtt::AsyncClient,
     toolguard_state: Arc<ToolGuardState>,
@@ -526,49 +472,23 @@ impl LocalMqttClient {
     }
 
     pub fn subscribe_to_requests(&self) -> Result<()> {
-        self.client
-            .subscribe(local::TOOL_ON_REQUEST, 1)
-            .wait()
-            .context("Failed to subscribe to tool-on requests")?;
-        self.client
-            .subscribe(local::TOOL_OFF_REQUEST, 1)
-            .wait()
-            .context("Failed to subscribe to tool-off requests")?;
-        self.client
-            .subscribe(local::TOOL_LOG_REQUEST, 1)
-            .wait()
-            .context("Failed to subscribe to tool-log requests")?;
-        self.client
-            .subscribe(local::POWER_REQUEST, 1)
-            .wait()
-            .context("Failed to subscribe to power requests")?;
-        self.client
-            .subscribe(local::ALIVE_REQUEST, 1)
-            .wait()
-            .context("Failed to subscribe to alive pulses")?;
-        self.client
-            .subscribe(local::KIOSK_REFRESH_REQUEST, 0)
-            .wait()
-            .context("Failed to subscribe to kiosk refresh topic")?;
-        self.client
-            .subscribe(local::DOOR_SCAN_REQUEST, 1)
-            .wait()
-            .context("Failed to subscribe to door scan requests")?;
-        // The resource-shaped wire (#182). The topics above are its aliases
-        // for one release; these are the wire.
+        // The resource-shaped wire (#182), and nothing else (#192): the
+        // `toolguard/*` and `door/*` families were its aliases for one release
+        // and a message on one of them now reaches nobody.
         for (topic, qos) in [
             (local::SCAN_REQUEST, 1),
             (local::STOP_REQUEST, 1),
             (local::USAGE_REQUEST, 1),
             (local::POWER_REPORT_REQUEST, 1),
             (local::RESOURCE_ALIVE_REQUEST, 1),
+            (local::KIOSK_REFRESH_REQUEST, 0),
         ] {
             self.client
                 .subscribe(topic, qos)
                 .wait()
                 .with_context(|| format!("Failed to subscribe to {topic}"))?;
         }
-        info!("Subscribed to local resource request topics (and their toolguard/door aliases)");
+        info!("Subscribed to local resource request topics");
         Ok(())
     }
 
@@ -578,20 +498,11 @@ impl LocalMqttClient {
             return;
         }
 
-        if topic == local::DOOR_SCAN_REQUEST {
-            match serde_json::from_slice::<LocalScanRequest>(payload) {
-                Ok(req) => self.handle_door_scan(req).await,
-                Err(e) => warn!("Failed to parse door scan request: {}", e),
-            }
-            return;
-        }
-
         // ── the resource-shaped wire (#182) ──────────────────────────────
         //
-        // One scan, one stop, one usage report, one power report, naming the
-        // resource. Each is translated into the handler the alias topic has
-        // always used, so there is exactly one decision path per message
-        // whichever name it arrived under.
+        // One scan, one stop, one usage report, one power report, one pulse,
+        // naming the resource. There is exactly one decision path per message
+        // and exactly one name it arrives under (#192).
         if topic == local::SCAN_REQUEST {
             match serde_json::from_slice::<LocalScan>(payload) {
                 Ok(req) => self.handle_scan(req).await,
@@ -601,48 +512,21 @@ impl LocalMqttClient {
         }
         if topic == local::STOP_REQUEST {
             match serde_json::from_slice::<LocalStop>(payload) {
-                Ok(req) => {
-                    self.handle_tool_off(LocalToolStopRequest {
-                        card: req.card,
-                        tool_id: req.resource,
-                    })
-                    .await
-                }
+                Ok(req) => self.handle_stop(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
             return;
         }
         if topic == local::USAGE_REQUEST {
             match serde_json::from_slice::<LocalUsage>(payload) {
-                Ok(req) => {
-                    self.handle_tool_log(LocalToolLogRequest {
-                        card: req.card,
-                        tool_id: req.resource,
-                        seconds: req.seconds,
-                        active_seconds: req.active_seconds,
-                        temperature: req.temperature,
-                    })
-                    .await
-                }
+                Ok(req) => self.handle_usage(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
             return;
         }
         if topic == local::POWER_REPORT_REQUEST {
             match serde_json::from_slice::<LocalPower>(payload) {
-                Ok(req) => {
-                    self.handle_power(LocalPowerRequest {
-                        tool_id: req.resource,
-                        device_id: req.device_id,
-                        relay_on: req.relay_on,
-                        draw_now: req.draw_now,
-                        voltage_now: req.voltage_now,
-                        max_voltage: req.max_voltage,
-                        amperage_limit: req.amperage_limit,
-                        self_tripped: req.self_tripped,
-                    })
-                    .await
-                }
+                Ok(req) => self.handle_power(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
             return;
@@ -654,67 +538,10 @@ impl LocalMqttClient {
             }
             return;
         }
-
-        // ── the aliases: still served, one release, and said so once ─────
-        self.note_deprecated_topic(topic);
-
-        if topic == local::POWER_REQUEST {
-            match serde_json::from_slice::<LocalPowerRequest>(payload) {
-                Ok(req) => self.handle_power(req).await,
-                Err(e) => warn!("Failed to parse local power request: {}", e),
-            }
-            return;
-        }
-
-        // The pulse (#170). Any device, any role: this is what credits a device
-        // with being alive, and a power report is the only other thing that does.
-        if topic == local::ALIVE_REQUEST {
-            match serde_json::from_slice::<LocalAliveRequest>(payload) {
-                Ok(req) => self.handle_alive(req).await,
-                Err(e) => warn!("Failed to parse local alive pulse: {}", e),
-            }
-            return;
-        }
-
-        // Tool-log is parsed as its own shape, because it is the only one of
-        // the three that carries durations (#169).
-        if topic == local::TOOL_LOG_REQUEST {
-            match serde_json::from_slice(payload) {
-                Ok(req) => self.handle_tool_log(req).await,
-                Err(e) => warn!("Failed to parse local tool request on {}: {}", topic, e),
-            }
-            return;
-        }
-
-        if topic == local::TOOL_OFF_REQUEST {
-            match serde_json::from_slice::<LocalToolStopRequest>(payload) {
-                Ok(req) => self.handle_tool_off(req).await,
-                Err(e) => warn!("Failed to parse local tool request on {}: {}", topic, e),
-            }
-            return;
-        }
-
-        let req: LocalToolRequest = match serde_json::from_slice(payload) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("Failed to parse local tool request on {}: {}", topic, e);
-                return;
-            }
-        };
-
-        match topic {
-            local::TOOL_ON_REQUEST => self.handle_tool_on(req).await,
-            _ => {}
-        }
-    }
-
-    /// The deprecated door alias (#182): `door/request/scan` is a scan.
-    async fn handle_door_scan(&self, req: LocalScanRequest) {
-        self.handle_scan(LocalScan {
-            resource: req.door_id.to_string(),
-            card: req.card_id,
-        })
-        .await;
+        debug!(
+            "Ignoring a message on an unsubscribed local topic: {}",
+            topic
+        );
     }
 
     /// Tell the server what happened at a door (audit log, webhook, etc.): the
@@ -752,32 +579,33 @@ impl LocalMqttClient {
 
     /// Forward a server-initiated unlock command onto the local broker so
     /// the relay actuates. Called by a bridge task in `main` that drains the
-    /// channel populated by [`EdgeMqttClient`].
+    /// channel populated by [`EdgeMqttClient`]. On the wire it is a yes to a
+    /// scan nobody made: the resource, `authorized: true`, the pulse.
     pub fn publish_doors_unlock_response(&self, cmd: &UnlockCommand) {
-        self.publish_unlock(&LocalUnlockResponse {
-            door_id: cmd.door_id,
-            granted: true,
-            duration_ms: cmd.duration_ms,
-            reason: Some(cmd.reason.clone()),
-        });
+        self.publish_scan_reply(
+            &cmd.door_id.to_string(),
+            true,
+            &cmd.reason,
+            Some(cmd.duration_ms),
+        );
     }
 
-    /// Every door unlock -- a scan's answer, a server-initiated unlock, an Open
-    /// Access hold pulse -- goes out on both wires (#182): the alias
-    /// `door/response/unlock` as it always has, and `resource/response/scan`
-    /// with the pulse carried as `strike`. One place, so the two cannot drift.
-    fn publish_unlock(&self, response: &LocalUnlockResponse) {
-        if let Ok(v) = serde_json::to_value(response) {
-            self.publish_local(local::DOOR_UNLOCK_RESPONSE, &v);
-        }
-        let reply = LocalScanReply::from_door(
-            &response.door_id.to_string(),
-            response.granted,
-            response.duration_ms,
-            response.reason.as_deref(),
-        );
-        if let Ok(v) = serde_json::to_value(&reply) {
-            self.publish_local(local::SCAN_RESPONSE, &v);
+    /// The one reply to a scan, and the only way `resource/response/scan` is
+    /// ever published (#166, #192): a scan's answer, a server-initiated unlock,
+    /// an Open Access hold pulse -- all from here, so none can omit the
+    /// resource it is about. `pulse_ms` is the latch pulse when the resource
+    /// has one; [`LocalScanReply::new`] drops it on a refusal.
+    fn publish_scan_reply(
+        &self,
+        resource: &str,
+        authorized: bool,
+        reason: &str,
+        pulse_ms: Option<i32>,
+    ) {
+        let reply = LocalScanReply::new(resource, authorized, reason, pulse_ms);
+        match serde_json::to_value(&reply) {
+            Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
+            Err(e) => warn!("Failed to serialize scan reply: {}", e),
         }
     }
 
@@ -785,9 +613,8 @@ impl LocalMqttClient {
     /// resource is and whichever topic the badge arrived on.
     ///
     /// One decision ([`ResourceCache::decide`]), one session opened on a yes
-    /// with the resource's profile, one reply -- published on the resource
-    /// topic and, for one release, on the alias the resource's kind used to
-    /// answer on -- and one report upstream: a door's goes as the signed
+    /// with the resource's profile, one reply on the resource topic, and one
+    /// report upstream: a door's goes as the signed
     /// `doors/event` the server's door path records; a tool's opens the
     /// session on the server's resource path. A tool the server insists on
     /// deciding itself is asked over that same path, and refused if it cannot
@@ -806,7 +633,7 @@ impl LocalMqttClient {
             ScanDecision::AskServer => self.remote_scan(&req).await,
         };
 
-        self.publish_scan_reply(&req, kind, authorized, &reason, strike_ms);
+        self.publish_scan_reply(&req.resource, authorized, &reason, strike_ms);
 
         if authorized {
             // The session this edge just opened is what a lease is for (#179),
@@ -833,29 +660,6 @@ impl LocalMqttClient {
         }
     }
 
-    /// The one reply to a scan, on the resource topic and on the alias the
-    /// resource's kind used to answer on (#182, one release).
-    fn publish_scan_reply(
-        &self,
-        req: &LocalScan,
-        kind: Kind,
-        authorized: bool,
-        reason: &str,
-        strike_ms: Option<i32>,
-    ) {
-        match (kind, uuid::Uuid::parse_str(&req.resource)) {
-            (Kind::Door, Ok(door_id)) => self.publish_unlock(&LocalUnlockResponse {
-                door_id,
-                granted: authorized,
-                duration_ms: strike_ms.unwrap_or(0),
-                reason: (!authorized).then(|| reason.to_string()),
-            }),
-            // The request's own name, echoed: a reply names the resource that
-            // was asked about, or a module cannot tell it from its neighbour's.
-            _ => self.publish_tool_on(&req.resource, authorized, reason, strike_ms),
-        }
-    }
-
     /// Open a tool's session on the server after a local yes: the resource
     /// path (#182), fire-and-forget as the alias forward always was.
     fn forward_scan(&self, resource: String, card: String) {
@@ -876,34 +680,13 @@ impl LocalMqttClient {
         });
     }
 
-    /// Say once per alias topic that it is on its way out (#182). Once, not
-    /// per message: a plug heartbeats every second.
-    fn note_deprecated_topic(&self, topic: &str) {
-        use std::collections::HashSet;
-        use std::sync::{Mutex, OnceLock};
-        static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-        let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
-        let mut set = warned.lock().expect("deprecation set");
-        if set.insert(topic.to_string()) {
-            warn!(
-                "{topic} is a deprecated alias; the resource-shaped topic replaces it in the \
-                 next minor release (see FIRMWARE.md, the local broker)"
-            );
-        }
-    }
-
     /// Publish one Open Access hold pulse: a momentary unlock the hold-refresh
     /// loop re-sends before it elapses to keep the strike energized for the whole
     /// window. Same wire message as any unlock (the external relay firmware only
     /// understands the momentary `duration_ms`); holding is a property of the
     /// loop re-sending, and stopping is what relocks the door — fail-secure.
     pub fn publish_doors_hold(&self, door_id: uuid::Uuid, duration_ms: i32) {
-        self.publish_unlock(&LocalUnlockResponse {
-            door_id,
-            granted: true,
-            duration_ms,
-            reason: Some("open_access".to_string()),
-        });
+        self.publish_scan_reply(&door_id.to_string(), true, "open_access", Some(duration_ms));
     }
 
     /// Publish one lease decision onto the local broker.
@@ -926,11 +709,6 @@ impl LocalMqttClient {
     }
 
     pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
-        match serde_json::to_value(action) {
-            Ok(v) => self.publish_local(local::TOOL_LEASE, &v),
-            Err(e) => warn!("Failed to serialize tool lease: {}", e),
-        }
-        // The same lease, resource-shaped (#182).
         match serde_json::to_value(ResourceLeasePayload::from(action)) {
             Ok(v) => self.publish_local(local::RESOURCE_LEASE, &v),
             Err(e) => warn!("Failed to serialize resource lease: {}", e),
@@ -948,20 +726,11 @@ impl LocalMqttClient {
         self.refresh_notify.notify_waiters();
     }
 
-    /// The deprecated tool alias (#182): `toolguard/request/tool-on` is a scan.
-    async fn handle_tool_on(&self, req: LocalToolRequest) {
-        self.handle_scan(LocalScan {
-            resource: req.tool_id,
-            card: req.card,
-        })
-        .await;
-    }
-
     /// A firmware power reading (#48): record it for edge-local aggregation, trip
     /// + report any circuit now over its amperage limit, forward the reading to
     /// the server (which aggregates too), and ack. Decimal fields go up as
     /// strings, matching the server's tested `power-report` wire format.
-    async fn handle_power(&self, req: LocalPowerRequest) {
+    async fn handle_power(&self, req: LocalPower) {
         // A power report is this module saying it is alive, and it is the only
         // thing that says so on the local broker. Without it every binding whose
         // `on_disconnect` is `fail_off` -- the default, and the right default --
@@ -982,7 +751,7 @@ impl LocalMqttClient {
             debug!(
                 "Power report for {} carries no device_id, so no module can be \
                  credited as alive by it",
-                req.tool_id
+                req.resource
             );
         }
 
@@ -996,7 +765,7 @@ impl LocalMqttClient {
 
         if let Some(draw) = req.draw_now {
             self.power_state
-                .record_draw(&req.tool_id, draw, chrono::Utc::now());
+                .record_draw(&req.resource, draw, chrono::Utc::now());
         }
 
         // Edge-local fast-trip: any circuit now over its limit is tripped locally
@@ -1026,7 +795,7 @@ impl LocalMqttClient {
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
         let body = serde_json::json!({
-            "tool_id": req.tool_id,
+            "tool_id": req.resource,
             "draw_now": req.draw_now.map(|v| v.to_string()),
             "voltage_now": req.voltage_now.map(|v| v.to_string()),
             "max_voltage": req.max_voltage.map(|v| v.to_string()),
@@ -1052,7 +821,6 @@ impl LocalMqttClient {
             }
         });
 
-        self.publish_local(local::POWER_RESPONSE, &serde_json::json!({ "ok": true }));
         self.publish_local(
             local::POWER_REPORT_RESPONSE,
             &serde_json::json!({ "ok": true }),
@@ -1108,16 +876,15 @@ impl LocalMqttClient {
         }
     }
 
-    async fn handle_tool_off(&self, req: LocalToolStopRequest) {
+    async fn handle_stop(&self, req: LocalStop) {
         let response_payload = serde_json::json!({ "ok": true });
-        self.publish_local(local::TOOL_OFF_RESPONSE, &response_payload);
         self.publish_local(local::STOP_RESPONSE, &response_payload);
         // The lease ends with the stop, not a sync interval later (#179).
-        self.cache.close_session(&req.tool_id, chrono::Utc::now());
+        self.cache.close_session(&req.resource, chrono::Utc::now());
 
         let url = format!(
             "{}/api/resources/{}/stop",
-            self.remote_instance_url, req.tool_id
+            self.remote_instance_url, req.resource
         );
         let card = req.card.clone();
         let token = self.remote_auth_token.clone();
@@ -1176,15 +943,14 @@ impl LocalMqttClient {
         });
     }
 
-    async fn handle_tool_log(&self, req: LocalToolLogRequest) {
+    async fn handle_usage(&self, req: LocalUsage) {
         let seconds = req.seconds.unwrap_or(0.0);
         let response_payload = serde_json::json!({ "ok": true });
-        self.publish_local(local::TOOL_LOG_RESPONSE, &response_payload);
         self.publish_local(local::USAGE_RESPONSE, &response_payload);
 
         let url = format!(
             "{}/api/resources/{}/usage",
-            self.remote_instance_url, req.tool_id
+            self.remote_instance_url, req.resource
         );
         let token = self.remote_auth_token.clone();
         let http = self.http_client.clone();
@@ -1216,12 +982,13 @@ impl LocalMqttClient {
     /// Publish the current toolguard state to the local broker so subscribers
     /// (e.g. status kiosks) receive it immediately.
     pub fn publish_state_bytes(&self, bytes: Vec<u8>) {
-        // Both names, one release (#182).
-        for topic in [local::STATE, local::RESOURCE_STATE] {
-            let msg = mqtt::Message::new(topic, bytes.clone(), 1);
-            if let Err(e) = self.client.publish(msg).wait() {
-                warn!("Failed to publish state to {}: {}", topic, e);
-            }
+        let msg = mqtt::Message::new(local::RESOURCE_STATE, bytes, 1);
+        if let Err(e) = self.client.publish(msg).wait() {
+            warn!(
+                "Failed to publish state to {}: {}",
+                local::RESOURCE_STATE,
+                e
+            );
         }
     }
 
@@ -1234,41 +1001,6 @@ impl LocalMqttClient {
                 }
             }
             Err(e) => warn!("Failed to serialize local response: {}", e),
-        }
-    }
-
-    /// Answer a tool-on request (#166).
-    ///
-    /// The single way this topic is published, so `tool_id` cannot be left off
-    /// by one of the three decision paths. A module needs it to tell its own
-    /// answer from the answer to the reader at the next machine -- these topics
-    /// carry no device id and are not namespaced, so without it every reply is
-    /// addressed to everyone.
-    fn publish_tool_on(
-        &self,
-        tool_id: &str,
-        authorized: bool,
-        reason: &str,
-        strike_ms: Option<i32>,
-    ) {
-        let payload = LocalToolOnResponse {
-            tool_id: tool_id.to_string(),
-            authorized,
-            reason: reason.to_string(),
-        };
-        match serde_json::to_value(&payload) {
-            Ok(v) => self.publish_local(local::TOOL_ON_RESPONSE, &v),
-            Err(e) => warn!("Failed to serialize tool-on response: {}", e),
-        }
-        // The same answer, resource-shaped (#182) -- with the pulse when the
-        // resource has a latch, which the alias cannot say.
-        let mut reply = LocalScanReply::from_tool(&payload);
-        if authorized {
-            reply.strike = strike_ms.map(|pulse_ms| css_lib::wire::LocalStrike { pulse_ms });
-        }
-        match serde_json::to_value(reply) {
-            Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
-            Err(e) => warn!("Failed to serialize scan reply: {}", e),
         }
     }
 

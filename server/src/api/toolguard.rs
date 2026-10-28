@@ -19,13 +19,9 @@ pub struct ToolGuardResponse {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_on: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_off: Option<bool>,
-    /// The resource-shaped answer to a scan (#182): present on the
-    /// `/api/resources/{id}/scan` reply and nowhere else. `tool_on` is the same
-    /// bit under its alias name, on the alias path.
+    /// The answer to a scan (#182): present on the `/api/resources/{id}/scan`
+    /// reply and nowhere else. `tool_on` was the same bit under its alias name
+    /// on the alias path, until #192.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorized: Option<bool>,
     /// On a yes for a resource with a `strike` binding (#182): the pulse the
@@ -40,8 +36,6 @@ impl ToolGuardResponse {
         Self {
             status: status.to_string(),
             message,
-            tool_on: None,
-            tool_off: None,
             authorized: None,
             strike: None,
         }
@@ -59,27 +53,6 @@ impl ToolGuardResponse {
         Self::bare("error", Some(message.into()))
     }
 
-    fn tool_authorized() -> Self {
-        Self {
-            tool_on: Some(true),
-            ..Self::bare("ok", Some("Tool authorized".to_string()))
-        }
-    }
-
-    fn tool_denied(reason: impl Into<String>) -> Self {
-        Self {
-            tool_on: Some(false),
-            ..Self::bare("error", Some(reason.into()))
-        }
-    }
-
-    fn tool_off_ok() -> Self {
-        Self {
-            tool_off: Some(true),
-            ..Self::bare("ok", Some("Tool deactivated".to_string()))
-        }
-    }
-
     /// A yes on the resource path (#182), carrying the strike pulse when the
     /// resource has a latch.
     pub(crate) fn resource_authorized(strike: Option<css_lib::wire::LocalStrike>) -> Self {
@@ -95,90 +68,6 @@ impl ToolGuardResponse {
         Self {
             authorized: Some(false),
             ..Self::bare("error", Some(reason.into()))
-        }
-    }
-
-    /// The alias reply restated for the resource path (#182): `tool_on`
-    /// becomes `authorized`, so one activation function serves both names and
-    /// the two cannot drift.
-    pub(crate) fn as_resource_reply(self) -> Self {
-        Self {
-            authorized: self.tool_on,
-            tool_on: None,
-            tool_off: None,
-            ..self
-        }
-    }
-}
-
-/// Request parameters for tool operations
-#[derive(Debug, Deserialize)]
-pub struct ToolRequest {
-    pub card: String,
-    pub tool_id: String,
-}
-
-/// A stop. `card` is optional (#179): a stop is a safety act and needs no
-/// badge, so a device that read none -- a plug with a stop button, a sensor,
-/// an automation on the local broker -- names the tool alone.
-#[derive(Debug, Deserialize)]
-pub struct ToolStopRequest {
-    pub card: Option<String>,
-    pub tool_id: String,
-}
-
-/// What actually arrives on the wire, before anything is known to be present.
-///
-/// Every field is optional and the struct is validated *after* authentication,
-/// which preserves the contract `FIRMWARE.md` states and the 401 matrix
-/// asserts: a request with no credential is **401**, not a 4xx about its body.
-/// A caller holding nothing must learn exactly one thing -- that it holds
-/// nothing -- and must never be able to tell a well-formed request from a
-/// malformed one, because that difference is a probing oracle.
-///
-/// This is why the handlers take `Bytes` rather than `Json<..>`. Optional
-/// fields alone are not enough: `Json` is a whole-request extractor that
-/// rejects a missing or wrong `Content-Type` with **415** before the handler
-/// body runs, which puts the same leak one extractor further down. The e2e
-/// contract matrix caught exactly that. `Bytes` never rejects, so
-/// authentication genuinely runs first.
-///
-/// Same reasoning as [`PowerReportRequest`] and [`PowerTripRequest`].
-#[derive(Debug, Default, Deserialize)]
-pub struct ToolRequestWire {
-    #[serde(default)]
-    pub card: Option<String>,
-    #[serde(default)]
-    pub tool_id: Option<String>,
-}
-
-impl ToolRequestWire {
-    /// The tool id as authentication needs it, before validation.
-    ///
-    /// An absent tool id reads as empty, which `authorize_toolguard` treats as a
-    /// device-wide operation -- so a body with no tool_id can never authorize a
-    /// per-tool one.
-    fn borrowed(&self) -> &str {
-        self.tool_id.as_deref().unwrap_or("")
-    }
-
-    fn validated(self) -> Result<ToolRequest, ApiError> {
-        match (self.card, self.tool_id) {
-            (Some(card), Some(tool_id)) => Ok(ToolRequest { card, tool_id }),
-            _ => Err(ApiError::BadRequest(
-                "card and tool_id are required".to_string(),
-            )),
-        }
-    }
-
-    /// The same body as a stop, where the card is optional (#179).
-    fn validated_for_stop(self) -> Result<ToolStopRequest, ApiError> {
-        match self.tool_id {
-            Some(tool_id) => Ok(ToolStopRequest {
-                card: self.card,
-                tool_id,
-            }),
-            None => Err(ApiError::BadRequest("tool_id is required".to_string())),
         }
     }
 }
@@ -215,7 +104,7 @@ pub struct PowerReportRequest {
     pub relay_on: Option<bool>,
     /// Which module sent this reading (#161).
     ///
-    /// The MQTT twin `toolguard/request/power` has carried this since #83,
+    /// The MQTT twin (`resource/request/power` on the local broker) has carried this since #83,
     /// because the edge needs it to know a module is alive before it will grant
     /// a lease. The HTTP form did not, so when an edge forwarded a module's
     /// report the only device the server could see was the EDGE -- and
@@ -243,49 +132,6 @@ pub struct ToolLogRequest {
     /// Absent means "this device cannot tell", which is not zero.
     pub active_seconds: Option<f32>,
     pub temperature: Option<f32>,
-}
-
-/// The wire form of [`ToolLogRequest`]; see [`ToolRequestWire`] for why every
-/// field is optional.
-#[derive(Debug, Default, Deserialize)]
-pub struct ToolLogRequestWire {
-    #[serde(default)]
-    pub card: Option<String>,
-    #[serde(default)]
-    pub tool_id: Option<String>,
-    #[serde(default)]
-    pub seconds: Option<f32>,
-    #[serde(default)]
-    pub active_seconds: Option<f32>,
-    #[serde(default)]
-    pub temperature: Option<f32>,
-}
-
-impl ToolLogRequestWire {
-    /// The tool id as authentication needs it, before validation. See
-    /// [`ToolRequestWire::borrowed`].
-    fn borrowed(&self) -> &str {
-        self.tool_id.as_deref().unwrap_or("")
-    }
-
-    fn validated(self) -> Result<ToolLogRequest, ApiError> {
-        match (self.tool_id, self.seconds) {
-            (Some(tool_id), Some(seconds)) => Ok(ToolLogRequest {
-                // Not required either (#174): a plug has no card to name.
-                card: self.card,
-                tool_id,
-                seconds,
-                // Not in the required tuple: a device that senses no working
-                // signal is the normal case, and demanding it would refuse
-                // every module deployed before #169.
-                active_seconds: self.active_seconds,
-                temperature: self.temperature,
-            }),
-            _ => Err(ApiError::BadRequest(
-                "tool_id and seconds are required".to_string(),
-            )),
-        }
-    }
 }
 
 // ── Sync payload types (shared between HTTP response and MQTT publish) ──────
@@ -332,9 +178,6 @@ pub struct ToolGuardSyncPayload {
 pub fn toolguard_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(api_status))
-        .route("/tool-on", post(tool_on))
-        .route("/tool-off", post(tool_off))
-        .route("/tool-log", post(tool_log))
         .route("/sync", get(sync))
         .route("/boot-reset", post(boot_reset))
         .route("/power-report", post(power_report))
@@ -455,38 +298,6 @@ async fn boot_reset(
     ))))
 }
 
-/// POST /api/toolguard/tool-on
-async fn tool_on(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<ToolGuardResponse>, ApiError> {
-    let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
-    let tool_id = parsed.as_ref().map(ToolRequestWire::borrowed).unwrap_or("");
-    let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
-    let req = parsed
-        .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
-        .validated()?;
-
-    // The card is deliberately absent from this line (#107). It identifies a
-    // person, this log is written on every swipe, and the file is collected as
-    // a CI artifact and readable by anyone who can reach the container host.
-    tracing::info!("Tool on request: tool_id={}", req.tool_id);
-
-    // #120 (#14): authentication already happened in authorize_toolguard above --
-    // a device token bound to this tool. #101 slice 6 retired the API-key
-    // alternatives, so there is one credential and one place that checks it.
-    // Metered tools had a narrower gate here until #174 -- the `power` binding
-    // -- which made a tool with a separate reader and plug unstartable by badge.
-    // Being bound to the tool is the authorization; the charge is attributed to
-    // the session, not to the device that opened it.
-    let tool_lookup = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-
-    Ok(Json(
-        activate_tool(&state, tool_lookup, &req.card, &req.tool_id).await?,
-    ))
-}
-
 /// Open a session on a tool for a card: the decision and everything that
 /// follows a yes. One function behind both names (#182) -- the
 /// `/api/toolguard/tool-on` alias and `/api/resources/{id}/scan` -- so the two
@@ -517,24 +328,24 @@ pub(crate) async fn activate_tool(
             // hold), separate from the quiet unknown-card denial below.
             log_revoked_card_presented(state, &user, &card, &tool_name).await?;
             log_tool_access_denied(state, Some(&user), &tool_name, "Card revoked").await?;
-            return Ok(ToolGuardResponse::tool_denied("Card not authorized"));
+            return Ok(ToolGuardResponse::resource_denied("Card not authorized"));
         }
         crate::models::CardResolution::Unknown => {
             log_tool_access_denied(state, None, &tool_name, "Unknown card").await?;
-            return Ok(ToolGuardResponse::tool_denied("Unknown card"));
+            return Ok(ToolGuardResponse::resource_denied("Unknown card"));
         }
     };
 
     if !user.is_active {
         log_tool_access_denied(state, Some(&user), &tool_name, "User is not active").await?;
-        return Ok(ToolGuardResponse::tool_denied("User is not active"));
+        return Ok(ToolGuardResponse::resource_denied("User is not active"));
     }
 
     let tool = match tool_lookup {
         Some(t) => t,
         None => {
             log_tool_access_denied(state, Some(&user), &tool_name, "Tool not found").await?;
-            return Ok(ToolGuardResponse::tool_denied("Tool not found"));
+            return Ok(ToolGuardResponse::resource_denied("Tool not found"));
         }
     };
 
@@ -543,24 +354,26 @@ pub(crate) async fn activate_tool(
         crate::models::ToolStatus::InUse => {
             log_tool_access_denied(state, Some(&user), &tool_name, "Tool is already in use")
                 .await?;
-            return Ok(ToolGuardResponse::tool_denied("Tool is already in use"));
+            return Ok(ToolGuardResponse::resource_denied("Tool is already in use"));
         }
         crate::models::ToolStatus::Maintenance => {
             log_tool_access_denied(state, Some(&user), &tool_name, "Tool is under maintenance")
                 .await?;
-            return Ok(ToolGuardResponse::tool_denied("Tool is under maintenance"));
+            return Ok(ToolGuardResponse::resource_denied(
+                "Tool is under maintenance",
+            ));
         }
         crate::models::ToolStatus::Broken => {
             log_tool_access_denied(state, Some(&user), &tool_name, "Tool is broken").await?;
-            return Ok(ToolGuardResponse::tool_denied("Tool is broken"));
+            return Ok(ToolGuardResponse::resource_denied("Tool is broken"));
         }
         crate::models::ToolStatus::Repair => {
             log_tool_access_denied(state, Some(&user), &tool_name, "Tool is in repair").await?;
-            return Ok(ToolGuardResponse::tool_denied("Tool is in repair"));
+            return Ok(ToolGuardResponse::resource_denied("Tool is in repair"));
         }
         crate::models::ToolStatus::Retired => {
             log_tool_access_denied(state, Some(&user), &tool_name, "Tool is retired").await?;
-            return Ok(ToolGuardResponse::tool_denied("Tool is retired"));
+            return Ok(ToolGuardResponse::resource_denied("Tool is retired"));
         }
     }
 
@@ -574,7 +387,7 @@ pub(crate) async fn activate_tool(
         })?;
     if !authorized {
         log_tool_access_denied(state, Some(&user), &tool_name, "Training required").await?;
-        return Ok(ToolGuardResponse::tool_denied("Training required"));
+        return Ok(ToolGuardResponse::resource_denied("Training required"));
     }
 
     // Metered tool billing (Phase 2). Money is the LAST gate: training passed
@@ -588,7 +401,7 @@ pub(crate) async fn activate_tool(
                 crate::tool_billing::ActivationOutcome::Authorized(_) => {}
                 crate::tool_billing::ActivationOutcome::Denied(reason) => {
                     log_tool_access_denied(state, Some(&user), &tool_name, &reason).await?;
-                    return Ok(ToolGuardResponse::tool_denied(&reason));
+                    return Ok(ToolGuardResponse::resource_denied(&reason));
                 }
             }
         }
@@ -605,7 +418,7 @@ pub(crate) async fn activate_tool(
         .map_err(|e| ApiError::InternalServerError(format!("Failed to activate tool: {}", e)))?;
     if !activated {
         log_tool_access_denied(state, Some(&user), &tool_name, "Tool is already in use").await?;
-        return Ok(ToolGuardResponse::tool_denied("Tool is already in use"));
+        return Ok(ToolGuardResponse::resource_denied("Tool is already in use"));
     }
 
     use crate::models::NewToolEvent;
@@ -631,32 +444,7 @@ pub(crate) async fn activate_tool(
     // The tool's status changed, for the devices bound to it (#180).
     broadcast_toolguard_state_for_tool(state, tool.id);
 
-    Ok(ToolGuardResponse::tool_authorized())
-}
-
-/// POST /api/toolguard/tool-off
-async fn tool_off(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<ToolGuardResponse>, ApiError> {
-    let parsed: Option<ToolRequestWire> = serde_json::from_slice(&body).ok();
-    let tool_id = parsed.as_ref().map(ToolRequestWire::borrowed).unwrap_or("");
-    let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
-    let req = parsed
-        .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
-        .validated_for_stop()?;
-
-    tracing::info!("Tool off request: tool_id={}", req.tool_id);
-
-    let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    // #120 (#14): authenticated by authorize_toolguard above; the dead
-    // double-auth gate that stood here (an API key required even from an
-    // already-authenticated bound device) is removed. See tool_on.
-
-    Ok(Json(
-        deactivate_tool(&state, tool, req.card.as_deref(), &req.tool_id).await?,
-    ))
+    Ok(ToolGuardResponse::resource_authorized(None))
 }
 
 /// End a tool's session: a stop, with or without a badge (#179). One function
@@ -754,38 +542,7 @@ pub(crate) async fn deactivate_tool(
 
     broadcast_toolguard_state_for_tool(state, tool.id);
 
-    Ok(ToolGuardResponse::tool_off_ok())
-}
-
-/// POST /api/toolguard/tool-log
-async fn tool_log(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<ToolGuardResponse>, ApiError> {
-    let parsed: Option<ToolLogRequestWire> = serde_json::from_slice(&body).ok();
-    let tool_id = parsed
-        .as_ref()
-        .map(ToolLogRequestWire::borrowed)
-        .unwrap_or("");
-    let _device_id = authorize_toolguard(&state, &headers, tool_id).await?;
-    let req = parsed
-        .ok_or_else(|| ApiError::BadRequest("body must be a JSON object".to_string()))?
-        .validated()?;
-
-    tracing::info!(
-        "Tool log request: tool_id={}, seconds={}, temp={:?}",
-        req.tool_id,
-        req.seconds,
-        req.temperature
-    );
-
-    let tool = find_tool_by_toolguard_id(&state, &req.tool_id).await?;
-    // #120 (#14): authenticated by authorize_toolguard above; the dead
-    // double-auth gate that stood here (an API key required even from an
-    // already-authenticated bound device) is removed. See tool_on.
-
-    Ok(Json(report_tool_usage(&state, tool, &req).await?))
+    Ok(ToolGuardResponse::ok_with_message("Tool deactivated"))
 }
 
 /// Record a usage report against a tool's session. One function behind both
@@ -1704,9 +1461,9 @@ async fn authorize_toolguard(
     ))
 }
 
-/// The wire form of an alive pulse (#170). Optional for the same reason as
-/// [`ToolRequestWire`]: a body that does not parse must be refused AFTER
-/// authentication, not before it, or an unauthenticated caller learns the
+/// The wire form of an alive pulse (#170). Every field optional for the same
+/// reason as [`PowerReportRequest`]: a body that does not parse must be refused
+/// AFTER authentication, not before it, or an unauthenticated caller learns the
 /// body's shape from the status code.
 #[derive(Debug, Default, Deserialize)]
 pub struct AliveRequestWire {

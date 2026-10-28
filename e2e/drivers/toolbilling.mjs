@@ -63,12 +63,11 @@ async function auditCount(admin, eventType, userId) {
 }
 const toolStatus = async (admin, id) =>
   (await GET(`/api/tools/${id}`, { token: admin.token })).json?.data?.status
-const toolOn = (card, tid, token) =>
-  POST('/api/toolguard/tool-on', { token, body: { card, tool_id: tid } })
-const toolOff = (card, tid, token) =>
-  POST('/api/toolguard/tool-off', { token, body: { card, tool_id: tid } })
+// The resource path (#182): the tool is the resource; the aliases are gone (#192).
+const toolOn = (card, tid, token) => POST(`/api/resources/${tid}/scan`, { token, body: { card } })
+const toolOff = (card, tid, token) => POST(`/api/resources/${tid}/stop`, { token, body: { card } })
 const toolLog = (card, tid, token, seconds) =>
-  POST('/api/toolguard/tool-log', { token, body: { card, tool_id: tid, seconds } })
+  POST(`/api/resources/${tid}/usage`, { token, body: { card, seconds } })
 
 async function createMeteredTool(
   admin,
@@ -186,7 +185,7 @@ await main(async () => {
     await setCard(m, card)
     await fund(admin, m, '20.00') // member, balance 10
     const on = await toolOn(card, ext, powerTokens[ext])
-    ok(`sweep/${label}-activated`, on.json?.tool_on === true, JSON.stringify(on.json))
+    ok(`sweep/${label}-activated`, on.json?.authorized === true, JSON.stringify(on.json))
     assertEq(`sweep/${label}-is-in-use`, 'in_use', await toolStatus(admin, t.id))
     sweep.cases.push({ label, ext, m, card, id: t.id })
   }
@@ -218,7 +217,7 @@ await main(async () => {
   await setCard(readerMember, 'E2E-CARD-R')
   await fund(admin, readerMember, '20.00') // member, balance 10
   const readerOn = await toolOn('E2E-CARD-R', 'e2e-flat-tool', readerTokens['e2e-flat-tool'])
-  ok('toolbilling/a-reader-bound-device-may-start-a-metered-tool', readerOn.json?.tool_on === true,
+  ok('toolbilling/a-reader-bound-device-may-start-a-metered-tool', readerOn.json?.authorized === true,
     `a device bound as reader was refused a metered tool: ${JSON.stringify(readerOn.json)}`)
   ok(
     'toolbilling/the-readers-activation-placed-the-hold',
@@ -235,7 +234,7 @@ await main(async () => {
 
   // Activate with the tool's `power`-bound device: a hold of the max session cost (1.50).
   const on = await toolOn('E2E-CARD-1', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
-  ok('toolbilling/authorized', on.json?.tool_on === true, JSON.stringify(on.json))
+  ok('toolbilling/authorized', on.json?.authorized === true, JSON.stringify(on.json))
   ok(
     'toolbilling/hold-placed',
     toolBillingHonored({ balance: 10, held: 1.5, available: 8.5, nonNegative: true }, await view(member)) === null,
@@ -276,14 +275,14 @@ await main(async () => {
   await setCard(broke, 'E2E-CARD-2')
   await fund(admin, broke, '10.00') // -> member, balance 0
   const brokeOn = await toolOn('E2E-CARD-2', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
-  ok('toolbilling/insufficient-balance-denied', brokeOn.json?.tool_on === false, JSON.stringify(brokeOn.json))
+  ok('toolbilling/insufficient-balance-denied', brokeOn.json?.authorized === false, JSON.stringify(brokeOn.json))
 
   // Membership required: a non-member with some balance is refused.
   const nonmember = await account('toolbilling_nonmember')
   await setCard(nonmember, 'E2E-CARD-3')
   await fund(admin, nonmember, '5.00') // < dues -> not enrolled, balance 5
   const nmOn = await toolOn('E2E-CARD-3', 'e2e-flat-tool', powerTokens['e2e-flat-tool'])
-  ok('toolbilling/membership-required-denied', nmOn.json?.tool_on === false, JSON.stringify(nmOn.json))
+  ok('toolbilling/membership-required-denied', nmOn.json?.authorized === false, JSON.stringify(nmOn.json))
 
   // Training-before-money: a metered tool with a training step; an untrained
   // (but funded, member) user is refused at the training gate, and NO session or
@@ -304,7 +303,7 @@ await main(async () => {
   await fund(admin, trainee, '20.00') // member, balance 10
   const before = await view(trainee)
   const tOn = await toolOn('E2E-CARD-4', 'e2e-trained-tool', powerTokens['e2e-trained-tool'])
-  ok('toolbilling/training-denied', tOn.json?.tool_on === false, JSON.stringify(tOn.json))
+  ok('toolbilling/training-denied', tOn.json?.authorized === false, JSON.stringify(tOn.json))
   ok('toolbilling/training-denied-reason', /training/i.test(tOn.json?.message ?? ''), JSON.stringify(tOn.json))
   const after = await view(trainee)
   ok(
@@ -373,7 +372,7 @@ await main(async () => {
   // session locked in).
   const runTierCase = async (label, member, card, expectCharge, expectTierId) => {
     const on = await toolOn(card, ext, powerTokens[ext])
-    ok(`tiers/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
+    ok(`tiers/${label}-on`, on.json?.authorized === true, JSON.stringify(on.json))
     const off = await toolOff(card, ext, powerTokens[ext])
     assertEq(`tiers/${label}-off`, 200, off.status)
     const s = await lastSession(member)
@@ -432,7 +431,7 @@ await main(async () => {
   // #120/M2: two concurrent activations of the same idle NON-metered tool must
   // not both succeed. A non-metered tool has no open-session unique index to
   // serialize on, so this drives the try_activate_tool compare-and-set directly:
-  // exactly one tool-on gets tool_on:true, the other is refused. Without the CAS
+  // exactly one scan gets authorized:true, the other is refused. Without the CAS
   // both pass the loaded-row status check and both write InUse -> wins == 2. A
   // few rounds since a race won once may lose the next.
   const m2Rounds = Number(process.env.CSS_RACE_ROUNDS ?? 3)
@@ -451,9 +450,9 @@ await main(async () => {
       toolOn(card, ext, powerTokens[ext]),
       toolOn(card, ext, powerTokens[ext]),
     ])
-    const wins = [a, b].filter((x) => x.json?.tool_on === true).length
+    const wins = [a, b].filter((x) => x.json?.authorized === true).length
     assertEq(`toolbilling/m2-one-activation-wins-r${r}`, 1, wins,
-      `concurrent activations returned tool_on=${JSON.stringify([a.json?.tool_on, b.json?.tool_on])}; exactly one must win`)
+      `concurrent activations returned authorized=${JSON.stringify([a.json?.authorized, b.json?.authorized])}; exactly one must win`)
     await toolOff(card, ext, powerTokens[ext])
   }
 
@@ -476,7 +475,7 @@ await main(async () => {
     await setCard(stranger, 'M1-STRANGER')
 
     const on = await toolOn('M1-OWNER', ext, powerTokens[ext])
-    ok('toolbilling/m1-owner-activated', on.json?.tool_on === true, JSON.stringify(on.json))
+    ok('toolbilling/m1-owner-activated', on.json?.authorized === true, JSON.stringify(on.json))
 
     const strangerLog = await toolLog('M1-STRANGER', ext, powerTokens[ext], 30)
     assertEq('toolbilling/m1-stranger-report-refused', 'error', strangerLog.json?.status,
@@ -505,7 +504,7 @@ await main(async () => {
     await setCard(m, 'SPLIT-CARD')
     await fund(admin, m, '200.00') // member, balance 190
     const plugLog = (seconds) =>
-      POST('/api/toolguard/tool-log', { token: powerTokens[ext], body: { tool_id: ext, seconds } })
+      POST(`/api/resources/${ext}/usage`, { token: powerTokens[ext], body: { seconds } })
     const sessionOf = async (member) =>
       (await GET(`/api/admin/tool-billing/users/${member.user.id}/sessions`, { token: admin.token }))
         .json?.data?.[0]
@@ -517,7 +516,7 @@ await main(async () => {
       `usage was attributed to nobody: ${JSON.stringify(orphan.json)}`)
 
     const on = await toolOn('SPLIT-CARD', ext, readerTokens[ext])
-    ok('split/the-reader-starts-the-tool', on.json?.tool_on === true, JSON.stringify(on.json))
+    ok('split/the-reader-starts-the-tool', on.json?.authorized === true, JSON.stringify(on.json))
 
     const report = await plugLog(1.0)
     assertEq('split/the-plug-reports-with-no-card', 'ok', report.json?.status,
@@ -526,9 +525,9 @@ await main(async () => {
     // Bound to the tool is the authorization: a device bound to a DIFFERENT
     // tool is refused at entry auth, card or no card. Without this the
     // card-less path would let any device on the site put time on any session.
-    const foreign = await POST('/api/toolguard/tool-log', {
+    const foreign = await POST(`/api/resources/${ext}/usage`, {
       token: powerTokens['e2e-flat-tool'],
-      body: { tool_id: ext, seconds: 100 },
+      body: { seconds: 100 },
     })
     ok('split/a-device-bound-elsewhere-cannot-report-here', foreign.status === 401,
       `a device bound to another tool put time on this one: ${foreign.status} ${JSON.stringify(foreign.json)}`)
@@ -622,11 +621,11 @@ await main(async () => {
       await fund(admin, m, '200.00')
 
       const on = await toolOn(card, extId, powerTokens[extId])
-      ok(`usagebasis/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
+      ok(`usagebasis/${label}-on`, on.json?.authorized === true, JSON.stringify(on.json))
 
-      const log = await POST('/api/toolguard/tool-log', {
+      const log = await POST(`/api/resources/${extId}/usage`, {
         token: powerTokens[extId],
-        body: { card, tool_id: extId, ...report },
+        body: { card, ...report },
       })
       assertEq(`usagebasis/${label}-logged`, 'ok', log.json?.status, JSON.stringify(log.json))
 
@@ -716,7 +715,7 @@ await main(async () => {
     await setCard(m, 'STOP-CARD')
     await fund(admin, m, '20.00') // member, balance 10
     const on = await toolOn('STOP-CARD', ext, powerTokens[ext])
-    ok('stop/session-open', on.json?.tool_on === true, JSON.stringify(on.json))
+    ok('stop/session-open', on.json?.authorized === true, JSON.stringify(on.json))
     ok(
       'stop/hold-placed-before-the-stop',
       toolBillingHonored({ balance: 10, held: 1.5, available: 8.5 }, await view(m)) === null,
@@ -724,13 +723,13 @@ await main(async () => {
     )
     // The READER device: bound to this tool, not the one that activated, and
     // presenting no card at all.
-    const cardless = await POST('/api/toolguard/tool-off', {
+    const cardless = await POST(`/api/resources/${ext}/stop`, {
       token: readerTokens[ext],
-      body: { tool_id: ext },
+      body: {},
     })
     ok(
       'stop/a-cardless-stop-from-a-bound-device-is-accepted',
-      cardless.status === 200 && cardless.json?.tool_off === true,
+      cardless.status === 200 && cardless.json?.status === 'ok',
       `a stop with no card was refused: ${cardless.status} ${JSON.stringify(cardless.json)}`,
     )
     const toolRow = (await GET(`/api/tools/${tool.id}`, { token: admin.token })).json?.data
@@ -752,10 +751,10 @@ await main(async () => {
     // A stop that lands late -- the tool is already idle -- is harmless, not an
     // error: a device that cannot know whether it was first must still be able
     // to send one.
-    const late = await POST('/api/toolguard/tool-off', { token: powerTokens[ext], body: { tool_id: ext } })
+    const late = await POST(`/api/resources/${ext}/stop`, { token: powerTokens[ext], body: {} })
     ok(
       'stop/a-late-cardless-stop-on-an-idle-tool-is-harmless',
-      late.status === 200 && late.json?.tool_off === true,
+      late.status === 200 && late.json?.status === 'ok',
       `${late.status} ${JSON.stringify(late.json)}`,
     )
     ok(
@@ -764,7 +763,7 @@ await main(async () => {
       JSON.stringify(await view(m)),
     )
     // Bound is still the authorization: no credential, no stop.
-    const nobody = await POST('/api/toolguard/tool-off', { token: 'not-a-real-token', body: { tool_id: ext } })
+    const nobody = await POST(`/api/resources/${ext}/stop`, { token: 'not-a-real-token', body: {} })
     assertEq('stop/an-unbound-credential-cannot-stop-anything', 401, nobody.status)
   }
 
@@ -864,7 +863,7 @@ await main(async () => {
     // And a released tool is usable again: the next member is not told it is
     // already in use.
     const again = await toolOn(unmetered.card, unmetered.ext, powerTokens[unmetered.ext])
-    ok('sweep/a-released-tool-can-be-started-again', again.json?.tool_on === true, JSON.stringify(again.json))
+    ok('sweep/a-released-tool-can-be-started-again', again.json?.authorized === true, JSON.stringify(again.json))
     assertEq('sweep/unmetered-stopped', 200, (await toolOff(unmetered.card, unmetered.ext, powerTokens[unmetered.ext])).status)
 
     for (const c of [ten, none]) {
@@ -899,7 +898,7 @@ await main(async () => {
     await setCard(m, 'SENSE-CARD')
     await fund(admin, m, '200.00') // member, balance 190
     const senseLog = (seconds, active_seconds) =>
-      POST('/api/toolguard/tool-log', { token: sensor.token, body: { tool_id: ext, seconds, active_seconds } })
+      POST(`/api/resources/${ext}/usage`, { token: sensor.token, body: { seconds, active_seconds } })
     const sessionOf = async (member) =>
       (await GET(`/api/admin/tool-billing/users/${member.user.id}/sessions`, { token: admin.token }))
         .json?.data?.[0]
@@ -908,7 +907,7 @@ await main(async () => {
     assertEq('sense/a-cardless-report-with-nobody-signed-on-is-refused', 'error', orphan.json?.status,
       `usage was attributed to nobody: ${JSON.stringify(orphan.json)}`)
     const on = await toolOn('SENSE-CARD', ext, readerTokens[ext])
-    ok('sense/the-reader-starts-the-tool', on.json?.tool_on === true, JSON.stringify(on.json))
+    ok('sense/the-reader-starts-the-tool', on.json?.authorized === true, JSON.stringify(on.json))
     // Both figures a sensing device has: the held one (`seconds`) and the raw
     // one (`active_seconds`). The default basis bills the held one.
     const report = await senseLog(1.0, 0.5)
@@ -954,12 +953,12 @@ await main(async () => {
       await setCard(m, card)
       await fund(admin, m, '200.00') // member, balance 190
       const plugLog = (seconds) =>
-        POST('/api/toolguard/tool-log', { token: powerTokens[ext], body: { tool_id: ext, seconds } })
+        POST(`/api/resources/${ext}/usage`, { token: powerTokens[ext], body: { seconds } })
       const sensorLog = (seconds, active_seconds) =>
-        POST('/api/toolguard/tool-log', { token: sensor.token, body: { tool_id: ext, seconds, active_seconds } })
+        POST(`/api/resources/${ext}/usage`, { token: sensor.token, body: { seconds, active_seconds } })
 
       const on = await toolOn(card, ext, readerTokens[ext])
-      ok(`twoboxes/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
+      ok(`twoboxes/${label}-on`, on.json?.authorized === true, JSON.stringify(on.json))
       // The plug has had the power on for 1.5 s; the machine worked for 0.5 s
       // of it, 0.25 s with the beam actually on. The honest bill is 0.5.
       const reports = plugFirst

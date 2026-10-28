@@ -223,9 +223,6 @@ fn guard_of(src: &str, handler: &str) -> String {
     // evidence of authenticating — `home_links::list_links_public` takes one to
     // derive a role best-effort and is genuinely public.
     const INLINE_AUTH: &[&str] = &[
-        "tool_on",
-        "tool_off",
-        "tool_log",
         "sync",
         "boot_reset",
         "power_report",

@@ -10,7 +10,7 @@
 //      with no `strike` -- a tool has no latch;
 //   2. a card-less stop on the resource path ends it (#179's rule, one name);
 //   3. a usage report is refused with no session and recorded with one, and
-//      the alias and the resource path open and close each other's sessions;
+//      the three HTTP aliases of this path are gone (#192: 404, not a refusal);
 //   4. a door's scan runs the door's own policy -- refused with no rule (doors
 //      are Restricted), granted with one -- and a yes carries the pulse of the
 //      door's `strike` binding, while a door with no strike binding carries the
@@ -173,31 +173,28 @@ main(async () => {
   const late = await stop(TOOL_EXT, reader.token)
   assertEq('resources/late-stop-is-harmless', 'ok', late.json?.status, late.text.slice(0, 200))
 
-  // --- 3. usage, and the alias boundary --------------------------------------
+  // --- 3. usage, and the aliases being gone (#192) ------------------------
   const noSession = await usage(TOOL_EXT, reader.token, { seconds: 30 })
   assertEq('resources/usage-with-no-session-is-refused', 'error', noSession.json?.status)
   assertEq('resources/usage-refusal-names-the-session', 'No open session for this tool',
     noSession.json?.message)
-  // Opened on the ALIAS, reported and stopped on the resource path.
-  const aliasOn = await POST('/api/toolguard/tool-on', {
-    token: reader.token,
-    body: { card: CARD, tool_id: TOOL_EXT },
-  })
-  assertEq('resources/alias-tool-on-still-works', true, aliasOn.json?.tool_on, aliasOn.text.slice(0, 200))
+  await scan(TOOL_EXT, reader.token, CARD)
   const logged = await usage(TOOL_EXT, reader.token, { card: CARD, seconds: 30, active_seconds: 12 })
   assertEq('resources/usage-with-a-session-is-logged', 'ok', logged.json?.status, logged.text.slice(0, 200))
   const stopWithCard = await stop(TOOL_EXT, reader.token, { card: CARD })
-  assertEq('resources/stop-with-a-card-closes-the-alias-session', 'ok', stopWithCard.json?.status)
-  assertEq('resources/alias-session-is-idle', 'idle', await toolStatus())
-  // And the other way: opened on the resource path, closed on the alias.
-  await scan(TOOL_EXT, reader.token, CARD)
-  const aliasOff = await POST('/api/toolguard/tool-off', {
-    token: reader.token,
-    body: { tool_id: TOOL_EXT },
-  })
-  assertEq('resources/alias-tool-off-closes-the-resource-session', true, aliasOff.json?.tool_off,
-    aliasOff.text.slice(0, 200))
-  assertEq('resources/resource-session-is-idle', 'idle', await toolStatus())
+  assertEq('resources/stop-with-a-card-closes-the-session', 'ok', stopWithCard.json?.status)
+  assertEq('resources/session-is-idle-after-the-stop', 'idle', await toolStatus())
+  // The three HTTP aliases are not routes: a bound device with a valid body
+  // gets 404, and the tool it names is untouched.
+  for (const [alias, body] of [
+    ['tool-on', { card: CARD, tool_id: TOOL_EXT }],
+    ['tool-off', { card: CARD, tool_id: TOOL_EXT }],
+    ['tool-log', { card: CARD, tool_id: TOOL_EXT, seconds: 30 }],
+  ]) {
+    const gone = await POST(`/api/toolguard/${alias}`, { token: reader.token, body })
+    assertEq(`resources/alias-${alias}-is-gone`, 404, gone.status, gone.text.slice(0, 200))
+  }
+  assertEq('resources/the-gone-aliases-touched-nothing', 'idle', await toolStatus())
 
   // --- 4. a door's scan -------------------------------------------------------
   const noRule = await scan(door.id, latch.token, CARD)
