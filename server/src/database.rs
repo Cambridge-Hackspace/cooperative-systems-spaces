@@ -5144,31 +5144,65 @@ impl DatabaseManager {
         &self,
         session_id: uuid::Uuid,
         seconds: bigdecimal::BigDecimal,
+        sensed: bool,
     ) -> Result<(), DatabaseError> {
         use crate::schema::tool_usage_sessions::dsl::*;
         use diesel::dsl::sql;
-        use diesel::sql_types::Numeric;
+        use diesel::sql_types::{Nullable, Numeric};
         let mut conn = self.get_connection()?;
         // #120/M13: accumulate in a single atomic UPDATE
-        // (COALESCE(reported_seconds, 0) + $n) rather than SELECT-add-in-Rust-then-
-        // UPDATE. The read-modify-write let two concurrent device reports on the
-        // same session read the same base and clobber each other, underbilling by
-        // one report -- directly gameable by parallel reporting. A zero-row update
-        // means the session is no longer open, so nothing accumulates (the settle
-        // path bounds the charge by wall-clock and the cap regardless).
-        diesel::update(
+        // (COALESCE(column, 0) + $n) rather than SELECT-add-in-Rust-then-UPDATE.
+        // The read-modify-write let two concurrent device reports on the same
+        // session read the same base and clobber each other, underbilling by
+        // one report -- directly gameable by parallel reporting. A zero-row
+        // update means the session is no longer open, so nothing accumulates
+        // (the settle path bounds the charge by wall-clock and the cap
+        // regardless).
+        //
+        // #193: by source. A report from a device that senses the machine
+        // (`sensed`: it carried `active_seconds`) accumulates into the sensed
+        // figure and that figure IS `reported_seconds`. A report from a device
+        // that only switches power accumulates into the unsensed figure, which
+        // is `reported_seconds` only while no sensing device has spoken: a
+        // plug's power-on time and a sensor's working time are two
+        // measurements of one session, and their sum is a measurement of
+        // nothing. Still one statement: every SET reads the row as it was,
+        // so the new total is computed from the old one under the row lock.
+        let update = diesel::update(
             tool_usage_sessions
                 .filter(id.eq(session_id))
                 .filter(status.eq("open")),
-        )
-        .set(
-            reported_seconds.eq(sql::<diesel::sql_types::Nullable<Numeric>>(
-                "COALESCE(reported_seconds, 0) + ",
-            )
-            .bind::<Numeric, _>(seconds)),
-        )
-        .execute(&mut conn)
-        .map_err(DatabaseError::Diesel)?;
+        );
+        if sensed {
+            update
+                .set((
+                    reported_sensed_seconds.eq(sql::<Nullable<Numeric>>(
+                        "COALESCE(reported_sensed_seconds, 0) + ",
+                    )
+                    .bind::<Numeric, _>(seconds.clone())),
+                    reported_seconds.eq(sql::<Nullable<Numeric>>(
+                        "COALESCE(reported_sensed_seconds, 0) + ",
+                    )
+                    .bind::<Numeric, _>(seconds)),
+                ))
+                .execute(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+        } else {
+            update
+                .set((
+                    reported_unsensed_seconds.eq(sql::<Nullable<Numeric>>(
+                        "COALESCE(reported_unsensed_seconds, 0) + ",
+                    )
+                    .bind::<Numeric, _>(seconds.clone())),
+                    reported_seconds.eq(sql::<Nullable<Numeric>>(
+                        "CASE WHEN reported_sensed_seconds IS NULL THEN COALESCE(reported_unsensed_seconds, 0) + ",
+                    )
+                    .bind::<Numeric, _>(seconds)
+                    .sql(" ELSE reported_seconds END")),
+                ))
+                .execute(&mut conn)
+                .map_err(DatabaseError::Diesel)?;
+        }
         Ok(())
     }
 

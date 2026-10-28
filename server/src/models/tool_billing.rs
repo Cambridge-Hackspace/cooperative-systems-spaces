@@ -52,6 +52,14 @@ pub struct ToolUsageSession {
     /// tool with no sensing hardware must not read as one that never ran.
     /// Appended last for the positional `Queryable`.
     pub reported_active_seconds: Option<BigDecimal>,
+    /// `seconds` from reports that carried `active_seconds` -- devices that
+    /// sense the machine (#193). `reported_seconds` is this once any such
+    /// report has arrived. `None` means none has.
+    pub reported_sensed_seconds: Option<BigDecimal>,
+    /// `seconds` from reports that carried no `active_seconds` -- devices that
+    /// only switch power (#193). `reported_seconds` is this only while no
+    /// sensing device has reported. `None` means none has.
+    pub reported_unsensed_seconds: Option<BigDecimal>,
 }
 
 /// A session to open (activation). Everything else defaults: `ended_at`,

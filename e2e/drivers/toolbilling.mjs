@@ -927,4 +927,65 @@ await main(async () => {
     )
   }
 
+  // ── #193: a plug AND a separate sensor on one tool ──────────────────────
+  //
+  // The plug switches the power and senses nothing, so it reports the time the
+  // power was on with no `active_seconds`; the sensor reports the machine
+  // working, with one. Each is the usage that device can honestly measure, and
+  // their sum is a measurement of nothing: under the occupancy basis the
+  // session used to be billed both. Now the sensing device's figure is the
+  // session's `reported_seconds`, the plug's is kept apart, and the order the
+  // two report in does not matter -- which is why there are two tools here.
+  // Per-minute, small figures and a sleep so the wall-clock cap is not what
+  // decides. After the sweep arms, like `sense` above, for the same reason.
+  {
+    const twoBoxes = async (label, plugFirst) => {
+      const ext = `e2e-two-boxes-${label}`
+      const created = await createMeteredTool(admin, { externalId: ext, flatFee: null, ratePerMin: '60.00', maxMin: 1 })
+      macSeq += 1
+      const sensor = await boundDevice(admin.token, created.id, {
+        role: 'sensor',
+        name: `billing-sensor-${ext}`,
+        mac: `02:00:00:00:8d:${macSeq.toString(16).padStart(2, '0')}`,
+      })
+      ok(`twoboxes/${label}-sensor-bound`, !!sensor.token && sensor.bindStatus === 201, sensor.text)
+      const m = await account(`tb_two_${label}`)
+      const card = `TWO-${label.toUpperCase()}`
+      await setCard(m, card)
+      await fund(admin, m, '200.00') // member, balance 190
+      const plugLog = (seconds) =>
+        POST('/api/toolguard/tool-log', { token: powerTokens[ext], body: { tool_id: ext, seconds } })
+      const sensorLog = (seconds, active_seconds) =>
+        POST('/api/toolguard/tool-log', { token: sensor.token, body: { tool_id: ext, seconds, active_seconds } })
+
+      const on = await toolOn(card, ext, readerTokens[ext])
+      ok(`twoboxes/${label}-on`, on.json?.tool_on === true, JSON.stringify(on.json))
+      // The plug has had the power on for 1.5 s; the machine worked for 0.5 s
+      // of it, 0.25 s with the beam actually on. The honest bill is 0.5.
+      const reports = plugFirst
+        ? [() => plugLog(1.5), () => sensorLog(0.5, 0.25)]
+        : [() => sensorLog(0.5, 0.25), () => plugLog(1.5)]
+      for (const r of reports) {
+        const res = await r()
+        assertEq(`twoboxes/${label}-report-accepted`, 'ok', res.json?.status, JSON.stringify(res.json))
+      }
+      await new Promise((r) => setTimeout(r, 3000))
+      assertEq(`twoboxes/${label}-off`, 200, (await toolOff(card, ext, readerTokens[ext])).status)
+      const s = (await GET(`/api/admin/tool-billing/users/${m.user.id}/sessions`, { token: admin.token }))
+        .json?.data?.[0]
+      ok(`twoboxes/${label}-bills-the-sensors-figure-not-the-sum`,
+        s?.status === 'settled' && Math.abs(Number(s?.charged_amount) - 0.5) < 1e-9,
+        `expected 0.50 (the sensor's 0.5 s), not 2.00 (plug 1.5 + sensor 0.5): ${JSON.stringify(s)}`)
+      // The second oracle: the row says where each figure came from.
+      ok(`twoboxes/${label}-keeps-both-figures-apart`,
+        Math.abs(Number(s?.reported_sensed_seconds) - 0.5) < 1e-6 &&
+          Math.abs(Number(s?.reported_unsensed_seconds) - 1.5) < 1e-6 &&
+          Math.abs(Number(s?.reported_seconds) - 0.5) < 1e-6,
+        `sensed=${s?.reported_sensed_seconds} unsensed=${s?.reported_unsensed_seconds} ` +
+          `reported=${s?.reported_seconds}; expected 0.5 / 1.5 / 0.5`)
+    }
+    await twoBoxes('plug-first', true)
+    await twoBoxes('sensor-first', false)
+  }
+
 })

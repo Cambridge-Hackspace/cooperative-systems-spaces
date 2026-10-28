@@ -414,6 +414,14 @@ impl ToolBillingService {
     /// its own rather than rejecting the whole report, because the billable
     /// figure is still good and refusing it would lose real usage over a
     /// statistic.
+    ///
+    /// Which figure `seconds` joins is decided here by whether the report
+    /// carried `active_seconds` at all (#193): a device sends that field when
+    /// it senses the machine and never when it does not, so its presence says
+    /// what kind of device is reporting, and a sensing device's figure is the
+    /// session's occupancy where a plug's power-on time would otherwise be
+    /// added on top of it. Presence, not validity: a sensing device whose
+    /// active figure was unusable is still a sensing device.
     pub fn record_usage(
         &self,
         tool_id: Uuid,
@@ -427,7 +435,8 @@ impl ToolBillingService {
             return Ok(false); // orphan report: no open session for this tool
         };
         let dec = BigDecimal::from_str(&format!("{seconds:.3}")).unwrap_or_else(|_| zero());
-        self.db.add_reported_seconds(session.id, dec)?;
+        self.db
+            .add_reported_seconds(session.id, dec, active_seconds.is_some())?;
         if let Some(active) = active_seconds.filter(|a| a.is_finite() && *a >= 0.0) {
             let dec = BigDecimal::from_str(&format!("{active:.3}")).unwrap_or_else(|_| zero());
             self.db.add_reported_active_seconds(session.id, dec)?;
