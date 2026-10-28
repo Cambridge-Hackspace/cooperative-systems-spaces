@@ -9,16 +9,16 @@
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use css_lib::wire::{kinds, PowerStatePayload, ToolModuleStatePayload};
+use css_lib::wire::{kinds, PowerStatePayload, ResourcePolicyPayload, ToolModuleStatePayload};
 use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::doors::{DoorStateSnapshot, DoorsState, UnlockCommand};
+use crate::doors::{DoorStateSnapshot, UnlockCommand};
 use crate::modules::ModuleState;
 use crate::mqtt::DoorsUnlockSender;
 use crate::power::PowerState;
-use crate::toolguard::ToolGuardState;
+use crate::resources::ResourceCache;
 
 #[derive(Deserialize)]
 struct NameUpdate {
@@ -28,8 +28,8 @@ struct NameUpdate {
 #[derive(Clone)]
 pub struct EdgeInbound {
     pub config_manager: Arc<RwLock<Config>>,
-    pub toolguard_state: Arc<ToolGuardState>,
-    pub doors_state: Arc<DoorsState>,
+    /// The one cache (#191): the policy and both of its aliases land here.
+    pub resource_cache: Arc<ResourceCache>,
     pub power_state: Arc<PowerState>,
     pub module_state: Arc<ModuleState>,
     pub doors_unlock_tx: DoorsUnlockSender,
@@ -58,10 +58,28 @@ impl EdgeInbound {
                 }
                 Err(e) => warn!("Failed to parse name update: {}", e),
             },
-            kinds::TOOLGUARD_STATE => match self.toolguard_state.apply_sync_bytes(payload) {
-                Ok(()) => info!("ToolGuard state updated via inbound transport"),
-                Err(e) => warn!("Failed to parse toolguard state payload: {}", e),
-            },
+            // #191: the one policy, and its two aliases for one release. All
+            // three are folded into the one cache; a pushed payload carries no
+            // request time.
+            kinds::RESOURCE_POLICY => {
+                match serde_json::from_slice::<ResourcePolicyPayload>(payload) {
+                    Ok(policy) => {
+                        let named = policy.resources.len();
+                        self.resource_cache.apply_policy(policy, None);
+                        info!(
+                            "Resource policy updated via inbound transport ({} resource(s))",
+                            named
+                        );
+                    }
+                    Err(e) => warn!("Failed to parse resource/policy payload: {}", e),
+                }
+            }
+            kinds::TOOLGUARD_STATE => {
+                match self.resource_cache.apply_sync_alias_bytes(payload, None) {
+                    Ok(()) => info!("ToolGuard state updated via inbound transport"),
+                    Err(e) => warn!("Failed to parse toolguard state payload: {}", e),
+                }
+            }
             kinds::POWER_STATE => match serde_json::from_slice::<PowerStatePayload>(payload) {
                 Ok(snapshot) => {
                     let locked = snapshot.locked_tool_ids.len();
@@ -89,7 +107,7 @@ impl EdgeInbound {
             kinds::DOORS_STATE => match serde_json::from_slice::<DoorStateSnapshot>(payload) {
                 Ok(snapshot) => {
                     let count = snapshot.doors.len();
-                    self.doors_state.apply_snapshot(snapshot);
+                    self.resource_cache.apply_doors_alias(snapshot);
                     info!(
                         "Doors state updated via inbound transport ({} door(s))",
                         count

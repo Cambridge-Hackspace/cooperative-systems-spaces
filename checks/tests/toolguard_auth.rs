@@ -99,6 +99,8 @@ const RESOURCE_EXPECTED: &[(&str, Auth)] = &[
     ("scan", Auth::Required),
     ("stop", Auth::Required),
     ("usage", Auth::Required),
+    // #191: the policy poll, the one-shape twin of `sync`.
+    ("policy", Auth::Required),
 ];
 
 const TOOLGUARD_SRC: &str = "server/src/api/toolguard.rs";

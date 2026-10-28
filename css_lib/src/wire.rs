@@ -53,6 +53,13 @@ pub mod kinds {
     /// `checks/tests/toolguard_wire_types.rs`), and module wiring changes on a
     /// different cadence than the authorization list.
     pub const MODULE_STATE: &str = "module/state";
+    /// The policy for every resource this device coordinates, one shape
+    /// whatever the kind (#191): [`super::ResourcePolicyPayload`]. The push
+    /// twin of `GET /api/resources/policy`. Not `resource/state`, which is
+    /// what the edge publishes on the LOCAL broker: that is the allow-list
+    /// mirror for modules, and one name for two payloads on two wires would
+    /// be the confusion this convergence exists to end.
+    pub const RESOURCE_POLICY: &str = "resource/policy";
 }
 
 /// The `module/state` snapshot the server pushes to the edge (#83).
@@ -66,6 +73,88 @@ pub struct ToolModuleStatePayload {
     pub as_of: String,
     /// Every tool that has at least one module bound or one interlock defined.
     pub tools: Vec<ToolModuleTool>,
+}
+
+/// The policy for every resource one device coordinates, in one shape (#191).
+///
+/// Until this, "who may use this resource" reached the edge in two
+/// representations: per-principal resource lists for tools (`toolguard/sync`)
+/// and per-resource card lists for doors (`doors/state`), and the edge decided
+/// each in its own order. This is both at once, per resource: a door's
+/// compiled lists and hold, a tool's status and online rule, and every
+/// resource's kind, session profile, pulse and whether it is in use -- with
+/// the principals (members, as digests) beside them, which the tool rule and
+/// the kiosk still read. `toolguard/sync` and `doors/state` are aliases of it
+/// for one release.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourcePolicyPayload {
+    /// The device this policy is for; a device holds only what it is bound to.
+    pub device_id: String,
+    /// When the server built it (RFC 3339). Advisory, as on `module/state`.
+    pub as_of: String,
+    /// Which profile field the card digests were taken from.
+    pub profile_field: String,
+    pub resources: Vec<ResourcePolicy>,
+    pub principals: Vec<Principal>,
+}
+
+/// One resource's policy, whatever its kind (#191).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourcePolicy {
+    /// The resource's UUID.
+    pub id: String,
+    pub external_id: Option<String>,
+    pub name: String,
+    /// `tool` | `door`.
+    pub kind: String,
+    /// `momentary` | `until_stopped`; see `module/state`.
+    #[serde(default)]
+    pub session_profile: String,
+    /// A tool's `idle` | `in_use` | `maintenance` | `broken` | `repair` |
+    /// `retired`, as on the allow-list; empty for a door.
+    #[serde(default)]
+    pub status: String,
+    /// A tool the server insists on deciding itself; never set on a door.
+    #[serde(default)]
+    pub requires_online: bool,
+    /// A session is open on it as the server knows it (#190).
+    #[serde(default)]
+    pub in_use: bool,
+    /// A door that is authored but must not open; always true for a tool.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// The strike pulse, for a resource with a `strike` binding (a door's site
+    /// default when it has none).
+    #[serde(default)]
+    pub pulse_ms: Option<i32>,
+    /// Card digests a door's allow rules compile to. Empty on a tool: a tool
+    /// is decided from `principals`.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Card digests a door's deny rules compile to; `deny` beats `allow`.
+    #[serde(default)]
+    pub deny: Vec<String>,
+    /// The Open Access latch (RFC 3339): held released, no card needed, until
+    /// then. Compared against the device's own clock, so the window
+    /// self-expires.
+    #[serde(default)]
+    pub hold_until: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A member as a device may know one (#191): a digest, never the card.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Principal {
+    /// `argon2id(device_pepper, card)`, hex-encoded; see `profile_field_digest`.
+    pub digest: String,
+    pub full_name: String,
+    pub is_active: bool,
+    /// The resources this member may start, by UUID.
+    #[serde(default)]
+    pub authorized: Vec<String>,
 }
 
 /// One resource's wiring: the modules bound to it and the rules that gate it.

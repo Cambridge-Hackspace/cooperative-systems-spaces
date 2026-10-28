@@ -49,6 +49,8 @@ pub fn resource_routes() -> Router<AppState> {
         .route("/{id}/scan", post(scan))
         .route("/{id}/stop", post(stop))
         .route("/{id}/usage", post(usage))
+        // #191: the policy for everything this device coordinates, one shape.
+        .route("/policy", get(policy))
 }
 
 /// The resource-level attributes an administrator sets, whatever the kind
@@ -590,4 +592,121 @@ async fn admin_stop(
         kind: kind.to_string(),
         ended,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// The policy, one shape whatever the kind (#191)
+// ---------------------------------------------------------------------------
+
+/// Build one device's resource policy: the tools it is bound to and their
+/// principals (the allow-list, as `toolguard/sync` has always built it), the
+/// doors it coordinates and their compiled card lists (as `doors/state` has),
+/// and every resource's kind, profile, pulse and whether it is in use.
+pub async fn build_resource_policy(
+    state: &AppState,
+    device_id: Uuid,
+) -> Result<css_lib::wire::ResourcePolicyPayload, ApiError> {
+    let config = state.config_manager.get_config();
+    let profile_field = config.toolguard.profile_field.clone();
+    let tools = toolguard::build_sync_payload(state, device_id, &profile_field).await?;
+    let doors = state.door_service.compile_state_for(device_id)?;
+    let profiles: std::collections::HashMap<Uuid, (String, String)> = state
+        .db
+        .resource_profiles()?
+        .into_iter()
+        .map(|(id, kind, profile)| (id, (kind, profile)))
+        .collect();
+    let in_use: std::collections::HashSet<Uuid> = state
+        .db
+        .get_inuse_tools()?
+        .into_iter()
+        .map(|t| t.id)
+        .chain(
+            state
+                .db
+                .open_resource_sessions()?
+                .into_iter()
+                .map(|s| s.resource_id),
+        )
+        .collect();
+
+    let mut resources = Vec::with_capacity(tools.tools.len() + doors.doors.len());
+    for t in &tools.tools {
+        let (kind, profile) = profiles.get(&t.id).cloned().unwrap_or_else(|| {
+            (
+                crate::models::ResourceKind::Tool.as_str().to_string(),
+                String::new(),
+            )
+        });
+        resources.push(css_lib::wire::ResourcePolicy {
+            id: t.id.to_string(),
+            external_id: t.external_id.clone(),
+            name: t.name.clone(),
+            kind,
+            session_profile: profile,
+            status: serde_json::to_value(&t.status)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            requires_online: t.requires_online,
+            in_use: in_use.contains(&t.id),
+            enabled: true,
+            pulse_ms: state.db.door_strike(t.id)?.map(|s| s.pulse_ms),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            hold_until: None,
+        });
+    }
+    for d in &doors.doors {
+        let profile = profiles
+            .get(&d.id)
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default();
+        resources.push(css_lib::wire::ResourcePolicy {
+            id: d.id.to_string(),
+            external_id: None,
+            name: d.name.clone(),
+            kind: crate::models::ResourceKind::Door.as_str().to_string(),
+            session_profile: profile,
+            status: String::new(),
+            requires_online: false,
+            in_use: in_use.contains(&d.id),
+            enabled: d.enabled,
+            pulse_ms: Some(d.unlock_duration_ms),
+            allow: d.allow_cards.clone(),
+            deny: d.deny_cards.clone(),
+            hold_until: d.hold_unlock_until.map(|t| t.to_rfc3339()),
+        });
+    }
+    let principals = tools
+        .users
+        .iter()
+        .map(|u| css_lib::wire::Principal {
+            digest: u.profile_field_digest.clone(),
+            full_name: u.full_name.clone(),
+            is_active: u.is_active,
+            authorized: u
+                .authorized_tool_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+        })
+        .collect();
+    Ok(css_lib::wire::ResourcePolicyPayload {
+        device_id: device_id.to_string(),
+        as_of: chrono::Utc::now().to_rfc3339(),
+        profile_field,
+        resources,
+        principals,
+    })
+}
+
+/// GET /api/resources/policy -- the policy for everything this device
+/// coordinates (#191). Device Bearer token; the push twin is `resource/policy`.
+async fn policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<css_lib::wire::ResourcePolicyPayload>, ApiError> {
+    let (device_id, _) = toolguard::extract_device_auth(&state, &headers).await?;
+    Ok(Json(build_resource_policy(&state, device_id).await?))
 }

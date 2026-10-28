@@ -1598,6 +1598,32 @@ async fn publish_to_devices(state: &AppState, devices: Vec<Uuid>) {
                 e
             ),
         }
+        // #191: the same facts in the one shape, beside the alias, for one
+        // release. A door change still reaches the edge through `doors/state`
+        // and the periodic policy poll; this is the allow-list's push.
+        match crate::api::resources::build_resource_policy(state, device_id).await {
+            Ok(policy) => match serde_json::to_vec(&policy) {
+                Ok(bytes) => {
+                    if let Err(e) = mqtt_service.publish_to_device(
+                        device_id,
+                        css_lib::wire::kinds::RESOURCE_POLICY,
+                        bytes,
+                    ) {
+                        tracing::warn!(
+                            "Failed to publish resource policy to device {}: {}",
+                            device_id,
+                            e
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to serialize resource policy: {}", e),
+            },
+            Err(e) => tracing::warn!(
+                "Failed to build resource policy for device {}: {}",
+                device_id,
+                e
+            ),
+        }
     }
 }
 

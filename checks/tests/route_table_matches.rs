@@ -242,6 +242,7 @@ fn guard_of(src: &str, handler: &str) -> String {
         "scan",
         "stop",
         "usage",
+        "policy",
     ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();

@@ -1024,8 +1024,10 @@ async function assertRoom(fixture) {
     `a door with no power binding must lease nothing, and the stopped room must stay refused: ${JSON.stringify(frontLeases).slice(0, 300)}`
   )
 
-  // A card nobody holds, at the room: refused with the door policy's own
-  // reason, and no pulse.
+  // A card nobody holds, at the room: refused with the one vocabulary's
+  // reason, and no pulse. Until #191 a door said `Card not authorized` for a
+  // card it had never seen; the one decision says `Unknown card` at a door as
+  // at a tool, which is also what the server's own door path says.
   const denied = forRoom(roomDenied)
   ok(
     'lease/a-stranger-is-refused-at-the-room',
@@ -1033,8 +1035,8 @@ async function assertRoom(fixture) {
     `expected a refusal with no strike: ${JSON.stringify(denied[0])}`
   )
   ok(
-    'lease/the-refusal-gives-the-door-policys-reason',
-    denied.length >= 1 && /not authorized/i.test(String(denied[0].reason ?? '')),
+    'lease/the-refusal-gives-the-one-vocabularys-reason',
+    denied.length >= 1 && /unknown card/i.test(String(denied[0].reason ?? '')),
     `got ${JSON.stringify(denied[0]?.reason)}`
   )
 

@@ -6,7 +6,7 @@
 //! `main.rs`, so nothing here could be reached from `edge/tests/` and the only
 //! testable surface was whatever a module could assert about itself from the
 //! inside. It also meant a large amount of genuinely-live code —
-//! [`toolguard::ToolGuardState::has_state`], [`doors::DoorsState::len`],
+//! [`toolguard::ToolGuardState::has_state`], [`resources::ResourceCache::policy_len`],
 //! [`config::ConfigManager`] — was reported as dead, because a binary's private
 //! items are dead unless the binary itself calls them.
 

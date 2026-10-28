@@ -274,7 +274,7 @@ particular **do not call `boot-reset`** — see the warning at the end of this s
 
 ```
 POST /api/toolguard/boot-reset     ← first, always
-GET  /api/toolguard/sync           ← the allow-list (class 2 and edge only)
+GET  /api/resources/policy         ← the policy (class 2 and edge only); `sync` is its alias
 GET  /api/toolguard/module-state   ← your wiring and interlocks
 GET  /api/toolguard/power-state    ← lockouts
 subscribe to the push topics
@@ -826,6 +826,90 @@ report, exactly as `tool-log` says. On a door it is refused with
 `No open session for this resource`: there is no session for the time to belong
 to.
 
+#### `GET /api/resources/policy` — the policy, one shape
+
+**Device Bearer token only.** Every resource this device coordinates, each
+carrying every rule a device can decide from, plus the principals. One shape
+whatever the kind (#191): a door's compiled card lists and its Open Access
+hold, a tool's status and its online rule, and every resource's kind, session
+profile, strike pulse and whether it is in use. The push twin is
+`resource/policy`. [`GET /api/toolguard/sync`](#get-apitoolguardsync--the-allow-list)
+and `doors/state` are **aliases** of it for one release: each carries one half
+of this, in the shape it always had.
+
+```json
+{
+  "device_id": "…uuid…",
+  "as_of": "2026-10-28T12:00:00Z",
+  "profile_field": "card_id",
+  "resources": [
+    { "id": "…uuid…", "external_id": "laser-01", "name": "CO₂ Laser",
+      "kind": "tool", "session_profile": "until_stopped", "status": "idle",
+      "requires_online": false, "in_use": false, "enabled": true,
+      "pulse_ms": null, "allow": [], "deny": [], "hold_until": null },
+    { "id": "…uuid…", "external_id": null, "name": "Front door",
+      "kind": "door", "session_profile": "momentary", "status": "",
+      "requires_online": false, "in_use": false, "enabled": true,
+      "pulse_ms": 4200, "allow": ["9f86d081…"], "deny": [], "hold_until": null }
+  ],
+  "principals": [
+    { "digest": "9f86d081…64 hex chars…", "full_name": "A Member",
+      "is_active": true, "authorized": ["…uuid…"] }
+  ]
+}
+```
+
+- `kind` is `tool` or `door`; `session_profile` is `momentary` or
+  `until_stopped`, as `module/state` says.
+- `status` is a tool's `idle` | `in_use` | `maintenance` | `broken` |
+  `repair` | `retired`, exactly as `sync` spells it; empty on a door.
+- `requires_online` is a tool the server insists on deciding itself: ask it
+  on the resource path, and refuse if you cannot. Never set on a door.
+- `in_use` says a session is open on it as the server knows it (#190).
+- `enabled: false` is a door that is authored but must not open.
+- `pulse_ms` is the strike pulse for a resource with a `strike` binding (a
+  door's site default when it has none); `null` for a tool without one.
+- `allow` and `deny` are the card digests a door's rules compile to —
+  `argon2id` digests, hex, as everywhere here (see
+  [device classes](#device-classes)) — and `deny` beats `allow`. Empty on a
+  tool: a tool is decided from `principals`.
+- `hold_until` is the Open Access latch: held released, no card needed, until
+  that instant, compared against **your** clock so the window self-expires.
+- `principals[].digest` is `argon2id(device_pepper, card)`, never the card;
+  `authorized` lists the resources that member may start, by UUID.
+- `as_of` is when the server built it. A device keeping a cache drops a
+  payload older than the one it holds — a replayed older policy must not
+  re-add a removed door or revert a deny entry.
+
+**Deciding from it.** A device that decides locally evaluates one arm order
+for every kind, and refuses with one vocabulary; the reference edge does
+exactly this and these are its words:
+
+1. a power lockout (`power/state`) refuses first — it is sticky and fail-secure;
+2. a resource with `enabled: false` refuses;
+3. a card in `deny` refuses, whatever follows;
+4. a live `hold_until` admits any card;
+5. a card in `allow` is admitted — a compiled card rule admits a card the
+   principals may not even name;
+6. a resource with `requires_online` is asked of the server, not decided;
+7. otherwise the card is matched against `principals` by digest: unknown,
+   inactive, or not `authorized` for this resource refuses; authorized for a
+   resource whose `status` is not `idle` refuses; else admitted.
+
+| reason | meaning |
+|---|---|
+| `Tool is locked out (power)` | the resource is locked out by `power/state` |
+| `Door is disabled` | `enabled: false` |
+| `Denied by access rule` | the card's digest is in `deny` |
+| `Unknown card` | the digest is in no list and names no principal |
+| `User is not active` | the principal's membership lapsed |
+| `Card not authorized` | a known, active principal with no grant for this resource |
+| `Tool unavailable: <status>` | authorized, but `status` is not `idle` |
+
+A tool has no lists and a door no status, so each kind simply never takes the
+arms it cannot. The server's own replies on this path keep the two tables
+above and under `tool-on` until the aliases are removed.
+
 ### `POST /api/toolguard/tool-on`
 
 **Deprecated alias** of [`POST /api/resources/{id}/scan`](#post-apiresourcesidscan)
@@ -926,6 +1010,10 @@ and two refusals are specific to this endpoint:
 Both come back as `status: "error"` with HTTP **200**, like every other refusal.
 
 ### `GET /api/toolguard/sync` — the allow-list
+
+**Alias** (one release) of
+[`GET /api/resources/policy`](#get-apiresourcespolicy--the-policy-one-shape):
+its tools and principals, in the shape every shipped device reads.
 
 **Device Bearer token only.** Returns the cached authorization state for this
 device:
@@ -1271,8 +1359,9 @@ Published to `{namespace}/devices/{device_id}/{kind}`:
 | kind | meaning |
 |---|---|
 | `name` | the device's assigned name |
-| `toolguard/state` | authorization state; the push twin of `GET /sync` |
-| `doors/state` | door state snapshot |
+| `resource/policy` | every resource this device coordinates, one shape; the push twin of `GET /api/resources/policy` |
+| `toolguard/state` | authorization state; the push twin of `GET /sync`. An alias of `resource/policy` for one release |
+| `doors/state` | door state snapshot. An alias of `resource/policy` for one release |
 | `doors/unlock` | an unlock command |
 | `power/state` | lockout + circuit topology; push twin of `GET /power-state` |
 | `module/state` | module bindings + interlocks; push twin of `GET /module-state` |
@@ -1311,7 +1400,9 @@ recorded as `other`.
 ### Payloads: `doors/state` (server → device)
 
 The compiled door snapshot. One message carries every door this device
-coordinates.
+coordinates. An **alias** (one release) of `resource/policy`: the doors half of
+[the policy](#get-apiresourcespolicy--the-policy-one-shape), in the shape it
+always had.
 
 ```json
 {
