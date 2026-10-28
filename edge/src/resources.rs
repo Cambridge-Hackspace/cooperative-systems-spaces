@@ -524,8 +524,33 @@ impl ResourceCache {
     /// kind and the profile), then the policy (a resource with no wiring is
     /// still a resource). `None` when nothing knows it.
     pub fn resolve(&self, name: &str) -> Option<Resolved> {
+        // The wiring's lock is taken and released before the policy's: this
+        // function must hold at most ONE lock at a time, and callers that
+        // already hold the policy must use `resolved_from` instead. See the
+        // note there.
+        let wiring = self.wiring.resource(name);
         let policy = self.policy.read().expect("policy lock");
-        if let Some(w) = self.wiring.resource(name) {
+        Self::resolved_from(&policy, wiring, name)
+    }
+
+    /// What `resolve` answers, given a policy the caller already holds and the
+    /// wiring it already read.
+    ///
+    /// **This exists because `decide` must not re-enter the policy lock.**
+    /// `std::sync::RwLock` is not reentrant for readers in any useful sense: a
+    /// second `read()` on a thread that already holds one blocks behind any
+    /// writer queued in between, and that writer is waiting for the first read
+    /// to end -- a deadlock that wedges the lock for the whole process. The
+    /// edge then answers no scan and publishes no lease ever again, while HTTP
+    /// keeps working, so it presents as a coordinator that went quiet rather
+    /// than as a crash. CI found it on the `lease` stage the first time a
+    /// `doors/state` republish landed beside a badge (#191/#192 era).
+    fn resolved_from(
+        policy: &Policy,
+        wiring: Option<crate::modules::ResourceWiring>,
+        name: &str,
+    ) -> Option<Resolved> {
+        if let Some(w) = wiring {
             let kind = Kind::parse(&w.kind);
             let profile = SessionProfile::parse(&w.session_profile, kind);
             // A door's pulse is what the server compiled for it (its strike
@@ -569,10 +594,14 @@ impl ResourceCache {
         if self.power.is_locked(name) {
             return ScanDecision::Deny(reason::LOCKED_OUT.to_string());
         }
+        // Everything this decision needs from another lock is read BEFORE the
+        // policy's, and the policy's is taken exactly once: see
+        // [`Self::resolved_from`] for what re-entering it costs.
+        let wiring = self.wiring.resource(name);
+        let token = self.allow_list.wire_digest_hex(card).unwrap_or_default();
         let policy = self.policy.read().expect("policy lock");
         let entry = policy.find(name);
-        let token = self.allow_list.wire_digest_hex(card).unwrap_or_default();
-        let strike_ms = self.resolve(name).and_then(|r| r.pulse_ms);
+        let strike_ms = Self::resolved_from(&policy, wiring, name).and_then(|r| r.pulse_ms);
         if let Some(e) = entry {
             if !e.enabled {
                 return ScanDecision::Deny(reason::DISABLED.to_string());
@@ -1487,6 +1516,91 @@ mod tests {
             0
         );
         assert!(c.hold_sent.read().unwrap().is_empty());
+    }
+
+    /// A badge decided while a snapshot is landing must not wedge the cache.
+    ///
+    /// The defect this guards is a deadlock, not a wrong answer: `decide` held
+    /// the policy's read lock and then called `resolve`, which took it again.
+    /// `std::sync::RwLock` queues a waiting writer between those two reads, and
+    /// the second read waits for that writer while the writer waits for the
+    /// first read -- so the whole lock is wedged, for good. Every later scan,
+    /// every lease pass and every ingest blocks, and because the edge's HTTP
+    /// side keeps answering, it presents as a coordinator that silently stopped
+    /// coordinating. A real `doors/state` republish beside a badge is exactly
+    /// what produced it, in CI, with the local battery green twice.
+    ///
+    /// Written as contention on purpose: there is no single-threaded order of
+    /// calls that shows it. The watchdog is what makes it a test rather than a
+    /// hang -- on the defect this returns `Err(RecvTimeout)` instead of
+    /// blocking the suite forever.
+    #[test]
+    fn a_decision_during_a_snapshot_does_not_wedge_the_policy_lock() {
+        let c = cache("until_stopped");
+        let writer = Arc::clone(&c);
+        let (tx, rx) = std::sync::mpsc::channel::<&'static str>();
+        let wtx = tx.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wstop = Arc::clone(&stop);
+        // The ingest side: a door snapshot landing over and over, each one
+        // newer than the last so none is dropped as stale. It runs until the
+        // reader is done, so a writer is queued at every moment the reader
+        // could re-enter the lock.
+        let w = std::thread::spawn(move || {
+            let mut i = 0i64;
+            while !wstop.load(std::sync::atomic::Ordering::Relaxed) {
+                writer.apply_doors_alias(doors(
+                    t0() + Duration::milliseconds(i),
+                    compiled_door(&[&digest(CARD)], &[], None),
+                ));
+                i += 1;
+            }
+            let _ = wtx.send("writer");
+        });
+        // The decision side. Few iterations on purpose: one `decide` hashes the
+        // swipe with argon2id, measured at ~680 ms in a debug build, and on the
+        // defect the lock was held across exactly that -- so the window a
+        // writer had to arrive in was enormous and a handful of badges is
+        // ample. The cheap readers between them are the lease engine's pass and
+        // the scan path's resolve, which the same wedge also stops.
+        let reader = Arc::clone(&c);
+        let r = std::thread::spawn(move || {
+            let ttl = Duration::seconds(3);
+            let timeout = Duration::seconds(120);
+            let refresh = Duration::seconds(30);
+            for _ in 0..8 {
+                let _ = reader.decide(&door(), CARD, t0());
+                for _ in 0..50 {
+                    let _ = reader.resolve(&door());
+                    let _ = reader.requires_online("laser");
+                    let _ = reader.tick(t0(), ttl, timeout, refresh);
+                }
+            }
+            let _ = tx.send("reader");
+        });
+
+        let mut done = 0;
+        while done < 2 {
+            match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok("reader") => {
+                    // Tell the writer to stop only once the reader is through,
+                    // so contention never lets up while it matters.
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    done += 1;
+                }
+                Ok(_) => done += 1,
+                Err(e) => panic!(
+                    "a thread never finished ({e}): the policy lock is wedged. \
+                     `decide` or `tick` is taking the policy lock twice on one \
+                     thread, or holding it across another lock -- see \
+                     ResourceCache::resolved_from."
+                ),
+            }
+        }
+        w.join().expect("writer thread panicked");
+        r.join().expect("reader thread panicked");
+        // And the cache still answers afterwards, so "finished" is not "gave up".
+        assert_eq!(c.decide(&door(), CARD, t0()), allow(Some(4200)));
     }
 
     #[test]
