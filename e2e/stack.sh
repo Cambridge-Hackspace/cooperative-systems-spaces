@@ -496,9 +496,68 @@ mqtt_sub() {
 #
 # Bound to loopback: it accepts and stores anything sent to it, so it has no
 # business being reachable from off the machine.
+# Who is listening on a local TCP port: prints "<pid> <command>" or nothing.
+#
+# Three tools because this runs on three systems: `ss` on the Linux guest,
+# `lsof` on a developer's machine, `sockstat` on FreeBSD. The command is the
+# process's argument list, which is how a css-smtp-sink is told apart from
+# whatever else might hold the port: the binary is started by its path, so the
+# path's last element is in there. (Not the kernel's short command name: for a
+# script that is the interpreter on one of these systems and the script on the
+# others, and the self-test's stand-in is a script.)
+listener_on_port() {
+  local port="$1" pid=""
+  if command -v ss >/dev/null 2>&1; then
+    pid=$(ss -ltnpH "sport = :${port}" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
+  fi
+  if [[ -z ${pid} ]] && command -v lsof >/dev/null 2>&1; then
+    pid=$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | head -1)
+  fi
+  if [[ -z ${pid} ]] && command -v sockstat >/dev/null 2>&1; then
+    pid=$(sockstat -4 -l -p "${port}" 2>/dev/null | awk -v p=":${port}" '$6 ~ p"$" {print $3; exit}')
+  fi
+  [[ -n ${pid} ]] || return 1
+  printf '%s %s\n' "${pid}" "$(ps -o args= -p "${pid}" 2>/dev/null)"
+}
+
+port_closed() { ! tcp_open "$1"; }
+
+# A css-smtp-sink holding SMTP_PORT that this run did not start: stop it.
+#
+# #187: a run that dies between `up` and `down` loses its pid file, and the sink
+# it started keeps the port with that run's certificate. The next run's sink
+# then fails to bind -- one line in its log that nothing read -- and the server,
+# trusting the NEW certificate, refuses the OLD sink: 344 "certificate verify
+# failed" lines and three mail stages red for a cause three stages earlier.
+# Only a css-smtp-sink is stopped here. Anything else on the port is somebody
+# else's, and the caller refuses rather than guesses.
+stop_stale_smtp_sink() {
+  local owner pid args
+  owner=$(listener_on_port "${SMTP_PORT}") || return 0
+  pid=${owner%% *}
+  args=${owner#* }
+  case "${args}" in
+    *css-smtp-sink*)
+      warn "a css-smtp-sink from an earlier run (pid ${pid}) still holds ${SMTP_PORT}; its run died between up and down and left no pid file. Stopping it (#187)."
+      kill "${pid}" 2>/dev/null || true
+      if ! wait_for "port ${SMTP_PORT} to free" 10 port_closed "${SMTP_PORT}"; then
+        kill -9 "${pid}" 2>/dev/null || true
+        wait_for "port ${SMTP_PORT} to free" 5 port_closed "${SMTP_PORT}" || return 1
+      fi
+      ;;
+    *)
+      warn "something that is not css-smtp-sink (pid ${pid}: ${args:-unknown}) is listening on ${SMTP_PORT}; the sink cannot bind there. Stop it, or set CSS_E2E_SMTP_PORT."
+      return 1
+      ;;
+  esac
+}
+
 start_smtp_sink() {
   log "starting css-smtp-sink on ${SMTP_PORT}"
   mkdir -p "${STACK_DIR}/mail"
+
+  # The port must be ours before anything is started on it; see the function.
+  stop_stale_smtp_sink || return 1
 
   # A throwaway certificate for STARTTLS, generated per run.
   #
@@ -526,7 +585,16 @@ start_smtp_sink() {
     SMTP_SINK_TLS_CERT="${STACK_DIR}/smtp-cert.pem" \
     SMTP_SINK_TLS_KEY="${STACK_DIR}/smtp-key.pem" \
     "${ROOT}/e2e/artifacts/css-smtp-sink" >"${OUT}/logs/smtp-sink.log" 2>&1 &
-  echo $! >"${STACK_DIR}/smtp-sink.pid"
+  local pid=$!
+  echo "${pid}" >"${STACK_DIR}/smtp-sink.pid"
+
+  # It came up, and it is OURS that answers: a port that answers is not proof
+  # by itself, which is the whole of #187. The process this function started
+  # must still be alive once the port is open.
+  if ! wait_for "css-smtp-sink" 20 tcp_open "${SMTP_PORT}" || ! kill -0 "${pid}" 2>/dev/null; then
+    warn "css-smtp-sink did not come up on ${SMTP_PORT}: $(tail -3 "${OUT}/logs/smtp-sink.log" 2>/dev/null | tr '\n' ' ')"
+    return 1
+  fi
 }
 
 stop_smtp_sink() {
@@ -534,6 +602,9 @@ stop_smtp_sink() {
     kill "$(cat "${STACK_DIR}/smtp-sink.pid")" 2>/dev/null || true
     rm -f "${STACK_DIR}/smtp-sink.pid"
   fi
+  # By port as well as by pid file (#187): the pid file is exactly what a run
+  # that died between up and down does not leave behind.
+  stop_stale_smtp_sink || true
 }
 
 # The Groups.io destination. A plain HTTP sink, so unlike css-smtp-sink it needs
