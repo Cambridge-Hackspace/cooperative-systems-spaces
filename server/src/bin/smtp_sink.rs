@@ -211,9 +211,19 @@ fn serve(
     }
 }
 
+/// One write per reply line, CRLF included.
+///
+/// It used to be two: the line, then the CRLF, each its own TCP segment on an
+/// unbuffered stream. A client that reads a line at a time -- lettre, every
+/// real mailer -- never sees the seam. A client that does ONE read after
+/// `STARTTLS` and takes whatever it got as the 220 -- `openssl s_client`, which
+/// the mail stage uses to check whose certificate the sink presents (#187) --
+/// got `220 2.0.0 Ready to start TLS` without its CRLF, began TLS, and read the
+/// stray CRLF as the first TLS record: "wrong version number", no certificate,
+/// and the sink logging "TLS handshake: unexpected EOF". The wire is the same
+/// bytes either way; what changed is that they now arrive together.
 fn say<W: Write>(w: &mut W, line: &str) -> std::io::Result<()> {
-    w.write_all(line.as_bytes())?;
-    w.write_all(b"\r\n")?;
+    w.write_all(format!("{line}\r\n").as_bytes())?;
     w.flush()
 }
 

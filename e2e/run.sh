@@ -351,6 +351,14 @@ stage_preflight() {
       "$((avail_kb / 1024)) MiB free at $(pwd); this suite needs 8 GiB"
   fi
 
+  # The stack script's own self-test (#187): a stale sink is replaced, a
+  # foreign listener is refused, a clean start is a clean start.
+  if bash "${HERE}/test/smtp-sink.sh" >"${OUT}/logs/smtp-sink-selftest.log" 2>&1; then
+    record_case "stack/smtp-sink-self-test" ok
+  else
+    record_case "stack/smtp-sink-self-test" fail "see logs/smtp-sink-selftest.log"
+  fi
+
   emit_junit preflight "provision=${PROVISION}" "engine=${ENGINE:-none}"
 }
 
@@ -469,11 +477,13 @@ stage_up() {
   # Before the server, because css-server's [email] points at it and a mailer
   # whose relay refuses the connection is indistinguishable, from the outside,
   # from a mailer that was never asked to send.
-  start_smtp_sink
-  if wait_for "css-smtp-sink" 20 tcp_open "${SMTP_PORT}"; then
+  # start_smtp_sink waits for the sink itself (#187): a port that answers is
+  # not proof the sink this run started is the one answering.
+  if start_smtp_sink; then
     record_case "up/smtp-sink" ok
   else
-    record_case "up/smtp-sink" fail "never accepted a connection on ${SMTP_PORT}"
+    record_case "up/smtp-sink" fail \
+      "css-smtp-sink did not come up on ${SMTP_PORT} -- see the WARN above and logs/smtp-sink.log"
     collect_stack_logs
     emit_junit up
     return 1
@@ -1097,6 +1107,23 @@ stage_mail() {
     record_case "mail/sink-is-up" ok
   else
     record_case "mail/sink-is-up" fail "nothing is listening on ${SMTP_PORT}"
+    emit_junit mail
+    return 1
+  fi
+
+  # And it is THIS run's sink (#187): the certificate it presents over STARTTLS
+  # is the one this run generated. A sink from an earlier run presents that
+  # run's, the server refuses it, and every case below fails as "no mail
+  # arrived" -- a password-reset bug to the reader, a stale process in fact.
+  local expected presented
+  expected=$(openssl x509 -in "${STACK_DIR}/smtp-cert.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
+  presented=$(openssl s_client -connect "127.0.0.1:${SMTP_PORT}" -starttls smtp </dev/null 2>/dev/null \
+    | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
+  if [[ -n ${expected} && ${presented} == "${expected}" ]]; then
+    record_case "mail/sink-presents-this-runs-certificate" ok
+  else
+    record_case "mail/sink-presents-this-runs-certificate" fail \
+      "the sink on ${SMTP_PORT} presents ${presented:-no certificate}; this run generated ${expected:-none}. A sink from an earlier run is holding the port (#187)."
     emit_junit mail
     return 1
   fi
