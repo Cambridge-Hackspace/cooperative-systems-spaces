@@ -2,7 +2,12 @@
 /target
 **/*.rs.bk
 
-# Node
+# Node. The repository root is not a Node project, but a vitest or npm run from
+# here writes one anyway -- and #195 is what that cost: a tracked
+# `node_modules/.vite/vitest/<hash>/results.json`, committed by a run from the
+# wrong directory and then showing up as a *deletion* in every worktree that
+# did not have it. The root entry is the one that stops that.
+/node_modules
 /frontend/node_modules
 /frontend/dist
 /frontend_edge/node_modules
