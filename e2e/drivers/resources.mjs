@@ -377,21 +377,39 @@ main(async () => {
   assertEq('resources/policy-door-is-enabled', true, pdoor?.enabled)
   assertEq('resources/policy-door-carries-its-strike-pulse', 4200, pdoor?.pulse_ms)
   assertEq('resources/policy-door-is-never-online-decided', false, pdoor?.requires_online)
-  // The member's user rule compiles to the member's cards, so every digest the
-  // member's principals carry is in the door's allow set: the card that starts
-  // the tool opens the door. What this does NOT assert is equality. Against a
-  // real stack the door's set carried one digest more than the member's
-  // principals did (observed 2026-10-28, same member, same second), and the
-  // two unions read identically in the source -- so the extra is recorded
-  // here rather than hidden, and tracked as its own issue.
+  // The door's allow set is every card of every member its rules select, as
+  // digests. Two rules select here, and #200 is why that is spelled out: the
+  // fixture's `kind=user` rule for the member, and the standing `role=staff`
+  // allow that `create_door` seeds (#101, so an administrator's remote unlock
+  // is an explicit, auditable, revocable rule rather than an invisible
+  // capability). A staff member who holds a card is therefore in the set by
+  // right, and the extra digest that looked like a leak was one.
+  //
+  // So the rules are pinned first -- a change in what a new door is seeded
+  // with shows up here as itself, not as a mystery digest -- and then the set
+  // is held to two claims: every digest in it belongs to a member the policy
+  // names, and the badging member's own digests are all present. The first is
+  // what a containment-only assertion could not make: a digest belonging to
+  // nobody at all would have passed it.
+  const doorRules = (await GET(`/api/admin/doors/${door.id}/rules`, T)).json?.data ?? []
+  const ruleShape = doorRules
+    .map((r) => `${r.effect}:${r.kind}:${r.kind === 'user' ? (r.value === member.user.id ? 'the-member' : r.value) : r.value}`)
+    .sort()
+  assertEq('resources/policy-door-rules-are-the-seed-and-the-fixture',
+    JSON.stringify(['allow:role:staff', 'allow:user:the-member']), JSON.stringify(ruleShape),
+    `a new door is seeded with a standing staff allow and the fixture adds one user rule: ${JSON.stringify(doorRules)}`)
   const mineDigests = mine.map((u) => u.digest)
-  const extras = (pdoor?.allow ?? []).filter((d) => !mineDigests.includes(d))
+  const named = new Map((rp.principals ?? []).map((u) => [u.digest, u.full_name]))
+  const unexplained = (pdoor?.allow ?? []).filter((d) => !named.has(d))
   ok('resources/policy-door-carries-the-compiled-rule-as-digests',
     Array.isArray(pdoor?.allow) && mineDigests.length >= 1 &&
       pdoor.allow.every((d) => /^[0-9a-f]{64}$/.test(d)) &&
-      mineDigests.every((d) => pdoor.allow.includes(d)),
-    `the member's principals' digests ${JSON.stringify(mineDigests)} should all be in the door's allow set ` +
-      `${JSON.stringify(pdoor?.allow)}; digests the principals do not explain: ${JSON.stringify(extras)}`)
+      mineDigests.every((d) => pdoor.allow.includes(d)) &&
+      unexplained.length === 0,
+    `the door's allow set ${JSON.stringify(pdoor?.allow)} must hold the member's digests ` +
+      `${JSON.stringify(mineDigests)} and nothing the policy cannot name; unexplained: ` +
+      `${JSON.stringify(unexplained)} (owners of the rest: ` +
+      `${JSON.stringify((pdoor?.allow ?? []).map((d) => named.get(d) ?? null))})`)
   ok('resources/policy-door-has-no-deny-and-no-hold', pdoor?.deny?.length === 0 && pdoor?.hold_until === null,
     JSON.stringify(pdoor).slice(0, 200))
   ok('resources/policy-omits-a-tool-the-device-does-not-coordinate',
