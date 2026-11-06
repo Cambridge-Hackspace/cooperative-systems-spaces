@@ -19,6 +19,7 @@ use crate::config::{AuthStatus, Config};
 use crate::registration::register_device;
 use crate::system_info::SystemInfo;
 use crate::toolguard::ToolGuardState;
+use crate::transport_health::{TransportHealth, TransportStatus};
 
 #[cfg(not(debug_assertions))]
 #[derive(RustEmbed, Clone)]
@@ -35,6 +36,10 @@ pub struct AppState {
     /// startup. A sensitive endpoint is served to a loopback client
     /// unconditionally, or to a remote client that presents this token.
     pub pairing_token: Arc<String>,
+    /// What the edge knows about its own uplink. Shared with whichever remote
+    /// transport main started, so `/api/status` can answer "is the link up"
+    /// locally -- the question #207 made unanswerable from the device.
+    pub transport_health: Arc<TransportHealth>,
 }
 
 /// #120 (#123/H1): a sensitive local endpoint (`/api/register`, `/api/status`,
@@ -60,6 +65,11 @@ pub struct DeviceStatusResponse {
     pub is_registered: bool,
     pub auth_status: String,
     pub system_info: SystemInfo,
+    /// Registration and authentication say whether the edge is ALLOWED to talk
+    /// to the server, not whether it currently is. Reporting both as the whole
+    /// of "status" is what let a permanently-offline edge look healthy to the
+    /// operator standing in front of it.
+    pub remote_transport: TransportStatus,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +126,7 @@ pub async fn get_status(
             AuthStatus::Denied => "denied".to_string(),
         },
         system_info,
+        remote_transport: state.transport_health.snapshot(),
     };
 
     Ok(Json(ApiResponse::success(status)))
@@ -336,6 +347,7 @@ pub async fn start_web_server(
     toolguard_state: Arc<ToolGuardState>,
     frontend_path: String,
     pairing_token: Arc<String>,
+    transport_health: Arc<TransportHealth>,
 ) -> Result<()> {
     // #120 (#123/H1): bind loopback by default (config-overridable) instead of
     // 0.0.0.0, and log the address actually bound rather than a hard-coded
@@ -343,6 +355,7 @@ pub async fn start_web_server(
     let bind_host = config.read().unwrap().web_ui_bind_address.clone();
 
     let state = AppState {
+        transport_health,
         config,
         config_path,
         toolguard_state,

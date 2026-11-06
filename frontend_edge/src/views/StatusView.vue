@@ -53,6 +53,35 @@
             <div class="stat-title">IPv4 Address</div>
             <div class="stat-value text-lg">{{ status.system_info.ipv4_address }}</div>
           </div>
+          <div class="stat bg-base-200 rounded-lg">
+            <div class="stat-title">Server Link</div>
+            <div
+              class="stat-value text-lg"
+              :class="{
+                'text-success': status.remote_transport?.connected === true,
+                'text-error': status.remote_transport?.connected === false,
+              }"
+            >
+              {{ transportText }}
+            </div>
+            <div v-if="status.remote_transport?.key_exchange" class="stat-desc">
+              {{ status.remote_transport.key_exchange }}
+            </div>
+          </div>
+        </div>
+
+        <!-- The link is down. Registration and authentication can both be fine
+             while this is broken, which is how #207 stayed hidden: the portal
+             showed the device offline and the device itself said nothing. -->
+        <div v-if="status.remote_transport?.connected === false" class="alert alert-error mb-6">
+          <span>
+            Not connected to the server. Registration is unaffected; changes made on the server will
+            not reach this device until the link is back.
+            <template v-if="(status.remote_transport?.supervisor_restarts ?? 0) > 0">
+              The transport has restarted
+              {{ status.remote_transport?.supervisor_restarts }} time(s).
+            </template>
+          </span>
         </div>
 
         <!-- Registration Form (only if not registered) -->
@@ -202,6 +231,16 @@ const activeTab = ref<'web' | 'cli'>('web')
 let pollInterval: number | null = null
 
 const deviceName = computed(() => status.value.device_name || 'edge apparatus')
+
+// Three states, not two. `null` means the active transport does not report its
+// liveness (MQTT), and rendering that as "Disconnected" would be a fresh
+// falsehood in place of the old silence.
+const transportText = computed(() => {
+  const t = status.value.remote_transport
+  if (!t || !t.kind) return 'Starting...'
+  if (t.connected === null) return t.kind
+  return `${t.kind} - ${t.connected ? 'connected' : 'disconnected'}`
+})
 
 const statusText = computed(() => {
   const statusMap = {

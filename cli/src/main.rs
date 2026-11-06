@@ -74,6 +74,9 @@ async fn main() -> Result<()> {
     // Initialize logging
     init_logging(cli.verbose);
 
+    // Before the first HTTPS request, which is every command this binary has.
+    css_cli::tls::install_crypto_provider();
+
     // Load configuration
     let mut config = if let Some(config_path) = cli.config {
         CliConfig::from_file(&config_path)

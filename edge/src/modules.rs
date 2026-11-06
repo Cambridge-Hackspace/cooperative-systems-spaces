@@ -1014,7 +1014,6 @@ mod tests {
     // by nothing outside these tests, so every `fail_off` binding looked
     // permanently silent and no lease was ever granted to one.
 
-    #[test]
     /// A coordinator's own binding must not gate the tool it coordinates.
     ///
     /// #161 needs the edge bound to a tool in the `edge` role so the server will

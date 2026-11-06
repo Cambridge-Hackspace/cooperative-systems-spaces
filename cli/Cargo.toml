@@ -25,7 +25,23 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # CLI-specific dependencies
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+# reqwest 0.12, not 0.11: 0.11 pins rustls 0.21, which predates the crypto
+# provider abstraction entirely and cannot do hybrid post-quantum key exchange
+# at any feature setting. Carrying it also meant two rustls series in one lock,
+# which server/Cargo.toml names as its reason for staying on native-tls -- that
+# reason is now gone.
+# `rustls-tls-webpki-roots-no-provider` and not `rustls-tls`: the plain feature
+# forces rustls's `ring` provider, which would put BOTH providers in the build
+# and return rustls to the state where it cannot auto-determine one. Worse, it
+# is not even stable across build paths -- feature unification means
+# `cargo build -p css-edge` and `cargo build --workspace` would compile
+# different provider sets. The no-provider variant takes the webpki root store
+# and leaves the provider to the explicit rustls dependency below.
+reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots-no-provider"] }
+# Same decision as edge/Cargo.toml, for the same reasons; see there. Declared
+# rather than inherited so the provider is not whatever reqwest's feature set
+# happens to imply this release.
+rustls = { version = "0.23", features = ["aws_lc_rs", "prefer-post-quantum"] }
 url = "2.5.7"
 dirs = "5.0"
 rpassword = "7.3"
