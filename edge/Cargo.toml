@@ -40,6 +40,19 @@ hex = "0.4"
 
 # WebSocket transport (alternative to MQTT)
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+# DECLARED HERE EVEN THOUGH TUNGSTENITE ALREADY PULLS IT, because tungstenite
+# enables rustls with DEFAULT FEATURES OFF -- so neither provider feature
+# arrived, and rustls 0.23 panics the first time a TLS config is built when it
+# cannot determine one. That was #207: the WebSocket task died on every boot
+# while the rest of the edge kept working, so the edge showed offline and its
+# own log said nothing above INFO. Naming rustls here makes the provider this
+# crate's decision instead of a side effect of someone else's feature list.
+#
+# aws_lc_rs and not ring: ML-KEM lives only in rustls's aws_lc_rs provider, and
+# `prefer-post-quantum` is defined as ["aws_lc_rs"], so ring would opt the
+# control plane out of hybrid key exchange. Dockerfile.edge's builder already
+# installs cmake, which is aws-lc-sys's only extra build requirement.
+rustls = { version = "0.23", features = ["aws_lc_rs", "prefer-post-quantum"] }
 futures-util = "0.3"
 url = "2"
 

@@ -59,6 +59,12 @@ async fn main() -> Result<()> {
 
     init_logging(args.verbose);
 
+    // BEFORE ANYTHING THAT MIGHT BUILD A TLS CONFIG, which on this binary means
+    // before the WebSocket transport starts. rustls panics rather than erroring
+    // when no provider is installed, and a panic in a spawned task is not
+    // something the task's own retry loop can catch (#207).
+    css_edge::tls::install_crypto_provider();
+
     info!("Edge binary started");
 
     if args.generate_config {
@@ -67,6 +73,11 @@ async fn main() -> Result<()> {
     }
 
     let app_config = load_config(&args.config)?;
+
+    // Created here, before either the web server or a transport, because both
+    // need it and neither owns it: the web server starts first and must be able
+    // to say "no transport yet" rather than imply a healthy link.
+    let transport_health = std::sync::Arc::new(css_edge::transport_health::TransportHealth::new());
     info!("Configuration loaded from: {}", args.config);
     info!("Edge client name: {}", app_config.name);
 
@@ -133,6 +144,7 @@ async fn main() -> Result<()> {
                 Arc::new(ToolGuardState::new()),
                 args.frontend_path,
                 pairing_token.clone(),
+                transport_health.clone(),
             )
             .await?;
         }
@@ -149,6 +161,7 @@ async fn main() -> Result<()> {
                 Arc::new(ToolGuardState::new()),
                 args.frontend_path,
                 pairing_token.clone(),
+                transport_health.clone(),
             )
             .await?;
         }
@@ -500,6 +513,7 @@ async fn main() -> Result<()> {
             let config_path_for_web = args.config.clone();
             let frontend_path_for_web = args.frontend_path.clone();
             let tgs_for_web = Arc::clone(&toolguard_state);
+            let health_for_web = Arc::clone(&transport_health);
             tokio::spawn(async move {
                 if let Err(e) = start_web_server(
                     config_for_web,
@@ -508,6 +522,7 @@ async fn main() -> Result<()> {
                     tgs_for_web,
                     frontend_path_for_web,
                     pairing_token.clone(),
+                    health_for_web,
                 )
                 .await
                 {
@@ -519,6 +534,10 @@ async fn main() -> Result<()> {
             use css_edge::config::RemoteTransport;
             match app_config.remote_transport {
                 RemoteTransport::Mqtt => {
+                    // Named but not judged: paho reconnects internally and the
+                    // edge never sees the transitions, so claiming either state
+                    // would be a guess dressed as a reading.
+                    transport_health.declare_untracked("mqtt");
                     if app_config.remote_mqtt_config.is_none() {
                         info!("Remote MQTT not configured - running without remote connection");
                         // Drop the doors-event receiver so local scans don't queue indefinitely.
@@ -575,6 +594,7 @@ async fn main() -> Result<()> {
                         &remote_instance_url,
                         remote_auth_token.clone(),
                         edge_inbound.clone(),
+                        transport_health.clone(),
                     )?;
 
                     // Bridge: local RFID scans → server `doors/event`.

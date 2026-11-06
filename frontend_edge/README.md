@@ -73,6 +73,16 @@ The frontend expects these API endpoints from the edge apparatus:
 - `GET /api/status` - Get current device status
 - `POST /api/register` - Register device with Space Server
 
+`/api/status` carries `remote_transport` alongside the registration fields,
+because registration and authentication say whether the edge is _allowed_ to
+talk to the server, not whether it currently is. Its `connected` is
+three-valued: `true`, `false`, or `null` when the active transport does not
+report its own liveness (MQTT, where paho reconnects internally and the edge
+never sees the transitions). `key_exchange` is the negotiated TLS group, so a
+hybrid post-quantum handshake reads as `X25519MLKEM768` rather than being
+assumed, and `supervisor_restarts` is non-zero if the transport has had to be
+resurrected -- worth seeing even on a link that is up.
+
 ## Deployment
 
 To deploy to the edge apparatus:

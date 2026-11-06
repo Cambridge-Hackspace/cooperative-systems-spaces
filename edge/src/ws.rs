@@ -18,13 +18,60 @@ use tokio::time::interval;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{debug, info, warn};
+use tokio_tungstenite::MaybeTlsStream;
+use tracing::{debug, error, info, warn};
 
 use crate::edge_inbound::EdgeInbound;
 use crate::system_info::get_system_info;
+use crate::transport_health::TransportHealth;
 
 /// Cap on reconnect backoff (matches MQTT client's automatic reconnect cap).
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// The outbound queue, shared rather than owned by the supervisor task. It has
+/// to outlive that task: a supervisor that panics takes everything it owns with
+/// it, and the whole point of the watchdog below is that a replacement can pick
+/// the queue back up instead of the edge losing its upstream for good.
+type Outbound = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<WireMessage>>>;
+
+/// What to do about a supervisor task that finished.
+#[derive(Debug, PartialEq, Eq)]
+enum SupervisorVerdict {
+    Restart,
+    Stop,
+}
+
+/// Split out of `supervise` so the policy can be driven in a unit test without
+/// a server to connect to. The distinction that matters is the one #207 turned
+/// on: a PANIC is not an `Err` from the supervisor's own point of view, it is an
+/// `Err` from the JOIN HANDLE's -- so it is only visible to a caller that kept
+/// the handle and awaited it.
+fn verdict(outcome: &Result<(), tokio::task::JoinError>) -> SupervisorVerdict {
+    match outcome {
+        // `run` loops forever, so a clean return is itself a fault.
+        Ok(()) => SupervisorVerdict::Restart,
+        Err(e) if e.is_panic() => SupervisorVerdict::Restart,
+        // Cancelled: the runtime is shutting down, not a fault to recover from.
+        Err(_) => SupervisorVerdict::Stop,
+    }
+}
+
+/// The TLS key exchange group this connection negotiated, where it can be seen.
+///
+/// Reported because the edge only *prefers* post-quantum: it offers hybrid
+/// X25519+ML-KEM, and whatever terminates TLS in front of css-server may not
+/// offer it, in which case the handshake quietly settles on classical X25519.
+/// A plaintext `ws://` connection has no group at all, hence the Option.
+fn negotiated_key_exchange(stream: &MaybeTlsStream<tokio::net::TcpStream>) -> Option<String> {
+    match stream {
+        MaybeTlsStream::Rustls(tls) => {
+            let (_io, conn) = tls.get_ref();
+            conn.negotiated_key_exchange_group()
+                .map(|group| format!("{:?}", group.name()))
+        }
+        _ => None,
+    }
+}
 
 #[derive(Clone)]
 pub struct WsClient {
@@ -37,6 +84,7 @@ pub struct WsClient {
     connect_url: String,
     auth_token: String,
     start_time: std::time::Instant,
+    health: Arc<TransportHealth>,
 }
 
 impl WsClient {
@@ -46,28 +94,87 @@ impl WsClient {
         remote_instance_url: &str,
         auth_token: String,
         inbound: Arc<EdgeInbound>,
+        health: Arc<TransportHealth>,
     ) -> Result<Arc<Self>> {
         let connect_url = http_to_ws_url(remote_instance_url)
             .with_context(|| format!("invalid remote_instance_url: {remote_instance_url}"))?;
         let (outbound, outbound_rx) = mpsc::unbounded_channel::<WireMessage>();
+        health.declare_tracked("websocket");
         let client = Arc::new(Self {
             inbound,
             outbound,
             connect_url,
             auth_token,
             start_time: std::time::Instant::now(),
+            health,
         });
+        let outbound_rx: Outbound = Arc::new(tokio::sync::Mutex::new(outbound_rx));
         let supervisor = client.clone();
-        tokio::spawn(async move { supervisor.run(outbound_rx).await });
+        tokio::spawn(async move { supervisor.supervise(outbound_rx).await });
         Ok(client)
+    }
+
+    /// Watchdog over the reconnect supervisor.
+    ///
+    /// WHY A TASK WATCHING A TASK. `run` below already reconnects forever with
+    /// backoff, and it was useless against #207, because a PANIC IS NOT AN
+    /// `Err`: it unwound the supervisor task, so the `match` never saw it and
+    /// the reconnect loop died with the task. The `JoinHandle` was dropped at
+    /// the `spawn`, so nothing observed the death either -- the edge went on
+    /// serving its local broker and its HTTP sync, showed offline in the portal,
+    /// and said nothing above INFO about why. That silence was the defect that
+    /// made a one-line dependency fault take three weeks to notice.
+    ///
+    /// So the handle is kept and awaited. `run` never returns, which makes a
+    /// completed handle diagnostic in itself: `Err` is a panic, and even `Ok`
+    /// means the loop stopped looping, which should never happen.
+    ///
+    /// It RESTARTS rather than exiting the process, deliberately. Exiting is the
+    /// cleaner signal when something will restart the container, but that is a
+    /// deployment property this code cannot see -- the edge runs under rootless
+    /// podman with no restart policy guaranteed -- and turning a degraded edge
+    /// into a dead one is the worse failure for a box that still answers scans.
+    /// The restart count is reported through `/api/status` so a link that is
+    /// only up because it keeps being resurrected does not read as healthy.
+    async fn supervise(self: Arc<Self>, outbound: Outbound) {
+        use SupervisorVerdict::{Restart, Stop};
+        let mut backoff = Duration::from_secs(1);
+        loop {
+            let inner = self.clone();
+            let queue = outbound.clone();
+            let outcome = tokio::spawn(async move { inner.run(queue).await }).await;
+            match verdict(&outcome) {
+                Restart => match &outcome {
+                    Ok(()) => error!("WebSocket supervisor returned, which it never should"),
+                    Err(e) => error!("WebSocket supervisor PANICKED: {e}"),
+                },
+                Stop => {
+                    // The runtime is going away; a replacement would only die too.
+                    warn!("WebSocket supervisor cancelled; not restarting");
+                    self.health.mark_disconnected();
+                    return;
+                }
+            }
+            let n = self.health.note_supervisor_restart();
+            error!(
+                "WebSocket transport is DOWN; restarting its supervisor in {:?} (restart #{})",
+                backoff, n
+            );
+            tokio::time::sleep(backoff).await;
+            backoff = std::cmp::min(backoff * 2, MAX_BACKOFF);
+        }
     }
 
     /// Internal supervisor loop: connect, run the read+write halves until
     /// either side errors, then reconnect with exponential backoff.
-    async fn run(self: Arc<Self>, mut outbound_rx: mpsc::UnboundedReceiver<WireMessage>) {
+    async fn run(self: Arc<Self>, outbound: Outbound) {
         let mut backoff = Duration::from_secs(1);
         loop {
-            match self.connect_once(&mut outbound_rx).await {
+            let outcome = self.connect_once(&outbound).await;
+            // Whatever ended the session, the link is down and must stop
+            // reporting a negotiated group -- a stale one reads as present tense.
+            self.health.mark_disconnected();
+            match outcome {
                 Ok(()) => {
                     info!("WebSocket session ended cleanly; reconnecting");
                     backoff = Duration::from_secs(1);
@@ -86,10 +193,8 @@ impl WsClient {
 
     /// One connection lifetime. Returns `Ok(())` on clean close, `Err` on
     /// any failure that should trigger a reconnect.
-    async fn connect_once(
-        self: &Arc<Self>,
-        outbound_rx: &mut mpsc::UnboundedReceiver<WireMessage>,
-    ) -> Result<()> {
+    async fn connect_once(self: &Arc<Self>, outbound: &Outbound) -> Result<()> {
+        let mut outbound_rx = outbound.lock().await;
         let mut req = self
             .connect_url
             .as_str()
@@ -107,6 +212,12 @@ impl WsClient {
             .await
             .context("WebSocket connect failed")?;
         debug!("WebSocket: upgraded ({:?})", response.status());
+        let key_exchange = negotiated_key_exchange(stream.get_ref());
+        match &key_exchange {
+            Some(group) => info!("WebSocket: TLS key exchange {group}"),
+            None => info!("WebSocket: no TLS layer to report a key exchange for"),
+        }
+        self.health.mark_connected(key_exchange);
 
         let (mut sink, mut source) = stream.split();
 
@@ -256,5 +367,44 @@ mod tests {
     #[test]
     fn bad_scheme_rejected() {
         assert!(http_to_ws_url("mqtt://x").is_err());
+    }
+
+    /// What this does NOT prove: that `supervise` wires the verdict up
+    /// correctly, which needs a reachable server. It proves the decision, and
+    /// that a panicking task is distinguishable from a cancelled one at all --
+    /// the distinction the old code could not make because it never held the
+    /// handle.
+    #[tokio::test]
+    async fn a_panicking_supervisor_is_restarted() {
+        let outcome = tokio::spawn(async { panic!("the provider is missing") }).await;
+        let err = outcome
+            .as_ref()
+            .expect_err("a panicking task reported success");
+        assert!(err.is_panic(), "a panic must be visible as a panic");
+        assert_eq!(verdict(&outcome), SupervisorVerdict::Restart);
+    }
+
+    #[tokio::test]
+    async fn a_supervisor_that_returns_is_also_restarted() {
+        // `run` is an infinite loop; returning means it stopped looping.
+        let outcome = tokio::spawn(async {}).await;
+        assert!(outcome.is_ok());
+        assert_eq!(verdict(&outcome), SupervisorVerdict::Restart);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_supervisor_is_left_alone() {
+        let handle = tokio::spawn(async { std::future::pending::<()>().await });
+        handle.abort();
+        let outcome = handle.await;
+        let err = outcome
+            .as_ref()
+            .expect_err("an aborted task reported success");
+        assert!(err.is_cancelled());
+        assert_eq!(
+            verdict(&outcome),
+            SupervisorVerdict::Stop,
+            "respawning into a dying runtime is a restart loop, not a recovery"
+        );
     }
 }

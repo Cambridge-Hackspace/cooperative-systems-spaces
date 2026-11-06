@@ -21,7 +21,9 @@ pub mod registration;
 pub mod resources;
 pub mod static_files;
 pub mod system_info;
+pub mod tls;
 pub mod toolguard;
+pub mod transport_health;
 pub mod web_server;
 pub mod ws;
 
