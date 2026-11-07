@@ -81,8 +81,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # the server, it drives its own scratch database, and it opens no HTTP session at
 # all -- so it claims no address and nothing in it cares where the admin comes
 # from.
-STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -2052,6 +2052,176 @@ stage_health() {
 #
 # This is the first stage to run an *authenticated* edge. The devices stage runs
 # an Unauthenticated one on purpose, which starts a web server and nothing else.
+# ── bridge: the IoT bridge against a real edge ───────────────────────────────
+#
+# Cambridge-Hackspace/spaces-iot-bridge makes a Zigbee plug appear to this edge
+# as a `power` module by speaking the resource/* wire on its behalf. Everything
+# in its own repository is tested against a fake broker; this is the only place
+# it meets a real edge, a real registration and a real lease -- and it is the
+# first thing on that wire that is deliberately several devices at once and is
+# not firmware. Zigbee2MQTT is faked with mqtt_pub on the same broker: the plug
+# is `zigbee2mqtt/<friendly>` and its commands arrive on `/set`.
+#
+# What this proves, in windows:
+#   A. plug silent -> the bridge's power reports OMIT relay_on. "Cannot report"
+#      is not "off", and the laser's stage-0 confirmation turns on that field.
+#   B. member tool-on -> the edge grants -> the bridge commands the plug ON with
+#      on_time -> the fake plug answers ON -> relay_on: true appears.
+#   C. the signature: a RETAINED replay on reconnect is not believed. The bridge
+#      is restarted under a retained {"state":"ON"}; it must ask /get and omit
+#      relay_on until a live report answers.
+#   D. the plug drops off the mesh -> stop-on-loss publishes resource/request/stop
+#      within its debounce -> the edge refuses -> the bridge commands OFF.
+#
+# What it does NOT prove: anything about a real plug or Zigbee timing (#9 over
+# there), and the edge acting on the stop beyond refusing the lease.
+stage_bridge() {
+  cases_begin bridge
+  stack_paths
+
+  if ! server_ready; then
+    record_case "bridge/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit bridge
+    return 1
+  fi
+  record_case "bridge/stack-is-up" ok
+  if [[ ! -x "${ROOT}/e2e/artifacts/spaces-iot-bridge" ]]; then
+    record_case "bridge/binary-built" fail "e2e/artifacts/spaces-iot-bridge is missing; build.sh clones and builds it at a tag"
+    emit_junit bridge
+    return 1
+  fi
+  record_case "bridge/binary-built" ok
+
+  # Setup: admin, tool, member+card, the EDGE registered and bound, both configs,
+  # the broker logins, and an invite for the bridge to claim itself.
+  run_node bridge.mjs setup "${MQTT_PORT}" "${CARDS_DEVICE_PEPPER}" >"${OUT}/logs/bridge-setup.log" 2>&1 || true
+  absorb_driver_cases || true
+  if [[ ! -f "${STACK_DIR}/bridge-invite" ]]; then
+    record_case "bridge/setup" fail "setup wrote no invite; see logs/bridge-setup.log"
+    emit_junit bridge
+    return 1
+  fi
+  record_case "bridge/setup" ok
+
+  # The bridge registers ITSELF with its own subcommand. That is the real path:
+  # host MAC, platform linux, the capabilities shape the firmware crate cannot
+  # express, and an identity file it refuses to overwrite.
+  mkdir -p "${STACK_DIR}/bridge-identities"
+  if register_bridge extractor "$(cat "${STACK_DIR}/bridge-invite")" \
+    && [[ -s "${STACK_DIR}/bridge-identities/extractor.toml" ]]; then
+    record_case "bridge/registers-itself" ok
+  else
+    record_case "bridge/registers-itself" fail "register did not write the identity; see logs/spaces-iot-bridge-register.log"
+    emit_junit bridge
+    return 1
+  fi
+  if register_bridge extractor "$(cat "${STACK_DIR}/bridge-invite")" 2>/dev/null; then
+    record_case "bridge/never-re-registers" fail "a second register succeeded; a live identity was overwritten"
+  else
+    record_case "bridge/never-re-registers" ok
+  fi
+  run_node bridge.mjs bind >"${OUT}/logs/bridge-bind.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  local edge_port=8080
+  if tcp_open "${edge_port}"; then
+    record_case "bridge/port-is-free" fail "something is already listening on ${edge_port}"
+    emit_junit bridge
+    return 1
+  fi
+  local fixture="${STACK_DIR}/bridge-edge-frontend"
+  mkdir -p "${fixture}"
+  printf '<!doctype html><title>bridge</title>\n' >"${fixture}/index.html"
+  if ! start_edge css-edge "${fixture}" edge-bridge.config.toml; then
+    record_case "bridge/edge-starts" fail "could not start css-edge"
+    emit_junit bridge
+    return 1
+  fi
+  if wait_for "css-edge to sync its wiring" 60 edge_logged "Module state synced from remote"; then
+    record_case "bridge/edge-fetched-its-wiring" ok
+  else
+    record_case "bridge/edge-fetched-its-wiring" fail "css-edge never logged a module-state sync"
+    stop_edge
+    emit_junit bridge
+    return 1
+  fi
+
+  local friendly="e2e/plug/extractor" tool card
+  tool="$(cat "${STACK_DIR}/bridge-tool-id")"
+  card="$(cat "${STACK_DIR}/bridge-card")"
+
+  start_bridge
+  if wait_for "the bridge to connect to both brokers" 30 bridge_logged "edge: connected"; then
+    record_case "bridge/bridge-starts" ok
+  else
+    record_case "bridge/bridge-starts" fail "the bridge never logged edge: connected; see logs/spaces-iot-bridge-live.log"
+    stop_bridge
+    stop_edge
+    emit_junit bridge
+    return 1
+  fi
+
+  # Window A: the plug has said nothing. Every power report must omit relay_on.
+  mqtt_sub "resource/request/power" 4 "${STACK_DIR}/bridge-power-A.txt"
+
+  # Window B: member tool-on -> grant -> the bridge commands the plug ON.
+  mqtt_sub "zigbee2mqtt/${friendly}/set" 8 "${STACK_DIR}/bridge-set-B.txt" &
+  local set_sub=$!
+  sleep 1
+  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
+  wait "${set_sub}" || true
+  # The fake plug obeys, and the next reports may carry relay_on: true.
+  mqtt_pub "zigbee2mqtt/${friendly}" '{"state":"ON"}' || true
+  mqtt_sub "resource/request/power" 4 "${STACK_DIR}/bridge-power-B.txt"
+
+  # Window C: a retained replay must not be believed. Stop the bridge, leave a
+  # retained ON on the state topic, start it again: it must /get, and omit
+  # relay_on until a LIVE report answers.
+  #
+  # BUDGET: the plug is silent from the bridge's start until the live ON below,
+  # and the bridge is leased the whole time (the member is still signed on).
+  # Its stop-on-loss rule fires after LOSS_DEBOUNCE_MS = 10 s of "leased but
+  # not known On" -- correctly, that is the rule -- so this silence must stay
+  # well inside 10 s or the stop lands HERE and window D finds the tool already
+  # stopped. The first run had 8 s + 3 s = 11 s and did exactly that. The /get
+  # arrives within a second of the bridge connecting (its log says so), so a
+  # 4 s capture is generous; with the 2 s C1 window and publish latency the
+  # silence is ~7 s.
+  stop_bridge
+  mqtt_pub "zigbee2mqtt/${friendly}" '{"state":"ON"}' retain || true
+  mqtt_sub "zigbee2mqtt/${friendly}/get" 4 "${STACK_DIR}/bridge-get-C.txt" &
+  local get_sub=$!
+  sleep 1
+  start_bridge
+  wait "${get_sub}" || true
+  mqtt_sub "resource/request/power" 2 "${STACK_DIR}/bridge-power-C1.txt"
+  mqtt_pub "zigbee2mqtt/${friendly}" '{"state":"ON"}' || true
+  mqtt_sub "resource/request/power" 4 "${STACK_DIR}/bridge-power-C2.txt"
+  # Clear the retained message so the next run starts clean.
+  mqtt_pub "zigbee2mqtt/${friendly}" "" retain || true
+
+  # Window D: the plug leaves the mesh -> stop-on-loss -> refusal -> OFF. The
+  # stop comes LOSS_DEBOUNCE_MS = 10 s after the offline, so the captures are
+  # sized past that with room for publish latency.
+  mqtt_sub "resource/request/stop" 16 "${STACK_DIR}/bridge-stop-D.txt" &
+  local stop_sub=$!
+  mqtt_sub "zigbee2mqtt/${friendly}/set" 20 "${STACK_DIR}/bridge-set-D.txt" &
+  local set_sub_d=$!
+  sleep 1
+  mqtt_pub "zigbee2mqtt/${friendly}/availability" "offline" || true
+  wait "${stop_sub}" || true
+  wait "${set_sub_d}" || true
+
+  # The driver's verdicts are the stage's verdicts. Without this line the
+  # first run of this stage reported "7 case(s), 0 failure(s)" while the
+  # driver had written four FAILs to bridge.log that nothing read.
+  run_node bridge.mjs assert >"${OUT}/logs/bridge.log" 2>&1 || true
+  absorb_driver_cases || true
+  stop_bridge
+  stop_edge
+  emit_junit bridge
+}
+
 stage_lease() {
   cases_begin lease
   stack_paths

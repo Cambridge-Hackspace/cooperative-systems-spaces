@@ -448,13 +448,21 @@ stop_mosquitto() {
 # The host has no mosquitto_pub under container provisioning -- the broker is an
 # image -- so the publish runs inside the broker's own container there, and on
 # the host under --provision=external where the broker is a host process.
+# A third argument of `retain` publishes with the retain flag set: the broker
+# then replays the message to every later subscriber as if it were fresh, which
+# is exactly the trap the bridge stage exists to prove the bridge does not fall
+# into. Everything else about the call is unchanged.
 mqtt_pub() {
   local topic="$1" payload="$2"
+  # An array, not a string: "${retain[@]}" expands to nothing or to -r, with
+  # no unquoted expansion for shellcheck to object to and nothing to disable.
+  local -a retain=()
+  [[ ${3:-} == "retain" ]] && retain=(-r)
   if [[ ${PROVISION} == "external" ]]; then
     command -v mosquitto_pub >/dev/null 2>&1 || return 1
-    mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" -t "${topic}" -m "${payload}" 2>/dev/null
+    mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" "${retain[@]}" -t "${topic}" -m "${payload}" 2>/dev/null
   else
-    pm exec "${C_MQTT}" mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" \
+    pm exec "${C_MQTT}" mosquitto_pub -h 127.0.0.1 -p "${MQTT_PORT}" "${retain[@]}" \
       -t "${topic}" -m "${payload}" >/dev/null 2>&1
   fi
 }
@@ -1124,6 +1132,75 @@ start_edge() {
     --config "/stack/${config}" \
     --frontend-path "/stack/${frontend##*/}" \
     >/dev/null
+}
+
+# ── the IoT bridge ───────────────────────────────────────────────────────────
+# Started and stopped the way css-edge is, from the same /artifacts mount and
+# the same runtime image, so it is linked against the glibc it runs on. Its CLI
+# differs (`--config <file> run`), which is the only reason it is not start_edge.
+C_BRIDGE="css-e2e-bridge"
+
+start_bridge() {
+  local config="${1:-bridge.config.toml}"
+  if [[ ${PROVISION} == "external" ]]; then
+    RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
+      "${ROOT}/e2e/artifacts/spaces-iot-bridge" \
+      --config "${STACK_DIR}/${config}" run \
+      >>"${OUT}/logs/spaces-iot-bridge.log" 2>&1 &
+    echo $! >"${STACK_DIR}/bridge.pid"
+    return 0
+  fi
+  pm run -d --name "${C_BRIDGE}" --network host \
+    -e RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
+    -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
+    -v "${STACK_DIR}:/stack" \
+    "${IMG_SERVER_LOCAL}" "/artifacts/spaces-iot-bridge" \
+    --config "/stack/${config}" run \
+    >/dev/null
+}
+
+# One-shot: claim an invite and write the identity file under /stack. Runs the
+# bridge's own `register`, so the stage tests the real path and not a stand-in.
+register_bridge() {
+  local device="$1" invite="$2" config="${3:-bridge.config.toml}"
+  if [[ ${PROVISION} == "external" ]]; then
+    "${ROOT}/e2e/artifacts/spaces-iot-bridge" --config "${STACK_DIR}/${config}" \
+      register --device "${device}" --invite "${invite}" \
+      >>"${OUT}/logs/spaces-iot-bridge-register.log" 2>&1
+    return $?
+  fi
+  pm run --rm --network host \
+    -v "${ROOT}/e2e/artifacts:/artifacts:ro" \
+    -v "${STACK_DIR}:/stack" \
+    "${IMG_SERVER_LOCAL}" "/artifacts/spaces-iot-bridge" --config "/stack/${config}" \
+    register --device "${device}" --invite "${invite}" \
+    >>"${OUT}/logs/spaces-iot-bridge-register.log" 2>&1
+}
+
+collect_bridge_log() {
+  if [[ ${PROVISION} == "external" ]]; then
+    cp -f "${OUT}/logs/spaces-iot-bridge.log" "${OUT}/logs/spaces-iot-bridge-live.log" 2>/dev/null || true
+  else
+    pm logs "${C_BRIDGE}" >"${OUT}/logs/spaces-iot-bridge-live.log" 2>&1 || true
+  fi
+}
+
+bridge_logged() {
+  local needle="$1"
+  collect_bridge_log
+  grep -q -- "${needle}" "${OUT}/logs/spaces-iot-bridge-live.log" 2>/dev/null
+}
+
+stop_bridge() {
+  if [[ ${PROVISION} == "external" ]]; then
+    if [[ -f "${STACK_DIR}/bridge.pid" ]]; then
+      kill "$(cat "${STACK_DIR}/bridge.pid")" 2>/dev/null || true
+      rm -f "${STACK_DIR}/bridge.pid"
+    fi
+  else
+    pm logs "${C_BRIDGE}" >>"${OUT}/logs/spaces-iot-bridge.log" 2>&1 || true
+    pm rm -f "${C_BRIDGE}" >/dev/null 2>&1 || true
+  fi
 }
 
 stop_edge() {
