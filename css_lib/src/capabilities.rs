@@ -24,9 +24,16 @@
 //! }
 //! ```
 //!
-//! The enforcement descriptors all default to "cannot": an undeclared device is
-//! assumed to do nothing locally, so an unverified plug can never be the reason a
-//! `firmware` tier is accepted. `roles` defaults to empty -- a device that
+//! The enforcement descriptors all default to the CONSERVATIVE answer, which is
+//! not the same word for each: an undeclared device is assumed to do nothing
+//! locally (`local_inhibit`, `countdown` default false) AND to keep its relay
+//! however it was when its link dropped (`holds_last_on_disconnect` defaults
+//! TRUE). So an unverified plug can never be the reason a `firmware` tier is
+//! accepted, and can never be the reason a tool is reported as failing safe.
+//! Before #209 the last of those defaulted to false, and since `can_fail_safe`
+//! is `local_inhibit || countdown || !holds_last_on_disconnect`, an all-default
+//! device -- which was every device, since nothing registered with these fields
+//! -- read as failing safe on its own. `roles` defaults to empty -- a device that
 //! declares no role can be bound to nothing. Filling in the real descriptors for
 //! the hardware in use is a separate inventory task; this is the shape they take
 //! and the rule they feed.
@@ -68,8 +75,9 @@ impl DeviceCapabilities {
     }
 }
 
-/// A module's declared local abilities. Absent fields mean "cannot".
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A module's declared local abilities. Absent fields mean the conservative
+/// answer -- "cannot", or for `holds_last_on_disconnect`, "does".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleCapabilities {
     /// Conditions this module senses directly -- wired to it, not relayed.
     #[serde(default)]
@@ -85,9 +93,30 @@ pub struct ModuleCapabilities {
     pub countdown: bool,
     /// Whether it keeps its last relay state when its link drops. A plug that
     /// holds last and has neither `local_inhibit` nor `countdown` cannot fail
-    /// safe on its own at all.
-    #[serde(default)]
+    /// safe on its own at all -- which is why the DEFAULT is `true`: a device
+    /// that has not said is assumed to be that plug, not its opposite.
+    #[serde(default = "assume_holds_last")]
     pub holds_last_on_disconnect: bool,
+}
+
+/// The conservative default for `holds_last_on_disconnect`. A function rather
+/// than `#[serde(default)]` because serde's default for a bool is `false`,
+/// which here is the OPTIMISTIC answer.
+fn assume_holds_last() -> bool {
+    true
+}
+
+impl Default for ModuleCapabilities {
+    /// Hand-written so that `from_value`'s `unwrap_or_default()` and serde's
+    /// per-field defaults agree: both say "cannot, and holds last".
+    fn default() -> Self {
+        ModuleCapabilities {
+            local_inputs: Vec::new(),
+            local_inhibit: false,
+            countdown: false,
+            holds_last_on_disconnect: true,
+        }
+    }
 }
 
 impl ModuleCapabilities {
@@ -171,7 +200,9 @@ mod tests {
         assert!(!d.module.can_enforce_locally("door_open"));
         // Nothing declared means it does not claim to hold last either, so it is
         // not assumed to strand a tool energized.
-        assert!(d.module.can_fail_safe());
+        // #209: it can do nothing, and that INCLUDES failing safe. This line
+        // used to assert the opposite -- the defect, written down as a test.
+        assert!(!d.module.can_fail_safe());
     }
 
     #[test]
@@ -211,8 +242,13 @@ mod tests {
         let sensor_only = caps(&["door_open"], false, false, false);
         // Switches but senses nothing: not achievable.
         let plug_only = caps(&[], true, false, true);
-        assert!(firmware_enforcement_achievable("door_open", &[sensor_only.clone()]).is_err());
-        assert!(firmware_enforcement_achievable("door_open", &[plug_only.clone()]).is_err());
+        assert!(
+            firmware_enforcement_achievable("door_open", std::slice::from_ref(&sensor_only))
+                .is_err()
+        );
+        assert!(
+            firmware_enforcement_achievable("door_open", std::slice::from_ref(&plug_only)).is_err()
+        );
         // Two modules that between them could do it still cannot: connecting
         // them is the edge's job, which is a different tier.
         assert!(firmware_enforcement_achievable("door_open", &[sensor_only, plug_only]).is_err());
@@ -230,6 +266,50 @@ mod tests {
             err.reason.contains("edge"),
             "a refusal that does not name the achievable alternative just blocks somebody"
         );
+    }
+
+    /// #209. The implicit case beside the explicit one below: a device that
+    /// answered NONE of the safety questions must not be reported as failing
+    /// safe. Before this, `holds_last_on_disconnect` defaulted to false and
+    /// `!false` made every undeclared device -- which was every device -- fail
+    /// safe by formula. The mutant is restoring `#[derive(Default)]`, or
+    /// `#[serde(default)]` on the field.
+    #[test]
+    fn an_undeclared_device_is_not_reported_as_fail_safe() {
+        let undeclared = ModuleCapabilities::default();
+        assert!(
+            !undeclared.can_fail_safe(),
+            "silence must not read as safety"
+        );
+        assert!(!power_can_fail_safe(std::slice::from_ref(&undeclared)));
+        // And the same through the path the server actually takes: JSON with
+        // no descriptors at all.
+        let from_wire: ModuleCapabilities =
+            serde_json::from_value(serde_json::json!({ "roles": ["power"] })).unwrap();
+        assert!(!from_wire.can_fail_safe(), "an absent field is not a 'no'");
+        assert!(from_wire.holds_last_on_disconnect);
+    }
+
+    /// The cross-repo contract, CS:S side. This literal is pinned verbatim in
+    /// spaces-device's registration tests (spaces-firmware #2): what that crate
+    /// serialises must mean the same thing here. A rename on either side fails
+    /// the other.
+    #[test]
+    fn the_firmware_crates_declared_form_means_what_it_says_here() {
+        let caps: ModuleCapabilities = serde_json::from_value(serde_json::json!({
+            "roles": ["power"],
+            "local_inputs": ["door_open"],
+            "local_inhibit": true,
+            "countdown": false,
+            "holds_last_on_disconnect": true
+        }))
+        .unwrap();
+        assert_eq!(caps.local_inputs, vec!["door_open".to_string()]);
+        assert!(caps.local_inhibit);
+        assert!(!caps.countdown);
+        assert!(caps.holds_last_on_disconnect);
+        assert!(caps.can_enforce_locally("door_open"));
+        assert!(caps.can_fail_safe(), "local_inhibit alone fails safe");
     }
 
     #[test]

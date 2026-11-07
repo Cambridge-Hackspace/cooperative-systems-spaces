@@ -390,11 +390,13 @@ main(async () => {
     const wiredEntry = (snap2.json?.data?.tools ?? []).find((t) => t.tool_id === wiredToolId)
     assertEq('toolmodules/capable-tool-fails-safe', true, wiredEntry?.power_fails_safe)
     // The first tool's plug declared no capabilities at all, so it is not
-    // claimed to fail safe on the strength of nothing.
+    // claimed to fail safe on the strength of nothing (#209). Before #209 this
+    // check only proved the entry existed; the verdict it is named for was
+    // never asserted, and the server was in fact answering `true` here.
     const plainEntry = (snap2.json?.data?.tools ?? []).find((t) => t.tool_id === toolId)
-    ok('toolmodules/undeclared-plug-is-not-claimed-fail-safe',
-      wiredEntry?.power_fails_safe === true && plainEntry !== undefined,
+    ok('toolmodules/undeclared-plug-is-in-the-snapshot', plainEntry !== undefined,
       'both tools should appear in the snapshot with an explicit fail-safe verdict')
+    assertEq('toolmodules/undeclared-plug-is-not-claimed-fail-safe', false, plainEntry?.power_fails_safe)
 
     // --- a device may only be bound in a role it declares (#101) --------------
     // A reader-only device bound as `power` would be a tool the system believes it
