@@ -421,6 +421,28 @@ install -m 0755 "${CARGO_TARGET_DIR}/debug/css-edge" e2e/artifacts/css-edge-dbg
 # depends on and the one a phase-level skip quietly broke.
 install -m 0755 "${CARGO_TARGET_DIR}/release/toolpass-load" e2e/artifacts/toolpass-load
 
+# The IoT bridge (Cambridge-Hackspace/spaces-iot-bridge), at a TAG. It is the
+# first thing on the edge's local wire that is deliberately several devices
+# at once and is not firmware, and the `bridge` stage is the only place it
+# meets a real edge. Built from source on this guest so it is linked against
+# the same glibc as css-edge and runs from /artifacts the same way; cmake is
+# already installed above for paho, and aws-lc-sys needs nothing else. The
+# clone lives under e2e/.bridge, ignored like e2e/.cargo so preflight's
+# commit-matches-tree check stays clean, and gets its own target dir so it
+# cannot evict this workspace's build from the cache.
+BRIDGE_TAG="v0.1.2"
+BRIDGE_SRC="${ROOT}/e2e/.bridge/src"
+if [ ! -d "${BRIDGE_SRC}/.git" ]; then
+  git clone --quiet --depth 1 --branch "${BRIDGE_TAG}" \
+    https://github.com/Cambridge-Hackspace/spaces-iot-bridge.git "${BRIDGE_SRC}"
+elif [ "$(git -C "${BRIDGE_SRC}" describe --tags 2>/dev/null)" != "${BRIDGE_TAG}" ]; then
+  git -C "${BRIDGE_SRC}" fetch --quiet --depth 1 origin "refs/tags/${BRIDGE_TAG}:refs/tags/${BRIDGE_TAG}"
+  git -C "${BRIDGE_SRC}" checkout --quiet "${BRIDGE_TAG}"
+fi
+log "spaces-iot-bridge ${BRIDGE_TAG}"
+(cd "${BRIDGE_SRC}" && CARGO_TARGET_DIR="${CARGO_TARGET_DIR}/bridge" cargo build --locked --release)
+install -m 0755 "${CARGO_TARGET_DIR}/bridge/release/spaces-iot-bridge" e2e/artifacts/spaces-iot-bridge
+
 # run.sh's preflight stage asserts this commit matches the working tree, so a
 # run that skipped the build cannot silently test yesterday's binaries.
 {
@@ -428,6 +450,7 @@ install -m 0755 "${CARGO_TARGET_DIR}/release/toolpass-load" e2e/artifacts/toolpa
   echo "commit: $(git rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "dirty:  $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   echo "rustc:  $(rustc --version)"
+  echo "bridge: ${BRIDGE_TAG} $(git -C "${BRIDGE_SRC}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 } >e2e/artifacts/BUILD.txt
 
 log "build complete"

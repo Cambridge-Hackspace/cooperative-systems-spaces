@@ -137,6 +137,7 @@ exclude = [
   "/frontend_edge/dist/",
   # Local artifacts; the session's equivalents come back through out/.
   "/e2e/artifacts/",
+  "/e2e/.bridge/",
   "/e2e/out/",
   "/frontend/coverage/",
   "/frontend/test-results/",

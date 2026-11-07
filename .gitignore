@@ -36,6 +36,8 @@
 # untracked one defeats preflight's artifacts/commit-matches-tree check by
 # making every tree look dirty.
 /e2e/.cargo/
+# e2e/build.sh clones spaces-iot-bridge here at a tag; same reasoning as .cargo.
+/e2e/.bridge/
 
 # AppConfig::from_file rewrites config in place on a missing-field error and
 # leaves the original beside it as <path>.<unixtime>.backup.
