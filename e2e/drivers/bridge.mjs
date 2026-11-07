@@ -109,7 +109,12 @@ remote_instance_url = "${base}"
 `,
   )
 
-  // The bridge's config, in CONTAINER paths: /stack is STACK_DIR mounted.
+  // The bridge's config, in the paths the BRIDGE will see. Under podman the
+  // bridge runs in a container with STACK_DIR mounted at /stack, and
+  // CSS_STACK_DIR is unset here, so STACK_DIR is '/stack'. Under
+  // --provision=external (CI) the bridge runs on the host, CSS_STACK_DIR is
+  // the host path, and so is STACK_DIR. Writing the literal '/stack' here was
+  // the first CI run's failure: "Permission denied creating /stack/...".
   // The broker is anonymous; the logins are present because the bridge
   // requires the files, not because the broker reads them.
   for (const f of ['bridge-iot.toml', 'bridge-edge.toml']) {
@@ -122,11 +127,11 @@ url = "${base}"
 
 [edge]
 broker = "mqtt://127.0.0.1:${mqttPort}"
-credentials = "/stack/bridge-edge.toml"
+credentials = "${STACK_DIR}/bridge-edge.toml"
 
 [iot]
 broker = "mqtt://127.0.0.1:${mqttPort}"
-credentials = "/stack/bridge-iot.toml"
+credentials = "${STACK_DIR}/bridge-iot.toml"
 base = "zigbee2mqtt"
 
 [[device]]
@@ -135,7 +140,7 @@ backend = "zigbee2mqtt"
 friendly = "${FRIENDLY}"
 role = "power"
 resource = "bridge-${tag}"
-identity = "/stack/bridge-identities/extractor.toml"
+identity = "${STACK_DIR}/bridge-identities/extractor.toml"
 countdown = true
 on_time_s = 60
 rearm_s = 15
