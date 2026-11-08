@@ -26,6 +26,8 @@ const FRIENDLY = 'e2e/plug/extractor'
 export const FAKE_HA_PORT = 18123
 export const FAKE_HA_TOKEN = 'e2e-fake-ha-token'
 const LOCKS = { 'door-a': 'lock.door_a', 'door-b': 'lock.door_b' }
+/** A door contact HA owns, bridged as a sensor on door A (bridge #25, CS:S #213). */
+const CONTACT = 'binary_sensor.door_a_contact'
 
 /** Every JSON object mosquitto_sub captured, one per line, bad lines dropped. */
 function captured(name) {
@@ -123,6 +125,16 @@ async function setup() {
   }
   fs.writeFileSync(path.join(STACK_DIR, 'bridge-ha-token'), `${FAKE_HA_TOKEN}\n`)
 
+  // The TOOL gets a door_open trip, read from a contact the bridge will
+  // report as a sensor module (#25). Edge-enforced; the default latch stays.
+  // (A door cannot carry an interlock rule today: tool-interlocks validates
+  // against tools only -- filed as a CS:S issue from this stage's first run.)
+  const trip = await POST('/api/admin/tool-interlocks', {
+    token: admin.token,
+    body: { tool_id: toolId, kind: 'trip', condition: 'door_open', enforcement: 'edge' },
+  })
+  assertEq('bridge/the-tool-has-a-door-open-trip', 201, trip.status, trip.text.slice(0, 160))
+
   // The edge's config. Renew twice per TTL; a long offline window so a report
   // never ages out underneath an assertion -- the bridge's alive is every 2 s.
   fs.writeFileSync(
@@ -211,13 +223,24 @@ role = "power"
 resource = "${doorB.id}"
 identity = "${STACK_DIR}/bridge-identities/door-b.toml"
 stop_resource_on_loss = true
+
+# The tool's enclosure contact, as a sensor module (#25): HA's on is open,
+# which is door_open asserted.
+[[device]]
+name = "door-a-contact"
+backend = "homeassistant"
+entity = "${CONTACT}"
+role = "sensor"
+condition = "door_open"
+resource = "bridge-${tag}"
+identity = "${STACK_DIR}/bridge-identities/door-a-contact.toml"
 `,
   )
 
   // Invites for the bridge to claim with its OWN register subcommand: one
   // per device, since each is its own identity on the platform.
   const invites = {}
-  for (const [name, file] of [['extractor', 'bridge-invite'], ['door-a', 'bridge-invite-door-a'], ['door-b', 'bridge-invite-door-b']]) {
+  for (const [name, file] of [['extractor', 'bridge-invite'], ['door-a', 'bridge-invite-door-a'], ['door-b', 'bridge-invite-door-b'], ['door-a-contact', 'bridge-invite-door-a-contact']]) {
     const inv = await POST('/api/admin/devices/invite', { token: admin.token, body: { expires_in_hours: 1 } })
     invites[name] = inv.json?.data?.device_code
     fs.writeFileSync(path.join(STACK_DIR, file), invites[name] ?? '')
@@ -283,6 +306,20 @@ async function bind() {
     )
     fs.writeFileSync(path.join(STACK_DIR, `bridge-${name}-device-id`), lock.deviceId ?? '')
   }
+  // The contact, bound as sensor on the TOOL (#25). fail_off: a contact the
+  // edge has not heard from denies the tool, which is the point of one.
+  const contact = identityOf('door-a-contact')
+  ok('bridge/door-a-contact-identity-has-device-id', !!contact.deviceId, contact.text.slice(0, 80))
+  const contactB = await bindTo({
+    resource_id: fixture.toolId,
+    device_id: contact.deviceId,
+    role: 'sensor',
+    name: `door-a contact ${fixture.tag}`,
+    on_disconnect: 'fail_off',
+  })
+  assertEq('bridge/door-a-contact-bound-as-sensor', 201, contactB.status, contactB.text.slice(0, 160))
+  fs.writeFileSync(path.join(STACK_DIR, 'bridge-door-a-contact-device-id'), contact.deviceId ?? '')
+
   // Door B outlives its pulse, so stop-on-loss has a lease to end.
   const roomed = await PATCH(`/api/admin/resources/${fixture.doorBId}`, {
     token: fixture.adminToken,
@@ -371,7 +408,9 @@ async function assertWindows() {
   // #214: every lease this edge publishes names a module it coordinates. The
   // capture that found 38 foreign devices refused twice a second is the one
   // that keeps that found.
-  const ours = new Set([deviceId, lockA, lockB])
+  // Sensor bindings are leased too (edge/src/modules.rs:749), so the contact is ours.
+  const contactId = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-a-contact-device-id'), 'utf8').trim()
+  const ours = new Set([deviceId, lockA, lockB, contactId])
   const foreign = [...new Set((captured('bridge-lease-E.txt') ?? []).map((l) => l.device_id))].filter((d) => !ours.has(d))
   ok(
     'bridge/E-the-edge-leases-only-what-it-coordinates',
@@ -397,6 +436,25 @@ async function assertWindows() {
   const stopsF = (captured('bridge-stop-F.txt') ?? []).filter((s) => s.resource === doorB)
   ok('bridge/F-loss-stops-the-door', stopsF.length >= 1, `stops for door B: ${stopsF.length}`)
   ok('bridge/F-stop-relocks-the-door', callsB.length >= 2 && callsB[callsB.length - 1] === 'lock.lock', `calls: ${JSON.stringify(callsB)}`)
+
+  // ---- G: the contact as a sensor (#25 / CS:S #213) ------------------------
+  // G0: the bridge reports the contact's reading on the wire, shut = door_open false.
+  const g0 = (captured('bridge-condition-G0.txt') ?? []).filter((c) => c.device_id === contactId)
+  ok('bridge/G-the-contact-reports-its-condition', g0.length >= 1, `condition reports from the contact: ${g0.length}`)
+  ok(
+    'bridge/G-shut-is-door-open-false',
+    g0.length >= 1 && g0.every((c) => c.condition === 'door_open' && c.asserted === false && c.resource === tool),
+    `readings: ${JSON.stringify(g0.slice(0, 3))}`,
+  )
+  // G1: a badge at the tool with the enclosure shut -> the plug is granted
+  // (the trip is satisfied by the reading); the enclosure opens -> the edge
+  // trips: Tripped("door_open"), and the bridge switches the plug OFF on it.
+  const leaseG = mine(captured('bridge-lease-G.txt'))
+  ok('bridge/G-shut-enclosure-grants', leaseG.some((l) => l.grant === true), `grants: ${JSON.stringify(leaseG.map((l) => l.grant))}`)
+  const tripped = leaseG.filter((l) => l.grant === false && typeof l.reason === 'string' && l.reason.includes('Tripped') && l.reason.includes('door_open'))
+  ok('bridge/G-opening-the-enclosure-trips-the-tool', tripped.length >= 1, `reasons: ${JSON.stringify([...new Set(leaseG.map((l) => l.reason).filter(Boolean))])}`)
+  const setG = captured('bridge-set-G.txt') ?? []
+  ok('bridge/G-the-trip-switches-the-plug-off', setG.some((c) => c.state === 'ON') && setG[setG.length - 1]?.state === 'OFF', `set commands: ${JSON.stringify(setG)}`)
   void doorA
 }
 

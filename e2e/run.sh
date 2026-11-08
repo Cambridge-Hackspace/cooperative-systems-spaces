@@ -2120,10 +2120,11 @@ stage_bridge() {
   else
     record_case "bridge/never-re-registers" ok
   fi
-  # The two Home Assistant locks (#20) are identities of their own: the same
-  # register subcommand, which declares them power AND strike.
+  # The two Home Assistant locks (#20) and door A's contact (#25) are
+  # identities of their own: the same register subcommand, which declares
+  # the locks power AND strike, and the contact a sensor.
   local lock
-  for lock in door-a door-b; do
+  for lock in door-a door-b door-a-contact; do
     if register_bridge "${lock}" "$(cat "${STACK_DIR}/bridge-invite-${lock}")" \
       && [[ -s "${STACK_DIR}/bridge-identities/${lock}.toml" ]]; then
       record_case "bridge/${lock}-registers" ok
@@ -2176,7 +2177,7 @@ stage_bridge() {
 
   # The fake Home Assistant, before the bridge, so the bridge's first connect
   # succeeds rather than backs off. Both locks start locked.
-  start_fake_ha lock.door_a=locked lock.door_b=locked
+  start_fake_ha lock.door_a=locked lock.door_b=locked binary_sensor.door_a_contact=off
   if wait_for "the fake Home Assistant to listen" 20 fake_ha_logged "listening on"; then
     record_case "bridge/fake-ha-starts" ok
   else
@@ -2284,6 +2285,26 @@ stage_bridge() {
   wait "${stop_f}" || true
   # The relock lands a lease tick after the stop; give it a moment to be recorded.
   sleep 3
+
+  # Window G (#25): the tool's enclosure contact, a sensor module. G0 -- the
+  # bridge has been reporting it as door_open: false since it connected;
+  # capture 4 s of it. Then a badge at the TOOL (its session was stopped in
+  # window D) grants the plug again -- the trip is satisfied by the reading --
+  # and the enclosure opens: the fixture flips the contact on, the edge trips
+  # the tool (Tripped("door_open")), and the bridge switches the plug OFF on
+  # the refusal. 6 s is inside the 10 s stop-on-loss the unanswered ON would
+  # otherwise fire, so the trip is the only refusal in the window.
+  mqtt_sub "resource/request/condition" 4 "${STACK_DIR}/bridge-condition-G0.txt"
+  mqtt_sub "resource/lease" 6 "${STACK_DIR}/bridge-lease-G.txt" &
+  local lease_g=$!
+  mqtt_sub "zigbee2mqtt/${friendly}/set" 8 "${STACK_DIR}/bridge-set-G.txt" &
+  local set_g=$!
+  sleep 1
+  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
+  sleep 2
+  printf '{"entity_id":"binary_sensor.door_a_contact","state":"on"}\n' >"${STACK_DIR}/fake-ha-inject.json"
+  wait "${lease_g}" || true
+  wait "${set_g}" || true
 
   # The driver's verdicts are the stage's verdicts. Without this line the
   # first run of this stage reported "7 case(s), 0 failure(s)" while the
