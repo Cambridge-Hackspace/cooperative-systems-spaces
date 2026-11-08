@@ -162,6 +162,50 @@ pub struct Principal {
 /// #182: every resource with a binding appears -- a door with a coordinator and
 /// a strike as much as a tool with a plug. `kind` says which; the field names
 /// (`tool_id`, `tools`) are the wire's history and stay for the alias release.
+/// How a `module/state` snapshot was scoped for the device that asked (#214).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeScope {
+    /// The device holds `edge` bindings, so it was sent exactly the resources
+    /// it coordinates; `dropped` is how many resources it was not sent.
+    Coordinator { kept: usize, dropped: usize },
+    /// The device holds no `edge` binding anywhere, so it was sent everything --
+    /// what every device received before #214. A site that has not adopted
+    /// coordinator bindings keeps working; one that has narrows per edge.
+    Legacy,
+}
+
+impl ToolModuleStatePayload {
+    /// The snapshot as one edge should see it (#214): only the resources on
+    /// which `device_id` holds an `edge` binding -- the binding that already
+    /// decides whose relayed power reports are accepted -- or, for a device
+    /// holding none, the whole site, as before.
+    ///
+    /// Why not everything for everyone: every edge leases, and refuses, every
+    /// power binding it holds, every tick. With the whole site in every edge,
+    /// two edges on one broker would refuse and grant the same module at once,
+    /// and even apart each publishes refusals for modules it will never see.
+    pub fn scoped_to_edge(mut self, device_id: &str) -> (Self, EdgeScope) {
+        let coordinates = |t: &ToolModuleTool| {
+            t.modules
+                .iter()
+                .any(|m| m.role == "edge" && m.device_id == device_id)
+        };
+        if !self.tools.iter().any(coordinates) {
+            return (self, EdgeScope::Legacy);
+        }
+        let total = self.tools.len();
+        self.tools.retain(coordinates);
+        let kept = self.tools.len();
+        (
+            self,
+            EdgeScope::Coordinator {
+                kept,
+                dropped: total - kept,
+            },
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolModuleTool {
     /// The resource's UUID. Named for the wire's history; a door's id goes here
@@ -560,6 +604,93 @@ pub mod local {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ── module/state is scoped per edge (#214) ─────────────────────────────
+
+    fn binding(device: &str, role: &str) -> DeviceBinding {
+        DeviceBinding {
+            id: format!("b-{device}-{role}"),
+            device_id: device.into(),
+            role: role.into(),
+            name: String::new(),
+            params: json!({}),
+            on_disconnect: "fail_off".into(),
+            start_stage: 0,
+            start_delay_ms: 0,
+            run_on_ms: 0,
+            pulse_ms: 0,
+            hold_open_access: false,
+        }
+    }
+
+    fn tool(id: &str, bindings: &[(&str, &str)]) -> ToolModuleTool {
+        ToolModuleTool {
+            tool_id: id.into(),
+            external_id: None,
+            kind: "tool".into(),
+            session_profile: String::new(),
+            in_use: false,
+            modules: bindings.iter().map(|(d, r)| binding(d, r)).collect(),
+            interlocks: vec![],
+            power_fails_safe: false,
+        }
+    }
+
+    /// Three resources: A coordinated by edge X, B by edge Y, C by nobody.
+    fn site() -> ToolModuleStatePayload {
+        ToolModuleStatePayload {
+            as_of: "2026-11-08T00:00:00Z".into(),
+            tools: vec![
+                tool("A", &[("edge-x", "edge"), ("plug-a", "power")]),
+                tool("B", &[("edge-y", "edge"), ("plug-b", "power")]),
+                tool("C", &[("plug-c", "power")]),
+            ],
+        }
+    }
+
+    fn ids(p: &ToolModuleStatePayload) -> Vec<&str> {
+        p.tools.iter().map(|t| t.tool_id.as_str()).collect()
+    }
+
+    #[test]
+    fn an_edge_is_sent_exactly_the_resources_it_coordinates() {
+        // The mutant is `retain` keeping everything (or inverted): edge X would
+        // then lease plug-b and plug-c every tick alongside edge Y.
+        let (x, scope) = site().scoped_to_edge("edge-x");
+        assert_eq!(ids(&x), vec!["A"]);
+        assert_eq!(
+            scope,
+            EdgeScope::Coordinator {
+                kept: 1,
+                dropped: 2
+            }
+        );
+        let (y, _) = site().scoped_to_edge("edge-y");
+        assert_eq!(ids(&y), vec!["B"]);
+        assert_eq!(
+            x.as_of, "2026-11-08T00:00:00Z",
+            "scoping keeps the timestamp"
+        );
+    }
+
+    #[test]
+    fn a_device_with_no_edge_binding_anywhere_is_sent_the_whole_site_as_before() {
+        // The fallback that keeps a site which never bound a coordinator
+        // working. The mutant is "no edge binding -> nothing".
+        let (z, scope) = site().scoped_to_edge("edge-z");
+        assert_eq!(ids(&z), vec!["A", "B", "C"]);
+        assert_eq!(scope, EdgeScope::Legacy);
+    }
+
+    #[test]
+    fn only_the_edge_role_makes_a_device_a_coordinator() {
+        // plug-a is bound on A, as power. That is not coordinating A; it must
+        // get the legacy whole site, not "A because I am bound there". The
+        // mutant is matching on device_id alone.
+        let (p, scope) = site().scoped_to_edge("plug-a");
+        assert_eq!(scope, EdgeScope::Legacy);
+        assert_eq!(ids(&p), vec!["A", "B", "C"]);
+    }
 
     // ── the resource-shaped wire (#182) ───────────────────────────────────
 

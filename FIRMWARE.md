@@ -1137,6 +1137,13 @@ lapsed because the timestamp is stale. That bias is deliberate: fail secure.
 No parameters; a device token is the credential. Your wiring and the rules that
 gate it; the poll fallback for the MQTT `module/state` push.
 
+**Scoped to you (#214).** You receive the resources on which *your* device holds
+an `edge` binding -- the same binding that decides whose relayed power reports
+are accepted -- and nothing else, so two edges never lease the same module. A
+device that holds no `edge` binding anywhere receives the whole site, as every
+device did before #214; the server logs a warning when it does, because that
+device is coordinating everything by default rather than by decision.
+
 ```json
 {
   "as_of": "2026-10-02T12:00:00Z",
@@ -1290,7 +1297,7 @@ Published to `{namespace}/devices/{device_id}/{kind}`:
 | `doors/state` | door state snapshot. An alias of `resource/policy` for one release |
 | `doors/unlock` | an unlock command |
 | `power/state` | lockout + circuit topology; push twin of `GET /power-state` |
-| `module/state` | module bindings + interlocks; push twin of `GET /module-state` |
+| `module/state` | module bindings + interlocks, scoped to your `edge` bindings (#214); push twin of `GET /module-state` |
 
 Subscribe to the pushes **and** poll the HTTP twin on a slow timer. The push is
 the fast path; the poll is what recovers you after a dropped message.
