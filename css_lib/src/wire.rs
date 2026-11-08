@@ -386,6 +386,33 @@ pub struct LocalAliveRequest {
     pub device_id: String,
 }
 
+/// `resource/request/condition` (#213): a device's reading of one of a
+/// resource's interlock conditions -- `door_open: true` means the door is
+/// open. The plain truth of the named condition; the edge knows which
+/// conditions are hazards and which are requirements.
+///
+/// Until #213 the edge could debounce, gate and trip on a condition but
+/// nothing could deliver one: `ModuleState::observe` was reached only from
+/// tests, and a `sensor` binding could be alive or gone and nothing more.
+/// This is the message that was missing. The edge accepts it only from a
+/// device bound on the resource, only for a condition an enabled rule on that
+/// resource names, and -- where a rule names a source binding -- only from
+/// that binding's device. A reading also counts as being alive.
+///
+/// Report on every change AND on a timer: a condition never observed denies
+/// (`Unobserved`), so a sensor that reports only on change leaves its tool
+/// denied until the first change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalCondition {
+    /// The device's own id, from registration.
+    pub device_id: String,
+    /// The resource, by id or external id, as every other local request.
+    pub resource: String,
+    /// One of the server's condition vocabulary: `door_open`, `flow_ok`, ...
+    pub condition: String,
+    pub asserted: bool,
+}
+
 /// The **edge ↔ module** vocabulary, on the *local* broker.
 ///
 /// [`kinds`] above is the server ↔ device wire: namespaced under
@@ -575,6 +602,9 @@ pub mod local {
     pub const POWER_REPORT_REQUEST: &str = "resource/request/power";
     /// A device saying it is alive: [`super::LocalAliveRequest`], `{ device_id }`.
     pub const RESOURCE_ALIVE_REQUEST: &str = "resource/request/alive";
+    /// A sensor's reading of one named condition (#213). Request-only, like
+    /// `alive`: the lease is the feedback.
+    pub const CONDITION_REQUEST: &str = "resource/request/condition";
     /// The answer to [`SCAN_REQUEST`]: [`super::LocalScanReply`].
     pub const SCAN_RESPONSE: &str = "resource/response/scan";
     /// Ack for [`STOP_REQUEST`]: `{ "ok": true }`, receipt and nothing more.
@@ -690,6 +720,33 @@ mod tests {
         let (p, scope) = site().scoped_to_edge("plug-a");
         assert_eq!(scope, EdgeScope::Legacy);
         assert_eq!(ids(&p), vec!["A", "B", "C"]);
+    }
+
+    // ── a condition report (#213) ──────────────────────────────────────────
+
+    #[test]
+    fn a_condition_report_is_exactly_the_four_fields_the_firmware_crate_sends() {
+        // The CS:S half of the cross-repo contract: spaces-device pins the same
+        // literal for its ConditionReport. A rename on either side fails the
+        // other.
+        let r = LocalCondition {
+            device_id: "dev-1".into(),
+            resource: "laser-01".into(),
+            condition: "door_open".into(),
+            asserted: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            json!({ "device_id": "dev-1", "resource": "laser-01", "condition": "door_open", "asserted": true })
+        );
+        assert_eq!(local::CONDITION_REQUEST, "resource/request/condition");
+        // And a report missing `asserted` does not parse as "false".
+        assert!(
+            serde_json::from_str::<LocalCondition>(
+                r#"{"device_id":"d","resource":"r","condition":"door_open"}"#
+            )
+            .is_err()
+        );
     }
 
     // ── the resource-shaped wire (#182) ───────────────────────────────────

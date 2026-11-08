@@ -214,6 +214,24 @@ impl Default for ModuleState {
     }
 }
 
+/// Why a condition report was not observed (#213). Each is a warning in
+/// the log, named, because a sensor that is wired and ignored is the
+/// silent failure this subsystem exists not to have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConditionRefusal {
+    /// No wiring resolves to that resource, or no snapshot yet.
+    UnknownResource,
+    /// The reporting device holds no binding on the resource, in any role.
+    DeviceNotBound,
+    /// No enabled rule on the resource names that condition, so the
+    /// vocabulary stays the server's: a reading nothing uses is a
+    /// misconfiguration, not an observation.
+    ConditionUnused,
+    /// A rule names a source binding for the condition and this device
+    /// is not it.
+    NotTheSource { expected_device: String },
+}
+
 impl ModuleState {
     pub fn new() -> Self {
         Self {
@@ -484,6 +502,66 @@ impl ModuleState {
             inner.module_seen.insert(id.clone(), now);
         }
         ids.len()
+    }
+
+    /// A device's reading of a condition, from the local broker (#213).
+    ///
+    /// The validation is the point. `observe` records whatever it is told, and
+    /// is what the tests feed directly; this is the door it is reached
+    /// through from a wire anyone in the building can publish on, so a
+    /// reading has to come from a device bound on the resource, for a
+    /// condition a rule on it uses, and from the rule's source where it names
+    /// one. An accepted reading also counts as being heard from.
+    pub fn report_condition(
+        &self,
+        device_id: &str,
+        resource: &str,
+        condition: &str,
+        asserted: bool,
+        now: DateTime<Utc>,
+    ) -> Result<(), ConditionRefusal> {
+        let tool_key = {
+            let inner = self.inner.read().expect("module lock");
+            let snapshot = inner
+                .snapshot
+                .as_ref()
+                .ok_or(ConditionRefusal::UnknownResource)?;
+            let wiring =
+                Self::resolve(snapshot, resource).ok_or(ConditionRefusal::UnknownResource)?;
+            let mine: Vec<&DeviceBinding> = wiring
+                .modules
+                .iter()
+                .filter(|m| m.device_id == device_id)
+                .collect();
+            if mine.is_empty() {
+                return Err(ConditionRefusal::DeviceNotBound);
+            }
+            let rules: Vec<&ToolInterlockRule> = wiring
+                .interlocks
+                .iter()
+                .filter(|r| r.condition == condition)
+                .collect();
+            if rules.is_empty() {
+                return Err(ConditionRefusal::ConditionUnused);
+            }
+            for r in &rules {
+                if let Some(source) = &r.source_module_id {
+                    if !mine.iter().any(|m| &m.id == source) {
+                        let expected_device = wiring
+                            .modules
+                            .iter()
+                            .find(|m| &m.id == source)
+                            .map(|m| m.device_id.clone())
+                            .unwrap_or_else(|| source.clone());
+                        return Err(ConditionRefusal::NotTheSource { expected_device });
+                    }
+                }
+            }
+            wiring.tool_id.clone()
+        };
+        self.observe(&tool_key, condition, asserted, now);
+        self.note_device_seen(device_id, now);
+        Ok(())
     }
 
     /// Clear a latched trip. `re_auth` and `operator_ack` both land here; the
@@ -1222,6 +1300,124 @@ mod tests {
             s.evaluate("tool-1", t0(), timeout()),
             Decision::Deny(Denial::Unobserved("door_open".to_string()))
         );
+    }
+
+    // ── a condition arrives over the wire (#213) ───────────────────────────
+
+    fn with_sensor(rules: Vec<ToolInterlockRule>) -> ModuleState {
+        let s = state_with(
+            vec![
+                binding("m1", "power", "hold_last"),
+                binding("s1", "sensor", "fail_off"),
+            ],
+            rules,
+        );
+        // Everything bound has been heard from, so liveness is not the reason
+        // for any denial below.
+        s.note_device_seen("dev-m1", t0());
+        s.note_device_seen("dev-s1", t0());
+        s
+    }
+
+    #[test]
+    fn a_bound_sensors_report_is_observed_and_decides_the_tool() {
+        // The whole point of #213: a reading over the wire reaches the same
+        // evaluate() the test-fed readings did. The mutant is report_condition
+        // validating and then not calling observe.
+        let s = with_sensor(vec![rule(KIND_TRIP, "door_open", true, 0)]);
+        assert_eq!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Deny(Denial::Unobserved("door_open".into()))
+        );
+        assert_eq!(
+            s.report_condition("dev-s1", "tool-1", "door_open", false, t0()),
+            Ok(())
+        );
+        assert_eq!(s.evaluate("tool-1", t0(), timeout()), Decision::Allow);
+        assert_eq!(
+            s.report_condition("dev-s1", "tool-1", "door_open", true, t0()),
+            Ok(())
+        );
+        assert_eq!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Deny(Denial::Tripped("door_open".into()))
+        );
+    }
+
+    #[test]
+    fn a_report_from_a_device_not_bound_on_the_resource_is_refused_and_not_observed() {
+        // Anyone in the building can publish on the local broker. The mutant
+        // is observing before (or without) checking the binding: a stranger
+        // could then clear a hazard.
+        let s = with_sensor(vec![rule(KIND_TRIP, "door_open", true, 0)]);
+        assert_eq!(
+            s.report_condition("dev-stranger", "tool-1", "door_open", false, t0()),
+            Err(ConditionRefusal::DeviceNotBound)
+        );
+        assert_eq!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Deny(Denial::Unobserved("door_open".into())),
+            "the stranger's reading must not have been recorded"
+        );
+        assert_eq!(
+            s.report_condition("dev-s1", "no-such-tool", "door_open", false, t0()),
+            Err(ConditionRefusal::UnknownResource)
+        );
+    }
+
+    #[test]
+    fn a_condition_no_rule_uses_is_refused_so_the_vocabulary_stays_the_servers() {
+        let s = with_sensor(vec![rule(KIND_TRIP, "door_open", true, 0)]);
+        assert_eq!(
+            s.report_condition("dev-s1", "tool-1", "flow_ok", true, t0()),
+            Err(ConditionRefusal::ConditionUnused)
+        );
+    }
+
+    #[test]
+    fn a_rule_with_a_source_accepts_only_that_bindings_device() {
+        // The rule says the door contact is s1. A reading of door_open from
+        // the plug m1 -- bound on the tool, so past the first check -- is not
+        // the door contact. The mutant is skipping the source check.
+        let mut sourced = rule(KIND_TRIP, "door_open", true, 0);
+        sourced.source_module_id = Some("s1".into());
+        let s = with_sensor(vec![sourced]);
+        assert_eq!(
+            s.report_condition("dev-m1", "tool-1", "door_open", false, t0()),
+            Err(ConditionRefusal::NotTheSource {
+                expected_device: "dev-s1".into()
+            })
+        );
+        assert_eq!(
+            s.report_condition("dev-s1", "tool-1", "door_open", false, t0()),
+            Ok(())
+        );
+        assert_eq!(s.evaluate("tool-1", t0(), timeout()), Decision::Allow);
+    }
+
+    #[test]
+    fn an_accepted_reading_counts_as_being_heard_from() {
+        // A sensor that reports is not quiet. The mutant is dropping the
+        // note_device_seen call: a sensor reporting conditions every second
+        // but never pulsing alive would then be refused as offline.
+        let s = state_with(
+            vec![
+                binding("m1", "power", "hold_last"),
+                binding("s1", "sensor", "fail_off"),
+            ],
+            vec![rule(KIND_TRIP, "door_open", true, 0)],
+        );
+        s.note_device_seen("dev-m1", t0());
+        // s1 has never been heard from: fail_off denies.
+        assert!(matches!(
+            s.evaluate("tool-1", t0(), timeout()),
+            Decision::Deny(Denial::ModuleOffline(_))
+        ));
+        assert_eq!(
+            s.report_condition("dev-s1", "tool-1", "door_open", false, t0()),
+            Ok(())
+        );
+        assert_eq!(s.evaluate("tool-1", t0(), timeout()), Decision::Allow);
     }
 
     #[test]

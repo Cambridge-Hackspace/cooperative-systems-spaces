@@ -455,6 +455,18 @@ If you switch power, also publish `resource/request/power` periodically with
 your `device_id` — that is your telemetry, and it counts as being alive too,
 for plugs that predate the pulse.
 
+**If you sense something, publish `resource/request/condition`**
+`{ "device_id", "resource", "condition", "asserted" }` — the plain truth of the
+named condition (`door_open: true` means the door is open; the coordinator
+knows which conditions are hazards and which are requirements). Publish it on
+every change **and** on a timer of a few seconds: a condition that has never
+been observed denies the tool (`Unobserved`), so a sensor that reports only on
+change leaves its tool denied until the first change. The coordinator accepts a
+reading only from a device bound on that resource, only for a condition an
+enabled interlock rule on it names, and — where the rule names a source
+binding — only from that binding's device; anything else is logged and dropped.
+A reading counts as being alive, so a sensor that reports need not also pulse.
+
 ### Step 7 — a latch, and a room
 
 A door is not a different model. It is a resource whose actuator is a latch
@@ -1436,6 +1448,7 @@ be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
 | `resource/request/usage` | `{ "resource", "card"?, "seconds"?, "active_seconds"?, "temperature"? }` |
 | `resource/request/power` | `{ "resource", "device_id"?, "relay_on"?, "draw_now"?, "voltage_now"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
 | `resource/request/alive` | `{ "device_id" }` |
+| `resource/request/condition` | `{ "device_id", "resource", "condition", "asserted" }` — a sensor's reading of one interlock condition (#213) |
 | `kiosk/refresh` | *(none)* — ask the edge to re-push the allow-list |
 
 **Edge → module** (the edge publishes):

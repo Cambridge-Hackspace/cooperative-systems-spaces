@@ -1110,9 +1110,27 @@ C_EDGE="css-e2e-edge"
 # devices stage runs an Unauthenticated one, the lease stage a registered one,
 # and silently sharing a file would make whichever ran second depend on the
 # order they happened to be listed in.
+# Under --provision=external every process of a kind appends to one log for
+# the whole run, and `*_logged` greps that log to wait for a line. So a wait
+# for "Module state synced" on the SECOND edge of a run returned on the
+# FIRST edge's line, before this edge had any wiring, and an alive pulse sent
+# on the strength of it marked no module -- CI refused every lease in the
+# conditions stage as ModuleOffline while the podman axis, whose `pm logs` is
+# per container, passed. The live log is now this process's alone: what was
+# there before moves to <name>.history.log, so nothing is lost and nothing
+# earlier can satisfy a wait.
+rotate_log() {
+  local live="${OUT}/logs/$1.log"
+  if [[ -s ${live} ]]; then
+    cat "${live}" >>"${OUT}/logs/$1.history.log"
+    : >"${live}"
+  fi
+}
+
 start_edge() {
   local binary="$1" frontend="$2" config="${3:-edge.config.toml}"
   if [[ ${PROVISION} == "external" ]]; then
+    rotate_log css-edge
     RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       TZ="${STACK_TZ}" \
       "${ROOT}/e2e/artifacts/${binary}" \
@@ -1143,6 +1161,7 @@ C_BRIDGE="css-e2e-bridge"
 start_bridge() {
   local config="${1:-bridge.config.toml}"
   if [[ ${PROVISION} == "external" ]]; then
+    rotate_log spaces-iot-bridge
     RUST_LOG="${CSS_E2E_RUST_LOG:-info}" \
       "${ROOT}/e2e/artifacts/spaces-iot-bridge" \
       --config "${STACK_DIR}/${config}" run \
@@ -1201,6 +1220,7 @@ FAKE_HA_PORT=18123
 start_fake_ha() {
   # Arguments: entity=initial-state pairs.
   if [[ ${PROVISION} == "external" ]]; then
+    rotate_log fake-ha
     ensure_node
     CSS_STACK_DIR="${STACK_DIR}" \
       node "${ROOT}/e2e/drivers/fake-ha.mjs" "${FAKE_HA_PORT}" "$@" \

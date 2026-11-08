@@ -81,8 +81,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # the server, it drives its own scratch database, and it opens no HTTP session at
 # all -- so it claims no address and nothing in it cares where the admin comes
 # from.
-STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -2294,6 +2294,105 @@ stage_bridge() {
   stop_fake_ha
   stop_edge
   emit_junit bridge
+}
+
+# A sensor's reading over the wire (#213). Until #213 the coordinator could
+# debounce, gate and trip on a condition but nothing could deliver one:
+# `ModuleState::observe` was reached only from tests. This stage is the proof
+# that a reading published on resource/request/condition by a bound sensor
+# reaches the same evaluate() -- and that one from a stranger does not.
+stage_conditions() {
+  cases_begin conditions
+  stack_paths
+
+  if ! server_ready; then
+    record_case "conditions/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit conditions
+    return 1
+  fi
+  record_case "conditions/stack-is-up" ok
+
+  run_node conditions.mjs setup "${MQTT_PORT}" "${CARDS_DEVICE_PEPPER}" >"${OUT}/logs/conditions-setup.log" 2>&1 || true
+  absorb_driver_cases || true
+  if [[ ! -f "${STACK_DIR}/cond-plug-id" ]]; then
+    record_case "conditions/setup" fail "setup wrote no fixture; see logs/conditions-setup.log"
+    emit_junit conditions
+    return 1
+  fi
+  record_case "conditions/setup" ok
+
+  local edge_port=8080
+  if tcp_open "${edge_port}"; then
+    record_case "conditions/port-is-free" fail "something is already listening on ${edge_port}"
+    emit_junit conditions
+    return 1
+  fi
+  local fixture="${STACK_DIR}/cond-edge-frontend"
+  mkdir -p "${fixture}"
+  printf '<!doctype html><title>conditions</title>\n' >"${fixture}/index.html"
+  if ! start_edge css-edge "${fixture}" edge-cond.config.toml; then
+    record_case "conditions/edge-starts" fail "could not start css-edge"
+    emit_junit conditions
+    return 1
+  fi
+  if wait_for "css-edge to sync its wiring" 60 edge_logged "Module state synced from remote"; then
+    record_case "conditions/edge-fetched-its-wiring" ok
+  else
+    record_case "conditions/edge-fetched-its-wiring" fail "css-edge never logged a module-state sync"
+    stop_edge
+    emit_junit conditions
+    return 1
+  fi
+
+  local tool card plug sensor
+  tool="$(cat "${STACK_DIR}/cond-tool")"
+  card="$(cat "${STACK_DIR}/cond-card")"
+  plug="$(cat "${STACK_DIR}/cond-plug-id")"
+  sensor="$(cat "${STACK_DIR}/cond-sensor-id")"
+
+  # Both devices alive once; the edge's offline window is two minutes, so
+  # liveness is not the reason for any refusal below.
+  mqtt_pub "resource/request/alive" "{\"device_id\":\"${plug}\"}" || true
+  mqtt_pub "resource/request/alive" "{\"device_id\":\"${sensor}\"}" || true
+  sleep 1
+
+  # 1. A badge: the session opens, and the plug is refused because door_open
+  #    has never been observed. Not offline, not not-in-use: unobserved.
+  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
+  sleep 1
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-1.txt"
+
+  # 2. A stranger says the door is shut. The edge must drop it, by name.
+  mqtt_pub "resource/request/condition" \
+    "{\"device_id\":\"not-a-device\",\"resource\":\"${tool}\",\"condition\":\"door_open\",\"asserted\":false}" || true
+  sleep 1
+  mqtt_sub "resource/lease" 3 "${STACK_DIR}/cond-lease-2.txt"
+  if edge_logged "holds no binding on it; dropped"; then
+    record_case "conditions/2-the-edge-names-why-it-dropped-the-stranger" ok
+  else
+    record_case "conditions/2-the-edge-names-why-it-dropped-the-stranger" fail "no 'holds no binding' warning in the edge log"
+  fi
+
+  # 3. The bound sensor says the door is shut: observed, and granted.
+  mqtt_pub "resource/request/condition" \
+    "{\"device_id\":\"${sensor}\",\"resource\":\"${tool}\",\"condition\":\"door_open\",\"asserted\":false}" || true
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-3.txt"
+
+  # 4. The door opens mid-session: tripped.
+  mqtt_pub "resource/request/condition" \
+    "{\"device_id\":\"${sensor}\",\"resource\":\"${tool}\",\"condition\":\"door_open\",\"asserted\":true}" || true
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-4.txt"
+
+  # 5. The door shuts again. A trip latches: still refused until re-auth.
+  mqtt_pub "resource/request/condition" \
+    "{\"device_id\":\"${sensor}\",\"resource\":\"${tool}\",\"condition\":\"door_open\",\"asserted\":false}" || true
+  sleep 1
+  mqtt_sub "resource/lease" 3 "${STACK_DIR}/cond-lease-5.txt"
+
+  run_node conditions.mjs assert >"${OUT}/logs/conditions.log" 2>&1 || true
+  absorb_driver_cases || true
+  stop_edge
+  emit_junit conditions
 }
 
 stage_lease() {
