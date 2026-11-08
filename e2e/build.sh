@@ -115,11 +115,16 @@ fi
 SHELLCHECK_VERSION="v0.11.0"
 SHELLCHECK_SHA256="8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
 
+# Every bootstrap download retries: GitHub's release CDN answered 504 three
+# runs in a row from a reaper guest while answering 200 from a workstation,
+# and one lost asset fails the whole battery before a single stage runs.
+# --retry-all-errors is what makes a 5xx retry at all; without it curl only
+# retries transient transport errors.
 SHELLCHECK_ROOT="${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}/shellcheck-${SHELLCHECK_VERSION}"
 if [ ! -x "${SHELLCHECK_ROOT}/shellcheck" ]; then
   log "bootstrapping shellcheck ${SHELLCHECK_VERSION}"
   mkdir -p "${SHELLCHECK_ROOT}"
-  curl -fsSL -o "${SHELLCHECK_ROOT}/shellcheck.tar.xz" \
+  curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "${SHELLCHECK_ROOT}/shellcheck.tar.xz" \
     "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
   if ! printf '%s  %s\n' "${SHELLCHECK_SHA256}" "shellcheck.tar.xz" \
     | (cd "${SHELLCHECK_ROOT}" && sha256sum -c -); then
@@ -139,7 +144,7 @@ SHFMT_ROOT="${REAPER_CACHE_NODE:-${ROOT}/e2e/.node}/shfmt-${SHFMT_VERSION}"
 if [ ! -x "${SHFMT_ROOT}/shfmt" ]; then
   log "bootstrapping shfmt ${SHFMT_VERSION}"
   mkdir -p "${SHFMT_ROOT}"
-  curl -fsSL -o "${SHFMT_ROOT}/shfmt.download" \
+  curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "${SHFMT_ROOT}/shfmt.download" \
     "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
   if ! printf '%s  %s\n' "${SHFMT_SHA256}" "shfmt.download" \
     | (cd "${SHFMT_ROOT}" && sha256sum -c -); then
@@ -182,7 +187,7 @@ NODE_HOME="${NODE_ROOT}/node-${NODE_VERSION}-linux-x64"
 if [ ! -x "${NODE_HOME}/bin/node" ]; then
   log "bootstrapping Node ${NODE_VERSION}"
   mkdir -p "${NODE_ROOT}"
-  curl -fsSL -o "${NODE_ROOT}/${NODE_TARBALL}" \
+  curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "${NODE_ROOT}/${NODE_TARBALL}" \
     "https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
   # The verification is the point of pinning, so it is a hard failure and the
   # downloaded file is removed -- a corrupt tarball left in a session cache
@@ -430,7 +435,7 @@ install -m 0755 "${CARGO_TARGET_DIR}/release/toolpass-load" e2e/artifacts/toolpa
 # clone lives under e2e/.bridge, ignored like e2e/.cargo so preflight's
 # commit-matches-tree check stays clean, and gets its own target dir so it
 # cannot evict this workspace's build from the cache.
-BRIDGE_TAG="v0.1.6"
+BRIDGE_TAG="v0.3.0"
 BRIDGE_SRC="${ROOT}/e2e/.bridge/src"
 if [ ! -d "${BRIDGE_SRC}/.git" ]; then
   git clone --quiet --depth 1 --branch "${BRIDGE_TAG}" \
