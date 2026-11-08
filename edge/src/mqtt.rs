@@ -8,8 +8,8 @@ use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 use css_lib::wire::{
-    local, LocalAliveRequest, LocalPower, LocalScan, LocalScanReply, LocalStop, LocalUsage,
-    ResourceLeasePayload,
+    local, LocalAliveRequest, LocalCondition, LocalPower, LocalScan, LocalScanReply, LocalStop,
+    LocalUsage, ResourceLeasePayload,
 };
 
 use crate::config::{Config, MqttConfig};
@@ -481,6 +481,7 @@ impl LocalMqttClient {
             (local::USAGE_REQUEST, 1),
             (local::POWER_REPORT_REQUEST, 1),
             (local::RESOURCE_ALIVE_REQUEST, 1),
+            (local::CONDITION_REQUEST, 1),
             (local::KIOSK_REFRESH_REQUEST, 0),
         ] {
             self.client
@@ -534,6 +535,13 @@ impl LocalMqttClient {
         if topic == local::RESOURCE_ALIVE_REQUEST {
             match serde_json::from_slice::<LocalAliveRequest>(payload) {
                 Ok(req) => self.handle_alive(req).await,
+                Err(e) => warn!("Failed to parse {} : {}", topic, e),
+            }
+            return;
+        }
+        if topic == local::CONDITION_REQUEST {
+            match serde_json::from_slice::<LocalCondition>(payload) {
+                Ok(req) => self.handle_condition(req),
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
             return;
@@ -941,6 +949,42 @@ impl LocalMqttClient {
                 warn!("Failed to forward alive pulse to remote: {}", e);
             }
         });
+    }
+
+    /// A sensor's reading (#213). Validated and recorded by `ModuleState`;
+    /// every refusal is a named warning, because a sensor that is wired and
+    /// ignored is the silent failure this subsystem exists not to have. The
+    /// next lease tick is the feedback; nothing is published in reply.
+    fn handle_condition(&self, req: LocalCondition) {
+        use crate::modules::ConditionRefusal;
+        match self.module_state.report_condition(
+            &req.device_id,
+            &req.resource,
+            &req.condition,
+            req.asserted,
+            chrono::Utc::now(),
+        ) {
+            Ok(()) => debug!(
+                "condition {} = {} on {} from device {}",
+                req.condition, req.asserted, req.resource, req.device_id
+            ),
+            Err(ConditionRefusal::UnknownResource) => warn!(
+                "condition {} from device {} names resource {} this edge has no wiring for; dropped",
+                req.condition, req.device_id, req.resource
+            ),
+            Err(ConditionRefusal::DeviceNotBound) => warn!(
+                "condition {} on {} from device {} which holds no binding on it; dropped",
+                req.condition, req.resource, req.device_id
+            ),
+            Err(ConditionRefusal::ConditionUnused) => warn!(
+                "condition {} on {} from device {}: no enabled rule on that resource uses it; dropped",
+                req.condition, req.resource, req.device_id
+            ),
+            Err(ConditionRefusal::NotTheSource { expected_device }) => warn!(
+                "condition {} on {} from device {}: the rule's source is device {}; dropped",
+                req.condition, req.resource, req.device_id, expected_device
+            ),
+        }
     }
 
     async fn handle_usage(&self, req: LocalUsage) {
