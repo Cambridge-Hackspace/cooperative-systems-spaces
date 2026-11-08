@@ -368,6 +368,16 @@ async function assertWindows() {
     powerE.some((r) => r.relay_on === true),
     `relay_on from door A's lock: ${JSON.stringify(powerE.map((r) => r.relay_on))}`,
   )
+  // #214: every lease this edge publishes names a module it coordinates. The
+  // capture that found 38 foreign devices refused twice a second is the one
+  // that keeps that found.
+  const ours = new Set([deviceId, lockA, lockB])
+  const foreign = [...new Set((captured('bridge-lease-E.txt') ?? []).map((l) => l.device_id))].filter((d) => !ours.has(d))
+  ok(
+    'bridge/E-the-edge-leases-only-what-it-coordinates',
+    foreign.length === 0,
+    `${foreign.length} device(s) leased or refused by this edge are bound to resources it does not coordinate`,
+  )
   const firstGrant = leaseE.findIndex((l) => l.grant === true)
   ok(
     'bridge/E-pulse-end-withdraws-the-lease',

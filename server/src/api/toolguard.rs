@@ -896,13 +896,25 @@ async fn power_state(
 /// GET /api/toolguard/module-state - the module bindings + interlock snapshot
 /// the edge coordinates from (#83). Authenticated like the other controller
 /// endpoints; the poll fallback for the MQTT `module/state` push.
+///
+/// #214: scoped to the asking edge -- the resources on which it holds an
+/// `edge` binding. An edge holding none is sent the whole site, as every
+/// device was before, so a site that never bound a coordinator keeps working;
+/// the warning is how it finds out it is on the legacy path.
 async fn module_state(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(_q): Query<PowerStateQuery>,
 ) -> Result<Json<css_lib::wire::ToolModuleStatePayload>, ApiError> {
-    authorize_toolguard(&state, &headers, "").await?;
-    let payload = state.db.module_state_snapshot().map_err(ApiError::from)?;
+    let device_id = authorize_toolguard(&state, &headers, "").await?;
+    let snapshot = state.db.module_state_snapshot().map_err(ApiError::from)?;
+    let (payload, scope) = snapshot.scoped_to_edge(&device_id.to_string());
+    if scope == css_lib::wire::EdgeScope::Legacy {
+        tracing::warn!(
+            device_id = %device_id,
+            "module-state: device holds no `edge` binding; sending the whole site (#214)"
+        );
+    }
     Ok(Json(payload))
 }
 
@@ -1009,17 +1021,10 @@ pub async fn broadcast_module_state(state: &AppState) {
     let Some(mqtt_service) = state.mqtt_service.clone() else {
         return;
     };
-    let payload = match state.db.module_state_snapshot() {
+    let snapshot = match state.db.module_state_snapshot() {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("Failed to build module-state snapshot: {}", e);
-            return;
-        }
-    };
-    let bytes = match serde_json::to_vec(&payload) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!("Failed to serialize module-state payload: {}", e);
             return;
         }
     };
@@ -1030,12 +1035,20 @@ pub async fn broadcast_module_state(state: &AppState) {
             return;
         }
     };
+    // #214: built once, scoped per device. The push is per device already, so
+    // each edge receives exactly what the HTTP twin would hand it.
     for device_id in devices {
-        if let Err(e) = mqtt_service.publish_to_device(
-            device_id,
-            css_lib::wire::kinds::MODULE_STATE,
-            bytes.clone(),
-        ) {
+        let (payload, _scope) = snapshot.clone().scoped_to_edge(&device_id.to_string());
+        let bytes = match serde_json::to_vec(&payload) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Failed to serialize module-state payload: {}", e);
+                return;
+            }
+        };
+        if let Err(e) =
+            mqtt_service.publish_to_device(device_id, css_lib::wire::kinds::MODULE_STATE, bytes)
+        {
             tracing::warn!(
                 "Failed to publish module-state to device {}: {}",
                 device_id,
