@@ -1191,6 +1191,51 @@ bridge_logged() {
   grep -q -- "${needle}" "${OUT}/logs/spaces-iot-bridge-live.log" 2>/dev/null
 }
 
+# ── the fake Home Assistant (bridge #20) ─────────────────────────────────────
+# A Node script with no dependencies (e2e/drivers/fake-ha.mjs), run the way
+# the drivers are: from the same Node image under podman, from the host's
+# node otherwise. It listens on the loopback, which --network host shares.
+C_FAKE_HA="css-e2e-fake-ha"
+FAKE_HA_PORT=18123
+
+start_fake_ha() {
+  # Arguments: entity=initial-state pairs.
+  if [[ ${PROVISION} == "external" ]]; then
+    ensure_node
+    CSS_STACK_DIR="${STACK_DIR}" \
+      node "${ROOT}/e2e/drivers/fake-ha.mjs" "${FAKE_HA_PORT}" "$@" \
+      >>"${OUT}/logs/fake-ha.log" 2>&1 &
+    echo $! >"${STACK_DIR}/fake-ha.pid"
+    return 0
+  fi
+  pm run -d --name "${C_FAKE_HA}" --network host \
+    -e CSS_STACK_DIR=/stack \
+    -v "${ROOT}/e2e:/e2e:ro" \
+    -v "${STACK_DIR}:/stack" \
+    "${IMG_NODE}" node /e2e/drivers/fake-ha.mjs "${FAKE_HA_PORT}" "$@" \
+    >/dev/null
+}
+
+fake_ha_logged() {
+  local needle="$1"
+  if [[ ${PROVISION} != "external" ]]; then
+    pm logs "${C_FAKE_HA}" >"${OUT}/logs/fake-ha.log" 2>&1 || true
+  fi
+  grep -q -- "${needle}" "${OUT}/logs/fake-ha.log" 2>/dev/null
+}
+
+stop_fake_ha() {
+  if [[ ${PROVISION} == "external" ]]; then
+    if [[ -f "${STACK_DIR}/fake-ha.pid" ]]; then
+      kill "$(cat "${STACK_DIR}/fake-ha.pid")" 2>/dev/null || true
+      rm -f "${STACK_DIR}/fake-ha.pid"
+    fi
+  else
+    pm logs "${C_FAKE_HA}" >"${OUT}/logs/fake-ha.log" 2>&1 || true
+    pm rm -f "${C_FAKE_HA}" >/dev/null 2>&1 || true
+  fi
+}
+
 stop_bridge() {
   if [[ ${PROVISION} == "external" ]]; then
     if [[ -f "${STACK_DIR}/bridge.pid" ]]; then

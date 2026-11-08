@@ -430,7 +430,7 @@ install -m 0755 "${CARGO_TARGET_DIR}/release/toolpass-load" e2e/artifacts/toolpa
 # clone lives under e2e/.bridge, ignored like e2e/.cargo so preflight's
 # commit-matches-tree check stays clean, and gets its own target dir so it
 # cannot evict this workspace's build from the cache.
-BRIDGE_TAG="v0.1.2"
+BRIDGE_TAG="v0.1.6"
 BRIDGE_SRC="${ROOT}/e2e/.bridge/src"
 if [ ! -d "${BRIDGE_SRC}/.git" ]; then
   git clone --quiet --depth 1 --branch "${BRIDGE_TAG}" \

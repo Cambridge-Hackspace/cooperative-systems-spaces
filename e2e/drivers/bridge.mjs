@@ -3,19 +3,29 @@
 //
 //   setup   admin, tool, member+card, the EDGE device registered and bound,
 //           both configs under STACK_DIR, broker logins, and an invite written
-//           to bridge-invite for the bridge to claim itself with.
-//   bind    the identity the bridge wrote -> bound as power, stage 0, fail_off.
+//           to bridge-invite for the bridge to claim itself with. Plus, for the
+//           Home Assistant half (bridge #20): two doors between two places --
+//           A momentary, B until_stopped -- each with a lock the fake HA owns,
+//           and invites for the bridge to claim those identities too.
+//   bind    the identities the bridge wrote -> the plug bound as power on the
+//           tool; each lock bound as power AND strike (pulse 3000) on its
+//           door, with the edge as coordinator and a rule admitting the member.
+//   republish  the doors snapshot to the edge, as the lease stage does.
 //   assert  the captured windows, one case per claim.
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { PATCH, POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
 const FIXTURE = path.join(STACK_DIR, 'bridge-fixture.json')
 const mqttPort = process.argv[3] ?? '1883'
 const devicePepper = process.argv[4] ?? ''
 const FRIENDLY = 'e2e/plug/extractor'
+/** Where the stage runs the fake Home Assistant (stack.sh start_fake_ha). */
+export const FAKE_HA_PORT = 18123
+export const FAKE_HA_TOKEN = 'e2e-fake-ha-token'
+const LOCKS = { 'door-a': 'lock.door_a', 'door-b': 'lock.door_b' }
 
 /** Every JSON object mosquitto_sub captured, one per line, bad lines dropped. */
 function captured(name) {
@@ -81,6 +91,38 @@ async function setup() {
   })
   assertEq('bridge/member-card-set', 200, cardSet.status, cardSet.text.slice(0, 160))
 
+  // Two doors for the Home Assistant locks (#20): A stays `momentary`, so
+  // its lease is exactly the strike pulse; B becomes `until_stopped` in bind,
+  // so a lease on it outlives the pulse and stop-on-loss has something to stop.
+  const mkPlace = async (name) => {
+    const res = await POST('/api/admin/places', {
+      token: admin.token,
+      body: { name: `${name}-${tag}`, place_type: 'Outside', is_special: true },
+    })
+    return res.json?.data?.id
+  }
+  const outside = await mkPlace('bridge-outside')
+  const inside = await mkPlace('bridge-inside')
+  ok('bridge/places-created', !!outside && !!inside, 'two places for the doors to connect')
+  const mkDoor = async (name) => {
+    const res = await POST('/api/admin/doors', {
+      token: admin.token,
+      body: { name: `${name}-${tag}`, place_id_from: outside, place_id_to: inside },
+    })
+    return { id: res.json?.data?.id, status: res.status }
+  }
+  const doorA = await mkDoor('bridge-door-a')
+  const doorB = await mkDoor('bridge-door-b')
+  ok('bridge/doors-created', !!doorA.id && !!doorB.id, `${doorA.status} ${doorB.status}`)
+  for (const [label, door] of [['a', doorA], ['b', doorB]]) {
+    const rule = await POST(`/api/admin/doors/${door.id}/rules`, {
+      token: admin.token,
+      body: { kind: 'user', value: member.user.id, effect: 'allow' },
+    })
+    ok(`bridge/door-${label}-admits-the-member`, rule.status === 201, rule.text.slice(0, 120))
+  }
+  fs.writeFileSync(path.join(STACK_DIR, 'bridge-ha-token'), `${FAKE_HA_TOKEN}\n`)
+
   // The edge's config. Renew twice per TTL; a long offline window so a report
   // never ages out underneath an assertion -- the bridge's alive is every 2 s.
   fs.writeFileSync(
@@ -145,39 +187,116 @@ countdown = true
 on_time_s = 60
 rearm_s = 15
 stop_resource_on_loss = true
+
+# Home Assistant (#20): the fake the stage runs, on the loopback both the
+# host and a --network host container share.
+[homeassistant]
+url = "ws://127.0.0.1:${FAKE_HA_PORT}/api/websocket"
+token_file = "${STACK_DIR}/bridge-ha-token"
+
+[[device]]
+name = "door-a"
+backend = "homeassistant"
+entity = "${LOCKS['door-a']}"
+role = "power"
+resource = "${doorA.id}"
+identity = "${STACK_DIR}/bridge-identities/door-a.toml"
+stop_resource_on_loss = true
+
+[[device]]
+name = "door-b"
+backend = "homeassistant"
+entity = "${LOCKS['door-b']}"
+role = "power"
+resource = "${doorB.id}"
+identity = "${STACK_DIR}/bridge-identities/door-b.toml"
+stop_resource_on_loss = true
 `,
   )
 
-  // An invite for the bridge to claim with its OWN register subcommand.
-  const bridgeInvite = await POST('/api/admin/devices/invite', { token: admin.token, body: { expires_in_hours: 1 } })
-  const code = bridgeInvite.json?.data?.device_code
-  ok('bridge/invite-minted', !!code, `invite -> ${bridgeInvite.status}`)
-  fs.writeFileSync(path.join(STACK_DIR, 'bridge-invite'), code ?? '')
+  // Invites for the bridge to claim with its OWN register subcommand: one
+  // per device, since each is its own identity on the platform.
+  const invites = {}
+  for (const [name, file] of [['extractor', 'bridge-invite'], ['door-a', 'bridge-invite-door-a'], ['door-b', 'bridge-invite-door-b']]) {
+    const inv = await POST('/api/admin/devices/invite', { token: admin.token, body: { expires_in_hours: 1 } })
+    invites[name] = inv.json?.data?.device_code
+    fs.writeFileSync(path.join(STACK_DIR, file), invites[name] ?? '')
+  }
+  ok('bridge/invite-minted', Object.values(invites).every(Boolean), `invites: ${JSON.stringify(Object.keys(invites))}`)
   fs.writeFileSync(path.join(STACK_DIR, 'bridge-tool-id'), `bridge-${tag}`)
   fs.writeFileSync(path.join(STACK_DIR, 'bridge-card'), card)
-  fs.writeFileSync(FIXTURE, JSON.stringify({ tag, toolId, adminToken: admin.token, edgeId: edge.id }, null, 2))
+  fs.writeFileSync(path.join(STACK_DIR, 'bridge-door-a-id'), doorA.id ?? '')
+  fs.writeFileSync(path.join(STACK_DIR, 'bridge-door-b-id'), doorB.id ?? '')
+  fs.writeFileSync(
+    FIXTURE,
+    JSON.stringify({ tag, toolId, adminToken: admin.token, edgeId: edge.id, doorAId: doorA.id, doorBId: doorB.id }, null, 2),
+  )
   record('bridge/configs-written', 'ok')
+}
+
+function identityOf(name) {
+  const text = fs.readFileSync(path.join(STACK_DIR, 'bridge-identities', `${name}.toml`), 'utf8')
+  return { deviceId: /device_id\s*=\s*"([^"]+)"/.exec(text)?.[1], text }
 }
 
 async function bind() {
   const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'))
-  const idFile = path.join(STACK_DIR, 'bridge-identities', 'extractor.toml')
-  const text = fs.readFileSync(idFile, 'utf8')
-  const deviceId = /device_id\s*=\s*"([^"]+)"/.exec(text)?.[1]
+  const bindTo = (body) => POST('/api/admin/device-bindings', { token: fixture.adminToken, body })
+
+  const { deviceId, text } = identityOf('extractor')
   ok('bridge/identity-has-device-id', !!deviceId, `identity file: ${text.slice(0, 80)}`)
-  const binding = await POST('/api/admin/device-bindings', {
-    token: fixture.adminToken,
-    body: {
-      resource_id: fixture.toolId,
-      device_id: deviceId,
-      role: 'power',
-      name: `bridge extractor ${fixture.tag}`,
-      start_stage: 0,
-      on_disconnect: 'fail_off',
-    },
+  const binding = await bindTo({
+    resource_id: fixture.toolId,
+    device_id: deviceId,
+    role: 'power',
+    name: `bridge extractor ${fixture.tag}`,
+    start_stage: 0,
+    on_disconnect: 'fail_off',
   })
   assertEq('bridge/bound-as-power', 201, binding.status, binding.text.slice(0, 200))
   fs.writeFileSync(path.join(STACK_DIR, 'bridge-device-id'), deviceId ?? '')
+
+  // The locks (#20). Each door: the edge as coordinator, the lock as POWER
+  // (what is leased) and as STRIKE (what gives the door its pulse -- a door
+  // with no strike binding has a pulse of zero and never leases anything).
+  // hold_open_access is false: the bridge is not on the scan-reply path an
+  // open-access hold travels.
+  for (const [name, doorId] of [['door-a', fixture.doorAId], ['door-b', fixture.doorBId]]) {
+    const lock = identityOf(name)
+    ok(`bridge/${name}-identity-has-device-id`, !!lock.deviceId, lock.text.slice(0, 80))
+    const [edgeB, powerB, strikeB] = await Promise.all([
+      bindTo({ resource_id: doorId, device_id: fixture.edgeId, role: 'edge', name: `${name} coordinator ${fixture.tag}` }),
+      bindTo({ resource_id: doorId, device_id: lock.deviceId, role: 'power', name: `${name} lock ${fixture.tag}`, on_disconnect: 'fail_off' }),
+      bindTo({
+        resource_id: doorId,
+        device_id: lock.deviceId,
+        role: 'strike',
+        name: `${name} pulse ${fixture.tag}`,
+        pulse_ms: 3000,
+        hold_open_access: false,
+      }),
+    ])
+    ok(
+      `bridge/${name}-bound-as-power-and-strike`,
+      edgeB.status === 201 && powerB.status === 201 && strikeB.status === 201,
+      `edge ${edgeB.status} power ${powerB.status} strike ${strikeB.status}: ${strikeB.text.slice(0, 160)}`,
+    )
+    fs.writeFileSync(path.join(STACK_DIR, `bridge-${name}-device-id`), lock.deviceId ?? '')
+  }
+  // Door B outlives its pulse, so stop-on-loss has a lease to end.
+  const roomed = await PATCH(`/api/admin/resources/${fixture.doorBId}`, {
+    token: fixture.adminToken,
+    body: { session_profile: 'until_stopped' },
+  })
+  assertEq('bridge/door-b-is-until-stopped', 200, roomed.status, roomed.text.slice(0, 160))
+}
+
+async function republish() {
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'))
+  for (const id of [fixture.doorAId, fixture.doorBId]) {
+    const r = await POST(`/api/admin/doors/${id}/republish`, { token: fixture.adminToken })
+    ok(`bridge/door-republished-${id === fixture.doorAId ? 'a' : 'b'}`, r.status === 200 || r.status === 202, `${r.status} ${r.text.slice(0, 120)}`)
+  }
 }
 
 async function assertWindows() {
@@ -228,12 +347,54 @@ async function assertWindows() {
   ok('bridge/D-loss-stops-the-resource', stops.length >= 1, `stops for ${tool}: ${stops.length}`)
   const setD = captured('bridge-set-D.txt') ?? []
   ok('bridge/D-refusal-switches-plug-off', setD.some((c) => c.state === 'OFF'), `set commands: ${JSON.stringify(setD)}`)
+
+  // ---- Home Assistant (#20) ------------------------------------------------
+  const calls = captured('fake-ha-calls.jsonl') ?? []
+  const callsFor = (entity) => calls.filter((c) => c.target?.entity_id === entity).map((c) => `${c.domain}.${c.service}`)
+  const doorA = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-a-id'), 'utf8').trim()
+  const doorB = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-b-id'), 'utf8').trim()
+  const lockA = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-a-device-id'), 'utf8').trim()
+  const lockB = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-b-device-id'), 'utf8').trim()
+
+  // E: a badge at the momentary door. The lease is the pulse; the lock
+  // follows it both ways.
+  const leaseE = (captured('bridge-lease-E.txt') ?? []).filter((l) => l.device_id === lockA)
+  ok('bridge/E-badge-leases-the-lock', leaseE.some((l) => l.grant === true), `leases for door A's lock: ${JSON.stringify(leaseE.map((l) => l.grant))}`)
+  const callsA = callsFor(LOCKS['door-a'])
+  ok('bridge/E-lease-unlocks-the-door', callsA[0] === 'lock.unlock', `calls on ${LOCKS['door-a']}: ${JSON.stringify(callsA)}`)
+  const powerE = (captured('bridge-power-E.txt') ?? []).filter((r) => r.device_id === lockA)
+  ok(
+    'bridge/E-unlocked-is-reported-as-on',
+    powerE.some((r) => r.relay_on === true),
+    `relay_on from door A's lock: ${JSON.stringify(powerE.map((r) => r.relay_on))}`,
+  )
+  const firstGrant = leaseE.findIndex((l) => l.grant === true)
+  ok(
+    'bridge/E-pulse-end-withdraws-the-lease',
+    firstGrant >= 0 && leaseE.slice(firstGrant).some((l) => l.grant === false),
+    `after the pulse the lease must be refused: ${JSON.stringify(leaseE.map((l) => l.grant))}`,
+  )
+  ok('bridge/E-withdrawal-relocks-the-door', callsA.length >= 2 && callsA[callsA.length - 1] === 'lock.lock', `calls: ${JSON.stringify(callsA)}`)
+  const stateE = JSON.parse(fs.readFileSync(path.join(STACK_DIR, 'fake-ha-state.json'), 'utf8'))
+  ok('bridge/E-door-a-ends-locked', stateE[LOCKS['door-a']] === 'locked', `final: ${stateE[LOCKS['door-a']]}`)
+
+  // F: the until_stopped door. Leased past the pulse; HA loses the lock;
+  // stop-on-loss ends the session; the withdrawal relocks.
+  const callsB = callsFor(LOCKS['door-b'])
+  ok('bridge/F-badge-unlocks-the-room-door', callsB[0] === 'lock.unlock', `calls on ${LOCKS['door-b']}: ${JSON.stringify(callsB)}`)
+  const leaseF = (captured('bridge-lease-F.txt') ?? []).filter((l) => l.device_id === lockB)
+  ok('bridge/F-lease-outlives-the-pulse', leaseF.length >= 2 && leaseF.every((l) => l.grant === true), `leases 4 s after the badge: ${JSON.stringify(leaseF.map((l) => l.grant))}`)
+  const stopsF = (captured('bridge-stop-F.txt') ?? []).filter((s) => s.resource === doorB)
+  ok('bridge/F-loss-stops-the-door', stopsF.length >= 1, `stops for door B: ${stopsF.length}`)
+  ok('bridge/F-stop-relocks-the-door', callsB.length >= 2 && callsB[callsB.length - 1] === 'lock.lock', `calls: ${JSON.stringify(callsB)}`)
+  void doorA
 }
 
 main(async () => {
   const cmd = process.argv[2]
   if (cmd === 'setup') await setup()
   else if (cmd === 'bind') await bind()
+  else if (cmd === 'republish') await republish()
   else if (cmd === 'assert') await assertWindows()
   else throw new Error(`bridge.mjs: unknown command ${cmd}`)
 })

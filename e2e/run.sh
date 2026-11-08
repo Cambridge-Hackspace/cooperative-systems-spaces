@@ -2120,6 +2120,19 @@ stage_bridge() {
   else
     record_case "bridge/never-re-registers" ok
   fi
+  # The two Home Assistant locks (#20) are identities of their own: the same
+  # register subcommand, which declares them power AND strike.
+  local lock
+  for lock in door-a door-b; do
+    if register_bridge "${lock}" "$(cat "${STACK_DIR}/bridge-invite-${lock}")" \
+      && [[ -s "${STACK_DIR}/bridge-identities/${lock}.toml" ]]; then
+      record_case "bridge/${lock}-registers" ok
+    else
+      record_case "bridge/${lock}-registers" fail "register did not write ${lock}'s identity; see logs/spaces-iot-bridge-register.log"
+      emit_junit bridge
+      return 1
+    fi
+  done
   run_node bridge.mjs bind >"${OUT}/logs/bridge-bind.log" 2>&1 || true
   absorb_driver_cases || true
 
@@ -2145,10 +2158,34 @@ stage_bridge() {
     emit_junit bridge
     return 1
   fi
+  # The doors are decided from the compiled door snapshot, which the edge must
+  # have received before a badge at one means anything (as the lease stage).
+  run_node bridge.mjs republish >"${OUT}/logs/bridge-republish.log" 2>&1 || true
+  absorb_driver_cases || true
+  if wait_for "css-edge to receive the door snapshot" 30 edge_logged "Doors state updated"; then
+    record_case "bridge/edge-received-the-door-snapshot" ok
+  else
+    record_case "bridge/edge-received-the-door-snapshot" fail "css-edge never logged a doors/state snapshot; windows E and F cannot be about the decision"
+  fi
 
-  local friendly="e2e/plug/extractor" tool card
+  local friendly="e2e/plug/extractor" tool card door_a door_b
   tool="$(cat "${STACK_DIR}/bridge-tool-id")"
   card="$(cat "${STACK_DIR}/bridge-card")"
+  door_a="$(cat "${STACK_DIR}/bridge-door-a-id")"
+  door_b="$(cat "${STACK_DIR}/bridge-door-b-id")"
+
+  # The fake Home Assistant, before the bridge, so the bridge's first connect
+  # succeeds rather than backs off. Both locks start locked.
+  start_fake_ha lock.door_a=locked lock.door_b=locked
+  if wait_for "the fake Home Assistant to listen" 20 fake_ha_logged "listening on"; then
+    record_case "bridge/fake-ha-starts" ok
+  else
+    record_case "bridge/fake-ha-starts" fail "fake-ha.mjs never logged listening; see logs/fake-ha.log"
+    stop_fake_ha
+    stop_edge
+    emit_junit bridge
+    return 1
+  fi
 
   start_bridge
   if wait_for "the bridge to connect to both brokers" 30 bridge_logged "edge: connected"; then
@@ -2156,9 +2193,15 @@ stage_bridge() {
   else
     record_case "bridge/bridge-starts" fail "the bridge never logged edge: connected; see logs/spaces-iot-bridge-live.log"
     stop_bridge
+    stop_fake_ha
     stop_edge
     emit_junit bridge
     return 1
+  fi
+  if wait_for "the bridge to authenticate with Home Assistant" 20 bridge_logged "ha: connected and authenticated"; then
+    record_case "bridge/bridge-reaches-home-assistant" ok
+  else
+    record_case "bridge/bridge-reaches-home-assistant" fail "the bridge never logged ha: connected and authenticated; windows E and F cannot pass"
   fi
 
   # Window A: the plug has said nothing. Every power report must omit relay_on.
@@ -2212,12 +2255,43 @@ stage_bridge() {
   wait "${stop_sub}" || true
   wait "${set_sub_d}" || true
 
+  # Window E (#20): a badge at door A, which is momentary with a 3000 ms
+  # strike pulse on the LOCK's own strike binding. The edge leases the lock
+  # for exactly the pulse: the bridge unlocks on the grant, reports unlocked
+  # as on, and relocks on the withdrawal. 8 s covers grant, pulse, refusal
+  # and the lock's 300 ms transitions, with room.
+  mqtt_sub "resource/lease" 8 "${STACK_DIR}/bridge-lease-E.txt" &
+  local lease_e=$!
+  mqtt_sub "resource/request/power" 8 "${STACK_DIR}/bridge-power-E.txt" &
+  local power_e=$!
+  sleep 1
+  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${door_a}\"}" || true
+  wait "${lease_e}" || true
+  wait "${power_e}" || true
+
+  # Window F (#20): door B is until_stopped, so its lease outlives the pulse.
+  # Then Home Assistant loses the lock -- the fixture reports it unavailable --
+  # and stop-on-loss must end the session within its 10 s debounce; the
+  # withdrawal that follows relocks it. The stop capture is sized past the
+  # debounce like window D's.
+  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${door_b}\"}" || true
+  sleep 4
+  mqtt_sub "resource/lease" 2 "${STACK_DIR}/bridge-lease-F.txt"
+  mqtt_sub "resource/request/stop" 16 "${STACK_DIR}/bridge-stop-F.txt" &
+  local stop_f=$!
+  sleep 1
+  printf '{"entity_id":"lock.door_b","state":"unavailable"}\n' >"${STACK_DIR}/fake-ha-inject.json"
+  wait "${stop_f}" || true
+  # The relock lands a lease tick after the stop; give it a moment to be recorded.
+  sleep 3
+
   # The driver's verdicts are the stage's verdicts. Without this line the
   # first run of this stage reported "7 case(s), 0 failure(s)" while the
   # driver had written four FAILs to bridge.log that nothing read.
   run_node bridge.mjs assert >"${OUT}/logs/bridge.log" 2>&1 || true
   absorb_driver_cases || true
   stop_bridge
+  stop_fake_ha
   stop_edge
   emit_junit bridge
 }
