@@ -767,8 +767,12 @@ impl LocalMqttClient {
         // device actually energized (#179). Absent is "cannot tell", and a
         // device that cannot tell can never confirm.
         if let (Some(device_id), Some(relay_on)) = (req.device_id.as_deref(), req.relay_on) {
-            self.module_state
-                .note_relay_state(device_id, relay_on, chrono::Utc::now());
+            self.module_state.note_relay_state(
+                device_id,
+                &req.resource,
+                relay_on,
+                chrono::Utc::now(),
+            );
         }
 
         if let Some(draw) = req.draw_now {
