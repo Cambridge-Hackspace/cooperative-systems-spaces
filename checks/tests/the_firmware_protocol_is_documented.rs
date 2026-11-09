@@ -44,6 +44,9 @@ use css_checks::read;
 const DOC: &str = "FIRMWARE.md";
 const CORPUS: &str = "e2e/corpus/endpoints.json";
 const WIRE: &str = "css_lib/src/wire.rs";
+/// The edge ↔ module vocabulary: its own crate since #219, so the firmware can
+/// depend on exactly it. `css_lib::wire` re-exports it; the text lives here.
+const LOCAL_WIRE: &str = "css_wire/src/lib.rs";
 /// The heading above the edge ↔ module tables in the document.
 const LOCAL_SECTION: &str = "### The local broker: edge ↔ module";
 
@@ -174,30 +177,30 @@ fn kind_is_documented(spans: &[String], kind: &str) -> bool {
     spans.iter().any(|s| s == kind || s.ends_with(&suffix))
 }
 
-/// The body of one `pub mod <name>` block in `wire.rs`.
+/// The body of one `pub mod <name>` block in the source at `path`.
 ///
-/// `wire.rs` now holds two vocabularies -- `kinds` (server ↔ device, namespaced)
-/// and `local` (edge ↔ module, not) -- and they are checked against different
-/// parts of the document. Scanning the whole file for `pub const` would merge
+/// There are two vocabularies -- `kinds` (server ↔ device, namespaced, in
+/// `css_lib`) and `local` (edge ↔ module, not, in `css_wire`) -- and they are
+/// checked against different parts of the document. Scanning the whole file for `pub const` would merge
 /// them and report a missing local topic as a missing `kind`, sending whoever
 /// reads the failure to the wrong table.
 ///
 /// Delimited by the closing brace in column zero rather than by counting
 /// braces: the constants' doc comments contain `{ card, tool_id }` payload
 /// sketches, so brace counting reads the prose and loses its place.
-fn module_body(src: &str, name: &str) -> String {
+fn module_body(path: &str, src: &str, name: &str) -> String {
     let open = format!("pub mod {name} {{");
     let start = src
         .find(&open)
-        .unwrap_or_else(|| panic!("no `{open}` in {WIRE}. The extraction broke."));
+        .unwrap_or_else(|| panic!("no `{open}` in {path}. The extraction broke."));
     let rest = &src[start + open.len()..];
     let end = rest
         .find("\n}")
-        .unwrap_or_else(|| panic!("`pub mod {name}` in {WIRE} is never closed in column zero."));
+        .unwrap_or_else(|| panic!("`pub mod {name}` in {path} is never closed in column zero."));
     let body = rest[..end].to_string();
     assert!(
         body.contains("pub const"),
-        "`pub mod {name}` in {WIRE} yielded no constants. An empty vocabulary \
+        "`pub mod {name}` in {path} yielded no constants. An empty vocabulary \
          makes every check that reads it pass on any document at all."
     );
     body
@@ -275,7 +278,7 @@ fn every_documented_endpoint_exists() {
 #[test]
 fn every_wire_kind_is_documented() {
     let spans = code_spans(&read(DOC));
-    let missing: Vec<String> = wire_kinds(&module_body(&read(WIRE), "kinds"))
+    let missing: Vec<String> = wire_kinds(&module_body(WIRE, &read(WIRE), "kinds"))
         .into_iter()
         .filter(|k| !kind_is_documented(&spans, k))
         .collect();
@@ -298,14 +301,14 @@ fn every_wire_kind_is_documented() {
 #[test]
 fn every_local_topic_is_documented() {
     let spans = code_spans(&read(DOC));
-    let missing: Vec<String> = wire_kinds(&module_body(&read(WIRE), "local"))
+    let missing: Vec<String> = wire_kinds(&module_body(LOCAL_WIRE, &read(LOCAL_WIRE), "local"))
         .into_iter()
         .filter(|t| !spans.iter().any(|s| s == t))
         .collect();
 
     assert!(
         missing.is_empty(),
-        "these local-broker topics are in {WIRE} and not in {DOC}: {missing:?}\n\n\
+        "these local-broker topics are in {LOCAL_WIRE} and not in {DOC}: {missing:?}\n\n\
          A module's counterparty is the edge, not the server. An undocumented \
          local topic is a message firmware cannot know to publish or subscribe \
          to, and no amount of reading the HTTP section will reveal it."
@@ -318,7 +321,7 @@ fn every_local_topic_is_documented() {
 /// device that connects, stays healthy, and silently does nothing.
 #[test]
 fn every_documented_local_topic_exists() {
-    let real = wire_kinds(&module_body(&read(WIRE), "local"));
+    let real = wire_kinds(&module_body(LOCAL_WIRE, &read(LOCAL_WIRE), "local"));
     let documented = documented_local_topics(&read(DOC));
 
     assert!(
@@ -335,7 +338,7 @@ fn every_documented_local_topic_exists() {
 
     assert!(
         invented.is_empty(),
-        "{DOC} documents local-broker topics that are not in {WIRE}: {invented:?}\n\n\
+        "{DOC} documents local-broker topics that are not in {LOCAL_WIRE}: {invented:?}\n\n\
          Firmware will subscribe to these and hear nothing, or publish to them \
          and be ignored -- a failure that looks like healthy silence from both \
          ends."
@@ -436,9 +439,8 @@ mod the_checks_reject_what_they_are_for {
     /// the failure at the wrong table in the wrong section.
     #[test]
     fn the_two_vocabularies_are_extracted_separately() {
-        let wire = read(WIRE);
-        let kinds = wire_kinds(&module_body(&wire, "kinds"));
-        let local = wire_kinds(&module_body(&wire, "local"));
+        let kinds = wire_kinds(&module_body(WIRE, &read(WIRE), "kinds"));
+        let local = wire_kinds(&module_body(LOCAL_WIRE, &read(LOCAL_WIRE), "local"));
 
         assert!(
             kinds.contains("module/state") && !local.contains("module/state"),
@@ -455,7 +457,7 @@ mod the_checks_reject_what_they_are_for {
     #[test]
     #[should_panic(expected = "no `pub mod nonexistent")]
     fn a_missing_module_is_refused_rather_than_passing_vacuously() {
-        module_body(&read(WIRE), "nonexistent");
+        module_body(WIRE, &read(WIRE), "nonexistent");
     }
 
     /// The section-scoping guard. If the heading is ever reworded, the topic
@@ -716,11 +718,15 @@ fn every_enumerated_value_is_documented() {
         "interlock_reset",
         "enforcement",
     ] {
-        for value in wire_kinds(&module_body(&modules, vocab)) {
+        for value in wire_kinds(&module_body(MODELS_MODULES, &modules, vocab)) {
             expected.push((vocab.to_string(), value));
         }
     }
-    for value in wire_kinds(&module_body(&read(MODELS_DEVICES), "device_role")) {
+    for value in wire_kinds(&module_body(
+        MODELS_DEVICES,
+        &read(MODELS_DEVICES),
+        "device_role",
+    )) {
         expected.push(("device_role".to_string(), value));
     }
     for value in snake_case_enum_values(&read(MODELS_TOOLS), "ToolStatus") {
@@ -759,6 +765,7 @@ fn every_wire_payload_field_is_documented() {
 
     let sources: Vec<(&str, String)> = vec![
         (WIRE, read(WIRE)),
+        (LOCAL_WIRE, read(LOCAL_WIRE)),
         (TOOLGUARD, read(TOOLGUARD)),
         (DEVICES_API, read(DEVICES_API)),
         (DEVICES_INBOUND, read(DEVICES_INBOUND)),
@@ -776,8 +783,8 @@ fn every_wire_payload_field_is_documented() {
     // added to the wire has to be added here, and a struct renamed fails in
     // `struct_fields` rather than quietly losing its coverage.
     let payloads: [(&str, &str); 24] = [
-        (WIRE, "LocalScanReply"),
-        (WIRE, "LocalStrike"),
+        (LOCAL_WIRE, "LocalScanReply"),
+        (LOCAL_WIRE, "LocalStrike"),
         (WIRE, "ToolModuleStatePayload"),
         (WIRE, "ToolModuleTool"),
         (WIRE, "ResourcePolicyPayload"),
@@ -788,7 +795,7 @@ fn every_wire_payload_field_is_documented() {
         (WIRE, "PowerStatePayload"),
         (WIRE, "PowerStateCircuit"),
         (WIRE, "PowerStateTool"),
-        (WIRE, "ResourceLeasePayload"),
+        (LOCAL_WIRE, "ResourceLeasePayload"),
         (TOOLGUARD, "ToolGuardResponse"),
         (TOOLGUARD, "ToolGuardSyncPayload"),
         (TOOLGUARD, "ToolGuardSyncTool"),
@@ -1212,7 +1219,7 @@ const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
     // the document says.
     (
         "resource/response/scan",
-        Payload::Struct(WIRE, "LocalScanReply"),
+        Payload::Struct(LOCAL_WIRE, "LocalScanReply"),
     ),
     ("resource/response/stop", Payload::Handler("handle_stop")),
     ("resource/response/usage", Payload::Handler("handle_usage")),
@@ -1234,19 +1241,25 @@ const LOCAL_RESPONSE_PAYLOADS: &[(&str, Payload)] = &[
 /// exactly it.
 const LOCAL_REQUEST_PAYLOADS: &[(&str, Payload)] = &[
     // The resource-shaped wire (#182); its aliases are gone (#192).
-    ("resource/request/scan", Payload::Struct(WIRE, "LocalScan")),
-    ("resource/request/stop", Payload::Struct(WIRE, "LocalStop")),
+    (
+        "resource/request/scan",
+        Payload::Struct(LOCAL_WIRE, "LocalScan"),
+    ),
+    (
+        "resource/request/stop",
+        Payload::Struct(LOCAL_WIRE, "LocalStop"),
+    ),
     (
         "resource/request/usage",
-        Payload::Struct(WIRE, "LocalUsage"),
+        Payload::Struct(LOCAL_WIRE, "LocalUsage"),
     ),
     (
         "resource/request/power",
-        Payload::Struct(WIRE, "LocalPower"),
+        Payload::Struct(LOCAL_WIRE, "LocalPower"),
     ),
     (
         "resource/request/alive",
-        Payload::Struct(WIRE, "LocalAliveRequest"),
+        Payload::Struct(LOCAL_WIRE, "LocalAliveRequest"),
     ),
 ];
 
@@ -1525,7 +1538,7 @@ mod the_payload_row_check_rejects_what_it_is_for {
             r#"| `resource/response/scan` | `{ "status": string, "tool_on": bool }`"#,
         );
         let documented = documented_payload_fields(&doc, "resource/response/scan");
-        let actual: BTreeSet<String> = struct_fields(&read(WIRE), "LocalScanReply")
+        let actual: BTreeSet<String> = struct_fields(&read(LOCAL_WIRE), "LocalScanReply")
             .into_iter()
             .collect();
 
@@ -1556,7 +1569,7 @@ mod the_payload_row_check_rejects_what_it_is_for {
     /// field reaches the wire and the row that teaches it does not grow.
     #[test]
     fn a_published_field_missing_from_the_row_fails() {
-        let wire = read(WIRE).replace(
+        let wire = read(LOCAL_WIRE).replace(
             "pub struct LocalScanReply {\n    pub resource: String,",
             "pub struct LocalScanReply {\n    pub retry_after_ms: u32,\n    pub resource: String,",
         );

@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["server", "cli", "edge", "css_lib", "cmi5", "checks", "toolguard-test-ui", "toolguard-status-ui", "kiosk"]
+members = ["server", "cli", "edge", "css_lib", "css_wire", "cmi5", "checks", "toolguard-test-ui", "toolguard-status-ui", "kiosk"]
 # kiosk (bevy) and the toolguard-*-ui tools (egui) are heavy GUI utilities not
 # needed to build/run the server; keep them out of the default build set.
 # Build them explicitly with `-p kiosk`, `-p toolguard-status-ui`, etc., or
 # `--workspace` to build everything.
-default-members = ["server", "cli", "edge", "css_lib", "cmi5", "checks"]
+default-members = ["server", "cli", "edge", "css_lib", "css_wire", "cmi5", "checks"]
 # e2e/build.sh clones spaces-iot-bridge under e2e/.bridge/src for the `bridge`
 # stage. It is its own crate with its own lockfile; without this, cargo walks
 # up from that clone, finds this workspace, and refuses to build it at all
