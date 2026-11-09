@@ -32,7 +32,9 @@
 use css_checks::read;
 
 const EDGE_MQTT: &str = "edge/src/mqtt.rs";
-const WIRE: &str = "css_lib/src/wire.rs";
+/// Where `LocalScanReply` is defined: its own crate since #219, re-exported by
+/// `css_lib::wire`.
+const WIRE: &str = "css_wire/src/lib.rs";
 
 /// Source with `//` line comments stripped.
 ///

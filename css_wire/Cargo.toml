@@ -1,0 +1,15 @@
+[package]
+name = "css_wire"
+version = "0.1.0"
+edition = "2024"
+description = "The edge-module vocabulary on the CS:S local broker: topics, message shapes, and the capabilities a device declares. Defined once, for both ends of the wire."
+
+# serde and nothing else, on purpose: the other end of this wire is firmware on
+# an ESP32 (spaces-firmware depends on this crate by tag), so anything that will
+# not build there does not belong here. Logic that needs more -- the edge's
+# decisions, the server's database -- lives in css_lib and above.
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

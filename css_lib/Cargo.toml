@@ -9,6 +9,10 @@ edition = "2024"
 # which is exactly the noise that hides a real warning once `-D warnings` is on.
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# The edge-module vocabulary (#219): defined in its own crate so the firmware can
+# depend on exactly that and nothing heavier. Re-exported from `wire` and
+# `capabilities`.
+css_wire = { path = "../css_wire" }
 
 # Card encryption at rest (#108). XChaCha20-Poly1305 rather than AES-GCM: pure
 # Rust with no C toolchain, which matters because this workspace cross-compiles

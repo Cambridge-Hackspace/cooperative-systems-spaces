@@ -1422,10 +1422,13 @@ The topics a module actually speaks. They are **not** namespaced and carry no
 `device_id` — the local broker is inside one building, and the payloads name the
 tool and the card themselves.
 
-The names come from `css_lib::wire::local`, which is the single definition
-shared by the edge, the kiosk and the test tools. The oracle named at the top of
-this file holds this table and that module to each other, so neither can move
-without the other.
+The names come from the `css_wire` crate in this repository (`css_wire::local`
+for the topics, and the message types beside it), which is the single definition
+shared by the edge, the kiosk, the test tools and the firmware: it depends on
+serde alone, so firmware written in Rust depends on it by tag and builds it for
+its own target (spaces-firmware does). `css_lib::wire` re-exports it. The oracle
+named at the top of this file holds this table and that crate to each other, so
+neither can move without the other.
 
 **One wire, resource-shaped.** A door, a tool and a room are the same thing on
 this broker: a **resource** a badge is presented to, whose **bindings** decide
