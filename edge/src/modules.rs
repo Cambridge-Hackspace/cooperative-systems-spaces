@@ -195,8 +195,11 @@ struct Inner {
     /// threshold a relay confirmation must be newer than, and the clock a
     /// first-stage delay counts from.
     allowed_since: HashMap<String, DateTime<Utc>>,
-    /// The latest relay state each device reported, and when.
-    relay_state: HashMap<String, (bool, DateTime<Utc>)>,
+    /// The latest relay state each device reported for each tool, and when,
+    /// by (device_id, tool key). Per tool and not per device (#222): one
+    /// device can carry several power bindings -- a switch box, one output per
+    /// resource -- and one output closing must not confirm another's stage.
+    relay_state: HashMap<(String, String), (bool, DateTime<Utc>)>,
     /// Bindings currently leased, by binding id: when each was first granted
     /// in the present allow. Run-on applies only to these.
     granted_since: HashMap<String, DateTime<Utc>>,
@@ -362,14 +365,26 @@ impl ModuleState {
         inner.synced_in_use.extend(synced);
     }
 
-    /// A device reported its relay state (#179). This is what confirms, for
-    /// start sequencing, that an earlier stage actually energized -- not that
-    /// it was told to.
-    pub fn note_relay_state(&self, device_id: &str, relay_on: bool, now: DateTime<Utc>) {
+    /// A device reported its relay state for a resource (#179). This is what
+    /// confirms, for start sequencing, that an earlier stage actually
+    /// energized -- not that it was told to.
+    ///
+    /// Kept per device *and* resource (#222): a power report names the
+    /// resource it is about, and a device bound to several resources reports
+    /// each output separately. `resource` may be the id or the external id;
+    /// it is resolved to the tool's key as everything else here is.
+    pub fn note_relay_state(
+        &self,
+        device_id: &str,
+        resource: &str,
+        relay_on: bool,
+        now: DateTime<Utc>,
+    ) {
         let mut inner = self.inner.write().expect("module lock");
+        let key = Self::tool_key(&inner, resource);
         inner
             .relay_state
-            .insert(device_id.to_string(), (relay_on, now));
+            .insert((device_id.to_string(), key), (relay_on, now));
     }
 
     /// Whether the resource is in use as far as this edge knows, as of `now`:
@@ -908,7 +923,12 @@ impl ModuleState {
                             let mut base = allowed_since;
                             let mut blocked = false;
                             for earlier in power.iter().filter(|e| e.start_stage < b.start_stage) {
-                                match Self::confirmed_on_at(&inner, earlier, allowed_since) {
+                                match Self::confirmed_on_at(
+                                    &inner,
+                                    earlier,
+                                    &tool_key,
+                                    allowed_since,
+                                ) {
                                     Some(at) => base = base.max(at),
                                     None => {
                                         blocked = true;
@@ -967,15 +987,20 @@ impl ModuleState {
         out
     }
 
-    /// When a binding's device last confirmed its relay closed, if that
-    /// confirmation is newer than `since` -- a report from before the allow is
-    /// the previous run's, not this one's.
+    /// When a binding's device last confirmed its relay closed *for this
+    /// tool*, if that confirmation is newer than `since` -- a report from
+    /// before the allow is the previous run's, not this one's, and a report
+    /// about another resource on the same device is not about this one.
     fn confirmed_on_at(
         inner: &Inner,
         binding: &DeviceBinding,
+        tool_key: &str,
         since: DateTime<Utc>,
     ) -> Option<DateTime<Utc>> {
-        match inner.relay_state.get(&binding.device_id) {
+        match inner
+            .relay_state
+            .get(&(binding.device_id.clone(), tool_key.to_string()))
+        {
             Some((true, at)) if *at >= since => Some(*at),
             _ => None,
         }
@@ -1744,7 +1769,7 @@ mod tests {
             None,
             "b still waits for a to confirm: {out:?}"
         );
-        s.note_relay_state("dev-a", true, t0() + ms(500));
+        s.note_relay_state("dev-a", "tool-1", true, t0() + ms(500));
         let out = ticked(&s, t0() + ms(1_000));
         assert_eq!(
             grant_for(&out, "b"),
@@ -2042,7 +2067,7 @@ mod tests {
             None,
             "a timer stood in for a confirmation"
         );
-        s.note_relay_state("dev-a", true, t0() + ms(1_500));
+        s.note_relay_state("dev-a", "tool-1", true, t0() + ms(1_500));
         assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "b"), Some(true));
     }
 
@@ -2052,14 +2077,14 @@ mod tests {
         s.note_device_seen("dev-a", t0());
         s.note_device_seen("dev-b", t0());
         // The previous run's relay state, from before anyone signed on.
-        s.note_relay_state("dev-a", true, t0() - Duration::seconds(10));
+        s.note_relay_state("dev-a", "tool-1", true, t0() - Duration::seconds(10));
         s.note_session("tool-1", true, t0());
         assert_eq!(
             for_dev(&ticked(&s, t0()), "b"),
             None,
             "a stale confirmation was believed"
         );
-        s.note_relay_state("dev-a", true, t0() + ms(1_000));
+        s.note_relay_state("dev-a", "tool-1", true, t0() + ms(1_000));
         assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "b"), Some(true));
     }
 
@@ -2080,7 +2105,7 @@ mod tests {
     #[test]
     fn the_start_delay_counts_from_the_confirmation() {
         let s = two_stage(2_000, 0);
-        s.note_relay_state("dev-a", true, t0() + ms(500));
+        s.note_relay_state("dev-a", "tool-1", true, t0() + ms(500));
         assert_eq!(for_dev(&ticked(&s, t0() + ms(2_499)), "b"), None);
         assert_eq!(grant_for(&ticked(&s, t0() + ms(2_500)), "b"), Some(true));
     }
@@ -2097,7 +2122,7 @@ mod tests {
     #[test]
     fn run_on_keeps_a_leased_binding_on_after_a_denial_and_refuses_the_rest_at_once() {
         let s = two_stage(0, 3_000);
-        s.note_relay_state("dev-a", true, t0());
+        s.note_relay_state("dev-a", "tool-1", true, t0());
         assert_eq!(grant_for(&ticked(&s, t0() + ms(100)), "b"), Some(true));
         // The member signs off: the tool is denied.
         let stop = t0() + ms(5_000);
@@ -2132,7 +2157,7 @@ mod tests {
         s.note_device_seen("dev-b", t0());
         s.observe("tool-1", "door_open", false, t0());
         ticked(&s, t0());
-        s.note_relay_state("dev-a", true, t0());
+        s.note_relay_state("dev-a", "tool-1", true, t0());
         assert_eq!(grant_for(&ticked(&s, t0() + ms(100)), "b"), Some(true));
         let trip = t0() + ms(5_000);
         s.observe("tool-1", "door_open", true, trip);
@@ -2160,7 +2185,7 @@ mod tests {
     #[test]
     fn a_new_allow_clears_a_run_on_and_the_sequence_starts_over() {
         let s = two_stage(0, 3_000);
-        s.note_relay_state("dev-a", true, t0());
+        s.note_relay_state("dev-a", "tool-1", true, t0());
         ticked(&s, t0() + ms(100));
         s.note_session("tool-1", false, t0() + ms(1_000));
         assert_eq!(
@@ -2178,7 +2203,7 @@ mod tests {
             None,
             "the run-on grant leaked into the new allow: {out:?}"
         );
-        s.note_relay_state("dev-a", true, t0() + ms(2_500));
+        s.note_relay_state("dev-a", "tool-1", true, t0() + ms(2_500));
         assert_eq!(grant_for(&ticked(&s, t0() + ms(3_000)), "b"), Some(true));
     }
 
@@ -2195,13 +2220,67 @@ mod tests {
         assert_eq!(grant_for(&out, "a1"), Some(true));
         assert_eq!(grant_for(&out, "a2"), Some(true));
         assert_eq!(for_dev(&out, "c"), None);
-        s.note_relay_state("dev-a1", true, t0() + ms(500));
+        s.note_relay_state("dev-a1", "tool-1", true, t0() + ms(500));
         assert_eq!(
             for_dev(&ticked(&s, t0() + ms(1_000)), "c"),
             None,
             "one of two confirmed is not confirmed"
         );
-        s.note_relay_state("dev-a2", true, t0() + ms(1_500));
+        s.note_relay_state("dev-a2", "tool-1", true, t0() + ms(1_500));
         assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "c"), Some(true));
+    }
+
+    /// #222: one device bound to two resources -- a switch box, an output per
+    /// tool. The other tool's output closing is not this tool's first stage
+    /// confirming, and before #222 it was: relay state was kept by device.
+    #[test]
+    fn a_relay_on_for_another_resource_does_not_confirm_this_tools_stage() {
+        let mut sw1 = plug("sw1", 0, 0, 0);
+        sw1.device_id = "dev-sw".to_string();
+        let mut sw2 = plug("sw2", 0, 0, 0);
+        sw2.device_id = "dev-sw".to_string();
+        let s = ModuleState::new();
+        s.apply_state(ToolModuleStatePayload {
+            as_of: t0().to_rfc3339(),
+            tools: vec![
+                ToolModuleTool {
+                    tool_id: "tool-1".to_string(),
+                    external_id: Some("ext-1".to_string()),
+                    kind: "tool".to_string(),
+                    session_profile: String::new(),
+                    in_use: false,
+                    modules: vec![sw1, plug("b", 1, 0, 0)],
+                    interlocks: vec![],
+                    power_fails_safe: true,
+                },
+                ToolModuleTool {
+                    tool_id: "tool-2".to_string(),
+                    external_id: Some("ext-2".to_string()),
+                    kind: "tool".to_string(),
+                    session_profile: String::new(),
+                    in_use: false,
+                    modules: vec![sw2],
+                    interlocks: vec![],
+                    power_fails_safe: true,
+                },
+            ],
+        });
+        s.note_device_seen("dev-sw", t0());
+        s.note_device_seen("dev-b", t0());
+        s.note_session("tool-1", true, t0());
+        s.note_session("tool-2", true, t0());
+        ticked(&s, t0());
+
+        // The switch box's other output -- tool-2's -- closes.
+        s.note_relay_state("dev-sw", "tool-2", true, t0() + ms(500));
+        assert_eq!(
+            for_dev(&ticked(&s, t0() + ms(1_000)), "b"),
+            None,
+            "tool-2's relay confirmed tool-1's first stage"
+        );
+
+        // tool-1's own output closes, reported by external id as a device may.
+        s.note_relay_state("dev-sw", "ext-1", true, t0() + ms(1_500));
+        assert_eq!(grant_for(&ticked(&s, t0() + ms(2_000)), "b"), Some(true));
     }
 }
