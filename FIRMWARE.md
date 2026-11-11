@@ -1440,7 +1440,7 @@ one release (v0.2) and are gone (#192): the edge does not subscribe to the old
 request names and publishes nothing on the old reply names, so a message on one
 of them reaches nobody and gets no answer. Firmware that still speaks them must
 be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
-`spaces-toolguard-firmware` ≥ v0.2.0 speak the resource wire.
+`spaces-toolguard-device` ≥ v0.2.0 speak the resource wire.
 
 **Module → edge** (the edge subscribes):
 
