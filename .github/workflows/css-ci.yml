@@ -325,6 +325,18 @@ jobs:
           # otherwise the port is taken and the failure reads as a bind error.
           sudo systemctl stop mosquitto 2>/dev/null || true
           sudo systemctl disable mosquitto 2>/dev/null || true
+          # Ubuntu 26.04's apparmor package confines /usr/sbin/mosquitto to
+          # /etc/mosquitto, so the broker cannot read the config the suite
+          # writes into the workspace: it exits with "Unable to open config
+          # file" and up/mosquitto fails as "never accepted a connection".
+          # 24.04 shipped no such profile. Allow that one file and nothing
+          # else; the profile stays in enforce mode. The path is e2e/run.sh's
+          # default OUT (REAPER_OUT is unset here) plus stack.sh's STACK_DIR.
+          if [ -f /etc/apparmor.d/mosquitto ]; then
+            echo "${GITHUB_WORKSPACE}/e2e/out/stack/mosquitto.conf r," \
+              | sudo tee /etc/apparmor.d/local/mosquitto
+            sudo apparmor_parser -r /etc/apparmor.d/mosquitto
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Node for the API, fuzz and concurrency drivers. e2e/build.sh will
