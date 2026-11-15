@@ -112,6 +112,15 @@ const router = createRouter({
       },
     },
     {
+      // #226: how messages from other apps reach this member.
+      path: '/profile/notifications',
+      name: 'profile-notifications',
+      component: () => import('@/views/NotificationSettingsView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/profile/password',
       name: 'profile-password',
       component: () => import('@/views/PasswordChangeView.vue'),

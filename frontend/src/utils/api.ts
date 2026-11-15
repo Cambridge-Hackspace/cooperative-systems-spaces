@@ -563,6 +563,16 @@ export const oauthApi = withErrorGuard({
   },
 })
 
+/** #226: how messages from apps reach the signed-in member. */
+export const notifyApi = withErrorGuard({
+  preferences() {
+    return apiClient.get<import('@/types').NotifyAppChoices[]>('/notify/preferences')
+  },
+  setPreferences(client: string, body: { enabled?: boolean; kinds?: Record<string, boolean> }) {
+    return apiClient.put<{ saved: boolean }>(`/notify/preferences/${client}`, body)
+  },
+})
+
 /** #225: the apps that may sign members in through CS:S. */
 export const oauthAdminApi = withErrorGuard({
   list() {

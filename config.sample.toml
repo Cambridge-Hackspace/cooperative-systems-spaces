@@ -558,3 +558,6 @@ refresh_token_ttl_days = 30
 code_ttl_secs = 60
 request_ttl_secs = 600
 key_rotation_days = 90
+# The notification relay (#226): how many messages one app may send.
+notify_per_member_per_hour = 30
+notify_per_app_per_hour = 1000

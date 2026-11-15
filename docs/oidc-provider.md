@@ -102,6 +102,45 @@ progress.
 Merging account B into account A ends B's sign-ins in every app: B's codes,
 refresh tokens and consents go with B. A's `sub` doesn't change.
 
+## Messaging members (the notification relay)
+
+An app can send a member a message through CS:S (#226), such as "your print is
+done". CS:S delivers it however that member has chosen, so the app never needs
+their address, and never learns it.
+
+1. **Register the app with `notify:members`.** It needs a secret: it acts as
+   itself, through the client-credentials grant
+   (`grant_type=client_credentials&scope=notify:members`).
+2. **Declare the kinds of message it sends**, with labels members read:
+   `PUT /api/notify/kinds` with
+   `{"kinds": [{"kind": "print.done", "label": "Your print is done"}]}`. This
+   replaces the app's whole set. A kind that is no longer declared is dropped,
+   along with members' choices about it.
+3. **Send**: `POST /api/notify/members/{sub}` with
+   `{"kind", "title", "body"?, "link"?, "urgency"?: "normal"|"high", "dedupe_key"?}`.
+   `sub` is the member's id from their sign-in.
+
+The answer is `202` with the message's id, and it is the same whether the
+member receives the message or not. Each part of a message is limited:
+
+- **Title:** one line of plain text. It becomes the email subject.
+- **Body:** plain text. Line breaks are kept.
+- **Link:** an absolute http(s) URL, shown as text.
+- **`dedupe_key`:** a repeated key returns the first message's id and sends
+  nothing more.
+
+**What a member gets.** Each member chooses under **Profile → Notifications
+from apps**: per app, and per kind. Until they choose, only `high`-urgency
+messages reach them. Mail goes only to a confirmed address. Email is the only
+channel today.
+
+**Limits.** `oidc.notify_per_member_per_hour` (30) and
+`oidc.notify_per_app_per_hour` (1000). Past either, the answer is `429`.
+
+**The record.** Every message is an audit event, `member_notified`. It holds the
+app, the member, the kind and what became of the message (`delivered`,
+`failed` or `suppressed`). It holds no address and no text.
+
 ## What it doesn't do
 
 - **SAML.** CS:S signs members in through OpenID Connect only. (POP accepts SAML

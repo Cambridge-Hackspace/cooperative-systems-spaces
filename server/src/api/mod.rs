@@ -13,6 +13,7 @@ pub mod home_links;
 pub mod instance;
 pub mod membership;
 pub mod mfa;
+pub mod notify;
 pub mod oidc;
 pub mod pages;
 pub mod places;
@@ -66,6 +67,8 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/tool-billing", tool_billing::routes())
         // #225: CS:S as an OpenID Connect provider. Discovery is at the root.
         .nest("/oauth", oidc::routes())
+        // #226: apps message members through their own CS:S settings.
+        .nest("/notify", notify::routes())
         // The API's own 404, and it belongs here rather than at the composition
         // site.
         //

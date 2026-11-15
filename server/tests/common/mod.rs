@@ -27,7 +27,9 @@ pub enum Guard {
     Device,
     /// Authenticates inside the handler from a bare `HeaderMap` rather than via
     /// an extractor — the ToolGuard device endpoints. Behaves as guarded; the
-    /// divergence is recorded by `checks/tests/toolguard_auth.rs`.
+    /// divergence is recorded by `checks/tests/toolguard_auth.rs`. Also the
+    /// notification relay's `RelayApp` (#226), which reads the same header the
+    /// same way but as an extractor, so it refuses before the body is read.
     InlineAuth,
     /// The cmi5 LRS routes, authenticated by `Cmi5SessionAuth` — an opaque
     /// session credential resolved from the database, like a device token. Its
@@ -282,6 +284,11 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/oauth/logout", Guard::Public), // oidc::logout
     R("POST", "/api/oauth/end-session", Guard::Public), // oidc::end_session
     R("GET", "/api/oauth/me/tools", Guard::InlineAuth), // oidc::my_tools: an OAuth access token
+    R("GET", "/api/notify/kinds", Guard::InlineAuth), // notify::list_kinds (#226): an app token
+    R("PUT", "/api/notify/kinds", Guard::InlineAuth), // notify::declare_kinds: an app token
+    R("POST", "/api/notify/members/00000000-0000-4000-8000-000000000001", Guard::InlineAuth), // notify::notify_member: an app token
+    R("GET", "/api/notify/preferences", Guard::Auth), // notify::my_preferences
+    R("PUT", "/api/notify/preferences/00000000-0000-4000-8000-000000000001", Guard::Auth), // notify::set_preferences
     R("POST", "/api/admin/resources/00000000-0000-4000-8000-000000000001/stop", Guard::Admin), // resources::admin_stop
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/scan", Guard::InlineAuth), // resources::scan
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/stop", Guard::InlineAuth), // resources::stop

@@ -368,6 +368,10 @@ pub enum AuditEventType {
     OauthConsentGranted,
     OauthSignin,
     OauthSigningKeyRotated,
+    // #226: an app messaged a member through CS:S, and an app declared the
+    // kinds of message it sends.
+    MemberNotified,
+    NotificationKindsDeclared,
     ToolInterlockCreated,
     ToolInterlockDeleted,
     // Bypass detection (#84). Transition events, not level events: a module
@@ -622,6 +626,8 @@ impl AuditEventType {
             Self::OauthConsentGranted => "oauth_consent_granted",
             Self::OauthSignin => "oauth_signin",
             Self::OauthSigningKeyRotated => "oauth_signing_key_rotated",
+            Self::MemberNotified => "member_notified",
+            Self::NotificationKindsDeclared => "notification_kinds_declared",
             Self::ToolInterlockCreated => "tool_interlock_created",
             Self::ToolInterlockDeleted => "tool_interlock_deleted",
             Self::ToolModuleSilent => "tool_module_silent",
@@ -782,6 +788,8 @@ impl AuditEventType {
             OauthConsentGranted,
             OauthSignin,
             OauthSigningKeyRotated,
+            MemberNotified,
+            NotificationKindsDeclared,
             ToolInterlockCreated,
             ToolInterlockDeleted,
             ToolModuleSilent,
@@ -956,7 +964,9 @@ impl AuditEventType {
             | PasswordResetFailed
             | EmailVerificationSent
             | EmailVerified
-            | EmailSendFailed => Category::Mail,
+            | EmailSendFailed
+            | MemberNotified
+            | NotificationKindsDeclared => Category::Mail,
             Cmi5CoursePublished | Cmi5CourseDeleted | Cmi5AuAssignedToTool | Cmi5Launched
             | Cmi5AuSatisfied | Cmi5CourseExported => Category::Cmi5,
             MailingListSubscribe
@@ -1149,7 +1159,9 @@ impl AuditEventType {
             | RoleDeleted
             | AlertAcknowledged
             | OauthConsentGranted
-            | OauthSignin => Severity::Info,
+            | OauthSignin
+            | MemberNotified
+            | NotificationKindsDeclared => Severity::Info,
         }
     }
 

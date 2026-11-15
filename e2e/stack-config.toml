@@ -453,3 +453,6 @@ refresh_token_ttl_days = 30
 code_ttl_secs = 5
 request_ttl_secs = 600
 key_rotation_days = 90
+# Low, so the `notify` stage can reach the limit in a handful of requests.
+notify_per_member_per_hour = 6
+notify_per_app_per_hour = 1000

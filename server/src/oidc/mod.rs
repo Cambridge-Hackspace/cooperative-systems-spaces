@@ -8,6 +8,7 @@
 
 pub mod flow;
 pub mod keys;
+pub mod relay;
 pub mod store;
 
 use std::sync::{Arc, Mutex, OnceLock};

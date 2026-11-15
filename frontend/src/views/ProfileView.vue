@@ -38,6 +38,20 @@
       <router-link to="/profile/password" class="btn btn-primary btn-sm">Change</router-link>
     </div>
 
+    <!-- #226: how messages from other apps reach you -->
+    <div
+      v-if="isOwnProfile"
+      class="mb-6 flex items-center justify-between bg-base-200 rounded-lg p-4"
+    >
+      <div>
+        <div class="font-medium">Notifications from apps</div>
+        <div class="text-sm text-base-content/70">
+          Choose which messages from other apps reach you, and how.
+        </div>
+      </div>
+      <router-link to="/profile/notifications" class="btn btn-primary btn-sm">Choose</router-link>
+    </div>
+
     <!-- Email addresses (#118): own profile, or a manager viewing someone else's -->
     <EmailAddressesCard
       v-if="userId && (isOwnProfile || canManageUsers)"
