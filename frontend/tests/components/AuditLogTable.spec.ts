@@ -291,8 +291,10 @@ describe('the event-type filter', () => {
         'is a device that did not release it, and "which tools keep needing that" must be ' +
         'askable of the log. To thirty-three with resource_session_ended and ' +
         'resource_session_released_by_sweep (#190): a room an administrator had to end or ' +
-        'the sweep had to take back is the same question asked of a door.'
-    ).toHaveLength(33)
+        'the sweep had to take back is the same question asked of a door. ' +
+        'To thirty-four with oauth_signin (#225): a member signing in to another ' +
+        'program through CS:S is a sign-in, and sign-ins are filterable.'
+    ).toHaveLength(34)
   })
 
   it('titles every option it does offer', async () => {

@@ -440,3 +440,16 @@ module_silence_secs = 1
 liveness_sweep_secs = 2
 unauthorized_power_debounce_secs = 1
 unauthorized_power_draw_amps = 0.5
+
+# Enabled so the `oidc` stage can drive the whole flow (#225). The code lives
+# five seconds rather than sixty so the stage can watch one expire.
+[oidc]
+enabled = true
+issuer = ""
+key_encryption_key = ""
+id_token_ttl_secs = 3600
+access_token_ttl_secs = 3600
+refresh_token_ttl_days = 30
+code_ttl_secs = 5
+request_ttl_secs = 600
+key_rotation_days = 90

@@ -41,6 +41,13 @@ fn main_rs() -> String {
 /// if it genuinely does not, to say here what covers it instead.
 const MAIN_ONLY: &[(&str, &str)] = &[
     (
+        "/.well-known/openid-configuration",
+        "OpenID Connect discovery (#225). The specification puts it at the \
+         issuer's root, and the issuer is the site's URL, so it cannot live \
+         under /api. Covered by the stack battery's `oidc` stage, which fetches \
+         it and drives the whole flow from what it says.",
+    ),
+    (
         "/metrics",
         "dr-metrix's exporter. It cannot live in api_routes() because the crate \
          is Linux-only and the library has to build everywhere. Since #139 it is \

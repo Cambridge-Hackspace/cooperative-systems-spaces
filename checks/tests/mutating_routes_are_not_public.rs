@@ -38,6 +38,18 @@ const ALLOWED_PUBLIC: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/oauth/token",
+        "the OAuth token endpoint (#225): the app authenticates in the body or \
+         with HTTP Basic, and a code also needs its PKCE verifier",
+    ),
+    (
+        "POST",
+        "/api/oauth/end-session",
+        "ends the session, like /api/auth/logout; it only follows a redirect \
+         registered to the app the ID token hint names (#225)",
+    ),
+    (
+        "POST",
         "/api/auth/register",
         "creates the account; no credential yet",
     ),

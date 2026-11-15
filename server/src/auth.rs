@@ -321,7 +321,7 @@ pub fn token_from_cookie_header(header: &str) -> Option<&str> {
 /// header values (#120/#135). Cookie first -- the SPA path -- then a `Bearer`
 /// header for API, CLI, test and device clients. Both failure variants map to
 /// 401, so the missing-vs-invalid distinction is internal only.
-fn select_request_token<'a>(
+pub(crate) fn select_request_token<'a>(
     cookie_header: Option<&'a str>,
     authorization: Option<&'a str>,
 ) -> Result<&'a str, AuthError> {

@@ -530,6 +530,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "048006790404103c488e6c5616b3e7e702a71292aadda08e8f7698a9e0d2eb53"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -3027,9 +3028,12 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-trait",
+ "aws-lc-rs",
  "axum 0.8.8",
  "base32",
+ "base64 0.22.1",
  "bigdecimal",
+ "chacha20poly1305",
  "chrono",
  "chrono-tz",
  "clap",
@@ -3063,6 +3067,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sha2",
  "tempfile",
  "thiserror 1.0.69",
@@ -7219,7 +7224,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.16",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -7518,7 +7523,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -8942,6 +8947,12 @@ name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+
+[[package]]
+name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "untrusted"

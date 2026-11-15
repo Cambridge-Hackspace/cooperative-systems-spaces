@@ -544,6 +544,49 @@ export const toolModulesApi = withErrorGuard({
 })
 
 /** #182: resource-level attributes, whatever the kind. */
+/** #225: the sign-in and logout pages for apps signing members in through CS:S. */
+export const oauthApi = withErrorGuard({
+  request(id: string) {
+    return apiClient.get<import('@/types').OAuthRequestView>(`/oauth/requests/${id}`)
+  },
+  decide(id: string, approve: boolean) {
+    return apiClient.post<import('@/types').OAuthRedirect>(`/oauth/requests/${id}/decision`, {
+      approve,
+    })
+  },
+  endSession(params: {
+    id_token_hint?: string
+    post_logout_redirect_uri?: string
+    state?: string
+  }) {
+    return apiClient.post<import('@/types').OAuthRedirect>('/oauth/end-session', params)
+  },
+})
+
+/** #225: the apps that may sign members in through CS:S. */
+export const oauthAdminApi = withErrorGuard({
+  list() {
+    return apiClient.get<import('@/types').OAuthClient[]>('/admin/oauth/clients')
+  },
+  create(body: import('@/types').OAuthClientRequest) {
+    return apiClient.post<import('@/types').OAuthClientWithSecret>('/admin/oauth/clients', body)
+  },
+  update(id: string, body: import('@/types').OAuthClientRequest) {
+    return apiClient.patch<import('@/types').OAuthClient>(`/admin/oauth/clients/${id}`, body)
+  },
+  remove(id: string) {
+    return apiClient.delete<{ deleted: boolean }>(`/admin/oauth/clients/${id}`)
+  },
+  rotateSecret(id: string) {
+    return apiClient.post<import('@/types').OAuthClientWithSecret>(
+      `/admin/oauth/clients/${id}/secret`
+    )
+  },
+  rotateKeys() {
+    return apiClient.post<{ kid: string }>('/admin/oauth/keys/rotate')
+  },
+})
+
 export const resourcesApi = withErrorGuard({
   /** #228: every resource's administrator-set attributes. */
   list() {

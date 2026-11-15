@@ -74,6 +74,13 @@ diesel_migrations = "2.1.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
 dotenvy = "0.15.7"
 url = "2.5.7"
+# CS:S as an OpenID Connect provider (#225): RS256 keys and constant-time RSA
+# through aws-lc-rs (already in the tree via rustls), sealed at rest with
+# ChaCha20-Poly1305; base64url for JOSE; the token endpoint's form bodies.
+aws-lc-rs = "1.19"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+serde_urlencoded = "0.7"
 rust_decimal = "1.33"
 bigdecimal = { version = "0.4", features = ["serde"] }
 

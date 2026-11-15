@@ -142,7 +142,12 @@ describe('the audit filter against the server enum', () => {
       // 105 -> 106: #182 added resource_updated -- an administrator changing a
       // resource-level attribute (the session profile). A facility-configuration
       // record like the binding events, so it joins the unfiltered set.
-    ).toBe(106)
+      // 106 -> 112: #225 added seven. oauth_signin is a sign-in and IS
+      // offered; the other six -- oauth_client_created / _updated /
+      // _secret_rotated / _deleted, oauth_consent_granted and
+      // oauth_signing_key_rotated -- are app-administration records, like the
+      // RBAC administration set, and join the unfiltered set deliberately.
+    ).toBe(112)
   })
 
   // Named separately because these are the ones that matter in an

@@ -44,6 +44,7 @@ pub const PLAIN: &[(&str, &str)] = &[
     ("home_links", "created_by"),
     ("membership_ledger", "user_id"),
     ("membership_ledger", "created_by"),
+    ("oauth_clients", "created_by"),
     ("power_circuits", "locked_out_by"),
     ("profile_config_versions", "created_by"),
     ("schedules", "created_by"),
@@ -110,6 +111,21 @@ pub const DROPPED: &[(&str, &str, &str)] = &[
         "email_verification_tokens",
         "user_id",
         "re-issued against the moved address when the member asks",
+    ),
+    (
+        "oauth_authorization_codes",
+        "user_id",
+        "a code in flight names the absorbed identity; the app signs in again",
+    ),
+    (
+        "oauth_refresh_tokens",
+        "user_id",
+        "an app's session as the absorbed identity ends; it signs in again as the survivor (#225)",
+    ),
+    (
+        "oauth_consents",
+        "user_id",
+        "consent was given by the absorbed login; the survivor is asked again rather than assumed",
     ),
 ];
 

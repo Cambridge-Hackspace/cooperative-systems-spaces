@@ -92,6 +92,12 @@ const BUDGET: &[(&str, usize)] = &[
     // `ApiError::from`, which preserves 404/409).
     ("membership.rs", 1),
     ("mfa.rs", 8),
+    // #225: none of the four is a database error -- every database error in
+    // the file goes through `ApiError::from` (or `OauthError`, which does the
+    // same). They are a registered redirect URI that no longer parses, a query
+    // string that fails to serialize, and argon2 failing to hash a new secret:
+    // each is ours, and 500 is the honest answer.
+    ("oidc.rs", 4),
     ("mod.rs", 0),
     ("pages.rs", 0),
     ("places.rs", 0),

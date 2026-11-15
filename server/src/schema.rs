@@ -998,6 +998,10 @@ diesel::joinable!(access_rules -> schedules (schedule_id));
 diesel::joinable!(schedules -> users (created_by));
 diesel::joinable!(tools -> schedules (schedule_id));
 diesel::joinable!(tools -> resources (id));
+diesel::joinable!(oauth_authorization_requests -> oauth_clients (client_id));
+diesel::joinable!(oauth_authorization_codes -> oauth_clients (client_id));
+diesel::joinable!(oauth_refresh_tokens -> oauth_clients (client_id));
+diesel::joinable!(oauth_consents -> oauth_clients (client_id));
 diesel::joinable!(doors -> resources (id));
 diesel::joinable!(resource_sessions -> resources (resource_id));
 diesel::joinable!(home_links -> users (created_by));
@@ -1049,6 +1053,89 @@ diesel::joinable!(tool_tier_assignments -> tool_rate_tiers (tier_id));
 diesel::joinable!(tool_usage_sessions -> tool_rate_tiers (tier_id));
 // power_circuits -> power_circuits (parent_circuit_id) is a self-join; walked
 // manually in the ancestor helper, like places and cmi5_blocks.
+
+diesel::table! {
+    oauth_clients (id) {
+        id -> Uuid,
+        client_id -> Text,
+        name -> Text,
+        secret_hash -> Nullable<Text>,
+        confidential -> Bool,
+        redirect_uris -> Array<Text>,
+        post_logout_redirect_uris -> Array<Text>,
+        allowed_scopes -> Array<Text>,
+        skip_consent -> Bool,
+        disabled -> Bool,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    oauth_signing_keys (kid) {
+        kid -> Text,
+        private_key_sealed -> Text,
+        public_jwk -> Jsonb,
+        created_at -> Timestamptz,
+        retired_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    oauth_authorization_requests (id) {
+        id -> Uuid,
+        client_id -> Uuid,
+        redirect_uri -> Text,
+        scope -> Text,
+        state -> Nullable<Text>,
+        nonce -> Nullable<Text>,
+        code_challenge -> Text,
+        prompt -> Nullable<Text>,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    oauth_authorization_codes (code_hash) {
+        code_hash -> Text,
+        client_id -> Uuid,
+        user_id -> Uuid,
+        redirect_uri -> Text,
+        scope -> Text,
+        nonce -> Nullable<Text>,
+        code_challenge -> Text,
+        auth_time -> Timestamptz,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        used_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    oauth_refresh_tokens (id) {
+        id -> Uuid,
+        token_hash -> Text,
+        client_id -> Uuid,
+        user_id -> Uuid,
+        scope -> Text,
+        auth_time -> Timestamptz,
+        code_hash -> Nullable<Text>,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        revoked_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    oauth_consents (user_id, client_id) {
+        user_id -> Uuid,
+        client_id -> Uuid,
+        scopes -> Array<Text>,
+        granted_at -> Timestamptz,
+    }
+}
 
 diesel::allow_tables_to_appear_in_same_query!(
     alert_acknowledgements,
@@ -1111,4 +1198,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_bindings,
     tool_interlocks,
     resources,
+    oauth_clients,
+    oauth_signing_keys,
+    oauth_authorization_requests,
+    oauth_authorization_codes,
+    oauth_refresh_tokens,
+    oauth_consents,
 );

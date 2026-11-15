@@ -541,3 +541,20 @@ unauthorized_power_debounce_secs = 5
 # Draw at or above which a tool counts as running, for the second oracle. Above
 # a trickle so a controller's own standby consumption is not read as use.
 unauthorized_power_draw_amps = 0.5
+
+# CS:S as an OpenID Connect provider (#225): other programs, such as POP, sign
+# members in through CS:S. Off unless enabled. Apps are registered by an
+# administrator under Settings -> Apps.
+[oidc]
+enabled = false
+# The URL apps are told CS:S is at; empty means site.site_url.
+issuer = ""
+# Hex-encoded 32-byte key sealing the signing keys at rest; empty derives one
+# from auth.jwt_secret.
+key_encryption_key = ""
+id_token_ttl_secs = 3600
+access_token_ttl_secs = 3600
+refresh_token_ttl_days = 30
+code_ttl_secs = 60
+request_ttl_secs = 600
+key_rotation_days = 90

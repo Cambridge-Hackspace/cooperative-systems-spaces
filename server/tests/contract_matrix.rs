@@ -353,7 +353,11 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // surface is wider by exactly three until the aliases go.
     // 15 with #191's policy poll; 12 since #192 removed the three HTTP aliases
     // (`tool-on`, `tool-off`, `tool-log`) of the resource path.
-    assert_eq!(device_routes, 12, "device-authenticated routes");
+    // 15 with #225's three OAuth bearer routes (userinfo GET and POST, and
+    // me/tools): authenticated inside the handler by an RS256 access token,
+    // which, like a device token, can only be rejected by a lookup (the
+    // published keys live in the database), so only its shape checks run here.
+    assert_eq!(device_routes, 15, "device-authenticated routes");
     // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
     // (GET/PUT/DELETE), all authenticated by the session credential. Like the
     // device surface, only their shape checks are reachable offline; their
@@ -398,19 +402,23 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // sessions list and the stop, under /api/admin/resources.
     // 223 = 222 + the resource settings list (#228, Admin): GET
     // /api/admin/resources, which the wiring page reads.
-    assert_eq!(jwt_routes, 223, "JWT-authenticated routes");
+    // 232 = 223 + #225's nine: the consent page's two (request and decision)
+    // and app administration's seven (oauth.clients.manage checked in the
+    // handler), all Auth.
+    assert_eq!(jwt_routes, 232, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 223 * 7 + (12 + 6) * 3);
+    assert_eq!(asserted_pairs(), 232 * 7 + (15 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
     // on its contents by looking it up.
     let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
-    // 72 = (12 device + 6 cmi5) routes x 4 content-rejected credentials (#182
+    // 84 = (15 device + 6 cmi5) routes x 4 content-rejected credentials (#182
     // moved this from 68 with the three resource routes, #191 to 84 with the
-    // policy poll, #192 to 72 with the three aliases gone).
+    // policy poll, #192 to 72 with the three aliases gone, #225 to 84 with its
+    // three OAuth bearer routes).
     assert_eq!(
-        deferred, 72,
+        deferred, 84,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

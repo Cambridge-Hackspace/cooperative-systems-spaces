@@ -90,6 +90,8 @@ pub fn admin_routes() -> Router<AppState> {
         // #182: resource-level attributes, whatever the kind (the session
         // profile first).
         .nest("/resources", crate::api::resources::admin_routes())
+        // #225: the apps that may sign members in through CS:S.
+        .nest("/oauth", crate::api::oidc::admin_routes())
         .nest("/tool-tiers", crate::api::tool_tiers::admin_routes())
         .nest("/schedules", crate::api::schedules::admin_routes())
         .nest("/home-links", crate::api::home_links::admin_routes())

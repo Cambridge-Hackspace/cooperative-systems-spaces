@@ -522,6 +522,34 @@ async fn main() -> Result<(), anyhow::Error> {
             broadcaster.run(fan_out_state).await;
         });
     }
+    // #225: drop OpenID Connect sign-in requests nobody finished and codes
+    // long past their use, hourly, and rotate the signing key when it is due.
+    // Neither matters to correctness -- an expired request or code is refused
+    // on its own -- this only keeps the tables from growing.
+    if app_config.oidc.enabled {
+        let oidc_state = app_state.clone();
+        let daemon_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = daemon_shutdown.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
+                match oidc_state.db.oauth_sweep_expired() {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        info!("OpenID Connect sweep removed {n} expired request(s) and code(s)")
+                    }
+                    Err(e) => warn!("OpenID Connect sweep failed: {e}"),
+                }
+                if let Err(e) = css_server::oidc::current_key(&oidc_state) {
+                    warn!("OpenID Connect signing key check failed: {e:?}");
+                }
+            }
+        });
+    }
 
     // The session sweep (#173): returns a tool nobody released to `idle` once
     // its session has run past its own cap plus a grace, settling any open
@@ -590,7 +618,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let serve_dir = ServeDir::new(&frontend_path)
         .fallback(ServeFile::new(format!("{}/index.html", frontend_path)));
 
-    let general_route = Router::new().route("/status", get(root));
+    // #225: OpenID Connect discovery lives at the issuer's root, by spec, so
+    // it is outside the /api nest.
+    let general_route = Router::new().route("/status", get(root)).route(
+        "/.well-known/openid-configuration",
+        get(css_server::api::oidc::discovery),
+    );
     // .route("/profile", get(handlers::show_profile))
     // .layer(axum::middleware::from_fn_with_state(
     //     app_state.db.clone(),

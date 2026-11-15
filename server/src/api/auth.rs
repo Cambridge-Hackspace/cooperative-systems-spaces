@@ -27,7 +27,7 @@ use crate::{
 /// `Result` is handled rather than unwrapped so a future token format that is
 /// not cannot panic a login. On the (unreachable) error the response goes out
 /// without the cookie, and the body still carries the token for Bearer clients.
-fn attach_session_cookie(resp: &mut Response, cookie: String) {
+pub(crate) fn attach_session_cookie(resp: &mut Response, cookie: String) {
     match HeaderValue::from_str(&cookie) {
         Ok(value) => {
             resp.headers_mut().insert(SET_COOKIE, value);
