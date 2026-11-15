@@ -109,6 +109,8 @@ document cannot describe an endpoint that no longer exists.
 
 **Cooperative Systems**: _Spaces_ is Free Software under the AGPL.
 
+The one exception is `css_wire`, the wire vocabulary other programs speak to CS:S in. It is under the MIT License (`css_wire/LICENSE`), so programs under other licenses can depend on it.
+
 ## Commoning
 
 This project is built in the spirit of [commoning open source][commoning] — software
