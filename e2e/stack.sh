@@ -410,6 +410,10 @@ EOF
   # A service container cannot do this job: mosquitto 2 binds to loopback inside
   # its own namespace unless told otherwise, and a GitHub service container
   # takes no command override with which to point one at a config file.
+  #
+  # On Ubuntu 26.04 the apparmor package confines /usr/sbin/mosquitto to
+  # /etc/mosquitto, so a host broker cannot read the config written here unless
+  # a local AppArmor rule allows it. CI adds that rule; see css-ci.yml.
   if [[ ${PROVISION} == "external" ]]; then
     command -v mosquitto >/dev/null 2>&1 \
       || die "--provision=external needs mosquitto on PATH (apt-get install mosquitto)"

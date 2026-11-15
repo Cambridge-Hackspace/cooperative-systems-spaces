@@ -422,6 +422,13 @@ stage_up() {
   if wait_for "mosquitto" 30 tcp_open "${MQTT_PORT}"; then
     record_case "up/mosquitto" ok
   else
+    # Say why, not only that: the broker's own last words are the diagnosis
+    # (an AppArmor-denied config read on Ubuntu 26.04 read here as a bare
+    # timeout, and the reason sat unseen in an uploaded artifact).
+    if [[ -s "${OUT}/logs/mosquitto.log" ]]; then
+      warn "mosquitto's log ends:"
+      tail -n 5 "${OUT}/logs/mosquitto.log" >&2
+    fi
     record_case "up/mosquitto" fail "never accepted a connection on ${MQTT_PORT}"
     collect_stack_logs
     emit_junit up
