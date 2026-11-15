@@ -134,8 +134,12 @@ pub struct Resolved {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanDecision {
     /// Yes. `strike_ms` is the pulse the scanning device may release a latch
-    /// for, when the resource has one.
-    Allow { strike_ms: Option<i32> },
+    /// for, when the resource has one; `member` is who tapped, when the
+    /// resource is set to identify its member (#228).
+    Allow {
+        strike_ms: Option<i32>,
+        member: Option<css_lib::wire::LocalMember>,
+    },
     /// No, with the reason firmware shows and the server records.
     Deny(String),
     /// The server is the authority for this resource (a metered tool under
@@ -181,6 +185,8 @@ struct Entry {
     allow: Vec<String>,
     deny: Vec<String>,
     hold_until: Option<DateTime<Utc>>,
+    /// Name the member on a yes (#228); only the policy shape can say so.
+    identify_member: bool,
 }
 
 impl Entry {
@@ -210,6 +216,7 @@ impl Entry {
             allow: p.allow.clone(),
             deny: p.deny.clone(),
             hold_until,
+            identify_member: p.identify_member,
         })
     }
 
@@ -228,6 +235,7 @@ impl Entry {
             allow: Vec::new(),
             deny: Vec::new(),
             hold_until: None,
+            identify_member: false,
         }
     }
 
@@ -246,6 +254,7 @@ impl Entry {
             allow: d.allow_cards.clone(),
             deny: d.deny_cards.clone(),
             hold_until: d.hold_unlock_until,
+            identify_member: false,
         }
     }
 
@@ -283,6 +292,8 @@ struct Member {
     full_name: String,
     is_active: bool,
     authorized: Vec<Uuid>,
+    /// The member's user UUID, sent only where a resource identifies (#228).
+    user_id: Option<String>,
 }
 
 impl Member {
@@ -296,6 +307,7 @@ impl Member {
                 .iter()
                 .filter_map(|id| Uuid::parse_str(id).ok())
                 .collect(),
+            user_id: p.user_id.clone(),
         }
     }
 
@@ -305,6 +317,7 @@ impl Member {
             full_name: u.full_name.clone(),
             is_active: u.is_active,
             authorized: u.authorized_tool_ids.clone(),
+            user_id: None,
         }
     }
 
@@ -615,10 +628,16 @@ impl ResourceCache {
             // edge-local expiry): a stale payload cannot hold the door open
             // past `hold_until`.
             if e.hold_until.is_some_and(|until| now < until) {
-                return ScanDecision::Allow { strike_ms };
+                return ScanDecision::Allow {
+                    strike_ms,
+                    member: None,
+                };
             }
             if e.allow.iter().any(|c| c == &token) {
-                return ScanDecision::Allow { strike_ms };
+                return ScanDecision::Allow {
+                    strike_ms,
+                    member: None,
+                };
             }
             if e.requires_online {
                 return ScanDecision::AskServer;
@@ -642,7 +661,18 @@ impl ResourceCache {
         if !e.status.is_empty() && e.status != "idle" {
             return ScanDecision::Deny(format!("{}{}", reason::UNAVAILABLE_PREFIX, e.status));
         }
-        ScanDecision::Allow { strike_ms }
+        // #228: only a resource set to identify names anyone, and only a member
+        // the server sent an id for. A member without one stays unnamed rather
+        // than being named by something less stable than their id.
+        let member = e
+            .identify_member
+            .then(|| member.user_id.clone())
+            .flatten()
+            .map(|id| css_lib::wire::LocalMember {
+                id,
+                name: member.full_name.clone(),
+            });
+        ScanDecision::Allow { strike_ms, member }
     }
 
     /// Open a session on a resource after a yes, with the resource's profile
@@ -935,6 +965,7 @@ mod tests {
             allow: Vec::new(),
             deny: Vec::new(),
             hold_until: None,
+            identify_member: false,
         }
     }
 
@@ -956,6 +987,7 @@ mod tests {
                 full_name: "M".to_string(),
                 is_active: true,
                 authorized: vec![tool_id().to_string()],
+                user_id: None,
             }],
         }
     }
@@ -978,7 +1010,10 @@ mod tests {
     }
 
     fn allow(strike_ms: Option<i32>) -> ScanDecision {
-        ScanDecision::Allow { strike_ms }
+        ScanDecision::Allow {
+            strike_ms,
+            member: None,
+        }
     }
 
     fn deny(why: &str) -> ScanDecision {
@@ -1064,6 +1099,63 @@ mod tests {
                 "a name nothing knows is judged against the principals, as it always was"
             );
         }
+    }
+
+    /// The policy with the laser set to identify its member (#228), and the
+    /// member's id sent or not.
+    fn identifying_cache(identify: bool, user_id: Option<&str>) -> Arc<ResourceCache> {
+        let mut p = policy();
+        for r in p
+            .resources
+            .iter_mut()
+            .filter(|r| r.id == tool_id().to_string())
+        {
+            r.identify_member = identify;
+        }
+        p.principals[0].user_id = user_id.map(str::to_string);
+        p.principals[0].full_name = "Alex Doe".to_string();
+        let c = empty(wired(""), true);
+        c.apply_policy(p, None);
+        c
+    }
+
+    const ALEX: &str = "6f1c0b8e-0000-4000-8000-000000000001";
+
+    #[test]
+    fn a_tool_that_identifies_names_the_member_on_a_yes() {
+        let c = identifying_cache(true, Some(ALEX));
+        assert_eq!(
+            c.decide("laser", CARD, t0()),
+            ScanDecision::Allow {
+                strike_ms: None,
+                member: Some(css_lib::wire::LocalMember {
+                    id: ALEX.to_string(),
+                    name: "Alex Doe".to_string(),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_tool_that_does_not_identify_names_nobody() {
+        let c = identifying_cache(false, Some(ALEX));
+        assert_eq!(c.decide("laser", CARD, t0()), allow(None));
+    }
+
+    #[test]
+    fn a_member_the_server_sent_no_id_for_is_not_named() {
+        let c = identifying_cache(true, None);
+        assert_eq!(c.decide("laser", CARD, t0()), allow(None));
+    }
+
+    #[test]
+    fn a_refusal_at_a_tool_that_identifies_is_still_just_a_refusal() {
+        let c = identifying_cache(true, Some(ALEX));
+        assert_eq!(c.decide("drill", CARD, t0()), deny(reason::NOT_AUTHORIZED));
+        assert_eq!(
+            c.decide("laser", "NOBODY", t0()),
+            deny(reason::UNKNOWN_CARD)
+        );
     }
 
     #[test]

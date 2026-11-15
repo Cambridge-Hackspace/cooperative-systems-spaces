@@ -999,10 +999,14 @@ export interface SessionEnded {
 /** #182: what an administrator may set on a resource whatever its kind. */
 export interface UpdateResourceRequest {
   session_profile?: 'momentary' | 'until_stopped'
+  /** #228: name the member on a yes. Tools only. */
+  identify_member?: boolean
 }
 
 export interface ResourceSummary {
   id: string
   kind: string
   session_profile: string
+  /** #228: the scan reply names who tapped. Always false on a door. */
+  identify_member: boolean
 }

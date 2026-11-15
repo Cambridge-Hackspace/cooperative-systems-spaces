@@ -610,7 +610,20 @@ impl LocalMqttClient {
         reason: &str,
         pulse_ms: Option<i32>,
     ) {
-        let reply = LocalScanReply::new(resource, authorized, reason, pulse_ms);
+        self.publish_scan_reply_naming(resource, authorized, reason, pulse_ms, None);
+    }
+
+    /// The same reply, naming the member when the resource identifies (#228).
+    /// [`LocalScanReply::with_member`] drops the member on a refusal.
+    fn publish_scan_reply_naming(
+        &self,
+        resource: &str,
+        authorized: bool,
+        reason: &str,
+        pulse_ms: Option<i32>,
+        member: Option<css_lib::wire::LocalMember>,
+    ) {
+        let reply = LocalScanReply::new(resource, authorized, reason, pulse_ms).with_member(member);
         match serde_json::to_value(&reply) {
             Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
             Err(e) => warn!("Failed to serialize scan reply: {}", e),
@@ -634,14 +647,16 @@ impl LocalMqttClient {
             .resolve(&req.resource)
             .map(|r| r.kind)
             .unwrap_or(Kind::Tool);
-        let (authorized, reason, strike_ms) = match self.cache.decide(&req.resource, &req.card, now)
-        {
-            ScanDecision::Allow { strike_ms } => (true, "authorized".to_string(), strike_ms),
-            ScanDecision::Deny(why) => (false, why, None),
-            ScanDecision::AskServer => self.remote_scan(&req).await,
-        };
+        let (authorized, reason, strike_ms, member) =
+            match self.cache.decide(&req.resource, &req.card, now) {
+                ScanDecision::Allow { strike_ms, member } => {
+                    (true, "authorized".to_string(), strike_ms, member)
+                }
+                ScanDecision::Deny(why) => (false, why, None, None),
+                ScanDecision::AskServer => self.remote_scan(&req).await,
+            };
 
-        self.publish_scan_reply(&req.resource, authorized, &reason, strike_ms);
+        self.publish_scan_reply_naming(&req.resource, authorized, &reason, strike_ms, member);
 
         if authorized {
             // The session this edge just opened is what a lease is for (#179),
@@ -843,7 +858,15 @@ impl LocalMqttClient {
     /// place the hold) on its resource path (#182). Returns `(authorized,
     /// reason, strike_ms)`. Any transport or non-2xx error is a denial -- fail
     /// closed.
-    async fn remote_scan(&self, req: &LocalScan) -> (bool, String, Option<i32>) {
+    async fn remote_scan(
+        &self,
+        req: &LocalScan,
+    ) -> (
+        bool,
+        String,
+        Option<i32>,
+        Option<css_lib::wire::LocalMember>,
+    ) {
         let url = format!(
             "{}/api/resources/{}/scan",
             self.remote_instance_url, req.resource
@@ -877,13 +900,24 @@ impl LocalMqttClient {
                         .and_then(|s| s.get("pulse_ms"))
                         .and_then(|v| v.as_i64())
                         .map(|v| v as i32);
-                    (authorized, reason, strike_ms)
+                    // #228: the server names the member on a yes for a
+                    // resource that identifies; a malformed one names nobody.
+                    let member = body
+                        .get("member")
+                        .cloned()
+                        .and_then(|m| serde_json::from_value(m).ok());
+                    (authorized, reason, strike_ms, member)
                 }
-                Err(e) => (false, format!("server response unreadable: {e}"), None),
+                Err(e) => (
+                    false,
+                    format!("server response unreadable: {e}"),
+                    None,
+                    None,
+                ),
             },
             Err(e) => {
                 warn!("online-sync scan to remote failed: {}", e);
-                (false, "server unreachable".to_string(), None)
+                (false, "server unreachable".to_string(), None, None)
             }
         }
     }

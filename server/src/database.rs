@@ -3384,6 +3384,56 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// Every resource row (#228), for the administrator's wiring page.
+    pub fn list_resources(&self) -> Result<Vec<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        resources::table
+            .select(crate::models::Resource::as_select())
+            .order(resources::created_at.asc())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// The resources set to name their member on a yes (#228).
+    pub fn identifying_resources(
+        &self,
+    ) -> Result<std::collections::HashSet<uuid::Uuid>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        Ok(resources::table
+            .filter(resources::identify_member.eq(true))
+            .select(resources::id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)?
+            .into_iter()
+            .collect())
+    }
+
+    /// Turn naming the member on or off for one resource (#228). The column's
+    /// CHECK refuses it on anything but a tool; callers check the kind first so
+    /// the refusal reads as a 400 and not as a database fault.
+    pub fn update_resource_identify_member(
+        &self,
+        resource_id: uuid::Uuid,
+        identify: bool,
+    ) -> Result<Option<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        diesel::update(resources::table.find(resource_id))
+            .set((
+                resources::identify_member.eq(identify),
+                resources::updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::Resource::as_returning())
+            .get_result(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// One resource row, or `None`.
     pub fn get_resource(
         &self,
@@ -3641,7 +3691,10 @@ impl DatabaseManager {
         cipher: Option<&css_lib::card_crypto::CardCipher>,
     ) -> Result<
         (
-            Vec<crate::api::toolguard::ToolGuardSyncUser>,
+            // Each entry with the user it is for (#228). The id stays on the
+            // server: only the resource policy sends it, and only for members
+            // of a resource that identifies.
+            Vec<(uuid::Uuid, crate::api::toolguard::ToolGuardSyncUser)>,
             Vec<crate::api::toolguard::ToolGuardSyncTool>,
         ),
         DatabaseError,
@@ -3853,12 +3906,15 @@ impl DatabaseManager {
             }
 
             for digest in identifiers {
-                sync_users.push(ToolGuardSyncUser {
-                    profile_field_digest: hex::encode(digest),
-                    full_name: user.full_name.clone(),
-                    is_active: user.is_active,
-                    authorized_tool_ids: authorized_tool_ids.clone(),
-                });
+                sync_users.push((
+                    user.id,
+                    ToolGuardSyncUser {
+                        profile_field_digest: hex::encode(digest),
+                        full_name: user.full_name.clone(),
+                        is_active: user.is_active,
+                        authorized_tool_ids: authorized_tool_ids.clone(),
+                    },
+                ));
             }
         }
 

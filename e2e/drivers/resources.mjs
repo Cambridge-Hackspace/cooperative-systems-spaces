@@ -358,6 +358,62 @@ main(async () => {
       (aliasSync.json?.users ?? []).some((u) => u.profile_field_digest === principal?.digest),
     JSON.stringify({ syncTool, users: aliasSync.json?.users }).slice(0, 300))
 
+  // --- 8b. a tool can name the member who tapped (#228) ----------------------
+  // Off by default: no resource identifies and no principal carries an id.
+  assertEq('resources/identify-is-off-by-default', false, tool?.identify_member)
+  ok('resources/no-principal-carries-an-id-by-default',
+    !(rp.principals ?? []).some((u) => 'user_id' in u),
+    JSON.stringify(rp.principals ?? []).slice(0, 300))
+  const doorIdentify = await PATCH(`/api/admin/resources/${door.id}`, {
+    token: admin.token,
+    body: { identify_member: true },
+  })
+  assertEq('resources/a-door-cannot-identify', 400, doorIdentify.status, doorIdentify.text.slice(0, 200))
+  const identifyOn = await PATCH(`/api/admin/resources/${toolId}`, {
+    token: admin.token,
+    body: { identify_member: true },
+  })
+  assertEq('resources/a-tool-can-identify', 200, identifyOn.status, identifyOn.text.slice(0, 200))
+  assertEq('resources/identify-is-reported', true, identifyOn.json?.data?.identify_member)
+  const listed = await GET('/api/admin/resources', T)
+  assertEq('resources/the-list-carries-identify', true,
+    (listed.json?.data ?? []).find((r) => r.id === toolId)?.identify_member, listed.text.slice(0, 200))
+  const identifyAudit = await GET('/api/admin/audit-logs?event_type=resource_updated&per_page=50', T)
+  ok('resources/identify-change-is-audited',
+    (identifyAudit.json?.data ?? []).some((l) =>
+      String(l.event_data?.resource_id ?? '') === toolId && l.event_data?.identify_member === true),
+    JSON.stringify(identifyAudit.json?.data ?? identifyAudit.text).slice(0, 300))
+  const idPolicy = (await policyFor(reader.token)).json ?? {}
+  assertEq('resources/policy-says-the-tool-identifies', true,
+    (idPolicy.resources ?? []).find((r) => r.id === toolId)?.identify_member)
+  const myIds = (idPolicy.principals ?? []).filter((u) => u.full_name === myName).map((u) => u.user_id)
+  ok('resources/policy-gives-the-member-their-id', myIds.length >= 1 && myIds.every((id) => id === member.user.id),
+    JSON.stringify(myIds))
+  const idSync = await GET('/api/toolguard/sync', { token: reader.token })
+  ok('resources/the-sync-alias-never-carries-an-id',
+    !(idSync.json?.users ?? []).some((u) => 'user_id' in u), idSync.text.slice(0, 200))
+  const namedScan = await scan(TOOL_EXT, reader.token, CARD)
+  assertEq('resources/an-identifying-yes-is-a-yes', true, namedScan.json?.authorized, namedScan.text.slice(0, 200))
+  assertEq('resources/an-identifying-yes-names-the-member', member.user.id, namedScan.json?.member?.id,
+    namedScan.text.slice(0, 200))
+  assertEq('resources/an-identifying-yes-carries-the-name', myName, namedScan.json?.member?.name)
+  const refusedNamed = await scan(TOOL_EXT, reader.token, CARD)
+  assertEq('resources/an-identifying-no-is-a-no', false, refusedNamed.json?.authorized)
+  ok('resources/an-identifying-no-names-nobody', !('member' in (refusedNamed.json ?? {})),
+    refusedNamed.text.slice(0, 200))
+  await stop(TOOL_EXT, reader.token)
+  const identifyOff = await PATCH(`/api/admin/resources/${toolId}`, {
+    token: admin.token,
+    body: { identify_member: false },
+  })
+  assertEq('resources/identify-can-be-turned-off', false, identifyOff.json?.data?.identify_member,
+    identifyOff.text.slice(0, 200))
+  const unnamed = await scan(TOOL_EXT, reader.token, CARD)
+  assertEq('resources/a-yes-after-turning-it-off-is-a-yes', true, unnamed.json?.authorized)
+  assertEq('resources/a-yes-after-turning-it-off-is-unchanged-in-shape',
+    'authorized,message,status', Object.keys(unnamed.json ?? {}).sort().join(','), unnamed.text.slice(0, 200))
+  await stop(TOOL_EXT, reader.token)
+
   // The door's coordinator: an edge bound to the (now until_stopped) door.
   const coordinator = await mkDevice(admin, `res-edge-${tag}`, ['edge'], '02:00:00:00:87:04')
   const bindEdge = await bind(admin, {

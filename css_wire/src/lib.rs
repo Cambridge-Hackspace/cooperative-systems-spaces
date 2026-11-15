@@ -196,7 +196,10 @@ pub struct LocalStrike {
 /// `reason` is for humans and logs -- **branch on `authorized`, display
 /// `reason`** -- the strings are not part of the contract. `strike` is
 /// present only on a yes for a resource with a latch: the pulse the device
-/// may perform. This one reply replaced `toolguard/response/tool-on` and
+/// may perform. `member` is present only on a yes for a resource an
+/// administrator has set to identify the member (#228): who tapped, for a
+/// device that has to know, such as a print tower showing that member's jobs.
+/// This one reply replaced `toolguard/response/tool-on` and
 /// `door/response/unlock` (#182); the aliases are gone (#192).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalScanReply {
@@ -205,6 +208,22 @@ pub struct LocalScanReply {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strike: Option<LocalStrike>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<LocalMember>,
+}
+
+/// Who tapped, on a [`LocalScanReply`] for a resource set to identify its
+/// member (#228). Never present on a refusal, and never present at all for a
+/// resource that isn't set to identify.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalMember {
+    /// The member's user UUID: the same identifier CS:S issues as the OpenID
+    /// Connect `sub` (#225), so an app can match a tap to a sign-in.
+    pub id: String,
+    /// The member's name as CS:S holds it, for display. CS:S keeps one full
+    /// name and no separate given name, so a device that wants a first name
+    /// takes it from here itself.
+    pub name: String,
 }
 
 impl LocalScanReply {
@@ -223,7 +242,16 @@ impl LocalScanReply {
             } else {
                 None
             },
+            member: None,
         }
+    }
+
+    /// Name the member on this reply (#228). A refusal is never given one,
+    /// whatever is passed, in the same way it is never given a strike: a device
+    /// that greets whoever the field names cannot greet someone it refused.
+    pub fn with_member(mut self, member: Option<LocalMember>) -> Self {
+        self.member = if self.authorized { member } else { None };
+        self
     }
 }
 
@@ -291,4 +319,70 @@ pub mod local {
 
     /// A kiosk asking the edge to re-push its state. No payload.
     pub const KIOSK_REFRESH_REQUEST: &str = "kiosk/refresh";
+}
+
+#[cfg(test)]
+mod scan_reply_tests {
+    use super::*;
+
+    fn alex() -> LocalMember {
+        LocalMember {
+            id: "6f1c0b8e-0000-4000-8000-000000000001".to_string(),
+            name: "Alex Doe".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_reply_with_no_member_is_byte_identical_to_one_from_before_228() {
+        let reply = LocalScanReply::new("laser-01", true, "authorized", None);
+        assert_eq!(
+            serde_json::to_string(&reply).unwrap(),
+            r#"{"resource":"laser-01","authorized":true,"reason":"authorized"}"#
+        );
+    }
+
+    #[test]
+    fn a_yes_carries_the_member() {
+        let reply =
+            LocalScanReply::new("print-tower", true, "authorized", None).with_member(Some(alex()));
+        let v = serde_json::to_value(&reply).unwrap();
+        assert_eq!(v["member"]["id"], "6f1c0b8e-0000-4000-8000-000000000001");
+        assert_eq!(v["member"]["name"], "Alex Doe");
+    }
+
+    #[test]
+    fn a_refusal_never_carries_a_member() {
+        let reply = LocalScanReply::new("print-tower", false, "Training required", None)
+            .with_member(Some(alex()));
+        assert_eq!(reply.member, None);
+        assert!(!serde_json::to_string(&reply).unwrap().contains("member"));
+    }
+
+    /// Firmware pinned to css_wire 0.1.x has the reply without `member`. A
+    /// reply that carries it must still parse there, or naming the member at
+    /// one resource breaks every older device on the broker.
+    #[test]
+    fn a_reply_with_a_member_parses_as_the_0_1_reply() {
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct LocalScanReplyV01 {
+            resource: String,
+            authorized: bool,
+            reason: String,
+            #[serde(default)]
+            strike: Option<LocalStrike>,
+        }
+        let reply =
+            LocalScanReply::new("print-tower", true, "authorized", None).with_member(Some(alex()));
+        let old: LocalScanReplyV01 =
+            serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
+        assert!(old.authorized);
+    }
+
+    #[test]
+    fn a_reply_from_before_228_parses_with_no_member() {
+        let reply: LocalScanReply =
+            serde_json::from_str(r#"{"resource":"r","authorized":true,"reason":"ok"}"#).unwrap();
+        assert_eq!(reply.member, None);
+    }
 }

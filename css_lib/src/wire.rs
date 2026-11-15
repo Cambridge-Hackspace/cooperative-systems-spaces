@@ -139,6 +139,11 @@ pub struct ResourcePolicy {
     /// self-expires.
     #[serde(default)]
     pub hold_until: Option<String>,
+    /// Name the member on a yes (#228): the scan reply carries `member` for
+    /// this resource. Off unless an administrator turns it on, and only ever
+    /// on for a tool.
+    #[serde(default)]
+    pub identify_member: bool,
 }
 
 fn default_true() -> bool {
@@ -155,6 +160,11 @@ pub struct Principal {
     /// The resources this member may start, by UUID.
     #[serde(default)]
     pub authorized: Vec<String>,
+    /// The member's user UUID (#228), sent only for a member authorized for
+    /// at least one resource this device serves that identifies its member.
+    /// Everyone else stays a digest and a name, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 /// One resource's wiring: the modules bound to it and the rules that gate it.
@@ -358,8 +368,8 @@ pub struct PowerStateTool {
 /// `css_wire` (#219), which the firmware depends on too; re-exported here so
 /// every `css_lib::wire::...` import in this workspace stays as it was.
 pub use css_wire::{
-    LocalAliveRequest, LocalCondition, LocalPower, LocalScan, LocalScanReply, LocalStop,
-    LocalStrike, LocalUsage, ResourceLeasePayload, local,
+    LocalAliveRequest, LocalCondition, LocalMember, LocalPower, LocalScan, LocalScanReply,
+    LocalStop, LocalStrike, LocalUsage, ResourceLeasePayload, local,
 };
 
 #[cfg(test)]

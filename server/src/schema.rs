@@ -189,6 +189,7 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
         session_profile -> Text,
+        identify_member -> Bool,
     }
 }
 

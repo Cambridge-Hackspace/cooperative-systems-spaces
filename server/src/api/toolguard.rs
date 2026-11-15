@@ -29,6 +29,10 @@ pub struct ToolGuardResponse {
     /// resource with no latch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strike: Option<css_lib::wire::LocalStrike>,
+    /// On a yes for a tool set to identify its member (#228): who tapped.
+    /// Absent on a no, and on every resource that doesn't identify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<css_lib::wire::LocalMember>,
 }
 
 impl ToolGuardResponse {
@@ -38,6 +42,7 @@ impl ToolGuardResponse {
             message,
             authorized: None,
             strike: None,
+            member: None,
         }
     }
 
@@ -444,7 +449,20 @@ pub(crate) async fn activate_tool(
     // The tool's status changed, for the devices bound to it (#180).
     broadcast_toolguard_state_for_tool(state, tool.id);
 
-    Ok(ToolGuardResponse::resource_authorized(None))
+    // #228: a tool set to identify names the member on its yes, as the edge
+    // does when it decides.
+    let identifies = state
+        .db
+        .get_resource(tool.id)?
+        .is_some_and(|r| r.identify_member);
+    let mut reply = ToolGuardResponse::resource_authorized(None);
+    if identifies {
+        reply.member = Some(css_lib::wire::LocalMember {
+            id: user.id.to_string(),
+            name: user.full_name.clone(),
+        });
+    }
+    Ok(reply)
 }
 
 /// End a tool's session: a stop, with or without a badge (#179). One function
@@ -1105,12 +1123,27 @@ pub async fn build_sync_payload(
     device_id: Uuid,
     profile_field: &str,
 ) -> Result<ToolGuardSyncPayload, ApiError> {
+    Ok(
+        build_sync_payload_with_user_ids(state, device_id, profile_field)
+            .await?
+            .0,
+    )
+}
+
+/// The sync payload, and beside it the user each of its `users` entries is
+/// for, in the same order (#228). The ids never travel on `toolguard/sync`;
+/// the resource policy uses them to name members where a resource identifies.
+pub async fn build_sync_payload_with_user_ids(
+    state: &AppState,
+    device_id: Uuid,
+    profile_field: &str,
+) -> Result<(ToolGuardSyncPayload, Vec<Uuid>), ApiError> {
     // When tool billing is on, a config snapshot lets the DB layer drop metered
     // tools a member can't afford (or isn't a member for) from each user's
     // authorized list -- the per-user affordability filter that makes edge-local
     // actuation safe -- and flag metered tools that need online actuation.
     let metered_gate = state.tool_billing.as_ref().map(|svc| svc.gate());
-    let (mut users, mut tools) = state
+    let (users, mut tools) = state
         .db
         .get_toolguard_sync_data(
             device_id,
@@ -1119,6 +1152,7 @@ pub async fn build_sync_payload(
             state.card_cipher.as_deref(),
         )
         .map_err(|e| ApiError::InternalServerError(format!("Failed to build sync data: {}", e)))?;
+    let (user_ids, mut users): (Vec<Uuid>, Vec<ToolGuardSyncUser>) = users.into_iter().unzip();
 
     // Apply schedule gating: any tool whose attached schedule is closed
     // right now is removed from every user's authorized list, and then
@@ -1132,12 +1166,15 @@ pub async fn build_sync_payload(
         tools.retain(|t| !closed_tool_ids.contains(&t.id));
     }
 
-    Ok(ToolGuardSyncPayload {
-        device_id,
-        profile_field: profile_field.to_string(),
-        tools,
-        users,
-    })
+    Ok((
+        ToolGuardSyncPayload {
+            device_id,
+            profile_field: profile_field.to_string(),
+            tools,
+            users,
+        },
+        user_ids,
+    ))
 }
 
 /// Tools whose attached schedule isn't currently open. Empty when no tools

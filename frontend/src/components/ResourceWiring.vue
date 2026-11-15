@@ -69,6 +69,22 @@
           </label>
 
           <!--
+            #228: a tool can name the member who tapped on its yes, for a device
+            that has to know who it is serving, such as a print tower. Doors
+            can't: the edge decides them from card digests and has nobody to name.
+          -->
+          <label v-if="tool.kind !== 'door'" class="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              class="toggle toggle-xs"
+              :checked="identifiesMember(tool)"
+              :data-testid="`identify-${tool.tool_id}`"
+              @change="setIdentify(tool, ($event.target as HTMLInputElement).checked)"
+            />
+            <span>Identify the member on a scan</span>
+          </label>
+
+          <!--
             #190: the session as the platform knows it -- a room in use is a
             fact here now, not only on its coordinator -- and the one action an
             administrator has on it.
@@ -199,7 +215,7 @@
 import { computed, ref } from 'vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
 import { doorsApi, resourcesApi, toolModulesApi, toolsApi } from '@/utils/api'
-import type { Door, OpenSessionView, ToolModuleStateTool } from '@/types'
+import type { Door, OpenSessionView, ResourceSummary, ToolModuleStateTool } from '@/types'
 import type { Tool } from '@/types/tools'
 
 defineProps<{ embedded?: boolean }>()
@@ -210,6 +226,7 @@ const resources = ref<ToolModuleStateTool[]>([])
 const catalog = ref<Tool[]>([])
 const doors = ref<Door[]>([])
 const sessions = ref<OpenSessionView[]>([])
+const settings = ref<ResourceSummary[]>([])
 
 const wired = computed(() => resources.value)
 
@@ -244,6 +261,22 @@ async function setProfile(t: ToolModuleStateTool, profile: string) {
   }
 }
 
+/** #228: whether this tool names the member on a yes. */
+function identifiesMember(t: ToolModuleStateTool): boolean {
+  return settings.value.find((s) => s.id === t.tool_id)?.identify_member ?? false
+}
+
+async function setIdentify(t: ToolModuleStateTool, identify: boolean) {
+  const r = await resourcesApi.update(t.tool_id, { identify_member: identify })
+  if (r.success && r.data) {
+    const updated = r.data
+    settings.value = [...settings.value.filter((s) => s.id !== t.tool_id), updated]
+    error.value = ''
+  } else {
+    error.value = r.error || 'Identifying the member was not changed'
+  }
+}
+
 /** The open session on this resource, if the platform knows of one (#190). */
 function sessionOf(t: ToolModuleStateTool): OpenSessionView | undefined {
   return sessions.value.find((s) => s.resource_id === t.tool_id)
@@ -272,16 +305,18 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [snapshot, all, allDoors, open] = await Promise.all([
+    const [snapshot, all, allDoors, open, attrs] = await Promise.all([
       toolModulesApi.state(),
       toolsApi.getTools(),
       doorsApi.list(),
       resourcesApi.sessions(),
+      resourcesApi.list(),
     ])
     if (snapshot?.success && snapshot.data) resources.value = snapshot.data.tools ?? []
     if (all?.success && all.data) catalog.value = all.data
     if (allDoors?.success && allDoors.data) doors.value = allDoors.data
     if (open?.success && open.data) sessions.value = open.data
+    if (attrs?.success && attrs.data) settings.value = attrs.data
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load resource wiring'
   } finally {
