@@ -782,9 +782,10 @@ fn every_wire_payload_field_is_documented() {
     // Payloads a device sends or receives. Each named deliberately: a struct
     // added to the wire has to be added here, and a struct renamed fails in
     // `struct_fields` rather than quietly losing its coverage.
-    let payloads: [(&str, &str); 24] = [
+    let payloads: [(&str, &str); 25] = [
         (LOCAL_WIRE, "LocalScanReply"),
         (LOCAL_WIRE, "LocalStrike"),
+        (LOCAL_WIRE, "LocalMember"),
         (WIRE, "ToolModuleStatePayload"),
         (WIRE, "ToolModuleTool"),
         (WIRE, "ResourcePolicyPayload"),
@@ -1534,7 +1535,7 @@ mod the_payload_row_check_rejects_what_it_is_for {
     #[test]
     fn a_row_naming_a_field_the_wire_does_not_carry_fails() {
         let doc = read(DOC).replace(
-            r#"| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"? }`"#,
+            r#"| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"? }`"#,
             r#"| `resource/response/scan` | `{ "status": string, "tool_on": bool }`"#,
         );
         let documented = documented_payload_fields(&doc, "resource/response/scan");

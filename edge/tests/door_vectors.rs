@@ -79,6 +79,7 @@ fn door(
         allow,
         deny,
         hold_until: hold,
+        identify_member: false,
     }
 }
 

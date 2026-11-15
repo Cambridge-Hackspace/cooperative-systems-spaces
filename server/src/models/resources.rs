@@ -109,6 +109,9 @@ pub struct Resource {
     /// `momentary` | `until_stopped`; see [`session_profile`]. Appended last:
     /// positional Queryable.
     pub session_profile: String,
+    /// Name the member on a yes (#228). Tools only; the column's CHECK holds
+    /// that too. Appended last: positional Queryable.
+    pub identify_member: bool,
 }
 
 #[derive(Debug, Clone, Insertable)]

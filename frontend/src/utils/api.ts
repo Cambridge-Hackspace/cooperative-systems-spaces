@@ -545,6 +545,10 @@ export const toolModulesApi = withErrorGuard({
 
 /** #182: resource-level attributes, whatever the kind. */
 export const resourcesApi = withErrorGuard({
+  /** #228: every resource's administrator-set attributes. */
+  list() {
+    return apiClient.get<import('@/types').ResourceSummary[]>('/admin/resources')
+  },
   update(id: string, body: import('@/types').UpdateResourceRequest) {
     return apiClient.patch<import('@/types').ResourceSummary>(`/admin/resources/${id}`, body)
   },

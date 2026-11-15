@@ -262,6 +262,7 @@ pub const ROUTES: &[R] = &[
     R("POST", "/api/toolguard/power-trip", Guard::InlineAuth), // toolguard::power_trip
     R("GET", "/api/toolguard/sync", Guard::InlineAuth), // toolguard::sync
     // #182: the resource-shaped device path; one path for a badge at any resource.
+    R("GET", "/api/admin/resources", Guard::Admin), // resources::list_resources (#228)
     R("PATCH", "/api/admin/resources/00000000-0000-4000-8000-000000000001", Guard::Admin), // resources::update_resource
     R("GET", "/api/admin/resources/sessions", Guard::Admin), // resources::list_open_sessions
     R("POST", "/api/admin/resources/00000000-0000-4000-8000-000000000001/stop", Guard::Admin), // resources::admin_stop

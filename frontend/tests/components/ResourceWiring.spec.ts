@@ -29,7 +29,12 @@ const toolModules = vi.hoisted(() => ({
 }))
 const tools = vi.hoisted(() => ({ getTools: vi.fn() }))
 const doors = vi.hoisted(() => ({ list: vi.fn() }))
-const resources = vi.hoisted(() => ({ update: vi.fn(), sessions: vi.fn(), stop: vi.fn() }))
+const resources = vi.hoisted(() => ({
+  list: vi.fn(),
+  update: vi.fn(),
+  sessions: vi.fn(),
+  stop: vi.fn(),
+}))
 
 vi.mock('@/utils/api', () => ({
   toolModulesApi: toolModules,
@@ -125,6 +130,7 @@ describe('ResourceWiring', () => {
       data: [{ id: 'door-1', name: 'Front door' }],
     })
     resources.sessions.mockResolvedValue({ success: true, data: [] })
+    resources.list.mockResolvedValue({ success: true, data: [] })
   })
 
   it('names a door from the door list and labels its kind (#182)', async () => {
@@ -172,6 +178,55 @@ describe('ResourceWiring', () => {
     await flushPromises()
     expect(resources.update).toHaveBeenCalledWith('door-1', { session_profile: 'until_stopped' })
     expect((select.element as HTMLSelectElement).value).toBe('until_stopped')
+  })
+
+  it('shows whether a tool identifies its member, and offers the switch on tools only (#228)', async () => {
+    const snap = snapshot()
+    snap.data.tools.push(doorEntry())
+    toolModules.state.mockResolvedValue(snap)
+    resources.list.mockResolvedValue({
+      success: true,
+      data: [
+        { id: 'tool-1', kind: 'tool', session_profile: 'until_stopped', identify_member: true },
+        { id: 'door-1', kind: 'door', session_profile: 'momentary', identify_member: false },
+      ],
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    const toggle = w.get('[data-testid="identify-tool-1"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    // A door can't name its member, so it isn't offered the switch at all.
+    expect(w.find('[data-testid="identify-door-1"]').exists()).toBe(false)
+  })
+
+  it('sends a change of identifying the member, and shows what the server says (#228)', async () => {
+    resources.update.mockResolvedValue({
+      success: true,
+      data: { id: 'tool-1', kind: 'tool', session_profile: 'until_stopped', identify_member: true },
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    const toggle = w.get('[data-testid="identify-tool-1"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(resources.update).toHaveBeenCalledWith('tool-1', { identify_member: true })
+    expect((w.get('[data-testid="identify-tool-1"]').element as HTMLInputElement).checked).toBe(
+      true
+    )
+  })
+
+  it('shows the refusal when the server declines identifying the member (#228)', async () => {
+    resources.update.mockResolvedValue({
+      success: false,
+      error: 'identify_member is available for tools only',
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    await w.get('[data-testid="identify-tool-1"]').setValue(true)
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(true)
+    expect(w.text()).toContain('identify_member is available for tools only')
   })
 
   it('shows the refusal when the server declines a profile change', async () => {

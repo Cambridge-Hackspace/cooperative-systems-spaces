@@ -484,6 +484,13 @@ the same reply, the same stop.
   with a latch that gets a yes with no `strike` releases nothing — the
   resource has no strike binding yet — and should say so in its log rather
   than guess a duration.
+- **Who tapped.** On a yes for a tool an administrator has set to identify its
+  member, the reply also carries `member: { "id", "name" }` (#228): the
+  member's user UUID — the same identifier CS:S issues as the OpenID Connect
+  `sub` — and their name as CS:S holds it. It is never on a refusal, and never
+  on a resource that isn't set to identify, so a device that doesn't need it
+  can ignore the field entirely. Only tools can be set to identify: the edge
+  decides a door from card digests alone and has nobody to name.
 - A latch is never leased and never held for a session. On a device that
   drives a latch and gates no power — a door box — the session is the pulse:
   over when the latch closes again, with no usage and no stop sent for it.
@@ -736,12 +743,14 @@ Most endpoints return `ToolGuardResponse`:
   "status": "ok" | "error",
   "message": "human-readable, may be absent",
   "authorized": true | false,
-  "strike": { "pulse_ms": 4200 }
+  "strike": { "pulse_ms": 4200 },
+  "member": { "id": "…uuid…", "name": "A Member" }
 }
 ```
 
-`message`, `authorized` and `strike` are omitted rather than null when they do
-not apply; `authorized` and `strike` appear only on a scan's reply (see
+`message`, `authorized`, `strike` and `member` are omitted rather than null
+when they do not apply; `authorized`, `strike` and `member` appear only on a
+scan's reply, and `member` only on a yes for a tool set to identify (see
 [the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)).
 **Branch on `status` and `authorized`, never on `message`** — message text is
 for humans and changes. (`tool_on` and `tool_off` were the removed aliases'
@@ -802,7 +811,8 @@ honest method: this call *changes state*, so it was never a safe `GET`.
 
 Answers `authorized: true` on a yes, and — for a resource with a `strike`
 binding — `strike: { "pulse_ms": … }`, the pulse the device may release its
-latch for. A tool's yes opens its session and leases its `power` and `sensor`
+latch for. For a tool set to identify its member (#228), the yes also carries
+`member: { "id", "name" }`. A tool's yes opens its session and leases its `power` and `sensor`
 bindings; a door's yes is the pulse. **The reply is the actuation**:
 nothing is pushed to the door's coordinator for a scan answered here, so a
 reader that also holds the latch releases it from this reply, as a plug closes
@@ -882,11 +892,13 @@ of this, in the shape it always had.
     { "id": "…uuid…", "external_id": "laser-01", "name": "CO₂ Laser",
       "kind": "tool", "session_profile": "until_stopped", "status": "idle",
       "requires_online": false, "in_use": false, "enabled": true,
-      "pulse_ms": null, "allow": [], "deny": [], "hold_until": null },
+      "pulse_ms": null, "allow": [], "deny": [], "hold_until": null,
+      "identify_member": false },
     { "id": "…uuid…", "external_id": null, "name": "Front door",
       "kind": "door", "session_profile": "momentary", "status": "",
       "requires_online": false, "in_use": false, "enabled": true,
-      "pulse_ms": 4200, "allow": ["9f86d081…"], "deny": [], "hold_until": null }
+      "pulse_ms": 4200, "allow": ["9f86d081…"], "deny": [], "hold_until": null,
+      "identify_member": false }
   ],
   "principals": [
     { "digest": "9f86d081…64 hex chars…", "full_name": "A Member",
@@ -911,8 +923,13 @@ of this, in the shape it always had.
   tool: a tool is decided from `principals`.
 - `hold_until` is the Open Access latch: held released, no card needed, until
   that instant, compared against **your** clock so the window self-expires.
+- `identify_member` is a tool set to name the member on a yes (#228): put
+  `member: { "id", "name" }` on the scan reply. Always `false` on a door.
 - `principals[].digest` is `argon2id(device_pepper, card)`, never the card;
   `authorized` lists the resources that member may start, by UUID.
+- `user_id` on a principal is the member's user UUID, and is sent only for a
+  member authorized for a resource here with `identify_member` set. Everyone
+  else is a digest and a name. A member without one is never named.
 - `as_of` is when the server built it. A device keeping a cache drops a
   payload older than the one it holds — a replayed older policy must not
   re-add a removed door or revert a deny entry.
@@ -1458,7 +1475,7 @@ be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
 
 | topic | payload |
 |---|---|
-| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds |
+| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds; on a yes for a tool set to identify its member, `member` carries who tapped, as an id and a name (#228) |
 | `resource/response/stop` | `{ "ok": true }` |
 | `resource/response/usage` | `{ "ok": true }` |
 | `resource/response/power` | `{ "ok": true }` — an ack, nothing more |

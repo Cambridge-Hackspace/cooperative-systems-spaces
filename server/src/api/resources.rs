@@ -57,6 +57,8 @@ pub fn resource_routes() -> Router<AppState> {
 /// (#182). Mounted at `/api/admin/resources`.
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
+        // #228: every resource's settings, for the wiring page.
+        .route("/", get(list_resources))
         .route("/{id}", patch(update_resource))
         // #190: the open sessions on every resource, and ending one.
         .route("/sessions", get(list_open_sessions))
@@ -72,6 +74,9 @@ pub struct UpdateResourceRequest {
     /// `momentary` | `until_stopped`; see `models::resources::session_profile`.
     #[serde(default)]
     pub session_profile: Option<String>,
+    /// Name the member on a yes (#228). Tools only.
+    #[serde(default)]
+    pub identify_member: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +84,27 @@ pub struct ResourceSummary {
     pub id: Uuid,
     pub kind: String,
     pub session_profile: String,
+    pub identify_member: bool,
+}
+
+/// GET /api/admin/resources -- every resource's administrator-set
+/// attributes, whatever its kind (#228): what the wiring page shows beside
+/// each resource's bindings.
+async fn list_resources(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<ApiResponse<Vec<ResourceSummary>>>, ApiError> {
+    let rows = state.db.list_resources()?;
+    Ok(Json(ApiResponse::success(
+        rows.into_iter()
+            .map(|r| ResourceSummary {
+                id: r.id,
+                kind: r.kind,
+                session_profile: r.session_profile,
+                identify_member: r.identify_member,
+            })
+            .collect(),
+    )))
 }
 
 /// PATCH /api/admin/resources/{id}
@@ -92,16 +118,44 @@ async fn update_resource(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateResourceRequest>,
 ) -> Result<Json<ApiResponse<ResourceSummary>>, ApiError> {
-    let Some(profile) = req.session_profile.as_deref() else {
+    if req.session_profile.is_none() && req.identify_member.is_none() {
         return Err(ApiError::BadRequest(
-            "nothing to change: send session_profile".to_string(),
+            "nothing to change: send session_profile or identify_member".to_string(),
         ));
-    };
-    let profile =
-        crate::api::tool_modules::one_of(profile, &session_profile::ALL, "session_profile")?;
-    let Some(updated) = state.db.update_resource_session_profile(id, &profile)? else {
+    }
+    // Everything is validated before anything is written, so a request that
+    // is half wrong changes nothing.
+    let profile = req
+        .session_profile
+        .as_deref()
+        .map(|p| crate::api::tool_modules::one_of(p, &session_profile::ALL, "session_profile"))
+        .transpose()?;
+    let Some(current) = state.db.get_resource(id)? else {
         return Err(ApiError::NotFound("Resource not found".to_string()));
     };
+    // #228: only a tool can name its member. The edge decides a door from card
+    // digests and holds nobody to name, so on a door this would name members
+    // only when the server happened to decide.
+    if req.identify_member == Some(true)
+        && current.kind != crate::models::ResourceKind::Tool.as_str()
+    {
+        return Err(ApiError::BadRequest(
+            "identify_member is available for tools only".to_string(),
+        ));
+    }
+    let mut updated = current;
+    if let Some(profile) = profile.as_deref() {
+        let Some(u) = state.db.update_resource_session_profile(id, profile)? else {
+            return Err(ApiError::NotFound("Resource not found".to_string()));
+        };
+        updated = u;
+    }
+    if let Some(identify) = req.identify_member {
+        let Some(u) = state.db.update_resource_identify_member(id, identify)? else {
+            return Err(ApiError::NotFound("Resource not found".to_string()));
+        };
+        updated = u;
+    }
 
     let log = NewAuditLog {
         event_type: AuditEventType::ResourceUpdated.as_str().to_string(),
@@ -111,6 +165,7 @@ async fn update_resource(
             "resource_id": updated.id,
             "kind": updated.kind,
             "session_profile": updated.session_profile,
+            "identify_member": updated.identify_member,
         }),
         ip_address: None,
         user_agent: None,
@@ -126,6 +181,7 @@ async fn update_resource(
         id: updated.id,
         kind: updated.kind,
         session_profile: updated.session_profile,
+        identify_member: updated.identify_member,
     })))
 }
 
@@ -607,7 +663,9 @@ pub async fn build_resource_policy(
 ) -> Result<css_lib::wire::ResourcePolicyPayload, ApiError> {
     let config = state.config_manager.get_config();
     let profile_field = config.toolguard.profile_field.clone();
-    let tools = toolguard::build_sync_payload(state, device_id, &profile_field).await?;
+    let (tools, user_ids) =
+        toolguard::build_sync_payload_with_user_ids(state, device_id, &profile_field).await?;
+    let identifying = state.db.identifying_resources()?;
     let doors = state.door_service.compile_state_for(device_id)?;
     let profiles: std::collections::HashMap<Uuid, (String, String)> = state
         .db
@@ -654,6 +712,7 @@ pub async fn build_resource_policy(
             allow: Vec::new(),
             deny: Vec::new(),
             hold_until: None,
+            identify_member: identifying.contains(&t.id),
         });
     }
     for d in &doors.doors {
@@ -675,12 +734,18 @@ pub async fn build_resource_policy(
             allow: d.allow_cards.clone(),
             deny: d.deny_cards.clone(),
             hold_until: d.hold_unlock_until.map(|t| t.to_rfc3339()),
+            identify_member: false,
         });
     }
+    // #228: a member's id goes to this device only when they may use a tool
+    // here that names its member. Everyone else is a digest and a name, as
+    // before, so turning the setting on for one tool reveals nothing more
+    // about the members of any other.
     let principals = tools
         .users
         .iter()
-        .map(|u| css_lib::wire::Principal {
+        .zip(user_ids.iter())
+        .map(|(u, user_id)| css_lib::wire::Principal {
             digest: u.profile_field_digest.clone(),
             full_name: u.full_name.clone(),
             is_active: u.is_active,
@@ -689,6 +754,11 @@ pub async fn build_resource_policy(
                 .iter()
                 .map(|id| id.to_string())
                 .collect(),
+            user_id: u
+                .authorized_tool_ids
+                .iter()
+                .any(|id| identifying.contains(id))
+                .then(|| user_id.to_string()),
         })
         .collect();
     Ok(css_lib::wire::ResourcePolicyPayload {
