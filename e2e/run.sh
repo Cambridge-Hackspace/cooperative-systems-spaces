@@ -2407,9 +2407,18 @@ stage_conditions() {
   mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-3.txt"
 
   # 4. The door opens mid-session: tripped.
+  #
+  # Listen first. The edge names the trip once, on its first decision after
+  # the door opens, and that decision latches it: every decision after says
+  # Latched instead. A capture started after the publish misses that one
+  # message whenever the edge decides before the subscriber attaches, and
+  # the window then holds only Latched.
+  mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-4.txt" &
+  local lease_4=$!
+  sleep 1
   mqtt_pub "resource/request/condition" \
     "{\"device_id\":\"${sensor}\",\"resource\":\"${tool}\",\"condition\":\"door_open\",\"asserted\":true}" || true
-  mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-4.txt"
+  wait "${lease_4}" || true
 
   # 5. The door shuts again. A trip latches: still refused until re-auth.
   mqtt_pub "resource/request/condition" \
