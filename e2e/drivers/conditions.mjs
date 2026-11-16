@@ -130,6 +130,16 @@ async function assertWindows() {
   const grants = (rows) => rows.map((l) => l.grant)
   const reasons = (rows) => [...new Set(rows.map((l) => l.reason).filter(Boolean))]
 
+  // 0. The badge opened a session: everything below assumes one, and no
+  //    lease in windows 1 and 2 can show it (conditions are checked first).
+  const tool = fs.readFileSync(path.join(STACK_DIR, 'cond-tool'), 'utf8').trim()
+  const replies = (captured('cond-scan-1.txt') ?? []).filter((r) => r.resource === tool)
+  ok(
+    'conditions/0-the-badge-opens-a-session',
+    replies.some((r) => r.authorized === true),
+    `scan replies for ${tool}: ${JSON.stringify(replies)}`,
+  )
+
   // 1. Signed on, sensor alive, nothing observed: refused, and the reason is
   //    the unobserved condition -- not "offline", not "not in use".
   const w1 = forPlug('cond-lease-1.txt')
@@ -143,7 +153,7 @@ async function assertWindows() {
 
   // 3. The bound sensor says the door is shut: granted.
   const w3 = forPlug('cond-lease-3.txt')
-  ok('conditions/3-the-sensors-reading-is-observed-and-grants', w3.some((l) => l.grant === true), `grants: ${JSON.stringify(grants(w3))}`)
+  ok('conditions/3-the-sensors-reading-is-observed-and-grants', w3.some((l) => l.grant === true), `grants: ${JSON.stringify(grants(w3))}, reasons: ${JSON.stringify(reasons(w3))}`)
 
   // 4. The door opens mid-session: tripped, by name.
   const w4 = forPlug('cond-lease-4.txt')
