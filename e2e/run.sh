@@ -2114,6 +2114,12 @@ stage_bridge() {
   # host MAC, platform linux, the capabilities shape the firmware crate cannot
   # express, and an identity file it refuses to overwrite.
   #
+  # Start from none. Identities left by an earlier run on the same session
+  # name devices that run's database had, not this one's, and the bridge
+  # rightly refuses to overwrite them: kept, they fail registers-itself on
+  # every run after the first. The refusal is still asserted below, against
+  # the identity this run writes.
+  rm -rf "${STACK_DIR}/bridge-identities"
   mkdir -p "${STACK_DIR}/bridge-identities"
   if register_bridge extractor "$(cat "${STACK_DIR}/bridge-invite")" \
     && [[ -s "${STACK_DIR}/bridge-identities/extractor.toml" ]]; then
