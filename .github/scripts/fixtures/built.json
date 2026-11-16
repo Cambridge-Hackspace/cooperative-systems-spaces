@@ -1,0 +1,800 @@
+{
+  "jobs": [
+    {
+      "conclusion": "success",
+      "name": "shell",
+      "runner_name": "GitHub Actions 1000004514",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install shellcheck (pinned)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run mfinelli/setup-shfmt@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run ./e2e/lint.sh"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "frontend-edge",
+      "runner_name": "GitHub Actions 1000004516",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm ci --no-audit --no-fund"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm run format:check"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm run lint"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm run type-check"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm run type-check:strict"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm run build"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "browser-fake",
+      "runner_name": "GitHub Actions 1000004515",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm ci --no-audit --no-fund"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run the browser tier"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "frontend",
+      "runner_name": "GitHub Actions 1000004517",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run npm ci --no-audit --no-fund"
+        },
+        {
+          "conclusion": "success",
+          "name": "Format"
+        },
+        {
+          "conclusion": "success",
+          "name": "Lint"
+        },
+        {
+          "conclusion": "success",
+          "name": "Type-check"
+        },
+        {
+          "conclusion": "success",
+          "name": "Type-check (strict ratchet)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Test"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "assets",
+      "runner_name": "GitHub Actions 1000004518",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build frontend_edge"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build frontend"
+        },
+        {
+          "conclusion": "success",
+          "name": "Assert the bundles are real, not empty"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "rust",
+      "runner_name": "GitHub Actions 1000004519",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/download-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "System dependencies"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run dtolnay/rust-toolchain@stable"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Format"
+        },
+        {
+          "conclusion": "success",
+          "name": "Test"
+        },
+        {
+          "conclusion": "success",
+          "name": "Doc tests"
+        },
+        {
+          "conclusion": "success",
+          "name": "Check the full workspace, including the GUI crates"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "stack",
+      "runner_name": "GitHub Actions 1000004520",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "System dependencies"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run dtolnay/rust-toolchain@stable"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build everything the stack runs"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run the stack tiers"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "docker-server",
+      "runner_name": "GitHub Actions 1000004521",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Lowercase the image path"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run docker/setup-qemu-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run docker/setup-buildx-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run docker/login-action@v3"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Build and push (master)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build and push (dev)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run docker/login-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run docker/setup-buildx-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run docker/setup-qemu-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "docker-edge",
+      "runner_name": "GitHub Actions 1000004523",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Lowercase the image path"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run docker/setup-qemu-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run docker/setup-buildx-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run docker/login-action@v3"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Build and push (master)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build and push (dev)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run docker/login-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run docker/setup-buildx-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run docker/setup-qemu-action@v3"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "release (macos-latest, macos, css-server, css-cli, css-edge, false)",
+      "runner_name": "GitHub Actions 1000004526",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run dtolnay/rust-toolchain@stable"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install PostgreSQL client library (Windows)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install OpenSSL (Windows)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Report the Visual Studio the runner has (Windows)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install PostgreSQL client library (macOS)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install build dependencies (Linux)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build the edge bundle"
+        },
+        {
+          "conclusion": "success",
+          "name": "Assert the bundle is real"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-cli"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-edge"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run cargo build --locked --release --bin css-server"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "release (windows-latest, windows, css-server.exe, css-cli.exe, css-edge.exe, false)",
+      "runner_name": "GitHub Actions 1000004525",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run dtolnay/rust-toolchain@stable"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install PostgreSQL client library (Windows)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install OpenSSL (Windows)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Report the Visual Studio the runner has (Windows)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install PostgreSQL client library (macOS)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install build dependencies (Linux)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build the edge bundle"
+        },
+        {
+          "conclusion": "success",
+          "name": "Assert the bundle is real"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-cli"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-edge"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run cargo build --locked --release --bin css-server"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    },
+    {
+      "conclusion": "success",
+      "name": "release (ubuntu-latest, linux, css-server, css-cli, css-edge, true)",
+      "runner_name": "GitHub Actions 1000004524",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run dtolnay/rust-toolchain@stable"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install PostgreSQL client library (Windows)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install OpenSSL (Windows)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Report the Visual Studio the runner has (Windows)"
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install PostgreSQL client library (macOS)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install build dependencies (Linux)"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build the edge bundle"
+        },
+        {
+          "conclusion": "success",
+          "name": "Assert the bundle is real"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-cli"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-edge"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run cargo build --locked --release --bin css-server"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run Swatinem/rust-cache@v2"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job"
+        }
+      ]
+    }
+  ]
+}
