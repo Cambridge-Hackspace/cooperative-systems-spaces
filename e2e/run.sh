@@ -2113,6 +2113,7 @@ stage_bridge() {
   # The bridge registers ITSELF with its own subcommand. That is the real path:
   # host MAC, platform linux, the capabilities shape the firmware crate cannot
   # express, and an identity file it refuses to overwrite.
+  #
   mkdir -p "${STACK_DIR}/bridge-identities"
   if register_bridge extractor "$(cat "${STACK_DIR}/bridge-invite")" \
     && [[ -s "${STACK_DIR}/bridge-identities/extractor.toml" ]]; then
@@ -2371,6 +2372,20 @@ stage_conditions() {
     emit_junit conditions
     return 1
   fi
+  # The wiring says what is bound; the resource policy says who may use it.
+  # They are separate fetches, and on a loaded guest the policy has landed
+  # seconds after the wiring: a badge before it is refused by the edge for
+  # want of a card list, the tool is never in use, and step 3 fails as
+  # NotInUse ten steps from its cause. Wait for both, as the lease stage does.
+  if wait_for "css-edge to sync the resource policy" 60 edge_logged "Resource policy synced from remote"; then
+    record_case "conditions/edge-synced-the-resource-policy" ok
+  else
+    record_case "conditions/edge-synced-the-resource-policy" fail \
+      "css-edge never logged a resource policy sync; the badge below would be refused for want of it"
+    stop_edge
+    emit_junit conditions
+    return 1
+  fi
 
   local tool card plug sensor
   tool="$(cat "${STACK_DIR}/cond-tool")"
@@ -2386,8 +2401,17 @@ stage_conditions() {
 
   # 1. A badge: the session opens, and the plug is refused because door_open
   #    has never been observed. Not offline, not not-in-use: unobserved.
-  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
+  #
+  #    The edge checks conditions before whether the tool is in use, so an
+  #    Unobserved refusal says nothing about the session. The badge's own
+  #    reply is what shows it opened; it is captured from before the badge,
+  #    and asserted first, so a refused badge fails here rather than as a
+  #    mystery in step 3.
+  mqtt_sub "resource/response/scan" 3 "${STACK_DIR}/cond-scan-1.txt" &
+  local scan_1=$!
   sleep 1
+  mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
+  wait "${scan_1}" || true
   mqtt_sub "resource/lease" 4 "${STACK_DIR}/cond-lease-1.txt"
 
   # 2. A stranger says the door is shut. The edge must drop it, by name.
