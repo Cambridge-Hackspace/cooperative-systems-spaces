@@ -44,6 +44,7 @@ pub const PLAIN: &[(&str, &str)] = &[
     ("home_links", "created_by"),
     ("membership_ledger", "user_id"),
     ("membership_ledger", "created_by"),
+    ("notification_messages", "user_id"),
     ("oauth_clients", "created_by"),
     ("power_circuits", "locked_out_by"),
     ("profile_config_versions", "created_by"),
@@ -126,6 +127,11 @@ pub const DROPPED: &[(&str, &str, &str)] = &[
         "oauth_consents",
         "user_id",
         "consent was given by the absorbed login; the survivor is asked again rather than assumed",
+    ),
+    (
+        "notification_preferences",
+        "user_id",
+        "the absorbed login's choices of how to be reached; the survivor's own stand (#226)",
     ),
 ];
 

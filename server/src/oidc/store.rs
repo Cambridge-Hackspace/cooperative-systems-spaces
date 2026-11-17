@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use crate::database::{DatabaseError, DatabaseManager};
 use crate::models::{
-    NewOauthAuthorizationRequest, NewOauthClient, NewOauthRefreshToken, NewOauthSigningKey,
+    NewNotificationMessage, NewOauthAuthorizationRequest, NewOauthClient, NewOauthRefreshToken,
+    NewOauthSigningKey, NotificationKind, NotificationMessage, NotificationPreference,
     OauthAuthorizationCode, OauthAuthorizationRequest, OauthClient, OauthConsent,
     OauthRefreshToken, OauthSigningKey,
 };
@@ -393,5 +394,191 @@ impl DatabaseManager {
             .execute(&mut conn)
             .map_err(DatabaseError::Diesel)?;
         Ok(())
+    }
+
+    // ── the notification relay (#226) ───────────────────────────────────────
+
+    /// Replace an app's declared kinds with `kinds`: kinds no longer declared
+    /// are dropped, with any member's choice about them.
+    pub fn notify_declare_kinds(
+        &self,
+        client: Uuid,
+        kinds: &[(String, String)],
+    ) -> Result<Vec<NotificationKind>, DatabaseError> {
+        use crate::schema::{notification_kinds as k, notification_preferences as p};
+        let mut conn = self.get_connection()?;
+        conn.transaction(|conn| {
+            let names: Vec<String> = kinds.iter().map(|(n, _)| n.clone()).collect();
+            diesel::delete(
+                k::table
+                    .filter(k::client_id.eq(client))
+                    .filter(k::kind.ne_all(&names)),
+            )
+            .execute(conn)?;
+            diesel::delete(
+                p::table
+                    .filter(p::client_id.eq(client))
+                    .filter(p::kind.ne("*"))
+                    .filter(p::kind.ne_all(&names)),
+            )
+            .execute(conn)?;
+            for (kind, label) in kinds {
+                diesel::insert_into(k::table)
+                    .values((
+                        k::client_id.eq(client),
+                        k::kind.eq(kind),
+                        k::label.eq(label),
+                    ))
+                    .on_conflict((k::client_id, k::kind))
+                    .do_update()
+                    .set(k::label.eq(label))
+                    .execute(conn)?;
+            }
+            k::table
+                .filter(k::client_id.eq(client))
+                .order(k::kind.asc())
+                .select(NotificationKind::as_select())
+                .load(conn)
+        })
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// Every declared kind, for every app, by app then kind.
+    pub fn notify_all_kinds(&self) -> Result<Vec<NotificationKind>, DatabaseError> {
+        use crate::schema::notification_kinds as k;
+        let mut conn = self.get_connection()?;
+        k::table
+            .order((k::client_id.asc(), k::kind.asc()))
+            .select(NotificationKind::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn notify_kind(
+        &self,
+        client: Uuid,
+        kind: &str,
+    ) -> Result<Option<NotificationKind>, DatabaseError> {
+        use crate::schema::notification_kinds as k;
+        let mut conn = self.get_connection()?;
+        k::table
+            .find((client, kind))
+            .select(NotificationKind::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn notify_preferences(
+        &self,
+        user: Uuid,
+    ) -> Result<Vec<NotificationPreference>, DatabaseError> {
+        use crate::schema::notification_preferences as p;
+        let mut conn = self.get_connection()?;
+        p::table
+            .filter(p::user_id.eq(user))
+            .select(NotificationPreference::as_select())
+            .load(&mut conn)
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn notify_set_preference(
+        &self,
+        user: Uuid,
+        client: Uuid,
+        kind: &str,
+        email: bool,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::notification_preferences as p;
+        let mut conn = self.get_connection()?;
+        let now = Utc::now();
+        diesel::insert_into(p::table)
+            .values((
+                p::user_id.eq(user),
+                p::client_id.eq(client),
+                p::kind.eq(kind),
+                p::email.eq(email),
+                p::updated_at.eq(now),
+            ))
+            .on_conflict((p::user_id, p::client_id, p::kind))
+            .do_update()
+            .set((p::email.eq(email), p::updated_at.eq(now)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// Record an accepted message. A dedupe key the app has used before
+    /// returns the first message instead, with `false`: nothing is sent twice.
+    pub fn notify_record(
+        &self,
+        new: &NewNotificationMessage,
+    ) -> Result<(NotificationMessage, bool), DatabaseError> {
+        use crate::schema::notification_messages as m;
+        let mut conn = self.get_connection()?;
+        let inserted = diesel::insert_into(m::table)
+            .values(new)
+            .on_conflict((m::client_id, m::dedupe_key))
+            .do_nothing()
+            .returning(NotificationMessage::as_returning())
+            .get_result(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?;
+        if let Some(row) = inserted {
+            return Ok((row, true));
+        }
+        let first = m::table
+            .filter(m::client_id.eq(new.client_id))
+            .filter(m::dedupe_key.eq(&new.dedupe_key))
+            .select(NotificationMessage::as_select())
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok((first, false))
+    }
+
+    pub fn notify_by_dedupe(
+        &self,
+        client: Uuid,
+        key: &str,
+    ) -> Result<Option<NotificationMessage>, DatabaseError> {
+        use crate::schema::notification_messages as m;
+        let mut conn = self.get_connection()?;
+        m::table
+            .filter(m::client_id.eq(client))
+            .filter(m::dedupe_key.eq(key))
+            .select(NotificationMessage::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    pub fn notify_set_outcome(&self, id: Uuid, outcome: &str) -> Result<(), DatabaseError> {
+        use crate::schema::notification_messages as m;
+        let mut conn = self.get_connection()?;
+        diesel::update(m::table.find(id))
+            .set(m::outcome.eq(outcome))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// How many messages an app has had accepted since `since`, to one member
+    /// or (with `user` None) to everyone.
+    pub fn notify_count_since(
+        &self,
+        client: Uuid,
+        user: Option<Uuid>,
+        since: DateTime<Utc>,
+    ) -> Result<i64, DatabaseError> {
+        use crate::schema::notification_messages as m;
+        let mut conn = self.get_connection()?;
+        let base = m::table
+            .filter(m::client_id.eq(client))
+            .filter(m::created_at.ge(since));
+        match user {
+            Some(u) => base.filter(m::user_id.eq(u)).count().get_result(&mut conn),
+            None => base.count().get_result(&mut conn),
+        }
+        .map_err(DatabaseError::Diesel)
     }
 }

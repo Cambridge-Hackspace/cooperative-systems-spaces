@@ -1058,3 +1058,22 @@ export interface OAuthClientWithSecret {
   client: OAuthClient
   client_secret: string | null
 }
+
+// ── the notification relay (#226) ───────────────────────────────────────────
+
+/** One kind of message an app sends, and whether it reaches this member. */
+export interface NotifyKindChoice {
+  kind: string
+  label: string
+  email: boolean
+  /** No choice made yet: off, unless the app marks a message high-urgency. */
+  default: boolean
+}
+
+export interface NotifyAppChoices {
+  client: string
+  app: string
+  /** Off means nothing from this app reaches the member. */
+  enabled: boolean
+  kinds: NotifyKindChoice[]
+}

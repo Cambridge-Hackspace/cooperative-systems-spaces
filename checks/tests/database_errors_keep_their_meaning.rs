@@ -98,6 +98,8 @@ const BUDGET: &[(&str, usize)] = &[
     // string that fails to serialize, and argon2 failing to hash a new secret:
     // each is ours, and 500 is the honest answer.
     ("oidc.rs", 4),
+    // #226: none. Every database error goes through `ApiError::from`.
+    ("notify.rs", 0),
     ("mod.rs", 0),
     ("pages.rs", 0),
     ("places.rs", 0),

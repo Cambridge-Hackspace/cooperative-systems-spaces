@@ -148,3 +148,53 @@ pub struct OauthConsent {
     pub scopes: Vec<String>,
     pub granted_at: DateTime<Utc>,
 }
+
+// ── the notification relay (#226) ──────────────────────────────────────────
+
+use crate::schema::{notification_kinds, notification_messages, notification_preferences};
+
+#[derive(Debug, Clone, Queryable, Selectable, Insertable, Serialize)]
+#[diesel(table_name = notification_kinds)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NotificationKind {
+    pub client_id: Uuid,
+    pub kind: String,
+    pub label: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Queryable, Selectable, Insertable)]
+#[diesel(table_name = notification_preferences)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NotificationPreference {
+    pub user_id: Uuid,
+    pub client_id: Uuid,
+    pub kind: String,
+    pub email: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = notification_messages)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NotificationMessage {
+    pub id: Uuid,
+    pub client_id: Uuid,
+    pub user_id: Uuid,
+    pub kind: String,
+    pub urgency: String,
+    pub dedupe_key: Option<String>,
+    pub outcome: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = notification_messages)]
+pub struct NewNotificationMessage {
+    pub client_id: Uuid,
+    pub user_id: Uuid,
+    pub kind: String,
+    pub urgency: String,
+    pub dedupe_key: Option<String>,
+    pub outcome: String,
+}

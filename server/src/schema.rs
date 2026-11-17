@@ -1002,6 +1002,9 @@ diesel::joinable!(oauth_authorization_requests -> oauth_clients (client_id));
 diesel::joinable!(oauth_authorization_codes -> oauth_clients (client_id));
 diesel::joinable!(oauth_refresh_tokens -> oauth_clients (client_id));
 diesel::joinable!(oauth_consents -> oauth_clients (client_id));
+diesel::joinable!(notification_kinds -> oauth_clients (client_id));
+diesel::joinable!(notification_preferences -> oauth_clients (client_id));
+diesel::joinable!(notification_messages -> oauth_clients (client_id));
 diesel::joinable!(doors -> resources (id));
 diesel::joinable!(resource_sessions -> resources (resource_id));
 diesel::joinable!(home_links -> users (created_by));
@@ -1129,6 +1132,38 @@ diesel::table! {
 }
 
 diesel::table! {
+    notification_kinds (client_id, kind) {
+        client_id -> Uuid,
+        kind -> Text,
+        label -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    notification_preferences (user_id, client_id, kind) {
+        user_id -> Uuid,
+        client_id -> Uuid,
+        kind -> Text,
+        email -> Bool,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    notification_messages (id) {
+        id -> Uuid,
+        client_id -> Uuid,
+        user_id -> Uuid,
+        kind -> Text,
+        urgency -> Text,
+        dedupe_key -> Nullable<Text>,
+        outcome -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     oauth_consents (user_id, client_id) {
         user_id -> Uuid,
         client_id -> Uuid,
@@ -1204,4 +1239,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     oauth_authorization_codes,
     oauth_refresh_tokens,
     oauth_consents,
+    notification_kinds,
+    notification_preferences,
+    notification_messages,
 );

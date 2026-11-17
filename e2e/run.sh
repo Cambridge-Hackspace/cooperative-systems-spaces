@@ -81,8 +81,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # the server, it drives its own scratch database, and it opens no HTTP session at
 # all -- so it claims no address and nothing in it cares where the admin comes
 # from.
-STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,oidc,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,oidc,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,oidc,notify,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,oidc,notify,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -613,7 +613,8 @@ stage_schema() {
     schedules tools space_devices space_device_auth space_device_auth_requests \
     profile_config_versions webhooks audit_logs audit_event_types places \
     home_links oauth_clients oauth_signing_keys oauth_authorization_requests \
-    oauth_authorization_codes oauth_refresh_tokens oauth_consents; do
+    oauth_authorization_codes oauth_refresh_tokens oauth_consents \
+    notification_kinds notification_preferences notification_messages; do
     if [[ "$(sql_ro "SELECT to_regclass('public.${t}') IS NOT NULL" | tr -d ' ')" == "t" ]]; then
       record_case "schema/table/${t}" ok
     else
@@ -1636,6 +1637,33 @@ stage_oidc() {
 
   collect_server_log
   emit_junit oidc "driver=oidc.mjs"
+}
+
+# ===========================================================================
+# notify -- the notification relay (#226)
+# ===========================================================================
+# An app messages a member through CS:S on its own app token, and what reaches
+# the member's inbox -- read from the SMTP sink -- follows their choices: high
+# urgency before they choose, a kind they opted into, nothing from an app they
+# switched off. The app's answer is the same in every case. Dedupe, the rate
+# limit (six an hour per member in e2e/stack-config.toml) and the audit record
+# are asserted too.
+stage_notify() {
+  cases_begin notify
+  stack_paths
+
+  if ! server_ready; then
+    record_case "notify/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit notify
+    return 1
+  fi
+  record_case "notify/stack-is-up" ok
+
+  run_node notify.mjs >"${OUT}/logs/notify.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit notify "driver=notify.mjs"
 }
 
 # ===========================================================================

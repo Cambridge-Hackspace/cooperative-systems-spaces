@@ -209,6 +209,11 @@ fn guard_of(src: &str, handler: &str) -> String {
         ("AuthUser", "Auth"),
         ("DeviceAuth", "Device"),
         ("Cmi5SessionAuth", "Cmi5Session"),
+        // #226: the relay's app token. An extractor so that it refuses before
+        // the body is read, but it authenticates exactly as the InlineAuth
+        // handlers do -- from the Authorization header, by a check only the
+        // live tier can complete -- so it is that guard.
+        ("RelayApp", "InlineAuth"),
     ] {
         // The extractor may be written bare or fully qualified --
         // `auth: DeviceAuth` and `auth: crate::auth::DeviceAuth` are the same

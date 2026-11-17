@@ -147,7 +147,10 @@ describe('the audit filter against the server enum', () => {
       // _secret_rotated / _deleted, oauth_consent_granted and
       // oauth_signing_key_rotated -- are app-administration records, like the
       // RBAC administration set, and join the unfiltered set deliberately.
-    ).toBe(112)
+      // 112 -> 114: #226 added member_notified and notification_kinds_declared.
+      // Delivery records, like the mail and billing ones, and unfiltered
+      // deliberately.
+    ).toBe(114)
   })
 
   // Named separately because these are the ones that matter in an

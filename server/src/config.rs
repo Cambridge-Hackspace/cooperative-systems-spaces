@@ -1140,6 +1140,10 @@ pub struct OidcConfig {
     pub request_ttl_secs: i64,
     /// How often a new signing key replaces the current one.
     pub key_rotation_days: i64,
+    /// Messages one app may send one member in an hour, through the relay (#226).
+    pub notify_per_member_per_hour: i64,
+    /// Messages one app may send in an hour, to everyone (#226).
+    pub notify_per_app_per_hour: i64,
 }
 
 impl Default for OidcConfig {
@@ -1154,6 +1158,8 @@ impl Default for OidcConfig {
             code_ttl_secs: 60,
             request_ttl_secs: 600,
             key_rotation_days: 90,
+            notify_per_member_per_hour: 30,
+            notify_per_app_per_hour: 1000,
         }
     }
 }
@@ -1976,6 +1982,11 @@ fn validate_config(config: &AppConfig) -> Result<()> {
             ("oidc.code_ttl_secs", o.code_ttl_secs),
             ("oidc.request_ttl_secs", o.request_ttl_secs),
             ("oidc.key_rotation_days", o.key_rotation_days),
+            (
+                "oidc.notify_per_member_per_hour",
+                o.notify_per_member_per_hour,
+            ),
+            ("oidc.notify_per_app_per_hour", o.notify_per_app_per_hour),
         ] {
             if v <= 0 {
                 return Err(anyhow::anyhow!("{name} must be greater than zero, not {v}"));
