@@ -25,6 +25,10 @@
 import { parseMarks, parseTimeline } from './timeline.mjs'
 import { judgeLeaseTimeline, START_DELAY_MS, RUN_ON_MS, TICK_MS } from './lease-timeline.mjs'
 
+// run.sh's hold between the second stage's first grant and the stop. Copied,
+// not imported: the pacing is the shell's, and this is the check on it.
+const HOLD_MS = 1500
+
 const SEED = Number(process.env.SEED ?? Date.now() % 2 ** 31)
 console.log(`seed ${SEED} (replay with SEED=${SEED})`)
 function rng(seed) {
@@ -55,11 +59,21 @@ function world(
   const runOn = edge.runOnMs ?? RUN_ON_MS
   const T0 = 1_794_895_000
   const confirmAt = T0 + (stage.confirmAfter ?? 4)
-  const stopAt = confirmAt + (stage.stopAfter ?? 6)
+  const phase0 = rng(seed ^ 0x5bd1e995)() * (TICK_MS / 1000)
+  // As run.sh paces it: the stop goes HOLD after the second stage's first
+  // grant (or after the wait's 20 s deadline, if none comes), plus however
+  // long the stage takes to act -- milliseconds on CI's host broker, seconds
+  // under podman. Not a fixed gap: a fixed gap is what hid the fast case.
+  const firstGrant = edge.neverGrantsSecond
+    ? confirmAt + 20
+    : T0 +
+      phase0 +
+      Math.ceil((confirmAt + delay / 1000 - T0 - phase0) / (TICK_MS / 1000)) * (TICK_MS / 1000)
+  const stopAt = firstGrant + (stage.holdMs ?? HOLD_MS) / 1000 + (stage.lag ?? 0.02)
   // As the stage paces it: two seconds past the run-on's end, and never
   // less than six after the stop.
   const endAt = stopAt + Math.max(runOn / 1000 + 2.5, 6)
-  const phase = rand() * (TICK_MS / 1000)
+  const phase = phase0
   const events = []
   const at = (t, topic, json) => events.push({ t, topic, json })
 
@@ -144,10 +158,11 @@ if (ALL.length !== 10) {
 for (let i = 0; i < 200; i++) {
   const s = SEED + i
   const results = [
+    // CI: the host broker, the stage acting within milliseconds.
     world({}, s),
     // 2026-11-17: the stage acts late and the recorder stamps late and
     // unevenly. The old windows failed a correct edge here.
-    world({ stage: { confirmAfter: 9, stopAfter: 11 }, jitterMs: 200 }, s),
+    world({ stage: { confirmAfter: 9, lag: 3 }, jitterMs: 200 }, s),
   ]
   for (const r of results.flat()) {
     if (!r.pass) {
@@ -157,6 +172,18 @@ for (let i = 0; i < 200; i++) {
   }
 }
 console.log('ok   a healthy edge, and a slow healthy one, pass across 200 seeds')
+
+// The shape CI caught on #239: the stop sent the moment the second stage is
+// granted. The judge must not pass it -- 2b would be judged on nothing -- and
+// the hold above is what keeps the stage out of it.
+expect(
+  'the stop sent the instant the second stage is granted',
+  world({ stage: { holdMs: 0, lag: 0.01 } }),
+  [
+    'lease/the-second-stage-is-leased-after-confirmation-and-delay',
+    'lease/the-alias-lease-window-has-a-control',
+  ]
+)
 
 // Each defect fails the claim it breaks, and only that.
 expect('no start delay', world({ edge: { startDelayMs: 0 } }), [

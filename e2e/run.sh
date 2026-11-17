@@ -2717,6 +2717,11 @@ stage_lease() {
     "{\"resource\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.3,\"relay_on\":true}" || true
   timeline_wait "the second stage's grant" 20 "${timeline}" "${confirmed}" resource/lease \
     "\"device_id\":\"${plug2}\"" '"grant":true' >/dev/null || true
+  # Three more ticks before the stop, so 2b holds grants plainly before it.
+  # Without them, on CI's host broker the stop went out within milliseconds
+  # of the first grant and 2b -- which ends a tick before the stop -- had
+  # nothing to judge. The self-test models this hold (HOLD_MS); change both.
+  sleep 1.5
 
   # The member signs off, on the resource-shaped stop (#182). First stage
   # refused at once; second runs on 3 s. Again the stage waits for the event

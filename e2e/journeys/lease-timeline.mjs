@@ -70,7 +70,8 @@ export function judgeLeaseTimeline(rows, marks, ids) {
     JSON.stringify(rows_.map((r) => (r.grant ? 'grant' : `refuse:${r.reason}`)))
 
   // 2a: confirmed, inside the start delay.
-  const delayEnd = confirm.t + s(START_DELAY_MS - TICK_MS)
+  // Ends at the stop if that comes first: after it nothing is waiting.
+  const delayEnd = Math.min(confirm.t + s(START_DELAY_MS - TICK_MS), stop.t)
   const plug2InDelay = during(rows, LEASE, confirm.t, delayEnd, ofPlug2)
   check(
     'lease/the-second-stage-is-silent-inside-its-start-delay',

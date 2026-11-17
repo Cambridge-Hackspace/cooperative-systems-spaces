@@ -306,6 +306,8 @@ if (ALL.length !== 22) {
 for (let i = 0; i < 100; i++) {
   for (const [label, opts] of [
     ['healthy', {}],
+    // CI's host broker: every step taken within milliseconds of its event.
+    ['fast', { lag: 0.01, jitterMs: 20 }],
     // #234: every step seconds late, the recorder late and uneven.
     ['slow', { lag: 3, jitterMs: 250 }],
   ]) {
