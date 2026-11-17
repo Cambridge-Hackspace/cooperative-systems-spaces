@@ -16,6 +16,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { PATCH, POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { parseMarks, parseTimeline } from '../journeys/timeline.mjs'
+import { judgeBridgeTimeline } from '../journeys/bridge-timeline.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
 const FIXTURE = path.join(STACK_DIR, 'bridge-fixture.json')
@@ -337,125 +339,42 @@ async function republish() {
 }
 
 async function assertWindows() {
-  const deviceId = fs.readFileSync(path.join(STACK_DIR, 'bridge-device-id'), 'utf8').trim()
-  const tool = fs.readFileSync(path.join(STACK_DIR, 'bridge-tool-id'), 'utf8').trim()
-  const mine = (rows) => (rows ?? []).filter((r) => r.device_id === deviceId)
+  const read = (name) => fs.readFileSync(path.join(STACK_DIR, name), 'utf8').trim()
+  const ids = {
+    deviceId: read('bridge-device-id'),
+    toolId: read('bridge-tool-id'),
+    friendly: FRIENDLY,
+    doorA: read('bridge-door-a-id'),
+    doorB: read('bridge-door-b-id'),
+    lockA: read('bridge-door-a-device-id'),
+    lockB: read('bridge-door-b-device-id'),
+    contactId: read('bridge-door-a-contact-device-id'),
+  }
 
-  // A: silent plug -> relay_on omitted on every one of OUR reports.
-  const a = mine(captured('bridge-power-A.txt'))
-  ok('bridge/A-bridge-reports-while-plug-silent', a.length >= 1, `captured ${a.length} of our power reports`)
-  ok(
-    'bridge/A-silent-plug-omits-relay_on',
-    a.length >= 1 && a.every((r) => !('relay_on' in r)),
-    `relay_on fields: ${JSON.stringify(a.map((r) => r.relay_on))} -- "cannot report" must not be reported as off`,
-  )
+  // Windows A-G, from the stage timeline (journeys/bridge-timeline.mjs says
+  // why they are no longer captures of their own).
+  const timelineFile = path.join(STACK_DIR, 'bridge-timeline.txt')
+  const marksFile = `${timelineFile}.marks`
+  const timeline = parseTimeline(fs.existsSync(timelineFile) ? fs.readFileSync(timelineFile, 'utf8') : '')
+  const marks = parseMarks(fs.existsSync(marksFile) ? fs.readFileSync(marksFile, 'utf8') : '')
+  for (const c of judgeBridgeTimeline(timeline, marks, ids)) ok(c.name, c.pass, c.detail)
 
-  // B: grant -> ON with on_time; fake plug answers -> relay_on: true.
-  const setB = captured('bridge-set-B.txt') ?? []
-  const onCmd = setB.find((c) => c.state === 'ON')
-  ok('bridge/B-grant-commands-plug-on', !!onCmd, `set commands: ${JSON.stringify(setB)}`)
-  ok('bridge/B-on-carries-on_time', onCmd?.on_time === 60, `on_time: ${JSON.stringify(onCmd?.on_time)}`)
-  const b = mine(captured('bridge-power-B.txt'))
-  ok(
-    'bridge/B-reported-on-becomes-relay_on-true',
-    b.some((r) => r.relay_on === true),
-    `relay_on after the plug reported ON: ${JSON.stringify(b.map((r) => r.relay_on))}`,
-  )
-
-  // C: the signature. Restarted under a retained ON: it must /get, and omit
-  // relay_on until a live report answers.
-  const getC = captured('bridge-get-C.txt') ?? []
-  ok('bridge/C-retained-replay-triggers-a-get', getC.length >= 1, `get requests: ${getC.length}`)
-  const c1 = mine(captured('bridge-power-C1.txt'))
-  ok(
-    'bridge/C-retained-replay-is-not-believed',
-    c1.length >= 1 && c1.every((r) => !('relay_on' in r)),
-    `relay_on under a retained ON, before any live report: ${JSON.stringify(c1.map((r) => r.relay_on))}`,
-  )
-  const c2 = mine(captured('bridge-power-C2.txt'))
-  ok(
-    'bridge/C-live-report-resolves-unknown',
-    c2.some((r) => r.relay_on === true),
-    `relay_on after a live ON: ${JSON.stringify(c2.map((r) => r.relay_on))}`,
-  )
-
-  // D: plug gone -> stop-on-loss -> refusal -> OFF.
-  const stops = (captured('bridge-stop-D.txt') ?? []).filter((s) => s.resource === tool)
-  ok('bridge/D-loss-stops-the-resource', stops.length >= 1, `stops for ${tool}: ${stops.length}`)
-  const setD = captured('bridge-set-D.txt') ?? []
-  ok('bridge/D-refusal-switches-plug-off', setD.some((c) => c.state === 'OFF'), `set commands: ${JSON.stringify(setD)}`)
-
-  // ---- Home Assistant (#20) ------------------------------------------------
+  // ---- Home Assistant (#20): what the bridge asked HA to do -----------------
+  // Not on MQTT, so not in the timeline: the fake HA's own record of calls.
   const calls = captured('fake-ha-calls.jsonl') ?? []
   const callsFor = (entity) => calls.filter((c) => c.target?.entity_id === entity).map((c) => `${c.domain}.${c.service}`)
-  const doorA = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-a-id'), 'utf8').trim()
-  const doorB = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-b-id'), 'utf8').trim()
-  const lockA = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-a-device-id'), 'utf8').trim()
-  const lockB = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-b-device-id'), 'utf8').trim()
 
-  // E: a badge at the momentary door. The lease is the pulse; the lock
-  // follows it both ways.
-  const leaseE = (captured('bridge-lease-E.txt') ?? []).filter((l) => l.device_id === lockA)
-  ok('bridge/E-badge-leases-the-lock', leaseE.some((l) => l.grant === true), `leases for door A's lock: ${JSON.stringify(leaseE.map((l) => l.grant))}`)
+  // E: door A's lock follows its lease both ways.
   const callsA = callsFor(LOCKS['door-a'])
   ok('bridge/E-lease-unlocks-the-door', callsA[0] === 'lock.unlock', `calls on ${LOCKS['door-a']}: ${JSON.stringify(callsA)}`)
-  const powerE = (captured('bridge-power-E.txt') ?? []).filter((r) => r.device_id === lockA)
-  ok(
-    'bridge/E-unlocked-is-reported-as-on',
-    powerE.some((r) => r.relay_on === true),
-    `relay_on from door A's lock: ${JSON.stringify(powerE.map((r) => r.relay_on))}`,
-  )
-  // #214: every lease this edge publishes names a module it coordinates. The
-  // capture that found 38 foreign devices refused twice a second is the one
-  // that keeps that found.
-  // Sensor bindings are leased too (edge/src/modules.rs:749), so the contact is ours.
-  const contactId = fs.readFileSync(path.join(STACK_DIR, 'bridge-door-a-contact-device-id'), 'utf8').trim()
-  const ours = new Set([deviceId, lockA, lockB, contactId])
-  const foreign = [...new Set((captured('bridge-lease-E.txt') ?? []).map((l) => l.device_id))].filter((d) => !ours.has(d))
-  ok(
-    'bridge/E-the-edge-leases-only-what-it-coordinates',
-    foreign.length === 0,
-    `${foreign.length} device(s) leased or refused by this edge are bound to resources it does not coordinate`,
-  )
-  const firstGrant = leaseE.findIndex((l) => l.grant === true)
-  ok(
-    'bridge/E-pulse-end-withdraws-the-lease',
-    firstGrant >= 0 && leaseE.slice(firstGrant).some((l) => l.grant === false),
-    `after the pulse the lease must be refused: ${JSON.stringify(leaseE.map((l) => l.grant))}`,
-  )
   ok('bridge/E-withdrawal-relocks-the-door', callsA.length >= 2 && callsA[callsA.length - 1] === 'lock.lock', `calls: ${JSON.stringify(callsA)}`)
   const stateE = JSON.parse(fs.readFileSync(path.join(STACK_DIR, 'fake-ha-state.json'), 'utf8'))
   ok('bridge/E-door-a-ends-locked', stateE[LOCKS['door-a']] === 'locked', `final: ${stateE[LOCKS['door-a']]}`)
 
-  // F: the until_stopped door. Leased past the pulse; HA loses the lock;
-  // stop-on-loss ends the session; the withdrawal relocks.
+  // F: the until_stopped door unlocks on the badge, and the stop relocks it.
   const callsB = callsFor(LOCKS['door-b'])
   ok('bridge/F-badge-unlocks-the-room-door', callsB[0] === 'lock.unlock', `calls on ${LOCKS['door-b']}: ${JSON.stringify(callsB)}`)
-  const leaseF = (captured('bridge-lease-F.txt') ?? []).filter((l) => l.device_id === lockB)
-  ok('bridge/F-lease-outlives-the-pulse', leaseF.length >= 2 && leaseF.every((l) => l.grant === true), `leases 4 s after the badge: ${JSON.stringify(leaseF.map((l) => l.grant))}`)
-  const stopsF = (captured('bridge-stop-F.txt') ?? []).filter((s) => s.resource === doorB)
-  ok('bridge/F-loss-stops-the-door', stopsF.length >= 1, `stops for door B: ${stopsF.length}`)
   ok('bridge/F-stop-relocks-the-door', callsB.length >= 2 && callsB[callsB.length - 1] === 'lock.lock', `calls: ${JSON.stringify(callsB)}`)
-
-  // ---- G: the contact as a sensor (#25 / CS:S #213) ------------------------
-  // G0: the bridge reports the contact's reading on the wire, shut = door_open false.
-  const g0 = (captured('bridge-condition-G0.txt') ?? []).filter((c) => c.device_id === contactId)
-  ok('bridge/G-the-contact-reports-its-condition', g0.length >= 1, `condition reports from the contact: ${g0.length}`)
-  ok(
-    'bridge/G-shut-is-door-open-false',
-    g0.length >= 1 && g0.every((c) => c.condition === 'door_open' && c.asserted === false && c.resource === tool),
-    `readings: ${JSON.stringify(g0.slice(0, 3))}`,
-  )
-  // G1: a badge at the tool with the enclosure shut -> the plug is granted
-  // (the trip is satisfied by the reading); the enclosure opens -> the edge
-  // trips: Tripped("door_open"), and the bridge switches the plug OFF on it.
-  const leaseG = mine(captured('bridge-lease-G.txt'))
-  ok('bridge/G-shut-enclosure-grants', leaseG.some((l) => l.grant === true), `grants: ${JSON.stringify(leaseG.map((l) => l.grant))}`)
-  const tripped = leaseG.filter((l) => l.grant === false && typeof l.reason === 'string' && l.reason.includes('Tripped') && l.reason.includes('door_open'))
-  ok('bridge/G-opening-the-enclosure-trips-the-tool', tripped.length >= 1, `reasons: ${JSON.stringify([...new Set(leaseG.map((l) => l.reason).filter(Boolean))])}`)
-  const setG = captured('bridge-set-G.txt') ?? []
-  ok('bridge/G-the-trip-switches-the-plug-off', setG.some((c) => c.state === 'ON') && setG[setG.length - 1]?.state === 'OFF', `set commands: ${JSON.stringify(setG)}`)
-  void doorA
 }
 
 main(async () => {

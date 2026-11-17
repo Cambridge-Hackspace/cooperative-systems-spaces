@@ -279,7 +279,7 @@ stack_paths() {
 stack_rm_quiet() {
   [[ ${PROVISION} == "external" ]] && return 0
   local c
-  for c in "${C_SERVER}" "${C_MQTT}" "${C_PG}"; do
+  for c in "${C_RECORDER}" "${C_SERVER}" "${C_MQTT}" "${C_PG}"; do
     pm rm -f "${c}" >/dev/null 2>&1 || true
   done
   return 0
@@ -495,6 +495,111 @@ mqtt_sub() {
       -t "${topic}" -W "${secs}" >"${out}" 2>/dev/null || true
   fi
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# The timeline: every message, with the time the broker delivered it
+# ---------------------------------------------------------------------------
+# mqtt_sub's windows are clocked by the shell: a window opens when an exec has
+# started a subscriber, and closes -W seconds later. Where the system under
+# test runs a timer of its own -- a 3 s start delay, a 10 s loss debounce --
+# that window races it, and on a loaded guest the exec latency wins: the lease
+# stage's 2 s window "inside" a 3 s delay ran a second past it (#234's class).
+#
+# So a stage that asserts against a timer records instead. One subscriber on
+# every topic, for the whole stage, each line
+#
+#   <unix seconds.nanoseconds> TAB <retained 0|1> TAB <topic> TAB <payload>
+#
+# stamped by mosquitto_sub as each message arrives. The drivers judge the
+# timeline against the stage's OWN messages in it -- the confirm, the stop,
+# the reading -- so exec latency moves a window's edges and the events inside
+# it together, and cannot move one past the other. And where the stage must
+# itself act inside a timer, it waits for the event that starts it
+# (timeline_wait) rather than sleeping.
+#
+# Under container provisioning the recorder is a container of its own, and
+# `logs -f` streams its output to the host as it arrives; mosquitto_sub flushes
+# per message, so a wait sees a line within a fraction of a second.
+C_RECORDER="css-e2e-recorder"
+
+# timeline_start <file> -- start recording; returns once a line has arrived,
+# so nothing the stage does next can precede the recording. Leases are
+# published twice a second while an edge runs, so a stage with an edge up
+# never waits long; one without fails this after 20 s, loudly.
+timeline_start() {
+  local out="$1" fmt=$'%U\t%r\t%t\t%p'
+  timeline_stop
+  : >"${out}"
+  if [[ ${PROVISION} == "external" ]]; then
+    command -v mosquitto_sub >/dev/null 2>&1 || return 1
+    mosquitto_sub -h 127.0.0.1 -p "${MQTT_PORT}" -t '#' -F "${fmt}" >"${out}" 2>/dev/null &
+    echo $! >"${STACK_DIR}/recorder.pid"
+  else
+    pm run -d --rm --name "${C_RECORDER}" --network host "${IMG_MOSQUITTO}" \
+      mosquitto_sub -h 127.0.0.1 -p "${MQTT_PORT}" -t '#' -F "${fmt}" >/dev/null || return 1
+    pm logs -f "${C_RECORDER}" >"${out}" 2>/dev/null &
+    echo $! >"${STACK_DIR}/recorder.pid"
+  fi
+  wait_for "the timeline recorder" 20 test -s "${out}"
+}
+
+timeline_stop() {
+  if [[ -f "${STACK_DIR}/recorder.pid" ]]; then
+    kill "$(cat "${STACK_DIR}/recorder.pid")" 2>/dev/null || true
+    rm -f "${STACK_DIR}/recorder.pid"
+  fi
+  [[ ${PROVISION} == "external" ]] && return 0
+  pm rm -f "${C_RECORDER}" >/dev/null 2>&1 || true
+  return 0
+}
+
+# timeline_mark <file> <name> -- note how far the timeline has got, before an
+# action, as "<name> TAB <lines so far>" in <file>.marks. Taken BEFORE the
+# action, so everything the action causes lies after it; the drivers find the
+# action's own message as the first match past its mark. A line counts, not a
+# clock, so a mark cannot be wrong about order.
+timeline_mark() {
+  printf '%s\t%s\n' "$2" "$(timeline_lines "$1")" >>"$1.marks"
+}
+
+# timeline_lines <file> -- how many lines the timeline holds now: where a
+# timeline_wait for an action's consequences starts, read before the action.
+timeline_lines() {
+  local n
+  n="$(wc -l <"$1")"
+  printf '%s' "${n// /}"
+}
+
+# timeline_wait <label> <seconds> <file> <after-line> <topic> [substring...]
+# -- wait for the first line past <after-line> on exactly <topic> whose
+# payload contains every substring, and print its line number, which a
+# following wait can start from. A pacing tool only: it says when to act, and
+# the drivers judge what happened from the timeline itself. Non-zero, with a
+# warning, when the deadline passes; the stage carries on and the driver's
+# verdict names what was missing.
+timeline_wait() {
+  local label="$1" secs="$2" out="$3" after="$4" topic="$5"
+  shift 5
+  local deadline=$((SECONDS + secs)) hit
+  while :; do
+    hit="$(awk -F '\t' -v after="${after}" -v topic="${topic}" '
+      BEGIN { n = ARGC; for (i = 1; i < n; i++) { need[i] = ARGV[i]; delete ARGV[i] }; k = n - 1 }
+      NR > after && $3 == topic {
+        p = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", p)
+        for (i = 1; i <= k; i++) if (index(p, need[i]) == 0) next
+        print NR; exit
+      }' "$@" <"${out}")"
+    if [[ -n ${hit} ]]; then
+      printf '%s' "${hit}"
+      return 0
+    fi
+    if ((SECONDS >= deadline)); then
+      warn "${label}: not seen after ${secs}s"
+      return 1
+    fi
+    sleep 0.2
+  done
 }
 
 # Somewhere for the mailer to deliver.
@@ -1246,6 +1351,16 @@ fake_ha_logged() {
     pm logs "${C_FAKE_HA}" >"${OUT}/logs/fake-ha.log" 2>&1 || true
   fi
   grep -q -- "${needle}" "${OUT}/logs/fake-ha.log" 2>/dev/null
+}
+
+# ha_called <entity> <service> <count> -- true once the fake Home Assistant
+# has recorded at least <count> calls of <service> on <entity> (a pacing
+# check; the driver judges the calls themselves).
+ha_called() {
+  local n
+  n="$(grep -F "\"entity_id\":\"$1\"" "${STACK_DIR}/fake-ha-calls.jsonl" 2>/dev/null \
+    | grep -cF "\"service\":\"$2\"" || true)"
+  [[ ${n:-0} -ge $3 ]]
 }
 
 stop_fake_ha() {

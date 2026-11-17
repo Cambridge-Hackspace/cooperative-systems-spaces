@@ -87,6 +87,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { GET, PATCH, POST, PUT, account, adminAccount, assertEq, ok, record, main } from './lib.mjs'
+import { parseMarks, parseTimeline } from '../journeys/timeline.mjs'
+import { judgeLeaseTimeline } from '../journeys/lease-timeline.mjs'
 
 const STACK_DIR = process.env.CSS_STACK_DIR ?? '/stack'
 
@@ -530,15 +532,15 @@ async function assertWindows() {
   const stopped = captured('lease-window-3.txt')
   const midway = captured('lease-window-1b.txt')
   const nobodyOn = captured('lease-window-1c.txt')
-  const inDelay = captured('lease-window-2a.txt')
-  const sequenced = captured('lease-window-2b.txt')
-  const afterStop = captured('lease-window-2c.txt')
-  const runOnOver = captured('lease-window-2d.txt')
+  const timelineFile = path.join(STACK_DIR, 'lease-timeline.txt')
+  const timeline = fs.existsSync(timelineFile) ? fs.readFileSync(timelineFile, 'utf8') : null
+  const marksFile = `${timelineFile}.marks`
+  const marks = parseMarks(fs.existsSync(marksFile) ? fs.readFileSync(marksFile, 'utf8') : '')
   const toolOnReply = captured('lease-toolon-reply.txt')
 
   ok(
     'lease/windows-were-captured',
-    [before, midway, nobodyOn, after, inDelay, sequenced, afterStop, runOnOver, stopped, toolOnReply].every(
+    [before, midway, nobodyOn, after, timeline, stopped, toolOnReply].every(
       (w) => w !== null
     ),
     'one or more capture files is missing; the stage did not run to completion'
@@ -798,37 +800,17 @@ async function assertWindows() {
       `${JSON.stringify(ofPlug2(after))}. A timer stood in for a confirmation, or ` +
       `the wait was sent as a refusal.`
   )
-  // 2a: the first plug has confirmed; the second is inside its 3 s start delay.
-  assertEq(
-    'lease/the-second-stage-is-silent-inside-its-start-delay',
-    0,
-    ofPlug2(inDelay).length,
-    `the second stage was leased before its start delay had passed: ${JSON.stringify(ofPlug2(inDelay))}`
-  )
-  // 2b: confirmed and delayed -- granted.
-  const second = ofPlug2(sequenced)
-  ok(
-    'lease/the-second-stage-is-leased-after-confirmation-and-delay',
-    second.length >= 1 && second[second.length - 1]?.grant === true,
-    `the second stage never got its lease after the first confirmed and the delay ran: ` +
-      `${JSON.stringify(second)}`
-  )
-  // #192: the old alias name is silent. Captured in parallel with window 2b,
-  // whose grant above is the control: the coordinator was leasing in this
-  // very window, so an empty alias capture is the alias being gone and not a
-  // broker that said nothing. The precondition is asserted first so a failure
-  // reads as "the control window was empty" rather than as a leak.
-  const aliasWindow = captured('lease-window-2b-alias.txt') ?? []
-  ok(
-    'lease/the-alias-lease-window-has-a-control',
-    second.length >= 1,
-    'window 2b itself carried no lease, so an empty alias window proves nothing'
-  )
-  ok(
-    'lease/the-old-lease-topic-is-silent',
-    aliasWindow.length === 0,
-    `toolguard/lease still carries leases after #192: ${JSON.stringify(aliasWindow).slice(0, 300)}`
-  )
+  // 2a-2d, and #192's alias: timed against the edge's own timers, so judged
+  // from the stage timeline (journeys/lease-timeline.mjs says why).
+  for (const c of judgeLeaseTimeline(parseTimeline(timeline ?? ''), marks, {
+    // The stage publishes the stop naming the tool by its external id.
+    toolId: fixture.externalId,
+    deviceId: fixture.deviceId,
+    plug2Id: fixture.plug2Id,
+    sensorId: fixture.sensorId,
+  })) {
+    ok(c.name, c.pass, c.detail)
+  }
 
   // ── A sensor bound on its own gets the lease too ──────────────────────────
   //
@@ -853,43 +835,11 @@ async function assertWindows() {
     sensorOn.length >= 1 && sensorOn[sensorOn.length - 1]?.grant === true,
     `no grant reached the sensor in window 2, so it would never open its meter: ${JSON.stringify(sensorOn)}`
   )
-  const sensorInDelay = ofSensor(inDelay)
-  ok(
-    'lease/a-sensor-is-no-stage-and-is-leased-while-the-second-stage-waits',
-    sensorInDelay.length >= 1 && sensorInDelay.every((r) => r.grant === true),
-    `inside the second stage's start delay the sensor must already hold its lease: ${JSON.stringify(sensorInDelay)}`
-  )
-  const sensorAfterStop = ofSensor(afterStop)
-  ok(
-    'lease/a-sensor-is-refused-at-once-after-the-stop',
-    sensorAfterStop.length >= 1 && sensorAfterStop.every((r) => r.grant === false),
-    `a sensor gets no run-on; after tool-off every lease to it must refuse: ${JSON.stringify(sensorAfterStop)}`
-  )
+  // Inside the delay and after the stop: in the timeline judgments above.
 
-  // ── #179: run-on ──────────────────────────────────────────────────────────
-  //
-  // The member signs off. The first stage is refused at once; the second,
-  // with a 3 s run-on, keeps its grant -- and then loses it.
-  const firstAfterStop = mine(afterStop)
-  ok(
-    'lease/a-stop-refuses-the-first-stage-at-once',
-    firstAfterStop.length >= 1 &&
-      firstAfterStop[firstAfterStop.length - 1]?.grant === false &&
-      firstAfterStop[firstAfterStop.length - 1]?.reason === 'NotInUse',
-    `after tool-off the first stage should be refused with NotInUse: ${JSON.stringify(firstAfterStop)}`
-  )
-  const secondAfterStop = ofPlug2(afterStop)
-  ok(
-    'lease/run-on-keeps-the-second-stage-leased-after-the-stop',
-    secondAfterStop.length >= 1 && secondAfterStop.every((r) => r.grant === true),
-    `inside its run-on the second stage must still be granted: ${JSON.stringify(secondAfterStop)}`
-  )
-  const secondLater = ofPlug2(runOnOver)
-  ok(
-    'lease/run-on-ends',
-    secondLater.length >= 1 && secondLater[secondLater.length - 1]?.grant === false,
-    `the run-on never ended: ${JSON.stringify(secondLater)}`
-  )
+  // ── #179: run-on ── the member signs off; the first stage is refused at
+  // once and the second, with a 3 s run-on, keeps its grant and then loses
+  // it. Judged from the timeline, above.
 
   // ── window 3: the inversion ───────────────────────────────────────────────
   // Asserted last and with time already allowed to pass, against a precondition
