@@ -473,6 +473,14 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'master' || github.ref_name == 'dev'
     runs-on: ${{ matrix.os }}
+    # On a pull request the macOS leg may fail without failing the run, and the
+    # `macos-verdict` job below decides instead. GitHub-hosted macOS runners
+    # run short: when none is free the job is cancelled after fifteen minutes
+    # with no runner and no steps, and nothing of this project's has run. The
+    # verdict job passes that case on a pull request and fails everything else,
+    # a real build failure included, so this hides nothing it does not re-check.
+    # Pushes to dev and master are not covered: there the binaries are the point.
+    continue-on-error: ${{ matrix.os == 'macos-latest' && github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
@@ -707,3 +715,28 @@ jobs:
           name: css-server-${{ matrix.artifact_name }}
           path: target/release/${{ matrix.server_bin }}
           if-no-files-found: error
+
+  # The macOS leg's real result. See the comment on `release` and
+  # .github/scripts/macos-verdict.sh, which says exactly what passes. The
+  # script's own test runs first, so a broken classifier fails here rather than
+  # passing everything.
+  macos-verdict:
+    name: macOS build verdict
+    needs: release
+    if: always() && needs.release.result != 'skipped'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions: { actions: read, contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the classifier
+        run: .github/scripts/macos-verdict-test.sh
+      - name: Judge the macOS leg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          # filter=latest: after "re-run failed jobs", judge the newest attempt.
+          gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[]' | jq -s '{jobs: .}' >jobs.json
+          .github/scripts/macos-verdict.sh jobs.json "${{ github.event_name }}"
