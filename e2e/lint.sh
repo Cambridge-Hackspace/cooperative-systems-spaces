@@ -242,6 +242,8 @@ if command -v node >/dev/null 2>&1; then
   run "stripe-oracle" node e2e/journeys/stripe-selftest.mjs
   run "toolbilling-oracle" node e2e/journeys/toolbilling-selftest.mjs
   run "mqtt-oracle" node e2e/journeys/mqtt-selftest.mjs
+  run "lease-timeline-oracle" node e2e/journeys/lease-timeline-selftest.mjs
+  run "bridge-timeline-oracle" node e2e/journeys/bridge-timeline-selftest.mjs
 fi
 
 printf '\n'

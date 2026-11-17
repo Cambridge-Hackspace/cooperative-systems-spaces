@@ -2276,106 +2276,140 @@ stage_bridge() {
     record_case "bridge/bridge-reaches-home-assistant" fail "the bridge never logged ha: connected and authenticated; windows E and F cannot pass"
   fi
 
-  # Window A: the plug has said nothing. Every power report must omit relay_on.
-  mqtt_sub "resource/request/power" 4 "${STACK_DIR}/bridge-power-A.txt"
+  # Every window below is judged from one recording of the whole stage
+  # (journeys/bridge-timeline.mjs), and every step waits for the event that
+  # should follow the one before rather than sleeping a guess (#234). Two
+  # timers run underneath: the bridge's 10 s stop-on-loss, which an
+  # unanswered ON trips, and the doors' 3 s strike pulse. A step that sleeps
+  # races them, and on a loaded guest it loses -- window C's live ON came
+  # after the debounce and window D found its session already stopped;
+  # window G's enclosure opened 3.7 s after its capture had closed. Waiting
+  # on the event keeps each action a report interval behind its cause.
+  #
+  # The waits only pace. When one times out the stage carries on, and the
+  # driver's verdict names what the recording is missing.
+  local timeline="${STACK_DIR}/bridge-timeline.txt"
+  local at
+  rm -f "${timeline}.marks"
+  if timeline_start "${timeline}"; then
+    record_case "bridge/the-timeline-is-recording" ok
+  else
+    record_case "bridge/the-timeline-is-recording" fail \
+      "the recorder wrote nothing in 20 s; every window will report its anchors missing"
+  fi
+  local dev_id contact_id lock_a lock_b
+  dev_id="$(cat "${STACK_DIR}/bridge-device-id")"
+  contact_id="$(cat "${STACK_DIR}/bridge-door-a-contact-device-id")"
+  lock_a="$(cat "${STACK_DIR}/bridge-door-a-device-id")"
+  lock_b="$(cat "${STACK_DIR}/bridge-door-b-device-id")"
 
-  # Window B: member tool-on -> grant -> the bridge commands the plug ON.
-  mqtt_sub "zigbee2mqtt/${friendly}/set" 8 "${STACK_DIR}/bridge-set-B.txt" &
-  local set_sub=$!
-  sleep 1
+  # Window A: the plug has said nothing. Every power report must omit
+  # relay_on -- judged from the start of the recording to the badge, once
+  # there is a report to judge.
+  timeline_wait "a power report from the silent plug" 20 "${timeline}" 0 \
+    resource/request/power "\"device_id\":\"${dev_id}\"" >/dev/null || true
+
+  # Window B: member tool-on -> grant -> the bridge commands the plug ON, and
+  # the plug answers at once: an ON unanswered for 10 s is a loss.
+  timeline_mark "${timeline}" scanB
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
-  wait "${set_sub}" || true
-  # The fake plug obeys, and the next reports may carry relay_on: true.
+  timeline_wait "the bridge's ON for the plug" 20 "${timeline}" "${at}" \
+    "zigbee2mqtt/${friendly}/set" '"state":"ON"' >/dev/null || true
+  timeline_mark "${timeline}" liveB
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "zigbee2mqtt/${friendly}" '{"state":"ON"}' || true
-  mqtt_sub "resource/request/power" 4 "${STACK_DIR}/bridge-power-B.txt"
+  timeline_wait "relay_on: true after the plug's ON" 20 "${timeline}" "${at}" \
+    resource/request/power "\"device_id\":\"${dev_id}\"" '"relay_on":true' >/dev/null || true
 
   # Window C: a retained replay must not be believed. Stop the bridge, leave a
   # retained ON on the state topic, start it again: it must /get, and omit
-  # relay_on until a LIVE report answers.
-  #
-  # BUDGET: the plug is silent from the bridge's start until the live ON below,
-  # and the bridge is leased the whole time (the member is still signed on).
-  # Its stop-on-loss rule fires after LOSS_DEBOUNCE_MS = 10 s of "leased but
-  # not known On" -- correctly, that is the rule -- so this silence must stay
-  # well inside 10 s or the stop lands HERE and window D finds the tool already
-  # stopped. The first run had 8 s + 3 s = 11 s and did exactly that. The /get
-  # arrives within a second of the bridge connecting (its log says so), so a
-  # 4 s capture is generous; with the 2 s C1 window and publish latency the
-  # silence is ~7 s.
+  # relay_on until a LIVE report answers. The bridge is leased throughout (the
+  # member is still on), so from its start the 10 s debounce is running: the
+  # live ON goes the moment the /get and one report have been seen.
   stop_bridge
+  timeline_mark "${timeline}" restart
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "zigbee2mqtt/${friendly}" '{"state":"ON"}' retain || true
-  mqtt_sub "zigbee2mqtt/${friendly}/get" 4 "${STACK_DIR}/bridge-get-C.txt" &
-  local get_sub=$!
-  sleep 1
   start_bridge
-  wait "${get_sub}" || true
-  mqtt_sub "resource/request/power" 2 "${STACK_DIR}/bridge-power-C1.txt"
+  if at="$(timeline_wait "the restarted bridge's /get" 30 "${timeline}" "${at}" "zigbee2mqtt/${friendly}/get")"; then
+    timeline_wait "a report from the restarted bridge" 10 "${timeline}" "${at}" \
+      resource/request/power "\"device_id\":\"${dev_id}\"" >/dev/null || true
+  fi
+  timeline_mark "${timeline}" liveC
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "zigbee2mqtt/${friendly}" '{"state":"ON"}' || true
-  mqtt_sub "resource/request/power" 4 "${STACK_DIR}/bridge-power-C2.txt"
+  timeline_wait "relay_on: true after the live ON" 20 "${timeline}" "${at}" \
+    resource/request/power "\"device_id\":\"${dev_id}\"" '"relay_on":true' >/dev/null || true
   # Clear the retained message so the next run starts clean.
   mqtt_pub "zigbee2mqtt/${friendly}" "" retain || true
 
-  # Window D: the plug leaves the mesh -> stop-on-loss -> refusal -> OFF. The
-  # stop comes LOSS_DEBOUNCE_MS = 10 s after the offline, so the captures are
-  # sized past that with room for publish latency.
-  mqtt_sub "resource/request/stop" 16 "${STACK_DIR}/bridge-stop-D.txt" &
-  local stop_sub=$!
-  mqtt_sub "zigbee2mqtt/${friendly}/set" 20 "${STACK_DIR}/bridge-set-D.txt" &
-  local set_sub_d=$!
-  sleep 1
+  # Window D: the plug leaves the mesh -> stop-on-loss (10 s) -> refusal -> OFF.
+  timeline_mark "${timeline}" offline
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "zigbee2mqtt/${friendly}/availability" "offline" || true
-  wait "${stop_sub}" || true
-  wait "${set_sub_d}" || true
+  if at="$(timeline_wait "the stop on the plug's loss" 40 "${timeline}" "${at}" \
+    resource/request/stop "\"resource\":\"${tool}\"")"; then
+    timeline_wait "the bridge's OFF on the refusal" 15 "${timeline}" "${at}" \
+      "zigbee2mqtt/${friendly}/set" '"state":"OFF"' >/dev/null || true
+  fi
 
   # Window E (#20): a badge at door A, which is momentary with a 3000 ms
   # strike pulse on the LOCK's own strike binding. The edge leases the lock
   # for exactly the pulse: the bridge unlocks on the grant, reports unlocked
-  # as on, and relocks on the withdrawal. 8 s covers grant, pulse, refusal
-  # and the lock's 300 ms transitions, with room.
-  mqtt_sub "resource/lease" 8 "${STACK_DIR}/bridge-lease-E.txt" &
-  local lease_e=$!
-  mqtt_sub "resource/request/power" 8 "${STACK_DIR}/bridge-power-E.txt" &
-  local power_e=$!
-  sleep 1
+  # as on, and relocks on the withdrawal.
+  timeline_mark "${timeline}" scanE
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${door_a}\"}" || true
-  wait "${lease_e}" || true
-  wait "${power_e}" || true
+  if at="$(timeline_wait "door A's lock granted" 20 "${timeline}" "${at}" \
+    resource/lease "\"device_id\":\"${lock_a}\"" '"grant":true')"; then
+    timeline_wait "door A's lock withdrawn after its pulse" 20 "${timeline}" "${at}" \
+      resource/lease "\"device_id\":\"${lock_a}\"" '"grant":false' >/dev/null || true
+  fi
+  wait_for "door A to be relocked" 15 ha_called lock.door_a lock 1 || true
 
   # Window F (#20): door B is until_stopped, so its lease outlives the pulse.
   # Then Home Assistant loses the lock -- the fixture reports it unavailable --
   # and stop-on-loss must end the session within its 10 s debounce; the
-  # withdrawal that follows relocks it. The stop capture is sized past the
-  # debounce like window D's.
+  # withdrawal that follows relocks it. The lease is left three seconds past
+  # the pulse before the loss, so "outlives" has ticks to judge.
+  timeline_mark "${timeline}" scanF
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${door_b}\"}" || true
-  sleep 4
-  mqtt_sub "resource/lease" 2 "${STACK_DIR}/bridge-lease-F.txt"
-  mqtt_sub "resource/request/stop" 16 "${STACK_DIR}/bridge-stop-F.txt" &
-  local stop_f=$!
-  sleep 1
+  timeline_wait "door B's lock granted" 20 "${timeline}" "${at}" \
+    resource/lease "\"device_id\":\"${lock_b}\"" '"grant":true' >/dev/null || true
+  sleep 6
+  timeline_mark "${timeline}" injectF
+  at="$(timeline_lines "${timeline}")"
   printf '{"entity_id":"lock.door_b","state":"unavailable"}\n' >"${STACK_DIR}/fake-ha-inject.json"
-  wait "${stop_f}" || true
-  # The relock lands a lease tick after the stop; give it a moment to be recorded.
-  sleep 3
+  timeline_wait "the stop on door B's loss" 40 "${timeline}" "${at}" \
+    resource/request/stop "\"resource\":\"${door_b}\"" >/dev/null || true
+  wait_for "door B to be relocked" 15 ha_called lock.door_b lock 1 || true
 
-  # Window G (#25): the tool's enclosure contact, a sensor module. G0 -- the
-  # bridge has been reporting it as door_open: false since it connected;
-  # capture 4 s of it. Then a badge at the TOOL (its session was stopped in
-  # window D) grants the plug again -- the trip is satisfied by the reading --
-  # and the enclosure opens: the fixture flips the contact on, the edge trips
-  # the tool (Tripped("door_open")), and the bridge switches the plug OFF on
-  # the refusal. 6 s is inside the 10 s stop-on-loss the unanswered ON would
-  # otherwise fire, so the trip is the only refusal in the window.
-  mqtt_sub "resource/request/condition" 4 "${STACK_DIR}/bridge-condition-G0.txt"
-  mqtt_sub "resource/lease" 6 "${STACK_DIR}/bridge-lease-G.txt" &
-  local lease_g=$!
-  mqtt_sub "zigbee2mqtt/${friendly}/set" 8 "${STACK_DIR}/bridge-set-G.txt" &
-  local set_g=$!
-  sleep 1
+  # Window G (#25): the tool's enclosure contact, a sensor module. The bridge
+  # has reported it as door_open: false since it connected. A badge at the
+  # TOOL (its session was stopped in window D) grants the plug again -- the
+  # trip is satisfied by the reading -- and the enclosure opens at once, well
+  # inside the 10 s an unanswered ON would take to stop it: the fixture flips
+  # the contact on, the edge trips the tool (Tripped("door_open")), and the
+  # bridge switches the plug OFF on the refusal.
+  timeline_mark "${timeline}" scanG
+  at="$(timeline_lines "${timeline}")"
   mqtt_pub "resource/request/scan" "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
-  sleep 2
+  timeline_wait "the plug granted with the enclosure shut" 20 "${timeline}" "${at}" \
+    resource/lease "\"device_id\":\"${dev_id}\"" '"grant":true' >/dev/null || true
+  timeline_mark "${timeline}" injectG
+  at="$(timeline_lines "${timeline}")"
   printf '{"entity_id":"binary_sensor.door_a_contact","state":"on"}\n' >"${STACK_DIR}/fake-ha-inject.json"
-  wait "${lease_g}" || true
-  wait "${set_g}" || true
+  if at="$(timeline_wait "the contact's door_open reading" 15 "${timeline}" "${at}" \
+    resource/request/condition "\"device_id\":\"${contact_id}\"" '"asserted":true')"; then
+    timeline_wait "the bridge's OFF on the trip" 15 "${timeline}" "${at}" \
+      "zigbee2mqtt/${friendly}/set" '"state":"OFF"' >/dev/null || true
+  fi
+  # A tick more, so the trip's refusal and the OFF are both recorded.
+  sleep 1
+  timeline_mark "${timeline}" end
+  timeline_stop
 
   # The driver's verdicts are the stage's verdicts. Without this line the
   # first run of this stage reported "7 case(s), 0 failure(s)" while the
@@ -2613,6 +2647,18 @@ stage_lease() {
   plug2="$(cat "${STACK_DIR}/lease-plug2-id")"
   card="$(cat "${STACK_DIR}/lease-card")"
 
+  # The recording that windows 2a-2d are judged from (stack.sh timeline_start
+  # says why they cannot be windows of their own). Started before window 1 so
+  # #192's alias check covers the whole session, not four seconds of it.
+  local timeline="${STACK_DIR}/lease-timeline.txt"
+  rm -f "${timeline}.marks"
+  if timeline_start "${timeline}"; then
+    record_case "lease/the-timeline-is-recording" ok
+  else
+    record_case "lease/the-timeline-is-recording" fail \
+      "the recorder wrote nothing in 20 s; every timed claim below will report its anchor missing"
+  fi
+
   # Window 1: the module has reported nothing, so the lease must be refused.
   mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-1.txt"
 
@@ -2660,28 +2706,35 @@ stage_lease() {
   mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2.txt"
 
   # The first plug confirms: relay_on true. This, not the lease having been
-  # sent, is what the second stage waits for.
+  # sent, is what the second stage waits for -- for 3 s, and the stage waits
+  # with it, on the event and not the clock: until the second plug's first
+  # grant is in the timeline. The driver judges 2a (silent inside the delay)
+  # and 2b (granted after it) from the confirm's own timestamp.
+  timeline_mark "${timeline}" confirm
+  local confirmed
+  confirmed="$(timeline_lines "${timeline}")"
   mqtt_pub "resource/request/power" \
     "{\"resource\":\"${tool}\",\"device_id\":\"${dev}\",\"draw_now\":0.3,\"relay_on\":true}" || true
-
-  # Window 2a: inside the second stage's 3 s start delay -- still nothing.
-  mqtt_sub "resource/lease" 2 "${STACK_DIR}/lease-window-2a.txt"
-  # Window 2b: past it -- granted. Captured on the resource topic, and in
-  # parallel on the old alias name (#192): the alias window must stay EMPTY
-  # while the real one carries the grant, which is the proof the alias is gone
-  # rather than merely undocumented. The grant beside it is what keeps the
-  # empty capture from being a broker that said nothing to anyone.
-  mqtt_sub "toolguard/lease" 4 "${STACK_DIR}/lease-window-2b-alias.txt" &
-  local lease_alias_sub=$!
-  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2b.txt"
-  wait "${lease_alias_sub}" || true
+  timeline_wait "the second stage's grant" 20 "${timeline}" "${confirmed}" resource/lease \
+    "\"device_id\":\"${plug2}\"" '"grant":true' >/dev/null || true
 
   # The member signs off, on the resource-shaped stop (#182). First stage
-  # refused at once; second runs on 3 s.
+  # refused at once; second runs on 3 s. Again the stage waits for the event
+  # -- the second plug's first refusal, the run-on's end -- and then two more
+  # seconds of ticks, so 2d has refusals to judge past the run-on's last tick.
+  # Never less than 6 s after the stop, so an edge that refuses AT ONCE (no
+  # run-on) still leaves 2d something to judge rather than an empty slice.
+  timeline_mark "${timeline}" stop
+  local stopped since_stop=${SECONDS}
+  stopped="$(timeline_lines "${timeline}")"
   mqtt_pub "resource/request/stop" \
     "{\"card\":\"${card}\",\"resource\":\"${tool}\"}" || true
-  mqtt_sub "resource/lease" 2 "${STACK_DIR}/lease-window-2c.txt"
-  mqtt_sub "resource/lease" 4 "${STACK_DIR}/lease-window-2d.txt"
+  timeline_wait "the end of the second stage's run-on" 20 "${timeline}" "${stopped}" resource/lease \
+    "\"device_id\":\"${plug2}\"" '"grant":false' >/dev/null || true
+  sleep 2
+  while ((SECONDS - since_stop < 6)); do sleep 0.5; done
+  timeline_mark "${timeline}" end
+  timeline_stop
 
   # ---- the room (#182): a door, a tool and a room through the same topics --
   #
