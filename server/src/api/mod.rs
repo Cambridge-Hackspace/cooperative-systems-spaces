@@ -13,6 +13,7 @@ pub mod home_links;
 pub mod instance;
 pub mod membership;
 pub mod mfa;
+pub mod oidc;
 pub mod pages;
 pub mod places;
 pub mod power;
@@ -63,6 +64,8 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/membership", membership::routes())
         .nest("/stripe", stripe::routes())
         .nest("/tool-billing", tool_billing::routes())
+        // #225: CS:S as an OpenID Connect provider. Discovery is at the root.
+        .nest("/oauth", oidc::routes())
         // The API's own 404, and it belongs here rather than at the composition
         // site.
         //

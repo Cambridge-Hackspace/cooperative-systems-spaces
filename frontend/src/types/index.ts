@@ -1010,3 +1010,51 @@ export interface ResourceSummary {
   /** #228: the scan reply names who tapped. Always false on a door. */
   identify_member: boolean
 }
+
+// ── CS:S as an OpenID Connect provider (#225) ──────────────────────────────
+
+/** What the consent page shows for a sign-in an app asked for. */
+export interface OAuthRequestView {
+  app: string
+  /** The host the member will be sent back to. */
+  returns_to: string
+  scopes: Array<{ scope: string; description: string }>
+  /** Nothing to ask: the app skips consent, or the member already agreed. */
+  automatic: boolean
+}
+
+export interface OAuthRedirect {
+  redirect: string
+}
+
+/** A registered app. The secret is never returned except when it is made. */
+export interface OAuthClient {
+  id: string
+  client_id: string
+  name: string
+  confidential: boolean
+  redirect_uris: string[]
+  post_logout_redirect_uris: string[]
+  allowed_scopes: string[]
+  skip_consent: boolean
+  disabled: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface OAuthClientRequest {
+  name?: string
+  confidential?: boolean
+  redirect_uris?: string[]
+  post_logout_redirect_uris?: string[]
+  allowed_scopes?: string[]
+  skip_consent?: boolean
+  disabled?: boolean
+}
+
+/** A new app, or one given a new secret: the secret is shown this once. */
+export interface OAuthClientWithSecret {
+  client: OAuthClient
+  client_secret: string | null
+}

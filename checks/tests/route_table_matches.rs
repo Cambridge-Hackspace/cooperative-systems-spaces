@@ -240,6 +240,10 @@ fn guard_of(src: &str, handler: &str) -> String {
         "stop",
         "usage",
         "policy",
+        // #225: an OAuth access token (RS256, checked against the published
+        // keys) read from the Authorization header by `member_token`.
+        "userinfo",
+        "my_tools",
     ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();

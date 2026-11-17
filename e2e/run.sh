@@ -81,8 +81,8 @@ mkdir -p "${OUT}/junit" "${OUT}/logs"
 # the server, it drives its own scratch database, and it opens no HTTP session at
 # all -- so it claims no address and nothing in it cares where the admin comes
 # from.
-STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
-STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_ALL="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,oidc,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
+STAGES_DEFAULT="preflight,up,schema,toolpass,calendar,restart,contract,pages,roles,mfa,cookie,mail,emails,groupsio,stripe,toolbilling,cards,merge,alerts,waivers,circuits,doors,resources,oidc,toolmodules,bypass,lease,bridge,conditions,mqttloss,fuzz,concurrency,journeys,cmi5,health,devices,browser,audit,evidence,devseed,logs,down"
 # Everything a stage name is allowed to be. Both validation sites read this.
 STAGES_VALID="${STAGES_ALL}"
 
@@ -612,7 +612,8 @@ stage_schema() {
   for t in users user_emails user_stripe_customers user_merges alert_acknowledgements alert_heartbeat_runs webhook_class_subscriptions resources doors access_rules device_bindings door_access_events door_checkins \
     schedules tools space_devices space_device_auth space_device_auth_requests \
     profile_config_versions webhooks audit_logs audit_event_types places \
-    home_links; do
+    home_links oauth_clients oauth_signing_keys oauth_authorization_requests \
+    oauth_authorization_codes oauth_refresh_tokens oauth_consents; do
     if [[ "$(sql_ro "SELECT to_regclass('public.${t}') IS NOT NULL" | tr -d ' ')" == "t" ]]; then
       record_case "schema/table/${t}" ok
     else
@@ -1607,6 +1608,34 @@ stage_resources() {
 
   collect_server_log
   emit_junit resources "driver=resources.mjs"
+}
+
+# ===========================================================================
+# oidc -- CS:S as an OpenID Connect provider (#225)
+# ===========================================================================
+# The whole sign-in an app drives, against a real stack: discovery, the JWKS,
+# authorize with PKCE, the consent step, the code exchanged for tokens (the ID
+# token verified by the driver with Node's own crypto against the published
+# keys), userinfo, refresh rotation, client credentials and logout; every
+# refusal #225 names; key rotation; and `sub` through an email change and a
+# merge. Needs `[oidc] enabled = true`, which e2e/stack-config.toml sets, with a
+# five-second code lifetime so an expired code can be shown.
+stage_oidc() {
+  cases_begin oidc
+  stack_paths
+
+  if ! server_ready; then
+    record_case "oidc/stack-is-up" fail "css-server is not answering; run the up stage first"
+    emit_junit oidc
+    return 1
+  fi
+  record_case "oidc/stack-is-up" ok
+
+  run_node oidc.mjs >"${OUT}/logs/oidc.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  collect_server_log
+  emit_junit oidc "driver=oidc.mjs"
 }
 
 # ===========================================================================

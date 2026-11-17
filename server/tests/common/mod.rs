@@ -265,6 +265,23 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/admin/resources", Guard::Admin), // resources::list_resources (#228)
     R("PATCH", "/api/admin/resources/00000000-0000-4000-8000-000000000001", Guard::Admin), // resources::update_resource
     R("GET", "/api/admin/resources/sessions", Guard::Admin), // resources::list_open_sessions
+    R("GET", "/api/admin/oauth/clients", Guard::Auth), // oidc::list_clients (#225): AuthUser + oauth.clients.manage in the handler
+    R("POST", "/api/admin/oauth/clients", Guard::Auth), // oidc::create_client
+    R("GET", "/api/admin/oauth/clients/00000000-0000-4000-8000-000000000001", Guard::Auth), // oidc::get_client
+    R("PATCH", "/api/admin/oauth/clients/00000000-0000-4000-8000-000000000001", Guard::Auth), // oidc::update_client
+    R("DELETE", "/api/admin/oauth/clients/00000000-0000-4000-8000-000000000001", Guard::Auth), // oidc::delete_client
+    R("POST", "/api/admin/oauth/clients/00000000-0000-4000-8000-000000000001/secret", Guard::Auth), // oidc::rotate_secret
+    R("POST", "/api/admin/oauth/keys/rotate", Guard::Auth), // oidc::rotate_keys
+    R("GET", "/api/oauth/jwks", Guard::Public), // oidc::jwks (#225)
+    R("GET", "/api/oauth/authorize", Guard::Public), // oidc::authorize
+    R("GET", "/api/oauth/requests/00000000-0000-4000-8000-000000000001", Guard::Auth), // oidc::request_info
+    R("POST", "/api/oauth/requests/00000000-0000-4000-8000-000000000001/decision", Guard::Auth), // oidc::decide
+    R("POST", "/api/oauth/token", Guard::Public), // oidc::token: the app authenticates in the body or Basic
+    R("GET", "/api/oauth/userinfo", Guard::InlineAuth), // oidc::userinfo: an OAuth access token
+    R("POST", "/api/oauth/userinfo", Guard::InlineAuth), // oidc::userinfo
+    R("GET", "/api/oauth/logout", Guard::Public), // oidc::logout
+    R("POST", "/api/oauth/end-session", Guard::Public), // oidc::end_session
+    R("GET", "/api/oauth/me/tools", Guard::InlineAuth), // oidc::my_tools: an OAuth access token
     R("POST", "/api/admin/resources/00000000-0000-4000-8000-000000000001/stop", Guard::Admin), // resources::admin_stop
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/scan", Guard::InlineAuth), // resources::scan
     R("POST", "/api/resources/00000000-0000-4000-8000-000000000001/stop", Guard::InlineAuth), // resources::stop

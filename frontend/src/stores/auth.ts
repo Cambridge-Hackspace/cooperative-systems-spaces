@@ -274,6 +274,7 @@ export const useAuthStore = defineStore('auth', () => {
     cancelMfa,
     register,
     logout,
+    clearSession,
     getCurrentUser,
     updateProfile,
     hasRole,

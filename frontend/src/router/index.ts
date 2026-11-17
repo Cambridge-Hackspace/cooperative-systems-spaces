@@ -226,6 +226,30 @@ const router = createRouter({
       },
     },
     {
+      // #225: the apps that may sign members in through CS:S.
+      path: '/admin/apps',
+      name: 'admin-apps',
+      component: () => import('@/components/OAuthAppsManagement.vue'),
+      meta: {
+        requiresAuth: true,
+        requiredRole: UserRole.Admin,
+      },
+    },
+    {
+      // #225: an app asked CS:S to sign this member in. Signed-out visitors are
+      // sent to /login and brought back here.
+      path: '/oauth/consent/:id',
+      name: 'oauth-consent',
+      component: () => import('@/views/OAuthConsentView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      // #225: an app asked CS:S to sign the member out.
+      path: '/oauth/logout',
+      name: 'oauth-logout',
+      component: () => import('@/views/OAuthLogoutView.vue'),
+    },
+    {
       path: '/admin/groupsio',
       name: 'admin-groupsio',
       component: () => import('@/components/GroupsioManagement.vue'),

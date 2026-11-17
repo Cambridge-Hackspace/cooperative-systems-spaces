@@ -7,6 +7,7 @@ mod doors;
 mod home_links;
 mod membership;
 mod mfa;
+mod oauth;
 mod places;
 mod power;
 mod profile_config;
@@ -36,6 +37,7 @@ pub use doors::*;
 pub use home_links::*;
 pub use membership::*;
 pub use mfa::*;
+pub use oauth::*;
 pub use places::*;
 pub use power::*;
 pub use profile_config::*;
@@ -356,6 +358,16 @@ pub enum AuditEventType {
     /// #190: the session sweep ended a room's session past its cap, the way
     /// `ToolReleasedBySweep` does a tool's. A Warning for the same reason.
     ResourceSessionReleasedBySweep,
+    // CS:S as an OpenID Connect provider (#225). An app registered, changed,
+    // given a new secret or removed; a member's consent; a sign-in through an
+    // app; a signing key rotated.
+    OauthClientCreated,
+    OauthClientUpdated,
+    OauthClientSecretRotated,
+    OauthClientDeleted,
+    OauthConsentGranted,
+    OauthSignin,
+    OauthSigningKeyRotated,
     ToolInterlockCreated,
     ToolInterlockDeleted,
     // Bypass detection (#84). Transition events, not level events: a module
@@ -603,6 +615,13 @@ impl AuditEventType {
             Self::ResourceUpdated => "resource_updated",
             Self::ResourceSessionEnded => "resource_session_ended",
             Self::ResourceSessionReleasedBySweep => "resource_session_released_by_sweep",
+            Self::OauthClientCreated => "oauth_client_created",
+            Self::OauthClientUpdated => "oauth_client_updated",
+            Self::OauthClientSecretRotated => "oauth_client_secret_rotated",
+            Self::OauthClientDeleted => "oauth_client_deleted",
+            Self::OauthConsentGranted => "oauth_consent_granted",
+            Self::OauthSignin => "oauth_signin",
+            Self::OauthSigningKeyRotated => "oauth_signing_key_rotated",
             Self::ToolInterlockCreated => "tool_interlock_created",
             Self::ToolInterlockDeleted => "tool_interlock_deleted",
             Self::ToolModuleSilent => "tool_module_silent",
@@ -756,6 +775,13 @@ impl AuditEventType {
             ResourceUpdated,
             ResourceSessionEnded,
             ResourceSessionReleasedBySweep,
+            OauthClientCreated,
+            OauthClientUpdated,
+            OauthClientSecretRotated,
+            OauthClientDeleted,
+            OauthConsentGranted,
+            OauthSignin,
+            OauthSigningKeyRotated,
             ToolInterlockCreated,
             ToolInterlockDeleted,
             ToolModuleSilent,
@@ -857,7 +883,9 @@ impl AuditEventType {
             | UserEmailChange
             | UserEmailAdded
             | UserEmailRemoved
-            | UserMerged => Category::User,
+            | UserMerged
+            | OauthConsentGranted
+            | OauthSignin => Category::User,
             TrainingSessionStarted
             | TrainingSessionCompleted
             | TrainingStepCreated
@@ -948,7 +976,12 @@ impl AuditEventType {
             | RolePermissionsChanged
             | RoleInheritanceChanged
             | UserRoleAssigned
-            | UserRoleUnassigned => Category::Rbac,
+            | UserRoleUnassigned
+            | OauthClientCreated
+            | OauthClientUpdated
+            | OauthClientSecretRotated
+            | OauthClientDeleted
+            | OauthSigningKeyRotated => Category::Rbac,
             AlertAcknowledged | AlertHeartbeat => Category::Alerts,
         }
     }
@@ -1003,7 +1036,12 @@ impl AuditEventType {
             | TrainingWaiverRevoked
             | InstructorRevoked
             | DoorRuleRemoved
-            | AlertHeartbeat => Severity::Notice,
+            | AlertHeartbeat
+            | OauthClientCreated
+            | OauthClientUpdated
+            | OauthClientSecretRotated
+            | OauthClientDeleted
+            | OauthSigningKeyRotated => Severity::Notice,
             // Records.
             UserRegistration
             | UserLogin
@@ -1109,7 +1147,9 @@ impl AuditEventType {
             | RoleCreated
             | RoleUpdated
             | RoleDeleted
-            | AlertAcknowledged => Severity::Info,
+            | AlertAcknowledged
+            | OauthConsentGranted
+            | OauthSignin => Severity::Info,
         }
     }
 

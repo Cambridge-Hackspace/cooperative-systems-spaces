@@ -1116,6 +1116,66 @@ impl Default for PowerTimeseriesConfig {
     }
 }
 
+/// CS:S as an OpenID Connect provider (#225): other programs sign members in
+/// through CS:S. Off unless enabled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OidcConfig {
+    pub enabled: bool,
+    /// The issuer: the URL apps are told CS:S is at, and the `iss` of every
+    /// token. Empty means `site.site_url`. Discovery is served at
+    /// `{issuer}/.well-known/openid-configuration`.
+    pub issuer: String,
+    /// Hex-encoded 32-byte key that seals the signing keys' private halves at
+    /// rest. Empty means one is derived from `auth.jwt_secret`, so changing
+    /// that secret also ends every token signed before it changed.
+    pub key_encryption_key: String,
+    pub id_token_ttl_secs: i64,
+    pub access_token_ttl_secs: i64,
+    pub refresh_token_ttl_days: i64,
+    /// How long an authorization code is good for. Short: an app redeems it
+    /// within a second of receiving it.
+    pub code_ttl_secs: i64,
+    /// How long a sign-in or consent may be left half-finished.
+    pub request_ttl_secs: i64,
+    /// How often a new signing key replaces the current one.
+    pub key_rotation_days: i64,
+}
+
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer: String::new(),
+            key_encryption_key: String::new(),
+            id_token_ttl_secs: 3600,
+            access_token_ttl_secs: 3600,
+            refresh_token_ttl_days: 30,
+            code_ttl_secs: 60,
+            request_ttl_secs: 600,
+            key_rotation_days: 90,
+        }
+    }
+}
+
+impl OidcConfig {
+    /// The issuer, falling back to the site's URL, without a trailing slash.
+    pub fn issuer_or(&self, site_url: &str) -> String {
+        let issuer = if self.issuer.trim().is_empty() {
+            site_url
+        } else {
+            self.issuer.trim()
+        };
+        issuer.trim_end_matches('/').to_string()
+    }
+
+    /// The longest a token signed by a key can still be presented: how long a
+    /// retired key stays published.
+    pub fn longest_token_secs(&self) -> i64 {
+        self.id_token_ttl_secs.max(self.access_token_ttl_secs)
+    }
+}
+
 /// Door access module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoorConfig {
@@ -1557,6 +1617,9 @@ pub struct AppConfig {
     /// Metered pay-per-use tool-billing module (Phase 2)
     #[serde(default)]
     pub tool_billing: ToolBillingConfig,
+    /// CS:S as an OpenID Connect provider (#225)
+    #[serde(default)]
+    pub oidc: OidcConfig,
 }
 
 impl Default for AppConfig {
@@ -1589,6 +1652,7 @@ impl Default for AppConfig {
             groupsio: GroupsioConfig::default(),
             membership: MembershipConfig::default(),
             tool_billing: ToolBillingConfig::default(),
+            oidc: OidcConfig::default(),
         }
     }
 }
@@ -1894,6 +1958,35 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     // dropped.
     if let Err(e) = config.cards.cipher() {
         return Err(anyhow::anyhow!("{e}"));
+    }
+
+    // #225: a bad sealing key found later would strand every signing key, so
+    // it is refused here, as card keys are. Lifetimes must be positive.
+    if config.oidc.enabled {
+        let o = &config.oidc;
+        let key =
+            (!o.key_encryption_key.trim().is_empty()).then_some(o.key_encryption_key.as_str());
+        if let Err(e) = crate::oidc::keys::sealing_key(key, &config.auth.jwt_secret) {
+            return Err(anyhow::anyhow!("{e}"));
+        }
+        for (name, v) in [
+            ("oidc.id_token_ttl_secs", o.id_token_ttl_secs),
+            ("oidc.access_token_ttl_secs", o.access_token_ttl_secs),
+            ("oidc.refresh_token_ttl_days", o.refresh_token_ttl_days),
+            ("oidc.code_ttl_secs", o.code_ttl_secs),
+            ("oidc.request_ttl_secs", o.request_ttl_secs),
+            ("oidc.key_rotation_days", o.key_rotation_days),
+        ] {
+            if v <= 0 {
+                return Err(anyhow::anyhow!("{name} must be greater than zero, not {v}"));
+            }
+        }
+        let issuer = o.issuer_or(&config.site.site_url);
+        if !issuer.starts_with("https://") && !issuer.starts_with("http://") {
+            return Err(anyhow::anyhow!(
+                "oidc.issuer (or site.site_url) must be an absolute http(s) URL, not {issuer:?}"
+            ));
+        }
     }
 
     if config.auth.jwt_secret == LEGACY_DEFAULT_JWT_SECRET {
