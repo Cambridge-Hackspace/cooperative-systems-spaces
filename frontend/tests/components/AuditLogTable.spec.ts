@@ -293,8 +293,11 @@ describe('the event-type filter', () => {
         'resource_session_released_by_sweep (#190): a room an administrator had to end or ' +
         'the sweep had to take back is the same question asked of a door. ' +
         'To thirty-four with oauth_signin (#225): a member signing in to another ' +
-        'program through CS:S is a sign-in, and sign-ins are filterable.'
-    ).toHaveLength(34)
+        'program through CS:S is a sign-in, and sign-ins are filterable. ' +
+        'To thirty-six with card_sign_in and card_sign_in_second_factor_failed (#241): ' +
+        'a card tap that signs someone in to an app is a sign-in, and a wrong second ' +
+        'factor at one is a refused sign-in, perhaps on a found card.'
+    ).toHaveLength(36)
   })
 
   it('titles every option it does offer', async () => {

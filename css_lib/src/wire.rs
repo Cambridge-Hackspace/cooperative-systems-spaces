@@ -369,7 +369,7 @@ pub struct PowerStateTool {
 /// every `css_lib::wire::...` import in this workspace stays as it was.
 pub use css_wire::{
     LocalAliveRequest, LocalCondition, LocalMember, LocalPower, LocalScan, LocalScanReply,
-    LocalStop, LocalStrike, LocalUsage, ResourceLeasePayload, local,
+    LocalSignIn, LocalStop, LocalStrike, LocalUsage, ResourceLeasePayload, local,
 };
 
 #[cfg(test)]

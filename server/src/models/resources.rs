@@ -112,6 +112,12 @@ pub struct Resource {
     /// Name the member on a yes (#228). Tools only; the column's CHECK holds
     /// that too. Appended last: positional Queryable.
     pub identify_member: bool,
+    /// The space's own app a yes signs the member in to (#241), if any. Needs
+    /// `identify_member`. Appended last: positional Queryable.
+    pub sign_in_app: Option<Uuid>,
+    /// Who must also give a TOTP code at a card sign-in (#241): `off`,
+    /// `admins` or `everyone`. Appended last: positional Queryable.
+    pub second_factor: String,
 }
 
 #[derive(Debug, Clone, Insertable)]

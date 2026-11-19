@@ -491,6 +491,19 @@ the same reply, the same stop.
   on a resource that isn't set to identify, so a device that doesn't need it
   can ignore the field entirely. Only tools can be set to identify: the edge
   decides a door from card digests alone and has nobody to name.
+- **A sign-in, for the reader's host** (#241). On a yes for a tool set to
+  sign in to one of the space's own apps (POP, the print tower), the reply
+  also carries `sign_in`, one of:
+  `{"kind":"code","code"}`, a one-time code the app redeems with CS:S's
+  OpenID Connect provider (`grant_type=urn:css:card-sign-in`, with its own
+  secret), briefly and once;
+  `{"kind":"totp","ticket"}`, when the resource asks this member for a second
+  factor: the app asks them for their TOTP code and redeems the ticket with
+  it; or `{"kind":"refused","reason"}`, no sign-in for this tap, and why, for
+  the member to read. It is never on a refusal. It is for the app, not the
+  device: firmware that is not the app passes it on or ignores it, and a
+  tap on such a tool opens no session and leases nothing, so the next member
+  can tap straight after.
 - A latch is never leased and never held for a session. On a device that
   drives a latch and gates no power — a door box — the session is the pulse:
   over when the latch closes again, with no usage and no stop sent for it.
@@ -748,9 +761,11 @@ Most endpoints return `ToolGuardResponse`:
 }
 ```
 
-`message`, `authorized`, `strike` and `member` are omitted rather than null
-when they do not apply; `authorized`, `strike` and `member` appear only on a
-scan's reply, and `member` only on a yes for a tool set to identify (see
+`message`, `authorized`, `strike`, `member` and `sign_in` are omitted rather
+than null when they do not apply; `authorized`, `strike`, `member` and
+`sign_in` appear only on a scan's reply, `member` only on a yes for a tool set
+to identify, and `sign_in` only on a yes for a tool set to sign in to an app
+(#241) (see
 [the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)).
 **Branch on `status` and `authorized`, never on `message`** — message text is
 for humans and changes. (`tool_on` and `tool_off` were the removed aliases'
@@ -812,7 +827,9 @@ honest method: this call *changes state*, so it was never a safe `GET`.
 Answers `authorized: true` on a yes, and — for a resource with a `strike`
 binding — `strike: { "pulse_ms": … }`, the pulse the device may release its
 latch for. For a tool set to identify its member (#228), the yes also carries
-`member: { "id", "name" }`. A tool's yes opens its session and leases its `power` and `sensor`
+`member: { "id", "name" }`, and for a tool set to sign in to an app (#241),
+`sign_in`, as on the resource path; such a tool's yes opens no session. A
+tool's yes otherwise opens its session and leases its `power` and `sensor`
 bindings; a door's yes is the pulse. **The reply is the actuation**:
 nothing is pushed to the door's coordinator for a scan answered here, so a
 reader that also holds the latch releases it from this reply, as a plug closes
@@ -1475,7 +1492,7 @@ be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
 
 | topic | payload |
 |---|---|
-| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds; on a yes for a tool set to identify its member, `member` carries who tapped, as an id and a name (#228) |
+| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"?, "sign_in"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds; on a yes for a tool set to identify its member, `member` carries who tapped, as an id and a name (#228); on a yes for a tool set to sign in to an app, `sign_in` carries a one-time code, a ticket to redeem with the member's TOTP code, or a refusal, for that app to complete (#241; its shape is under [the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)) |
 | `resource/response/stop` | `{ "ok": true }` |
 | `resource/response/usage` | `{ "ok": true }` |
 | `resource/response/power` | `{ "ok": true }` — an ack, nothing more |

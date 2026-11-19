@@ -6,6 +6,7 @@
 //! `api::oidc`; this module holds what they share: the issuer, the signing key
 //! and its rotation, and making and checking tokens.
 
+pub mod card;
 pub mod flow;
 pub mod keys;
 pub mod relay;

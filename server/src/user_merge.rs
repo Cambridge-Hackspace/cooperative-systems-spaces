@@ -119,6 +119,11 @@ pub const DROPPED: &[(&str, &str, &str)] = &[
         "a code in flight names the absorbed identity; the app signs in again",
     ),
     (
+        "card_sign_ins",
+        "user_id",
+        "a card sign-in in flight names the absorbed identity; the member taps again (#241)",
+    ),
+    (
         "oauth_refresh_tokens",
         "user_id",
         "an app's session as the absorbed identity ends; it signs in again as the survivor (#225)",

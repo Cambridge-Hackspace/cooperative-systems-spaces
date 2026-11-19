@@ -190,6 +190,8 @@ diesel::table! {
         updated_at -> Timestamptz,
         session_profile -> Text,
         identify_member -> Bool,
+        sign_in_app -> Nullable<Uuid>,
+        second_factor -> Text,
     }
 }
 
@@ -1000,6 +1002,8 @@ diesel::joinable!(tools -> schedules (schedule_id));
 diesel::joinable!(tools -> resources (id));
 diesel::joinable!(oauth_authorization_requests -> oauth_clients (client_id));
 diesel::joinable!(oauth_authorization_codes -> oauth_clients (client_id));
+diesel::joinable!(card_sign_ins -> oauth_clients (client_id));
+diesel::joinable!(card_sign_ins -> resources (resource_id));
 diesel::joinable!(oauth_refresh_tokens -> oauth_clients (client_id));
 diesel::joinable!(oauth_consents -> oauth_clients (client_id));
 diesel::joinable!(notification_kinds -> oauth_clients (client_id));
@@ -1097,6 +1101,22 @@ diesel::table! {
         prompt -> Nullable<Text>,
         created_at -> Timestamptz,
         expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    card_sign_ins (id) {
+        id -> Uuid,
+        resource_id -> Uuid,
+        client_id -> Uuid,
+        user_id -> Uuid,
+        ticket_hash -> Nullable<Text>,
+        code_hash -> Nullable<Text>,
+        amr -> Text,
+        tries -> Int4,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        used_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -1236,6 +1256,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     oauth_clients,
     oauth_signing_keys,
     oauth_authorization_requests,
+    card_sign_ins,
     oauth_authorization_codes,
     oauth_refresh_tokens,
     oauth_consents,

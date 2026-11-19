@@ -102,7 +102,7 @@ pub async fn discovery(State(state): State<AppState>) -> Result<Json<Value>, Api
         "end_session_endpoint": format!("{iss}/api/oauth/logout"),
         "response_types_supported": ["code"],
         "response_modes_supported": ["query"],
-        "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
+        "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials", oidc::card::GRANT],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": [oidc::keys::ALG],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
@@ -518,6 +518,10 @@ struct TokenForm {
     scope: Option<String>,
     client_id: Option<String>,
     client_secret: Option<String>,
+    /// A card sign-in's second factor (#241): the ticket from the scan reply,
+    /// and the member's TOTP code.
+    ticket: Option<String>,
+    totp: Option<String>,
 }
 
 /// Who is calling: `client_secret_basic`, `client_secret_post`, or a public
@@ -638,6 +642,7 @@ async fn token_inner(
         Some("authorization_code") => code_grant(state, &client, &form),
         Some("refresh_token") => refresh_grant(state, &client, &form),
         Some("client_credentials") => client_credentials_grant(state, &client, &form),
+        Some(oidc::card::GRANT) => card_grant(state, &client, &form),
         Some(_) => Err(OauthError::new(
             "unsupported_grant_type",
             "unsupported grant_type",
@@ -692,12 +697,110 @@ fn code_grant(
         code.nonce.as_deref(),
         code.auth_time,
         Some(code.code_hash.as_str()),
+        None,
     )?;
     audit(
         state,
         AuditEventType::OauthSignin,
         Some(user.id),
         json!({ "client_id": client.client_id, "app": client.name, "scopes": scopes }),
+    );
+    Ok(tokens)
+}
+
+/// A card tap's sign-in (#241): `code` from the scan reply, or `ticket` and
+/// `totp` where the resource asked for a second factor. Only for the app the
+/// sign-in was made for, and only one with a secret: a public client naming
+/// itself is never given a card sign-in.
+fn card_grant(
+    state: &AppState,
+    client: &OauthClient,
+    form: &TokenForm,
+) -> Result<Value, OauthError> {
+    let invalid = |m: &str| OauthError::new("invalid_grant", m);
+    if !client.confidential {
+        return Err(OauthError::new(
+            "unauthorized_client",
+            "only an app with a secret may complete a card sign-in",
+        ));
+    }
+    let code = match (
+        form.code.as_deref(),
+        form.ticket.as_deref(),
+        form.totp.as_deref(),
+    ) {
+        (Some(code), None, None) => code.to_string(),
+        (None, Some(ticket), Some(totp)) => {
+            match oidc::card::second_factor(state, client, ticket, totp)? {
+                Ok(code) => code,
+                Err(oidc::card::Refused::WrongCode(user)) => {
+                    audit(
+                        state,
+                        AuditEventType::CardSignInSecondFactorFailed,
+                        Some(user),
+                        json!({ "client_id": client.client_id, "app": client.name }),
+                    );
+                    return Err(invalid("that code is not right"));
+                }
+                Err(oidc::card::Refused::TooMany) => {
+                    return Err(invalid("too many tries: wait a while, then tap again"));
+                }
+                Err(oidc::card::Refused::Ticket) => {
+                    return Err(invalid("this sign-in has expired: tap again"));
+                }
+            }
+        }
+        _ => {
+            return Err(OauthError::new(
+                "invalid_request",
+                "a card sign-in takes code, or ticket and totp",
+            ))
+        }
+    };
+    let row = match state
+        .db
+        .card_sign_in_redeem(&flow::hash_secret(&code), client.id)?
+    {
+        store::CardRedeemed::Fresh(r) => r,
+        store::CardRedeemed::Replayed => {
+            tracing::warn!(
+                "card sign-in code replayed by {}; its tokens are revoked",
+                client.client_id
+            );
+            return Err(invalid("this sign-in was already used"));
+        }
+        store::CardRedeemed::Unknown => return Err(invalid("unknown card sign-in")),
+    };
+    if row.expires_at <= Utc::now() {
+        return Err(invalid("this sign-in has expired: tap again"));
+    }
+    let user = live_user(state, row.user_id)?;
+    // The app's member scopes, never one that acts as the app itself.
+    let scopes: Vec<String> = client
+        .allowed_scopes
+        .iter()
+        .filter(|s| !flow::APP_SCOPES.contains(&s.as_str()))
+        .cloned()
+        .collect();
+    let amr: Vec<&str> = row.amr.split(' ').collect();
+    let tokens = issue_user_tokens(
+        state,
+        client,
+        &user,
+        &scopes,
+        None,
+        row.created_at,
+        row.code_hash.as_deref(),
+        Some(&amr),
+    )?;
+    audit(
+        state,
+        AuditEventType::CardSignIn,
+        Some(user.id),
+        json!({
+            "client_id": client.client_id, "app": client.name, "scopes": scopes,
+            "resource_id": row.resource_id, "amr": amr,
+        }),
     );
     Ok(tokens)
 }
@@ -744,6 +847,7 @@ fn refresh_grant(
         None,
         old.auth_time,
         old.code_hash.as_deref(),
+        None,
     )
 }
 
@@ -805,6 +909,7 @@ fn issue_user_tokens(
     nonce: Option<&str>,
     auth_time: DateTime<Utc>,
     code_hash: Option<&str>,
+    amr: Option<&[&str]>,
 ) -> Result<Value, OauthError> {
     let config = state.config_manager.get_config();
     let now = Utc::now();
@@ -818,6 +923,11 @@ fn issue_user_tokens(
     id_claims["auth_time"] = json!(auth_time.timestamp());
     if let Some(n) = nonce {
         id_claims["nonce"] = json!(n);
+    }
+    // How the member proved who they are, when it was not a password at CS:S
+    // (#241): "hwk" for a card, and "otp" beside it for a TOTP code.
+    if let Some(amr) = amr {
+        id_claims["amr"] = json!(amr);
     }
     let id_token = oidc::sign(state, &id_claims)?;
     let refresh = flow::new_secret();

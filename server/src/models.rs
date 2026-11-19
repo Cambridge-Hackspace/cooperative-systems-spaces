@@ -368,6 +368,10 @@ pub enum AuditEventType {
     OauthConsentGranted,
     OauthSignin,
     OauthSigningKeyRotated,
+    // #241: a card tap signed a member in to an app; a second factor given at
+    // a card sign-in was wrong.
+    CardSignIn,
+    CardSignInSecondFactorFailed,
     // #226: an app messaged a member through CS:S, and an app declared the
     // kinds of message it sends.
     MemberNotified,
@@ -626,6 +630,8 @@ impl AuditEventType {
             Self::OauthConsentGranted => "oauth_consent_granted",
             Self::OauthSignin => "oauth_signin",
             Self::OauthSigningKeyRotated => "oauth_signing_key_rotated",
+            Self::CardSignIn => "card_sign_in",
+            Self::CardSignInSecondFactorFailed => "card_sign_in_second_factor_failed",
             Self::MemberNotified => "member_notified",
             Self::NotificationKindsDeclared => "notification_kinds_declared",
             Self::ToolInterlockCreated => "tool_interlock_created",
@@ -788,6 +794,8 @@ impl AuditEventType {
             OauthConsentGranted,
             OauthSignin,
             OauthSigningKeyRotated,
+            CardSignIn,
+            CardSignInSecondFactorFailed,
             MemberNotified,
             NotificationKindsDeclared,
             ToolInterlockCreated,
@@ -893,7 +901,9 @@ impl AuditEventType {
             | UserEmailRemoved
             | UserMerged
             | OauthConsentGranted
-            | OauthSignin => Category::User,
+            | OauthSignin
+            | CardSignIn
+            | CardSignInSecondFactorFailed => Category::User,
             TrainingSessionStarted
             | TrainingSessionCompleted
             | TrainingStepCreated
@@ -1020,6 +1030,7 @@ impl AuditEventType {
             // Refusals, recoveries, and changes to who may do what.
             FailedLoginAttempt
             | MfaLoginFailed
+            | CardSignInSecondFactorFailed
             | ToolAccessDenied
             | DoorUnlockDenied
             | PasswordResetFailed
@@ -1160,6 +1171,7 @@ impl AuditEventType {
             | AlertAcknowledged
             | OauthConsentGranted
             | OauthSignin
+            | CardSignIn
             | MemberNotified
             | NotificationKindsDeclared => Severity::Info,
         }

@@ -77,6 +77,15 @@ pub struct UpdateResourceRequest {
     /// Name the member on a yes (#228). Tools only.
     #[serde(default)]
     pub identify_member: Option<bool>,
+    /// The app a yes signs the member in to (#241), by its id; empty to sign
+    /// in to nothing. Needs identify_member, and an app that is the space's
+    /// own and has a secret.
+    #[serde(default)]
+    pub sign_in_app: Option<String>,
+    /// Who must also give a TOTP code at a card sign-in (#241): `off`,
+    /// `admins` or `everyone`.
+    #[serde(default)]
+    pub second_factor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,7 +94,25 @@ pub struct ResourceSummary {
     pub kind: String,
     pub session_profile: String,
     pub identify_member: bool,
+    pub sign_in_app: Option<Uuid>,
+    pub second_factor: String,
 }
+
+impl From<crate::models::Resource> for ResourceSummary {
+    fn from(r: crate::models::Resource) -> Self {
+        Self {
+            id: r.id,
+            kind: r.kind,
+            session_profile: r.session_profile,
+            identify_member: r.identify_member,
+            sign_in_app: r.sign_in_app,
+            second_factor: r.second_factor,
+        }
+    }
+}
+
+/// The second-factor settings a resource may take (#241).
+const SECOND_FACTORS: [&str; 3] = ["off", "admins", "everyone"];
 
 /// GET /api/admin/resources -- every resource's administrator-set
 /// attributes, whatever its kind (#228): what the wiring page shows beside
@@ -96,14 +123,7 @@ async fn list_resources(
 ) -> Result<Json<ApiResponse<Vec<ResourceSummary>>>, ApiError> {
     let rows = state.db.list_resources()?;
     Ok(Json(ApiResponse::success(
-        rows.into_iter()
-            .map(|r| ResourceSummary {
-                id: r.id,
-                kind: r.kind,
-                session_profile: r.session_profile,
-                identify_member: r.identify_member,
-            })
-            .collect(),
+        rows.into_iter().map(ResourceSummary::from).collect(),
     )))
 }
 
@@ -118,9 +138,14 @@ async fn update_resource(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateResourceRequest>,
 ) -> Result<Json<ApiResponse<ResourceSummary>>, ApiError> {
-    if req.session_profile.is_none() && req.identify_member.is_none() {
+    if req.session_profile.is_none()
+        && req.identify_member.is_none()
+        && req.sign_in_app.is_none()
+        && req.second_factor.is_none()
+    {
         return Err(ApiError::BadRequest(
-            "nothing to change: send session_profile or identify_member".to_string(),
+            "nothing to change: send session_profile, identify_member, sign_in_app or second_factor"
+                .to_string(),
         ));
     }
     // Everything is validated before anything is written, so a request that
@@ -143,7 +168,46 @@ async fn update_resource(
             "identify_member is available for tools only".to_string(),
         ));
     }
+    // #241: a sign-in names its member, so it needs identify_member as this
+    // request leaves it; and only an app the space runs, with a secret, may
+    // be given card sign-ins.
+    let factor = req
+        .second_factor
+        .as_deref()
+        .map(|f| crate::api::tool_modules::one_of(f, &SECOND_FACTORS, "second_factor"))
+        .transpose()?;
+    let app: Option<Option<Uuid>> = match req.sign_in_app.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(id) => {
+            let id = Uuid::parse_str(id)
+                .map_err(|_| ApiError::BadRequest("sign_in_app: an app's id".to_string()))?;
+            if crate::oidc::card::app_for(state.db.oauth_get_client(id)?).is_none() {
+                return Err(ApiError::BadRequest(
+                    "sign_in_app must be an app that is the space's own, has a secret, and is not disabled"
+                        .to_string(),
+                ));
+            }
+            Some(Some(id))
+        }
+    };
+    let identifies = req.identify_member.unwrap_or(current.identify_member);
+    let signs_in = app.unwrap_or(current.sign_in_app).is_some();
+    if signs_in && !identifies {
+        return Err(ApiError::BadRequest(
+            "a resource that signs in to an app names its member: it needs identify_member (clear sign_in_app to turn that off)"
+                .to_string(),
+        ));
+    }
     let mut updated = current;
+    // Clearing the app first, so turning identify_member off with it in one
+    // request satisfies the column's CHECK at each step.
+    if app == Some(None) {
+        let Some(u) = state.db.update_resource_sign_in_app(id, None)? else {
+            return Err(ApiError::NotFound("Resource not found".to_string()));
+        };
+        updated = u;
+    }
     if let Some(profile) = profile.as_deref() {
         let Some(u) = state.db.update_resource_session_profile(id, profile)? else {
             return Err(ApiError::NotFound("Resource not found".to_string()));
@@ -152,6 +216,18 @@ async fn update_resource(
     }
     if let Some(identify) = req.identify_member {
         let Some(u) = state.db.update_resource_identify_member(id, identify)? else {
+            return Err(ApiError::NotFound("Resource not found".to_string()));
+        };
+        updated = u;
+    }
+    if let Some(Some(app)) = app {
+        let Some(u) = state.db.update_resource_sign_in_app(id, Some(app))? else {
+            return Err(ApiError::NotFound("Resource not found".to_string()));
+        };
+        updated = u;
+    }
+    if let Some(factor) = factor.as_deref() {
+        let Some(u) = state.db.update_resource_second_factor(id, factor)? else {
             return Err(ApiError::NotFound("Resource not found".to_string()));
         };
         updated = u;
@@ -166,6 +242,8 @@ async fn update_resource(
             "kind": updated.kind,
             "session_profile": updated.session_profile,
             "identify_member": updated.identify_member,
+            "sign_in_app": updated.sign_in_app,
+            "second_factor": updated.second_factor,
         }),
         ip_address: None,
         user_agent: None,
@@ -177,12 +255,7 @@ async fn update_resource(
     // it, so the change reaches it now rather than at the next poll.
     toolguard::broadcast_module_state(&state).await;
 
-    Ok(Json(ApiResponse::success(ResourceSummary {
-        id: updated.id,
-        kind: updated.kind,
-        session_profile: updated.session_profile,
-        identify_member: updated.identify_member,
-    })))
+    Ok(Json(ApiResponse::success(ResourceSummary::from(updated))))
 }
 
 // ---------------------------------------------------------------------------
