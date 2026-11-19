@@ -210,6 +210,28 @@ pub struct LocalScanReply {
     pub strike: Option<LocalStrike>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<LocalMember>,
+    /// On a yes for a resource set to sign in to an app (#241): the sign-in
+    /// the reader's host, that app, completes. Never on a refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<LocalSignIn>,
+}
+
+/// A card tap's sign-in to the space's own app (#241), on a
+/// [`LocalScanReply`]. The app completes it with CS:S's OpenID Connect
+/// provider, never with the device it reached through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LocalSignIn {
+    /// Redeem at the provider's token endpoint, with
+    /// `grant_type=urn:css:card-sign-in` and the app's own credentials,
+    /// within a minute, once.
+    Code { code: String },
+    /// Ask the member for their TOTP code first, and send it with this ticket
+    /// to `POST /api/oauth/card-sign-in/second-factor`, within two minutes.
+    Totp { ticket: String },
+    /// No sign-in for this tap, and why, in words for the member: the
+    /// resource asks for a second factor they have not set up, say.
+    Refused { reason: String },
 }
 
 /// Who tapped, on a [`LocalScanReply`] for a resource set to identify its
@@ -243,7 +265,15 @@ impl LocalScanReply {
                 None
             },
             member: None,
+            sign_in: None,
         }
+    }
+
+    /// The sign-in this tap carries (#241). A refusal is never given one,
+    /// whatever is passed: no sign-in for someone the resource refused.
+    pub fn with_sign_in(mut self, sign_in: Option<LocalSignIn>) -> Self {
+        self.sign_in = if self.authorized { sign_in } else { None };
+        self
     }
 
     /// Name the member on this reply (#228). A refusal is never given one,
@@ -377,6 +407,72 @@ mod scan_reply_tests {
         let old: LocalScanReplyV01 =
             serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
         assert!(old.authorized);
+    }
+
+    // ---- a card tap's sign-in (#241) ----
+
+    #[test]
+    fn a_sign_in_is_said_by_kind_as_the_reader_host_reads_it() {
+        let code = LocalScanReply::new("print-tower", true, "authorized", None).with_sign_in(Some(
+            LocalSignIn::Code {
+                code: "c0de".into(),
+            },
+        ));
+        assert_eq!(
+            serde_json::to_value(&code).unwrap()["sign_in"],
+            serde_json::json!({"kind": "code", "code": "c0de"})
+        );
+        let totp = LocalSignIn::Totp {
+            ticket: "t1ck".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&totp).unwrap(),
+            serde_json::json!({"kind": "totp", "ticket": "t1ck"})
+        );
+        let refused = LocalSignIn::Refused {
+            reason: "set up an authenticator".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap(),
+            serde_json::json!({"kind": "refused", "reason": "set up an authenticator"})
+        );
+    }
+
+    #[test]
+    fn a_refusal_never_carries_a_sign_in() {
+        let reply = LocalScanReply::new("print-tower", false, "Training required", None)
+            .with_sign_in(Some(LocalSignIn::Code {
+                code: "c0de".into(),
+            }));
+        assert_eq!(reply.sign_in, None);
+        assert!(!serde_json::to_string(&reply).unwrap().contains("sign_in"));
+    }
+
+    /// A reply with no sign-in is the reply from before #241, byte for byte;
+    /// one with a sign-in still parses as the #228 reply, so a device pinned
+    /// to that css_wire is not broken by a resource that signs in.
+    #[test]
+    fn a_sign_in_changes_nothing_for_a_device_that_does_not_read_it() {
+        let plain = LocalScanReply::new("laser-01", true, "authorized", None).with_sign_in(None);
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"resource":"laser-01","authorized":true,"reason":"authorized"}"#
+        );
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct LocalScanReplyV02 {
+            resource: String,
+            authorized: bool,
+            reason: String,
+            #[serde(default)]
+            member: Option<LocalMember>,
+        }
+        let reply = LocalScanReply::new("print-tower", true, "authorized", None)
+            .with_member(Some(alex()))
+            .with_sign_in(Some(LocalSignIn::Totp { ticket: "t".into() }));
+        let old: LocalScanReplyV02 =
+            serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
+        assert_eq!(old.member.unwrap().name, "Alex Doe");
     }
 
     #[test]

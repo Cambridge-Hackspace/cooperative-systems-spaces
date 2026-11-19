@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 use crate::database::{DatabaseError, DatabaseManager};
 use crate::models::{
-    NewNotificationMessage, NewOauthAuthorizationRequest, NewOauthClient, NewOauthRefreshToken,
-    NewOauthSigningKey, NotificationKind, NotificationMessage, NotificationPreference,
-    OauthAuthorizationCode, OauthAuthorizationRequest, OauthClient, OauthConsent,
-    OauthRefreshToken, OauthSigningKey,
+    CardSignIn, NewCardSignIn, NewNotificationMessage, NewOauthAuthorizationRequest,
+    NewOauthClient, NewOauthRefreshToken, NewOauthSigningKey, NotificationKind,
+    NotificationMessage, NotificationPreference, OauthAuthorizationCode, OauthAuthorizationRequest,
+    OauthClient, OauthConsent, OauthRefreshToken, OauthSigningKey,
 };
 
 /// What an administrator may change about an app. `None` leaves a field alone.
@@ -32,6 +32,13 @@ pub enum Redeemed {
     /// The code was already used. Its tokens have been revoked.
     Replayed,
     /// No such code, or it belongs to another app.
+    Unknown,
+}
+
+/// What became of a card sign-in's code (#241).
+pub enum CardRedeemed {
+    Fresh(CardSignIn),
+    Replayed,
     Unknown,
 }
 
@@ -278,6 +285,133 @@ impl DatabaseManager {
             return Ok(Redeemed::Replayed);
         }
         Ok(Redeemed::Unknown)
+    }
+
+    // ── card sign-in (#241) ─────────────────────────────────────────────────
+
+    pub fn card_sign_in_start(&self, new: &NewCardSignIn) -> Result<(), DatabaseError> {
+        use crate::schema::card_sign_ins;
+        let mut conn = self.get_connection()?;
+        diesel::insert_into(card_sign_ins::table)
+            .values(new)
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// One try at a sign-in's ticket, for one app: counted before the TOTP
+    /// is checked, in one update, so racing tries cannot share a count. `None`
+    /// for a ticket that is unknown, another app's, spent, expired, or past
+    /// its tries.
+    pub fn card_sign_in_try(
+        &self,
+        ticket_hash: &str,
+        client: Uuid,
+        max_tries: i32,
+    ) -> Result<Option<CardSignIn>, DatabaseError> {
+        use crate::schema::card_sign_ins as s;
+        let mut conn = self.get_connection()?;
+        diesel::update(
+            s::table
+                .filter(s::ticket_hash.eq(ticket_hash))
+                .filter(s::client_id.eq(client))
+                .filter(s::used_at.is_null())
+                .filter(s::expires_at.gt(Utc::now()))
+                .filter(s::tries.lt(max_tries)),
+        )
+        .set(s::tries.eq(s::tries + 1))
+        .returning(CardSignIn::as_returning())
+        .get_result(&mut conn)
+        .optional()
+        .map_err(DatabaseError::Diesel)
+    }
+
+    /// A sign-in whose second factor was given: its ticket is spent and it
+    /// becomes a code, with a fresh expiry.
+    pub fn card_sign_in_issue(
+        &self,
+        id: Uuid,
+        code_hash: &str,
+        amr: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), DatabaseError> {
+        use crate::schema::card_sign_ins as s;
+        let mut conn = self.get_connection()?;
+        diesel::update(s::table.find(id).filter(s::code_hash.is_null()))
+            .set((
+                s::ticket_hash.eq(None::<String>),
+                s::code_hash.eq(Some(code_hash)),
+                s::amr.eq(amr),
+                s::expires_at.eq(expires_at),
+            ))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(())
+    }
+
+    /// Use a card sign-in's code once, for its app, as
+    /// [`Self::oauth_redeem_code`] does: the update is the lock, and a second
+    /// use revokes every refresh token the first led to.
+    pub fn card_sign_in_redeem(
+        &self,
+        code_hash: &str,
+        client: Uuid,
+    ) -> Result<CardRedeemed, DatabaseError> {
+        use crate::schema::{card_sign_ins as s, oauth_refresh_tokens as t};
+        let mut conn = self.get_connection()?;
+        let now = Utc::now();
+        let fresh = diesel::update(
+            s::table
+                .filter(s::code_hash.eq(code_hash))
+                .filter(s::client_id.eq(client))
+                .filter(s::used_at.is_null()),
+        )
+        .set(s::used_at.eq(Some(now)))
+        .returning(CardSignIn::as_returning())
+        .get_result(&mut conn)
+        .optional()
+        .map_err(DatabaseError::Diesel)?;
+        if let Some(c) = fresh {
+            return Ok(CardRedeemed::Fresh(c));
+        }
+        let replayed = s::table
+            .filter(s::code_hash.eq(code_hash))
+            .filter(s::client_id.eq(client))
+            .select(s::id)
+            .first::<Uuid>(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)?
+            .is_some();
+        if replayed {
+            diesel::update(
+                t::table
+                    .filter(t::code_hash.eq(code_hash))
+                    .filter(t::revoked_at.is_null()),
+            )
+            .set(t::revoked_at.eq(Some(now)))
+            .execute(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+            return Ok(CardRedeemed::Replayed);
+        }
+        Ok(CardRedeemed::Unknown)
+    }
+
+    /// How many card sign-in tries a member has spent since `since`, across
+    /// tickets: the per-member limit on TOTP guesses.
+    pub fn card_sign_in_tries_since(
+        &self,
+        user: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<i64, DatabaseError> {
+        use crate::schema::card_sign_ins as s;
+        let mut conn = self.get_connection()?;
+        let total: Option<i64> = s::table
+            .filter(s::user_id.eq(user))
+            .filter(s::created_at.gt(since))
+            .select(diesel::dsl::sum(s::tries))
+            .first(&mut conn)
+            .map_err(DatabaseError::Diesel)?;
+        Ok(total.unwrap_or(0))
     }
 
     // ── refresh tokens ──────────────────────────────────────────────────────

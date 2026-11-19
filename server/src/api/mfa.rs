@@ -663,7 +663,7 @@ async fn verify_login(
     }
 }
 
-fn verify_totp_path(
+pub(crate) fn verify_totp_path(
     state: &AppState,
     user: &crate::models::User,
     code: Option<&str>,

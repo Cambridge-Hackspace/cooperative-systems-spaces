@@ -14,7 +14,7 @@
 // redirects are vitest's (OAuthConsentView.spec.ts); this drives the API the
 // page calls, with a member's own session token.
 
-import { generateKeyPairSync, createHash, createPublicKey, verify as cryptoVerify, sign as cryptoSign, randomBytes } from 'node:crypto'
+import { generateKeyPairSync, createHash, createHmac, createPublicKey, verify as cryptoVerify, sign as cryptoSign, randomBytes } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -446,4 +446,193 @@ await main(async () => {
     (await audit('oauth_signing_key_rotated')).some((l) => l.event_data?.kid === rot.json?.data?.kid))
   ok('oidc/no-audit-record-holds-a-secret',
     !JSON.stringify(await audit('oauth_client_created')).includes(POP.secret), 'a secret reached the audit log')
+
+  // ---- a card tap signs in to the space's own app (#241) ------------------------------
+  {
+  // A reader on a tool set to identify and to sign in to POP: the scan reply
+  // carries a code POP redeems with its secret, or, with a second factor, a
+  // ticket POP sends back with the member's TOTP. Fresh accounts: the ones
+  // above were renamed and merged.
+  const cardMember = await account('card_member')
+  const CARD = `CARD-SIGN-IN-${RUN_TAG}`
+  const issuedCard = await POST(`/api/cards/user/${cardMember.user.id}`, { ...T, body: { code: CARD } })
+  assertEq('card-sign-in/card-issued', 200, issuedCard.status, issuedCard.text.slice(0, 200))
+  const towerExt = `print-tower-${RUN_TAG}`
+  const towerRes = await POST('/api/tools', {
+    ...T,
+    body: {
+      name: `E2E print tower ${RUN_TAG}`, category: 'other', requires_training: false, external_id: towerExt,
+      usage_flat_fee: null, usage_rate_per_min: null, usage_max_session_minutes: null,
+    },
+  })
+  const towerId = towerRes.json?.data?.id
+  ok('card-sign-in/tool-created', !!towerId, towerRes.text.slice(0, 200))
+  const inv = await POST('/api/admin/devices/invite', { ...T, body: { expires_in_hours: 1 } })
+  const reg = await POST('/api/devices/register', {
+    body: {
+      device_code: inv.json?.data?.device_code, name: `tower-reader-${RUN_TAG}`, capabilities: { roles: ['reader'] },
+      mac_address: '02:00:00:00:24:01', software_version: '0.0.0-e2e', platform: 'linux',
+    },
+  })
+  const reader = reg.json?.data?.auth_token ?? reg.json?.auth_token
+  const readerId = reg.json?.data?.device_id ?? reg.json?.device_id
+  const bound = await POST('/api/admin/device-bindings', {
+    ...T, body: { resource_id: towerId, device_id: readerId, role: 'reader', name: 'tower reader' },
+  })
+  assertEq('card-sign-in/reader-bound', 201, bound.status, bound.text.slice(0, 200))
+  const tap = async () => POST(`/api/resources/${towerExt}/scan`, { token: reader, body: { card: CARD } })
+  const setTower = (body) => PATCH(`/api/admin/resources/${towerId}`, { ...T, body })
+
+  // The app: the space's own, with a secret. Only such an app may be named.
+  const towerApp = await mk({
+    name: `POP tower ${RUN_TAG}`, redirect_uris: [REDIRECT], skip_consent: true,
+    allowed_scopes: ['openid', 'profile', 'roles', 'training:read'],
+  })
+  const TOWER = { id: towerApp.client.client_id, secret: towerApp.client_secret, uuid: towerApp.client.id }
+  ok('card-sign-in/discovery-offers-the-grant', (d.grant_types_supported ?? []).includes('urn:css:card-sign-in'),
+    JSON.stringify(d.grant_types_supported))
+  const notIdentifying = await setTower({ sign_in_app: TOWER.uuid })
+  assertEq('card-sign-in/a-resource-that-does-not-identify-cannot-sign-in', 400, notIdentifying.status,
+    notIdentifying.text.slice(0, 200))
+  await setTower({ identify_member: true })
+  for (const [why, app] of [['a-third-party-app', pop.client.id], ['a-public-app', spa.client.id], ['no-app-at-all', '00000000-0000-4000-8000-000000000000']]) {
+    const r = await setTower({ sign_in_app: app })
+    assertEq(`card-sign-in/${why}-cannot-be-signed-in-to`, 400, r.status, r.text.slice(0, 200))
+  }
+  const plainTap = await tap()
+  ok('card-sign-in/off-by-default-a-tap-carries-no-sign-in', plainTap.json?.authorized === true && !('sign_in' in (plainTap.json ?? {})),
+    plainTap.text.slice(0, 200))
+  await POST(`/api/resources/${towerExt}/stop`, { token: reader, body: {} })
+  const on = await setTower({ sign_in_app: TOWER.uuid })
+  assertEq('card-sign-in/the-space-s-own-app-can-be-signed-in-to', 200, on.status, on.text.slice(0, 200))
+  assertEq('card-sign-in/the-setting-is-reported', TOWER.uuid, on.json?.data?.sign_in_app)
+  assertEq('card-sign-in/the-second-factor-is-off-by-default', 'off', on.json?.data?.second_factor)
+  const keepsIdentify = await setTower({ identify_member: false })
+  assertEq('card-sign-in/identify-cannot-be-turned-off-under-a-sign-in', 400, keepsIdentify.status, keepsIdentify.text.slice(0, 200))
+
+  // A tap: a yes, the member named, and a code. It occupies nothing.
+  const t1 = await tap()
+  assertEq('card-sign-in/a-tap-is-a-yes', true, t1.json?.authorized, t1.text.slice(0, 200))
+  assertEq('card-sign-in/a-tap-names-the-member', cardMember.user.id, t1.json?.member?.id)
+  assertEq('card-sign-in/a-tap-carries-a-code', 'code', t1.json?.sign_in?.kind, t1.text.slice(0, 200))
+  const toolNow = (await GET(`/api/tools/${towerId}`, T)).json?.data?.status
+  assertEq('card-sign-in/a-sign-in-occupies-nothing', 'idle', toolNow)
+  const t2 = await tap()
+  assertEq('card-sign-in/the-next-tap-is-a-yes-too', true, t2.json?.authorized, t2.text.slice(0, 200))
+
+  // Redeemed by the app, with its secret: tokens for the member.
+  const redeem = (code, who = TOWER) => tokenRequest({ grant_type: 'urn:css:card-sign-in', code }, who)
+  const got = await redeem(t1.json?.sign_in?.code)
+  assertEq('card-sign-in/the-app-redeems-the-code', 200, got.status, got.text.slice(0, 200))
+  const cardKeys = (await raw('GET', path(d.jwks_uri))).json?.keys ?? []
+  ok('card-sign-in/the-id-token-verifies-against-the-published-keys', verifiesAgainst(got.json?.id_token, cardKeys))
+  const cardIdc = decode(got.json?.id_token ?? 'e30.e30.x').claims
+  assertEq('card-sign-in/the-id-token-names-the-member', cardMember.user.id, cardIdc.sub)
+  assertEq('card-sign-in/the-id-token-is-for-the-app', TOWER.id, cardIdc.aud)
+  assertEq('card-sign-in/the-id-token-says-a-card', '["hwk"]', JSON.stringify(cardIdc.amr))
+  const tools = await raw('GET', '/api/oauth/me/tools', { headers: { Authorization: `Bearer ${got.json?.access_token}` } })
+  assertEq('card-sign-in/the-access-token-reads-training', 200, tools.status, tools.text.slice(0, 200))
+  ok('card-sign-in/no-app-scope-is-granted', !String(got.json?.scope ?? '').includes('notify:members'), String(got.json?.scope))
+
+  // Once: a replay is refused, and ends what the first redemption issued.
+  const replay = await redeem(t1.json?.sign_in?.code)
+  assertEq('card-sign-in/a-code-is-good-once', 400, replay.status, replay.text.slice(0, 200))
+  const afterReplay = await tokenRequest({ grant_type: 'refresh_token', refresh_token: got.json?.refresh_token }, TOWER)
+  assertEq('card-sign-in/a-replay-ends-the-first-redemption-s-tokens', 400, afterReplay.status, afterReplay.text.slice(0, 200))
+  // Not another app's, not a public client's, not expired.
+  // Another enabled app with a secret (POP above was disabled by now).
+  const byOther = await redeem(t2.json?.sign_in?.code, { id: trusted.client.client_id, secret: trusted.client_secret })
+  assertEq('card-sign-in/another-app-cannot-redeem-it', 400, byOther.status, byOther.text.slice(0, 200))
+  const byPublic = await tokenRequest({ grant_type: 'urn:css:card-sign-in', code: t2.json?.sign_in?.code, client_id: spa.client.client_id })
+  ok('card-sign-in/a-public-client-cannot-redeem-it', byPublic.status === 400 || byPublic.status === 401, `${byPublic.status} ${byPublic.text.slice(0, 200)}`)
+  const t3 = await tap()
+  await new Promise((r) => setTimeout(r, 6000)) // the stack's code lifetime is five seconds
+  const late = await redeem(t3.json?.sign_in?.code)
+  assertEq('card-sign-in/an-expired-code-is-refused', 400, late.status, late.text.slice(0, 200))
+  ok('card-sign-in/a-code-is-never-an-authorization-code',
+    (await tokenRequest({ grant_type: 'authorization_code', code: t2.json?.sign_in?.code, redirect_uri: REDIRECT }, TOWER)).status === 400)
+
+  // A second factor: a member with no TOTP is refused in words; with one,
+  // a ticket, and the code only for their TOTP.
+  await setTower({ second_factor: 'everyone' })
+  const noTotp = await tap()
+  assertEq('card-sign-in/a-second-factor-without-totp-is-refused', 'refused', noTotp.json?.sign_in?.kind, noTotp.text.slice(0, 200))
+  ok('card-sign-in/the-refusal-says-where-to-set-one-up', /authenticator/.test(noTotp.json?.sign_in?.reason ?? ''),
+    noTotp.json?.sign_in?.reason)
+  const setup = await POST('/api/auth/mfa/totp/setup', { token: cardMember.token })
+  const secret = setup.json?.data?.secret_base32
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  const totp = (b32, at = Math.floor(Date.now() / 1000)) => {
+    let bits = 0, value = 0
+    const key = []
+    for (const ch of b32.replace(/=+$/, '').toUpperCase()) {
+      value = (value << 5) | B32.indexOf(ch); bits += 5
+      if (bits >= 8) { key.push((value >>> (bits - 8)) & 0xff); bits -= 8 }
+    }
+    const buf = Buffer.alloc(8)
+    const counter = Math.floor(at / 30)
+    buf.writeUInt32BE(Math.floor(counter / 2 ** 32), 0); buf.writeUInt32BE(counter >>> 0, 4)
+    const mac = createHmac('sha1', Buffer.from(key)).update(buf).digest()
+    const o = mac[mac.length - 1] & 0x0f
+    return String((((mac[o] & 0x7f) << 24) | (mac[o + 1] << 16) | (mac[o + 2] << 8) | mac[o + 3]) % 1_000_000).padStart(6, '0')
+  }
+  const confirmed = await POST('/api/auth/mfa/totp/confirm', { token: cardMember.token, body: { code: totp(secret) } })
+  assertEq('card-sign-in/totp-enrolled', 200, confirmed.status, confirmed.text.slice(0, 200))
+  // Past the step just used to confirm, so the next code is not a replay.
+  await new Promise((r) => setTimeout(r, (30 - (Math.floor(Date.now() / 1000) % 30) + 1) * 1000))
+  const withTicket = await tap()
+  assertEq('card-sign-in/a-second-factor-asks-for-totp', 'totp', withTicket.json?.sign_in?.kind, withTicket.text.slice(0, 200))
+  ok('card-sign-in/a-ticket-is-not-a-code', !('code' in (withTicket.json?.sign_in ?? {})))
+  const ticket = withTicket.json?.sign_in?.ticket
+  const second = (t, code, who = TOWER) => tokenRequest({ grant_type: 'urn:css:card-sign-in', ticket: t, totp: code }, who)
+  const wrong = await second(ticket, totp(secret) === '000000' ? '111111' : '000000')
+  assertEq('card-sign-in/a-wrong-totp-is-refused', 400, wrong.status, wrong.text.slice(0, 200))
+  const right = await second(ticket, totp(secret))
+  assertEq('card-sign-in/the-right-totp-signs-in', 200, right.status, right.text.slice(0, 200))
+  assertEq('card-sign-in/the-id-token-says-card-and-otp', '["hwk","otp"]', JSON.stringify(decode(right.json?.id_token ?? 'e30.e30.x').claims.amr))
+  const spent = await second(ticket, totp(secret))
+  assertEq('card-sign-in/a-ticket-is-good-once', 400, spent.status, spent.text.slice(0, 200))
+  // Three tries a ticket, then spent, whatever the fourth is. Each code is
+  // from a fresh TOTP step: a code already used is refused as a replay
+  // whatever the tries, and would let this case pass without the limit.
+  const nextStep = () => new Promise((r) => setTimeout(r, (30 - (Math.floor(Date.now() / 1000) % 30) + 1) * 1000))
+  const wrongCode = () => (totp(secret) === '000001' ? '000002' : '000001')
+  // The control: two wrong tries, and the third, right, is taken.
+  await nextStep()
+  const t5 = await tap()
+  for (let i = 0; i < 2; i++) await second(t5.json?.sign_in?.ticket, wrongCode())
+  const third = await second(t5.json?.sign_in?.ticket, totp(secret))
+  assertEq('card-sign-in/a-third-try-is-still-taken', 200, third.status, third.text.slice(0, 200))
+  // Three wrong, and the fourth, right and fresh, is refused.
+  await nextStep()
+  const t4 = await tap()
+  for (let i = 0; i < 3; i++) await second(t4.json?.sign_in?.ticket, wrongCode())
+  const fourth = await second(t4.json?.sign_in?.ticket, totp(secret))
+  assertEq('card-sign-in/a-ticket-allows-three-tries', 400, fourth.status, fourth.text.slice(0, 200))
+  // Admins only: this member is not one, so a code, no ticket.
+  await setTower({ second_factor: 'admins' })
+  const memberTap = await tap()
+  assertEq('card-sign-in/admins-only-spares-a-member', 'code', memberTap.json?.sign_in?.kind, memberTap.text.slice(0, 200))
+  const badFactor = await setTower({ second_factor: 'sometimes' })
+  assertEq('card-sign-in/an-unknown-second-factor-is-refused', 400, badFactor.status, badFactor.text.slice(0, 200))
+
+  // A refusal carries no sign-in; and turning it off leaves the plain yes.
+  const unknown = await POST(`/api/resources/${towerExt}/scan`, { token: reader, body: { card: 'NOBODY-CARD' } })
+  ok('card-sign-in/a-refusal-carries-no-sign-in', unknown.json?.authorized === false && !('sign_in' in (unknown.json ?? {})),
+    unknown.text.slice(0, 200))
+  const off = await setTower({ sign_in_app: '' })
+  assertEq('card-sign-in/sign-in-can-be-turned-off', null, off.json?.data?.sign_in_app, off.text.slice(0, 200))
+  const afterOff = await tap()
+  ok('card-sign-in/off-again-a-tap-carries-no-sign-in', !('sign_in' in (afterOff.json ?? {})), afterOff.text.slice(0, 200))
+
+  // The record: each sign-in, and each wrong second factor, never a code.
+  const signIns = await audit('card_sign_in')
+  ok('card-sign-in/a-card-sign-in-is-audited',
+    signIns.some((l) => l.user_id === cardMember.user.id && String(l.event_data?.resource_id ?? '') === towerId),
+    JSON.stringify(signIns).slice(0, 300))
+  ok('card-sign-in/a-wrong-second-factor-is-audited',
+    (await audit('card_sign_in_second_factor_failed')).some((l) => l.user_id === cardMember.user.id))
+  ok('card-sign-in/no-record-holds-a-code-or-ticket',
+    !JSON.stringify(signIns).includes(t1.json?.sign_in?.code ?? '!') && !JSON.stringify(signIns).includes(ticket ?? '!'))
+  }
 })

@@ -149,6 +149,43 @@ pub struct OauthConsent {
     pub granted_at: DateTime<Utc>,
 }
 
+// ── card sign-in (#241) ────────────────────────────────────────────────────
+
+use crate::schema::card_sign_ins;
+
+/// One card sign-in, from tap to redemption: a ticket while a TOTP code is
+/// awaited, then a code for the app. Only hashes are kept.
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = card_sign_ins)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CardSignIn {
+    pub id: Uuid,
+    pub resource_id: Uuid,
+    pub client_id: Uuid,
+    pub user_id: Uuid,
+    pub ticket_hash: Option<String>,
+    pub code_hash: Option<String>,
+    /// `hwk`, or `hwk otp`: the ID token's amr, space-separated.
+    pub amr: String,
+    pub tries: i32,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = card_sign_ins)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NewCardSignIn {
+    pub resource_id: Uuid,
+    pub client_id: Uuid,
+    pub user_id: Uuid,
+    pub ticket_hash: Option<String>,
+    pub code_hash: Option<String>,
+    pub amr: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 // ── the notification relay (#226) ──────────────────────────────────────────
 
 use crate::schema::{notification_kinds, notification_messages, notification_preferences};

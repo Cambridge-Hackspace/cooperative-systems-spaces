@@ -33,6 +33,10 @@ pub struct ToolGuardResponse {
     /// Absent on a no, and on every resource that doesn't identify.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<css_lib::wire::LocalMember>,
+    /// On a yes for a resource set to sign in to an app (#241): the sign-in
+    /// for the reader's host to complete. Absent on a no.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<css_lib::wire::LocalSignIn>,
 }
 
 impl ToolGuardResponse {
@@ -43,6 +47,7 @@ impl ToolGuardResponse {
             authorized: None,
             strike: None,
             member: None,
+            sign_in: None,
         }
     }
 
@@ -393,6 +398,24 @@ pub(crate) async fn activate_tool(
     if !authorized {
         log_tool_access_denied(state, Some(&user), &tool_name, "Training required").await?;
         return Ok(ToolGuardResponse::resource_denied("Training required"));
+    }
+
+    // #241: a resource that signs in to an app occupies nothing. A yes names
+    // the member and carries the sign-in, and opens no session, lease or
+    // billing, so the next member can tap straight after. Its column's CHECK
+    // holds that it identifies (#228).
+    if let Some(resource) = state
+        .db
+        .get_resource(tool.id)?
+        .filter(|r| r.sign_in_app.is_some())
+    {
+        let mut reply = ToolGuardResponse::resource_authorized(None);
+        reply.member = Some(css_lib::wire::LocalMember {
+            id: user.id.to_string(),
+            name: user.full_name.clone(),
+        });
+        reply.sign_in = crate::oidc::card::begin(state, &resource, &user)?;
+        return Ok(reply);
     }
 
     // Metered tool billing (Phase 2). Money is the LAST gate: training passed

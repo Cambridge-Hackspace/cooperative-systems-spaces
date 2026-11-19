@@ -3434,6 +3434,48 @@ impl DatabaseManager {
             .map_err(DatabaseError::Diesel)
     }
 
+    /// The app a resource signs in to (#241), or none. The column's CHECK
+    /// refuses an app on a resource that does not identify its member;
+    /// callers check first so the refusal reads as a 400.
+    pub fn update_resource_sign_in_app(
+        &self,
+        resource_id: uuid::Uuid,
+        app: Option<uuid::Uuid>,
+    ) -> Result<Option<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        diesel::update(resources::table.find(resource_id))
+            .set((
+                resources::sign_in_app.eq(app),
+                resources::updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::Resource::as_returning())
+            .get_result(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
+    /// Who must also give a TOTP code at a card sign-in on a resource (#241).
+    pub fn update_resource_second_factor(
+        &self,
+        resource_id: uuid::Uuid,
+        factor: &str,
+    ) -> Result<Option<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        diesel::update(resources::table.find(resource_id))
+            .set((
+                resources::second_factor.eq(factor),
+                resources::updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::Resource::as_returning())
+            .get_result(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// One resource row, or `None`.
     pub fn get_resource(
         &self,

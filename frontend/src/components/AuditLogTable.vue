@@ -15,6 +15,10 @@
           <option value="user_login">User Login</option>
           <option value="user_logout">User Logout</option>
           <option value="oauth_signin">Sign-in Through an App</option>
+          <option value="card_sign_in">Card Sign-in to an App</option>
+          <option value="card_sign_in_second_factor_failed">
+            Card Sign-in: Wrong Second Factor
+          </option>
           <option value="user_registration">User Registration</option>
           <option value="user_role_change">Role Change</option>
           <option value="user_activation">User Activation</option>

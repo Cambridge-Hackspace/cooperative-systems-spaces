@@ -1535,7 +1535,7 @@ mod the_payload_row_check_rejects_what_it_is_for {
     #[test]
     fn a_row_naming_a_field_the_wire_does_not_carry_fails() {
         let doc = read(DOC).replace(
-            r#"| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"? }`"#,
+            r#"| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"?, "sign_in"? }`"#,
             r#"| `resource/response/scan` | `{ "status": string, "tool_on": bool }`"#,
         );
         let documented = documented_payload_fields(&doc, "resource/response/scan");
