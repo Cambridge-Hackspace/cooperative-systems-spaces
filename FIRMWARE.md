@@ -910,12 +910,12 @@ of this, in the shape it always had.
       "kind": "tool", "session_profile": "until_stopped", "status": "idle",
       "requires_online": false, "in_use": false, "enabled": true,
       "pulse_ms": null, "allow": [], "deny": [], "hold_until": null,
-      "identify_member": false },
+      "identify_member": false, "signs_in": false },
     { "id": "…uuid…", "external_id": null, "name": "Front door",
       "kind": "door", "session_profile": "momentary", "status": "",
       "requires_online": false, "in_use": false, "enabled": true,
       "pulse_ms": 4200, "allow": ["9f86d081…"], "deny": [], "hold_until": null,
-      "identify_member": false }
+      "identify_member": false, "signs_in": false }
   ],
   "principals": [
     { "digest": "9f86d081…64 hex chars…", "full_name": "A Member",
@@ -942,6 +942,13 @@ of this, in the shape it always had.
   that instant, compared against **your** clock so the window self-expires.
 - `identify_member` is a tool set to name the member on a yes (#228): put
   `member: { "id", "name" }` on the scan reply. Always `false` on a door.
+- `signs_in` is a tool set to sign the member in to one of the space's own
+  apps on a yes (#241). Only the server issues a sign-in, so an edge that
+  decides a yes here asks the server's resource path for it and puts the
+  server's `sign_in` on the reply; if the server cannot be asked, it answers
+  with its own yes and no `sign_in`. A yes here opens no session and leases
+  nothing. Always `false` on a door, and never `true` without
+  `identify_member`.
 - `principals[].digest` is `argon2id(device_pepper, card)`, never the card;
   `authorized` lists the resources that member may start, by UUID.
 - `user_id` on a principal is the member's user UUID, and is sent only for a

@@ -3412,6 +3412,22 @@ impl DatabaseManager {
             .collect())
     }
 
+    /// The resources a yes on signs the member in to an app (#241).
+    pub fn signing_in_resources(
+        &self,
+    ) -> Result<std::collections::HashSet<uuid::Uuid>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        Ok(resources::table
+            .filter(resources::sign_in_app.is_not_null())
+            .select(resources::id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)?
+            .into_iter()
+            .collect())
+    }
+
     /// Turn naming the member on or off for one resource (#228). The column's
     /// CHECK refuses it on anything but a tool; callers check the kind first so
     /// the refusal reads as a 400 and not as a database fault.
