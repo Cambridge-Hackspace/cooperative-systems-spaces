@@ -16,7 +16,7 @@
 // e2e `toolmodules` stage, against real logic and a real database.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 
 const toolModules = vi.hoisted(() => ({
   listModules: vi.fn(),
@@ -36,11 +36,14 @@ const resources = vi.hoisted(() => ({
   stop: vi.fn(),
 }))
 
+const oauthAdmin = vi.hoisted(() => ({ list: vi.fn() }))
+
 vi.mock('@/utils/api', () => ({
   toolModulesApi: toolModules,
   toolsApi: tools,
   doorsApi: doors,
   resourcesApi: resources,
+  oauthAdminApi: oauthAdmin,
 }))
 
 import ResourceWiring from '@/components/ResourceWiring.vue'
@@ -131,6 +134,7 @@ describe('ResourceWiring', () => {
     })
     resources.sessions.mockResolvedValue({ success: true, data: [] })
     resources.list.mockResolvedValue({ success: true, data: [] })
+    oauthAdmin.list.mockResolvedValue({ success: true, data: [] })
   })
 
   it('names a door from the door list and labels its kind (#182)', async () => {
@@ -227,6 +231,158 @@ describe('ResourceWiring', () => {
     await flushPromises()
     expect(w.find('[role="alert"]').exists()).toBe(true)
     expect(w.text()).toContain('identify_member is available for tools only')
+  })
+
+  // ── #241: a tap that signs the member in to an app ──────────────────────
+  //
+  // Which apps are offered is the server's rule (oidc::card::app_for),
+  // duplicated deliberately here: the view must offer the same set, so the
+  // spec states the rule itself rather than reusing the component's.
+
+  function app(id: string, over: Record<string, unknown> = {}) {
+    return {
+      id,
+      client_id: `css_${id}`,
+      name: `App ${id}`,
+      confidential: true,
+      skip_consent: true,
+      disabled: false,
+      redirect_uris: [],
+      post_logout_redirect_uris: [],
+      allowed_scopes: ['openid'],
+      created_by: null,
+      created_at: '2026-11-19T00:00:00Z',
+      updated_at: '2026-11-19T00:00:00Z',
+      ...over,
+    }
+  }
+
+  function identifying(over: Record<string, unknown> = {}) {
+    return {
+      id: 'tool-1',
+      kind: 'tool',
+      session_profile: 'until_stopped',
+      identify_member: true,
+      sign_in_app: null,
+      second_factor: 'off',
+      ...over,
+    }
+  }
+
+  /** The values a select offers, in order. */
+  function options(select: Omit<DOMWrapper<Element>, 'exists'>): string[] {
+    return select.findAll('option').map((o) => (o.element as HTMLOptionElement).value)
+  }
+
+  it('offers only apps a card may sign in to, and only while identifying (#241)', async () => {
+    oauthAdmin.list.mockResolvedValue({
+      success: true,
+      data: [
+        app('own'),
+        app('third-party', { skip_consent: false }),
+        app('public', { confidential: false }),
+        app('off', { disabled: true }),
+      ],
+    })
+    resources.list.mockResolvedValue({ success: true, data: [identifying()] })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    expect(options(w.get('[data-testid="sign-in-app-tool-1"]'))).toEqual(['', 'own'])
+    // No app yet: nothing to ask a second factor for.
+    expect(w.find('[data-testid="second-factor-tool-1"]').exists()).toBe(false)
+
+    resources.list.mockResolvedValue({
+      success: true,
+      data: [identifying({ identify_member: false })],
+    })
+    const off = mount(ResourceWiring)
+    await flushPromises()
+    expect(off.find('[data-testid="sign-in-app-tool-1"]').exists()).toBe(false)
+  })
+
+  it('keeps showing an app that is no longer eligible while a tool still uses it (#241)', async () => {
+    oauthAdmin.list.mockResolvedValue({
+      success: true,
+      data: [app('own'), app('was', { disabled: true })],
+    })
+    resources.list.mockResolvedValue({ success: true, data: [identifying({ sign_in_app: 'was' })] })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    const select = w.get('[data-testid="sign-in-app-tool-1"]')
+    expect((select.element as HTMLSelectElement).value).toBe('was')
+    expect(select.text()).toContain('no longer eligible')
+  })
+
+  it('never shows a tool that signs in as signing in to nothing without the app list (#241)', async () => {
+    oauthAdmin.list.mockResolvedValue({ success: false, error: 'Forbidden' })
+    resources.list.mockResolvedValue({ success: true, data: [identifying({ sign_in_app: 'abc' })] })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    expect((w.get('[data-testid="sign-in-app-tool-1"]').element as HTMLSelectElement).value).toBe(
+      'abc'
+    )
+  })
+
+  it('sends the app and the second factor, and shows what the server says (#241)', async () => {
+    oauthAdmin.list.mockResolvedValue({ success: true, data: [app('own')] })
+    resources.list.mockResolvedValue({ success: true, data: [identifying()] })
+    resources.update.mockResolvedValueOnce({
+      success: true,
+      data: identifying({ sign_in_app: 'own' }),
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    await w.get('[data-testid="sign-in-app-tool-1"]').setValue('own')
+    await flushPromises()
+    expect(resources.update).toHaveBeenLastCalledWith('tool-1', { sign_in_app: 'own' })
+
+    resources.update.mockResolvedValueOnce({
+      success: true,
+      data: identifying({ sign_in_app: 'own', second_factor: 'everyone' }),
+    })
+    const factor = w.get('[data-testid="second-factor-tool-1"]')
+    expect((factor.element as HTMLSelectElement).value).toBe('off')
+    await factor.setValue('everyone')
+    await flushPromises()
+    expect(resources.update).toHaveBeenLastCalledWith('tool-1', { second_factor: 'everyone' })
+    expect((w.get('[data-testid="second-factor-tool-1"]').element as HTMLSelectElement).value).toBe(
+      'everyone'
+    )
+  })
+
+  it('turns the sign-in off with identifying, in one request (#241)', async () => {
+    oauthAdmin.list.mockResolvedValue({ success: true, data: [app('own')] })
+    resources.list.mockResolvedValue({ success: true, data: [identifying({ sign_in_app: 'own' })] })
+    resources.update.mockResolvedValue({
+      success: true,
+      data: identifying({ identify_member: false, sign_in_app: null }),
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    await w.get('[data-testid="identify-tool-1"]').setValue(false)
+    await flushPromises()
+    expect(resources.update).toHaveBeenCalledTimes(1)
+    expect(resources.update).toHaveBeenCalledWith('tool-1', {
+      identify_member: false,
+      sign_in_app: '',
+    })
+    expect(w.find('[data-testid="sign-in-app-tool-1"]').exists()).toBe(false)
+  })
+
+  it('shows the refusal when the server declines a sign-in app (#241)', async () => {
+    oauthAdmin.list.mockResolvedValue({ success: true, data: [app('own')] })
+    resources.list.mockResolvedValue({ success: true, data: [identifying()] })
+    resources.update.mockResolvedValue({
+      success: false,
+      error:
+        "sign_in_app must be an app that is the space's own, has a secret, and is not disabled",
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    await w.get('[data-testid="sign-in-app-tool-1"]').setValue('own')
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(true)
+    expect(w.text()).toContain("sign_in_app must be an app that is the space's own")
   })
 
   it('shows the refusal when the server declines a profile change', async () => {
