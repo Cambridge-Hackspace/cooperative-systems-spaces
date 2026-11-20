@@ -85,6 +85,49 @@
           </label>
 
           <!--
+            #241: a yes can also sign the member in to one of the space's own
+            apps, so a card tap at its station is a sign-in. Only apps CS:S may
+            sign in without asking -- the space's own, with a secret, enabled --
+            are offered; the server holds the same rule and is the authority.
+            It names its member, so it shows only while identifying.
+          -->
+          <div
+            v-if="tool.kind !== 'door' && identifiesMember(tool)"
+            class="flex items-center gap-4 flex-wrap text-sm"
+          >
+            <label class="flex items-center gap-2">
+              <span>A tap signs in to</span>
+              <select
+                class="select select-bordered select-xs"
+                :value="signInAppOf(tool) ?? ''"
+                :data-testid="`sign-in-app-${tool.tool_id}`"
+                @change="setSignInApp(tool, ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="">nothing</option>
+                <option v-if="unlistedApp(tool)" :value="unlistedApp(tool)">
+                  an app this list can't show ({{ unlistedApp(tool) }})
+                </option>
+                <option v-for="a in appsFor(tool)" :key="a.id" :value="a.id">
+                  {{ a.name }}{{ signInEligible(a) ? '' : ' (no longer eligible)' }}
+                </option>
+              </select>
+            </label>
+            <label v-if="signInAppOf(tool)" class="flex items-center gap-2">
+              <span>Also ask for an authenticator code from</span>
+              <select
+                class="select select-bordered select-xs"
+                :value="secondFactorOf(tool)"
+                :data-testid="`second-factor-${tool.tool_id}`"
+                @change="setSecondFactor(tool, ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="off">nobody</option>
+                <option value="admins">admins</option>
+                <option value="everyone">everyone</option>
+              </select>
+            </label>
+          </div>
+
+          <!--
             #190: the session as the platform knows it -- a room in use is a
             fact here now, not only on its coordinator -- and the one action an
             administrator has on it.
@@ -214,8 +257,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useReloadOnReactivate } from '@/composables/useReloadOnReactivate'
-import { doorsApi, resourcesApi, toolModulesApi, toolsApi } from '@/utils/api'
-import type { Door, OpenSessionView, ResourceSummary, ToolModuleStateTool } from '@/types'
+import { doorsApi, oauthAdminApi, resourcesApi, toolModulesApi, toolsApi } from '@/utils/api'
+import type {
+  Door,
+  OAuthClient,
+  OpenSessionView,
+  ResourceSummary,
+  SecondFactor,
+  ToolModuleStateTool,
+  UpdateResourceRequest,
+} from '@/types'
 import type { Tool } from '@/types/tools'
 
 defineProps<{ embedded?: boolean }>()
@@ -227,6 +278,7 @@ const catalog = ref<Tool[]>([])
 const doors = ref<Door[]>([])
 const sessions = ref<OpenSessionView[]>([])
 const settings = ref<ResourceSummary[]>([])
+const apps = ref<OAuthClient[]>([])
 
 const wired = computed(() => resources.value)
 
@@ -267,14 +319,63 @@ function identifiesMember(t: ToolModuleStateTool): boolean {
 }
 
 async function setIdentify(t: ToolModuleStateTool, identify: boolean) {
-  const r = await resourcesApi.update(t.tool_id, { identify_member: identify })
+  // A sign-in names its member (#241), so turning identifying off turns the
+  // sign-in off with it, in the one request the server accepts that in.
+  const body: UpdateResourceRequest = { identify_member: identify }
+  if (!identify && signInAppOf(t)) body.sign_in_app = ''
+  await saveSetting(t, body, 'Identifying the member was not changed')
+}
+
+/** Send a change of a resource's settings, keeping what the server answers. */
+async function saveSetting(t: ToolModuleStateTool, body: UpdateResourceRequest, failed: string) {
+  const r = await resourcesApi.update(t.tool_id, body)
   if (r.success && r.data) {
     const updated = r.data
     settings.value = [...settings.value.filter((s) => s.id !== t.tool_id), updated]
     error.value = ''
   } else {
-    error.value = r.error || 'Identifying the member was not changed'
+    error.value = r.error || failed
   }
+}
+
+/** #241: the app a yes on this tool signs the member in to, if any. */
+function signInAppOf(t: ToolModuleStateTool): string | null {
+  return settings.value.find((s) => s.id === t.tool_id)?.sign_in_app ?? null
+}
+
+/** #241: who also gives a code; off from a server that predates the setting. */
+function secondFactorOf(t: ToolModuleStateTool): SecondFactor {
+  return settings.value.find((s) => s.id === t.tool_id)?.second_factor ?? 'off'
+}
+
+/**
+ * #241: an app CS:S may sign a member in to on a card tap: the space's own
+ * (it skips consent), able to keep a secret, and enabled. The server holds
+ * the same rule (`oidc::card::app_for`) and refuses anything else.
+ */
+function signInEligible(a: OAuthClient): boolean {
+  return a.skip_consent && a.confidential && !a.disabled
+}
+
+/** The apps to offer: the eligible ones, and the current one even if it no longer is. */
+function appsFor(t: ToolModuleStateTool): OAuthClient[] {
+  const current = signInAppOf(t)
+  return apps.value.filter((a) => signInEligible(a) || a.id === current)
+}
+
+/** The current app when the app list does not have it, so it is never shown as nothing. */
+function unlistedApp(t: ToolModuleStateTool): string | null {
+  const current = signInAppOf(t)
+  return current && !apps.value.some((a) => a.id === current) ? current : null
+}
+
+async function setSignInApp(t: ToolModuleStateTool, app: string) {
+  await saveSetting(t, { sign_in_app: app }, 'The sign-in app was not changed')
+}
+
+async function setSecondFactor(t: ToolModuleStateTool, factor: string) {
+  if (factor !== 'off' && factor !== 'admins' && factor !== 'everyone') return
+  await saveSetting(t, { second_factor: factor }, 'The second factor was not changed')
 }
 
 /** The open session on this resource, if the platform knows of one (#190). */
@@ -305,18 +406,22 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [snapshot, all, allDoors, open, attrs] = await Promise.all([
+    const [snapshot, all, allDoors, open, attrs, clients] = await Promise.all([
       toolModulesApi.state(),
       toolsApi.getTools(),
       doorsApi.list(),
       resourcesApi.sessions(),
       resourcesApi.list(),
+      oauthAdminApi.list(),
     ])
     if (snapshot?.success && snapshot.data) resources.value = snapshot.data.tools ?? []
     if (all?.success && all.data) catalog.value = all.data
     if (allDoors?.success && allDoors.data) doors.value = allDoors.data
     if (open?.success && open.data) sessions.value = open.data
     if (attrs?.success && attrs.data) settings.value = attrs.data
+    // Without the app list (an admin who may not manage apps), a tool already
+    // signing in still shows its app, by id, rather than nothing.
+    if (clients?.success && clients.data) apps.value = clients.data
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load resource wiring'
   } finally {

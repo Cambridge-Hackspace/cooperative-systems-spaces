@@ -1001,7 +1001,14 @@ export interface UpdateResourceRequest {
   session_profile?: 'momentary' | 'until_stopped'
   /** #228: name the member on a yes. Tools only. */
   identify_member?: boolean
+  /** #241: the app a yes signs the member in to, by id; '' for none. */
+  sign_in_app?: string
+  /** #241: who also gives a TOTP code at a card sign-in. */
+  second_factor?: SecondFactor
 }
+
+/** #241: who must also give a TOTP code when a card tap signs them in. */
+export type SecondFactor = 'off' | 'admins' | 'everyone'
 
 export interface ResourceSummary {
   id: string
@@ -1009,6 +1016,10 @@ export interface ResourceSummary {
   session_profile: string
   /** #228: the scan reply names who tapped. Always false on a door. */
   identify_member: boolean
+  /** #241: the app a yes signs the member in to, or null. Needs identify_member. */
+  sign_in_app?: string | null
+  /** #241: absent from a server that predates it, which means off. */
+  second_factor?: SecondFactor
 }
 
 // ── CS:S as an OpenID Connect provider (#225) ──────────────────────────────
