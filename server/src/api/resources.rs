@@ -739,6 +739,7 @@ pub async fn build_resource_policy(
     let (tools, user_ids) =
         toolguard::build_sync_payload_with_user_ids(state, device_id, &profile_field).await?;
     let identifying = state.db.identifying_resources()?;
+    let signing_in = state.db.signing_in_resources()?;
     let doors = state.door_service.compile_state_for(device_id)?;
     let profiles: std::collections::HashMap<Uuid, (String, String)> = state
         .db
@@ -786,6 +787,7 @@ pub async fn build_resource_policy(
             deny: Vec::new(),
             hold_until: None,
             identify_member: identifying.contains(&t.id),
+            signs_in: signing_in.contains(&t.id),
         });
     }
     for d in &doors.doors {
@@ -808,6 +810,7 @@ pub async fn build_resource_policy(
             deny: d.deny_cards.clone(),
             hold_until: d.hold_unlock_until.map(|t| t.to_rfc3339()),
             identify_member: false,
+            signs_in: false,
         });
     }
     // #228: a member's id goes to this device only when they may use a tool

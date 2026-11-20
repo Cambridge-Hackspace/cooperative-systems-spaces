@@ -187,6 +187,9 @@ struct Entry {
     hold_until: Option<DateTime<Utc>>,
     /// Name the member on a yes (#228); only the policy shape can say so.
     identify_member: bool,
+    /// A yes signs the member in to an app (#241): the server issues the
+    /// sign-in, and no session opens. Only the policy shape can say so.
+    signs_in: bool,
 }
 
 impl Entry {
@@ -217,6 +220,7 @@ impl Entry {
             deny: p.deny.clone(),
             hold_until,
             identify_member: p.identify_member,
+            signs_in: p.signs_in,
         })
     }
 
@@ -236,6 +240,7 @@ impl Entry {
             deny: Vec::new(),
             hold_until: None,
             identify_member: false,
+            signs_in: false,
         }
     }
 
@@ -255,6 +260,7 @@ impl Entry {
             deny: d.deny_cards.clone(),
             hold_until: d.hold_unlock_until,
             identify_member: false,
+            signs_in: false,
         }
     }
 
@@ -586,6 +592,16 @@ impl ResourceCache {
             profile: SessionProfile::parse(&e.session_profile, e.kind),
             pulse_ms: e.pulse_ms,
         })
+    }
+
+    /// Whether a yes on this resource signs the member in to an app (#241):
+    /// the server issues the sign-in, and no session opens here.
+    pub fn signs_in(&self, name: &str) -> bool {
+        self.policy
+            .read()
+            .expect("policy lock")
+            .find(name)
+            .is_some_and(|e| e.signs_in)
     }
 
     /// Whether the server insists on deciding this resource itself.
@@ -966,6 +982,7 @@ mod tests {
             deny: Vec::new(),
             hold_until: None,
             identify_member: false,
+            signs_in: false,
         }
     }
 
@@ -1099,6 +1116,31 @@ mod tests {
                 "a name nothing knows is judged against the principals, as it always was"
             );
         }
+    }
+
+    /// #241: whether a resource signs in comes from the policy, by either of
+    /// its names, and from nothing else: a resource the policy does not mark,
+    /// and a name nothing knows, do not.
+    #[test]
+    fn a_resource_signs_in_only_where_the_policy_says() {
+        let c = empty(wired(""), true);
+        c.apply_policy(policy(), None);
+        assert!(!c.signs_in("laser"), "off unless the policy says so");
+        let mut p = policy();
+        for r in p
+            .resources
+            .iter_mut()
+            .filter(|r| r.id == tool_id().to_string())
+        {
+            r.identify_member = true;
+            r.signs_in = true;
+        }
+        let c = empty(wired(""), true);
+        c.apply_policy(p, None);
+        assert!(c.signs_in("laser"));
+        assert!(c.signs_in(&tool_id().to_string()));
+        assert!(!c.signs_in("drill"));
+        assert!(!c.signs_in("not-a-resource"));
     }
 
     /// The policy with the laser set to identify its member (#228), and the

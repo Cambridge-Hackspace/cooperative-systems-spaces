@@ -80,6 +80,7 @@ fn door(
         deny,
         hold_until: hold,
         identify_member: false,
+        signs_in: false,
     }
 }
 

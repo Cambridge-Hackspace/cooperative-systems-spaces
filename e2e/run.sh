@@ -2574,6 +2574,10 @@ stage_lease() {
 
   run_node lease.mjs setup "${MQTT_PORT}" "${CARDS_DEVICE_PEPPER}" >"${OUT}/logs/lease-setup.log" 2>&1 || true
   absorb_driver_cases || true
+  # #241 stage 2: a tool bound to this edge, set to sign in, so the edge's first
+  # policy sync carries it. Asserted by edgesignin.mjs after the scan below.
+  run_node edgesignin.mjs setup >"${OUT}/logs/edgesignin-setup.log" 2>&1 || true
+  absorb_driver_cases || true
 
   # A cluster that cannot store an emoji invite code cannot register a device,
   # so there is nothing to bind and nothing to coordinate. The driver records
@@ -2858,6 +2862,27 @@ stage_lease() {
   wait "${toolon_sub}" || true
   wait "${toolon_leak_sub}" || true
 
+  # ---- a sign-in decided at the edge (#241, stage 2) ------------------------
+  #
+  # The member's card at the tool set to sign in: the edge decides the yes from
+  # its principals, then asks the server for the sign-in and puts it on this
+  # reply. Subscribe before publish, as above. Asserted by edgesignin.mjs.
+  if [[ -s "${STACK_DIR}/edgesignin-tool" ]]; then
+    local signin_tool
+    signin_tool="$(cat "${STACK_DIR}/edgesignin-tool")"
+    mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/edgesignin-reply.txt" &
+    local signin_sub=$!
+    # The tool's plug, leased NotInUse while idle: a session opened by the tap
+    # would grant it here (edgesignin.mjs).
+    mqtt_sub "resource/lease" 4 "${STACK_DIR}/edgesignin-lease.txt" &
+    local signin_lease_sub=$!
+    sleep 1
+    mqtt_pub "resource/request/scan" \
+      "{\"card\":\"$(cat "${STACK_DIR}/lease-card")\",\"resource\":\"${signin_tool}\"}" || true
+    wait "${signin_sub}" || true
+    wait "${signin_lease_sub}" || true
+  fi
+
   stop_edge
 
   # Window 3: the absence, with time allowed to pass. Opened after the edge is
@@ -2872,6 +2897,9 @@ stage_lease() {
   # this is a claim about the tool-on envelope and not about the lease, and
   # putting it in lease.mjs would bury it under a name nobody greps for it by.
   run_node toolonreply.mjs assert >"${OUT}/logs/toolonreply.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  run_node edgesignin.mjs assert >"${OUT}/logs/edgesignin.log" 2>&1 || true
   absorb_driver_cases || true
 
   collect_server_log

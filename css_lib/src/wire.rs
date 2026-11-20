@@ -144,6 +144,11 @@ pub struct ResourcePolicy {
     /// on for a tool.
     #[serde(default)]
     pub identify_member: bool,
+    /// A yes here signs the member in to one of the space's own apps (#241):
+    /// the edge asks the server for the sign-in rather than answering alone,
+    /// and opens no session, since such a resource occupies nothing.
+    #[serde(default)]
+    pub signs_in: bool,
 }
 
 fn default_true() -> bool {

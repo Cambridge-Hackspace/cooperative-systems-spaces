@@ -168,7 +168,7 @@ export function tokenOf(res) {
  * operation needs -- entry auth accepts any binding, but the metered gate
  * requires `power` specifically.
  */
-export async function boundDevice(adminToken, resourceId, { role = 'power', name, mac }) {
+export async function boundDevice(adminToken, resourceId, { role = 'power', name, mac, onDisconnect }) {
   const invite = await POST('/api/admin/devices/invite', {
     token: adminToken,
     body: { expires_in_hours: 1 },
@@ -187,7 +187,14 @@ export async function boundDevice(adminToken, resourceId, { role = 'power', name
   const token = reg.json?.data?.auth_token ?? reg.json?.auth_token
   const bind = await POST('/api/admin/device-bindings', {
     token: adminToken,
-    body: { resource_id: resourceId, device_id: id, role, name: name ?? `${role} device` },
+    body: {
+      resource_id: resourceId,
+      device_id: id,
+      role,
+      name: name ?? `${role} device`,
+      // Sent only when asked for, so every other caller keeps the server's default.
+      ...(onDisconnect ? { on_disconnect: onDisconnect } : {}),
+    },
   })
   return {
     id,

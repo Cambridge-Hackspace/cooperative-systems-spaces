@@ -610,7 +610,7 @@ impl LocalMqttClient {
         reason: &str,
         pulse_ms: Option<i32>,
     ) {
-        self.publish_scan_reply_naming(resource, authorized, reason, pulse_ms, None);
+        self.publish_scan_reply_naming(resource, authorized, reason, pulse_ms, None, None);
     }
 
     /// The same reply, naming the member when the resource identifies (#228).
@@ -622,8 +622,12 @@ impl LocalMqttClient {
         reason: &str,
         pulse_ms: Option<i32>,
         member: Option<css_lib::wire::LocalMember>,
+        sign_in: Option<css_lib::wire::LocalSignIn>,
     ) {
-        let reply = LocalScanReply::new(resource, authorized, reason, pulse_ms).with_member(member);
+        // Both drop themselves on a refusal (#228, #241).
+        let reply = LocalScanReply::new(resource, authorized, reason, pulse_ms)
+            .with_member(member)
+            .with_sign_in(sign_in);
         match serde_json::to_value(&reply) {
             Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
             Err(e) => warn!("Failed to serialize scan reply: {}", e),
@@ -647,16 +651,58 @@ impl LocalMqttClient {
             .resolve(&req.resource)
             .map(|r| r.kind)
             .unwrap_or(Kind::Tool);
-        let (authorized, reason, strike_ms, member) =
-            match self.cache.decide(&req.resource, &req.card, now) {
-                ScanDecision::Allow { strike_ms, member } => {
-                    (true, "authorized".to_string(), strike_ms, member)
-                }
-                ScanDecision::Deny(why) => (false, why, None, None),
-                ScanDecision::AskServer => self.remote_scan(&req).await,
-            };
+        let signs_in = self.cache.signs_in(&req.resource);
+        let ServerScan {
+            authorized,
+            reason,
+            strike_ms,
+            member,
+            sign_in,
+        } = match self.cache.decide(&req.resource, &req.card, now) {
+            // #241: a yes on a resource that signs in is the server's to
+            // complete, since only the server issues a sign-in. Unreachable,
+            // the yes stands as decided here, with no sign-in.
+            ScanDecision::Allow { strike_ms, member } if signs_in => {
+                let local = ServerScan {
+                    authorized: true,
+                    reason: "authorized".to_string(),
+                    strike_ms,
+                    member,
+                    sign_in: None,
+                };
+                with_server_sign_in(local, self.ask_server(&req).await)
+            }
+            ScanDecision::Allow { strike_ms, member } => ServerScan {
+                authorized: true,
+                reason: "authorized".to_string(),
+                strike_ms,
+                member,
+                sign_in: None,
+            },
+            ScanDecision::Deny(why) => ServerScan {
+                authorized: false,
+                reason: why,
+                strike_ms: None,
+                member: None,
+                sign_in: None,
+            },
+            ScanDecision::AskServer => self.remote_scan(&req).await,
+        };
 
-        self.publish_scan_reply_naming(&req.resource, authorized, &reason, strike_ms, member);
+        self.publish_scan_reply_naming(
+            &req.resource,
+            authorized,
+            &reason,
+            strike_ms,
+            member,
+            sign_in,
+        );
+
+        // A resource that signs in occupies nothing (#241): no session here,
+        // and the server, already asked, has none to open.
+        if signs_in {
+            return;
+        }
 
         if authorized {
             // The session this edge just opened is what a lease is for (#179),
@@ -854,19 +900,10 @@ impl LocalMqttClient {
         );
     }
 
-    /// Synchronously ask the server to decide a scan (and, for a metered tool,
-    /// place the hold) on its resource path (#182). Returns `(authorized,
-    /// reason, strike_ms)`. Any transport or non-2xx error is a denial -- fail
-    /// closed.
-    async fn remote_scan(
-        &self,
-        req: &LocalScan,
-    ) -> (
-        bool,
-        String,
-        Option<i32>,
-        Option<css_lib::wire::LocalMember>,
-    ) {
+    /// Ask the server for its answer to a scan (#182): the resource path, as
+    /// any device asks. `Err` when the server cannot be reached or answers
+    /// something unreadable, with the words a refusal would carry.
+    async fn ask_server(&self, req: &LocalScan) -> Result<ServerScan, String> {
         let url = format!(
             "{}/api/resources/{}/scan",
             self.remote_instance_url, req.resource
@@ -881,45 +918,26 @@ impl LocalMqttClient {
             .await
         {
             Ok(resp) => match resp.json::<serde_json::Value>().await {
-                Ok(body) => {
-                    // The server's envelope for a scan is { status, message,
-                    // authorized, strike? }; `tool_on` is the same bit under
-                    // the alias name, read in case an older server answers.
-                    let authorized = body
-                        .get("authorized")
-                        .or_else(|| body.get("tool_on"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let reason = body
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(if authorized { "authorized" } else { "denied" })
-                        .to_string();
-                    let strike_ms = body
-                        .get("strike")
-                        .and_then(|s| s.get("pulse_ms"))
-                        .and_then(|v| v.as_i64())
-                        .map(|v| v as i32);
-                    // #228: the server names the member on a yes for a
-                    // resource that identifies; a malformed one names nobody.
-                    let member = body
-                        .get("member")
-                        .cloned()
-                        .and_then(|m| serde_json::from_value(m).ok());
-                    (authorized, reason, strike_ms, member)
-                }
-                Err(e) => (
-                    false,
-                    format!("server response unreadable: {e}"),
-                    None,
-                    None,
-                ),
+                Ok(body) => Ok(parse_server_scan(&body)),
+                Err(e) => Err(format!("server response unreadable: {e}")),
             },
             Err(e) => {
                 warn!("online-sync scan to remote failed: {}", e);
-                (false, "server unreachable".to_string(), None, None)
+                Err("server unreachable".to_string())
             }
         }
+    }
+
+    /// The server's answer for a resource it decides itself: refused when it
+    /// cannot be asked, since nothing here may decide in its place.
+    async fn remote_scan(&self, req: &LocalScan) -> ServerScan {
+        self.ask_server(req).await.unwrap_or_else(|why| ServerScan {
+            authorized: false,
+            reason: why,
+            strike_ms: None,
+            member: None,
+            sign_in: None,
+        })
     }
 
     async fn handle_stop(&self, req: LocalStop) {
@@ -1217,4 +1235,153 @@ pub async fn run_local_mqtt_event_loop(
     }
 
     Ok(())
+}
+
+/// The server's answer to a scan, as the resource path gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ServerScan {
+    authorized: bool,
+    reason: String,
+    strike_ms: Option<i32>,
+    member: Option<css_lib::wire::LocalMember>,
+    /// #241: the sign-in, on a yes for a resource that signs in.
+    sign_in: Option<css_lib::wire::LocalSignIn>,
+}
+
+/// Read the server's envelope for a scan: `{ status, message, authorized,
+/// strike?, member?, sign_in? }`; `tool_on` is the same bit under the alias
+/// name, read in case an older server answers. A malformed `member` or
+/// `sign_in` is read as absent, never as a guess.
+fn parse_server_scan(body: &serde_json::Value) -> ServerScan {
+    let authorized = body
+        .get("authorized")
+        .or_else(|| body.get("tool_on"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let reason = body
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or(if authorized { "authorized" } else { "denied" })
+        .to_string();
+    let strike_ms = body
+        .get("strike")
+        .and_then(|s| s.get("pulse_ms"))
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let member = body
+        .get("member")
+        .cloned()
+        .and_then(|m| serde_json::from_value(m).ok());
+    let sign_in = body
+        .get("sign_in")
+        .cloned()
+        .and_then(|s| serde_json::from_value(s).ok());
+    ServerScan {
+        authorized,
+        reason,
+        strike_ms,
+        member,
+        sign_in,
+    }
+}
+
+/// A local yes on a resource that signs in, completed by the server (#241):
+/// its answer is the answer -- a refusal included, since the server is the
+/// authority whenever it can be asked. Unreachable, the local yes stands with
+/// no sign-in: the tap still names the member, and the app says it cannot sign
+/// them in just now.
+fn with_server_sign_in(local: ServerScan, server: Result<ServerScan, String>) -> ServerScan {
+    match server {
+        Ok(answer) => answer,
+        Err(why) => {
+            warn!("sign-in for a yes decided here: the server could not be asked ({why}); answering with no sign-in");
+            ServerScan {
+                sign_in: None,
+                ..local
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+    use css_lib::wire::{LocalMember, LocalSignIn};
+
+    fn alex() -> LocalMember {
+        LocalMember {
+            id: "6f1c0b8e-0000-4000-8000-000000000001".to_string(),
+            name: "Alex Doe".to_string(),
+        }
+    }
+
+    fn local_yes() -> ServerScan {
+        ServerScan {
+            authorized: true,
+            reason: "authorized".to_string(),
+            strike_ms: None,
+            member: Some(alex()),
+            sign_in: None,
+        }
+    }
+
+    #[test]
+    fn the_server_s_sign_in_is_read_from_its_answer() {
+        let s = parse_server_scan(&serde_json::json!({
+            "status": "ok", "message": "Authorized", "authorized": true,
+            "member": {"id": alex().id, "name": "Alex Doe"},
+            "sign_in": {"kind": "code", "code": "c0de"},
+        }));
+        assert!(s.authorized);
+        assert_eq!(s.member, Some(alex()));
+        assert_eq!(
+            s.sign_in,
+            Some(LocalSignIn::Code {
+                code: "c0de".into()
+            })
+        );
+        let t = parse_server_scan(
+            &serde_json::json!({"authorized": true, "sign_in": {"kind": "totp", "ticket": "t"}}),
+        );
+        assert_eq!(t.sign_in, Some(LocalSignIn::Totp { ticket: "t".into() }));
+    }
+
+    #[test]
+    fn a_malformed_sign_in_is_absent_never_guessed() {
+        for bad in [
+            serde_json::json!({"kind": "code"}),
+            serde_json::json!({"kind": "sorcery", "code": "x"}),
+            serde_json::json!("c0de"),
+        ] {
+            let s = parse_server_scan(&serde_json::json!({"authorized": true, "sign_in": bad}));
+            assert_eq!(s.sign_in, None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_reachable_server_s_answer_is_the_answer_a_refusal_included() {
+        let code = ServerScan {
+            sign_in: Some(LocalSignIn::Code {
+                code: "c0de".into(),
+            }),
+            ..local_yes()
+        };
+        assert_eq!(with_server_sign_in(local_yes(), Ok(code.clone())), code);
+        let no = ServerScan {
+            authorized: false,
+            reason: "Training required".into(),
+            strike_ms: None,
+            member: None,
+            sign_in: None,
+        };
+        assert_eq!(with_server_sign_in(local_yes(), Ok(no.clone())), no);
+    }
+
+    #[test]
+    fn an_unreachable_server_leaves_the_local_yes_with_no_sign_in() {
+        let out = with_server_sign_in(local_yes(), Err("server unreachable".into()));
+        assert!(out.authorized);
+        assert_eq!(out.member, Some(alex()));
+        assert_eq!(out.sign_in, None);
+    }
 }
