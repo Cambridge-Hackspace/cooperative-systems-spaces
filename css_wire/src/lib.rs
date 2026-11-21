@@ -226,8 +226,11 @@ pub enum LocalSignIn {
     /// `grant_type=urn:css:card-sign-in` and the app's own credentials,
     /// within a minute, once.
     Code { code: String },
-    /// Ask the member for their TOTP code first, and send it with this ticket
-    /// to `POST /api/oauth/card-sign-in/second-factor`, within two minutes.
+    /// Ask the member for their TOTP code first, and redeem this ticket with
+    /// it at the provider's token endpoint, in place of a code:
+    /// `grant_type=urn:css:card-sign-in`, `ticket` and `totp`, with the app's
+    /// own credentials, within two minutes. A wrong code may be retried with
+    /// the same ticket, three tries in all.
     Totp { ticket: String },
     /// No sign-in for this tap, and why, in words for the member: the
     /// resource asks for a second factor they have not set up, say.
