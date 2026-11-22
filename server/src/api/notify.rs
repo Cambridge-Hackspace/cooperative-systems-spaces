@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use axum::extract::{FromRequestParts, Path, State};
 use axum::http::request::Parts;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::{Duration, Utc};
@@ -51,53 +51,6 @@ fn disabled() -> ApiError {
     ApiError::NotFound("The OpenID Connect provider is not enabled".to_string())
 }
 
-/// The app behind an app token: a client-credentials token that carries
-/// `notify:members`, for an app that may still hold it. The header's shape is
-/// checked before anything touches the database.
-fn app_from_token(state: &AppState, headers: &HeaderMap) -> Result<OauthClient, ApiError> {
-    let unauthorized = || ApiError::Unauthorized("An app access token is required".to_string());
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .ok_or_else(unauthorized)?;
-    if !oidc::enabled(state) {
-        return Err(disabled());
-    }
-    let claims =
-        oidc::verify(state, token, Some(&oidc::api_audience(state)), false).map_err(|why| {
-            tracing::info!("relay token refused: {why:?}");
-            unauthorized()
-        })?;
-    let sub = claims
-        .get("sub")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let Some(client_id) = sub.strip_prefix("client:") else {
-        return Err(ApiError::Forbidden(
-            "This is a member's token. The relay takes the app's own token (client credentials)."
-                .to_string(),
-        ));
-    };
-    let scopes = claims
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !scopes.split_whitespace().any(|s| s == SCOPE) {
-        return Err(ApiError::Forbidden(format!(
-            "This token does not carry {SCOPE}"
-        )));
-    }
-    match state.db.oauth_client_by_client_id(client_id)? {
-        // Checked again now: an app whose scope was taken away, or that was
-        // disabled, stops being able to send at once, not when its token expires.
-        Some(c) if !c.disabled && c.allowed_scopes.iter().any(|s| s == SCOPE) => Ok(c),
-        _ => Err(unauthorized()),
-    }
-}
-
 fn audit(state: &AppState, event: AuditEventType, user: Option<Uuid>, data: Value) {
     let _ = state.db.create_audit_log(&NewAuditLog {
         event_type: event.as_str().to_string(),
@@ -122,7 +75,7 @@ impl FromRequestParts<AppState> for RelayApp {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        app_from_token(state, &parts.headers).map(RelayApp)
+        crate::api::oidc::app_from_token(state, &parts.headers, SCOPE).map(RelayApp)
     }
 }
 

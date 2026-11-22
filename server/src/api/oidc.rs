@@ -11,6 +11,8 @@
 //! - `GET  /api/oauth/logout`                  RP-initiated logout
 //! - `POST /api/oauth/end-session`             finishes it, from CS:S's own page
 //! - `GET  /api/oauth/me/tools`                training, under `training:read`
+//! - `GET  /api/oauth/members/{sub}/tools`     any member's, to an app with
+//!   `training:members` (client credentials)
 //!
 //! **Why authorize doesn't decide.** CS:S's session cookie is `SameSite=Strict`
 //! (its defense against cross-site request forgery), so a browser arriving from
@@ -53,6 +55,7 @@ pub fn routes() -> Router<AppState> {
         .route("/logout", get(logout))
         .route("/end-session", post(end_session))
         .route("/me/tools", get(my_tools))
+        .route("/members/{sub}/tools", get(member_tools))
 }
 
 /// Mounted at `/api/admin/oauth`. Each handler checks `oauth.clients.manage`.
@@ -1056,12 +1059,37 @@ async fn my_tools(
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<Vec<ToolTraining>>>, ApiError> {
     let t = member_token(&state, &headers, "training:read")?;
+    Ok(Json(ApiResponse::success(tools_for(&state, &t.user)?)))
+}
+
+/// `GET /api/oauth/members/{sub}/tools` -- the same answer for any member, to
+/// an app acting as itself with `training:members` (client credentials). It
+/// lets an app ask at each use, without keeping members' tokens. A member who
+/// does not exist or is deactivated is 404: an app learns nothing it may use.
+async fn member_tools(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(sub): Path<String>,
+) -> Result<Json<ApiResponse<Vec<ToolTraining>>>, ApiError> {
+    app_from_token(&state, &headers, "training:members")?;
+    let not_found = || ApiError::NotFound("No such member".to_string());
+    let id = Uuid::parse_str(&sub).map_err(|_| not_found())?;
+    let user = match state.db.find_user_by_id(id)? {
+        Some(u) if u.is_active => u,
+        _ => return Err(not_found()),
+    };
+    Ok(Json(ApiResponse::success(tools_for(&state, &user)?)))
+}
+
+/// Every tool, and whether `user` may start it: trained on it, or it needs no
+/// training.
+fn tools_for(state: &AppState, user: &User) -> Result<Vec<ToolTraining>, ApiError> {
     let mut out = Vec::new();
     for tool in state.db.oauth_all_tools()? {
         let authorized =
             state
                 .db
-                .user_is_authorized_for_tool(t.user.id, tool.id, tool.requires_training)?;
+                .user_is_authorized_for_tool(user.id, tool.id, tool.requires_training)?;
         out.push(ToolTraining {
             id: tool.id,
             external_id: tool.external_id.clone(),
@@ -1069,7 +1097,59 @@ async fn my_tools(
             authorized,
         });
     }
-    Ok(Json(ApiResponse::success(out)))
+    Ok(out)
+}
+
+/// The app behind an app token: a client-credentials token that carries
+/// `scope`, an app scope (`notify:members`, `training:members`), for an app
+/// that may still hold it. The header's shape is checked before anything
+/// touches the database.
+pub(crate) fn app_from_token(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+) -> Result<OauthClient, ApiError> {
+    let unauthorized = || ApiError::Unauthorized("An app access token is required".to_string());
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(unauthorized)?;
+    if !oidc::enabled(state) {
+        return Err(disabled());
+    }
+    let claims =
+        oidc::verify(state, token, Some(&oidc::api_audience(state)), false).map_err(|why| {
+            tracing::info!("app token refused: {why:?}");
+            unauthorized()
+        })?;
+    let sub = claims
+        .get("sub")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(client_id) = sub.strip_prefix("client:") else {
+        return Err(ApiError::Forbidden(
+            "This is a member's token. This takes the app's own token (client credentials)."
+                .to_string(),
+        ));
+    };
+    let scopes = claims
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !scopes.split_whitespace().any(|s| s == scope) {
+        return Err(ApiError::Forbidden(format!(
+            "This token does not carry {scope}"
+        )));
+    }
+    match state.db.oauth_client_by_client_id(client_id)? {
+        // Checked again now: an app whose scope was taken away, or that was
+        // disabled, stops being able to send at once, not when its token expires.
+        Some(c) if !c.disabled && c.allowed_scopes.iter().any(|s| s == scope) => Ok(c),
+        _ => Err(unauthorized()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1239,7 +1319,7 @@ async fn create_client(
             .any(|s| flow::APP_SCOPES.contains(&s.as_str()))
     {
         return Err(ApiError::BadRequest(
-            "an app without a secret can't act as itself, so it can't hold notify:members"
+            "an app without a secret can't act as itself, so it can't hold notify:members or training:members"
                 .to_string(),
         ));
     }
@@ -1301,7 +1381,7 @@ async fn update_client(
         check_scopes(s)?;
         if !current.confidential && s.iter().any(|x| flow::APP_SCOPES.contains(&x.as_str())) {
             return Err(ApiError::BadRequest(
-                "an app without a secret can't act as itself, so it can't hold notify:members"
+                "an app without a secret can't act as itself, so it can't hold notify:members or training:members"
                     .to_string(),
             ));
         }

@@ -23,6 +23,7 @@ import {
   POST,
   PUT,
   PATCH,
+  DELETE,
   PASSWORD,
   RUN_TAG,
   account,
@@ -362,6 +363,56 @@ await main(async () => {
   // that 403 insufficient_scope, not 401. Refused either way.
   assertEq('oidc/an-app-token-is-not-a-member-token', 403,
     (await GET('/api/oauth/userinfo', { token: cc.json?.access_token })).status)
+
+  // ---- any member's training, to the app acting as itself (training:members) -------
+  // An app that asks at each use, such as POP before a print, so a member who
+  // loses training is refused at once without the app keeping their tokens.
+  const trainer = await mk({ name: `Trainer ${RUN_TAG}`, redirect_uris: [], allowed_scopes: ['openid', 'training:members'] })
+  const TRAIN = { id: trainer.client.client_id, secret: trainer.client_secret }
+  const gated = await POST('/api/tools', {
+    ...T,
+    body: {
+      name: `E2E gated ${RUN_TAG}`, category: 'other', requires_training: true, external_id: `oidc-gated-${RUN_TAG}`,
+      usage_flat_fee: null, usage_rate_per_min: null, usage_max_session_minutes: null,
+    },
+  })
+  assertEq('oidc/a-gated-tool-is-made', 200, gated.status, gated.text.slice(0, 200))
+  const gatedId = gated.json?.data?.id
+  const tc = await tokenRequest({ grant_type: 'client_credentials', scope: 'training:members' }, TRAIN)
+  assertEq('oidc/training-members-issues-an-app-token', 200, tc.status, tc.text.slice(0, 200))
+  const theirs = (sub, token = tc.json?.access_token) => GET(`/api/oauth/members/${sub}/tools`, { token })
+  const verdict = (res) => (res.json?.data ?? []).find((x) => x.id === gatedId)?.authorized
+  const untrainedYet = await theirs(member.user.id)
+  assertEq('oidc/an-app-reads-a-member-s-training', 200, untrainedYet.status, untrainedYet.text.slice(0, 200))
+  assertEq('oidc/an-untrained-member-may-not-use-a-gated-tool', false, verdict(untrainedYet), untrainedYet.text.slice(0, 300))
+  const waiver = await POST(`/api/waivers/user/${member.user.id}/tool/${gatedId}`, { ...T, body: { reason: 'e2e training' } })
+  assertEq('oidc/the-member-is-trained', 200, waiver.status, waiver.text.slice(0, 200))
+  const trained = await theirs(member.user.id)
+  assertEq('oidc/a-trained-member-may-use-it-at-the-next-ask', true, verdict(trained), trained.text.slice(0, 300))
+  // Two oracles: the app's answer is the member's own, from me/tools.
+  const own = await GET('/api/oauth/me/tools', { token: t.access_token })
+  assertEq('oidc/the-app-s-answer-is-the-member-s-own', JSON.stringify(own.json?.data), JSON.stringify(trained.json?.data))
+  const untrained = await DELETE(`/api/waivers/${waiver.json?.data?.id}`, T)
+  assertEq('oidc/the-training-is-taken-away', 200, untrained.status, untrained.text.slice(0, 200))
+  const untrainedNow = await theirs(member.user.id)
+  assertEq('oidc/a-member-who-loses-training-is-refused-at-the-next-ask', false, verdict(untrainedNow), untrainedNow.text.slice(0, 300))
+  // Who may ask, and about whom.
+  assertEq('oidc/members-tools-without-a-token-is-401', 401, (await GET(`/api/oauth/members/${member.user.id}/tools`)).status)
+  assertEq('oidc/a-member-token-cannot-read-another-s-training', 403, (await theirs(member.user.id, t.access_token)).status)
+  assertEq('oidc/an-app-token-for-notify-cannot-read-training', 403, (await theirs(member.user.id, cc.json?.access_token)).status)
+  assertEq('oidc/an-unknown-member-is-404', 404, (await theirs('00000000-0000-4000-8000-000000000001')).status)
+  assertEq('oidc/a-malformed-sub-is-404', 404, (await theirs('not-a-uuid')).status)
+  const tcPublic = await tokenRequest({ grant_type: 'client_credentials', scope: 'training:members', client_id: spa.client.client_id })
+  assertEq('oidc/a-public-app-cannot-read-members-training', 'unauthorized_client', tcPublic.json?.error, tcPublic.text.slice(0, 200))
+  const publicHolds = await POST('/api/admin/oauth/clients', {
+    ...T,
+    body: { name: `SPA training ${RUN_TAG}`, confidential: false, redirect_uris: [REDIRECT], allowed_scopes: ['openid', 'training:members'] },
+  })
+  assertEq('oidc/a-public-app-cannot-be-granted-training-members', 400, publicHolds.status, publicHolds.text.slice(0, 200))
+  // The scope taken away stops the token already issued, at once.
+  const taken = await PATCH(`/api/admin/oauth/clients/${trainer.client.id}`, { ...T, body: { allowed_scopes: ['openid'] } })
+  assertEq('oidc/training-members-can-be-taken-away', 200, taken.status, taken.text.slice(0, 200))
+  assertEq('oidc/a-taken-scope-stops-the-issued-token', 401, (await theirs(member.user.id)).status)
 
   // ---- key rotation ------------------------------------------------------------------
   // The replay above revoked every token this member held with POP, r1's

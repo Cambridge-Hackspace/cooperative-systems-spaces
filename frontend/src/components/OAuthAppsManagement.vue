@@ -180,7 +180,8 @@ import { oauthAdminApi } from '@/utils/api'
 import type { OAuthClient } from '@/types'
 
 // What an administrator can grant, in the words the consent page uses.
-// `notify:members` is the app acting as itself (#226), never for a member.
+// `notify:members` (#226) and `training:members` are the app acting as itself,
+// never for a member.
 const SCOPES = [
   { scope: 'openid', label: 'Confirm who the member is (always)' },
   { scope: 'profile', label: 'Their name and username' },
@@ -188,6 +189,7 @@ const SCOPES = [
   { scope: 'roles', label: 'Their roles in CS:S' },
   { scope: 'training:read', label: 'Which tools they are trained on' },
   { scope: 'notify:members', label: 'Send members notifications (needs a secret)' },
+  { scope: 'training:members', label: "Read any member's training (needs a secret)" },
 ]
 
 const apps = ref<OAuthClient[]>([])

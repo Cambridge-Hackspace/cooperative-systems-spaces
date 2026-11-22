@@ -48,6 +48,7 @@ The other settings and their defaults:
   | `roles` | `roles`: the member's CS:S role names. |
   | `training:read` | `GET /api/oauth/me/tools`: each tool, and whether the member may use it. |
   | `notify:members` | The app acting as itself, to message members (#226). Only through the client-credentials grant, and only for an app with a secret. |
+  | `training:members` | The app acting as itself: `GET /api/oauth/members/{sub}/tools`, any member's tools and whether they may use each. Only through the client-credentials grant, and only for an app with a secret. |
 
 - **A secret, or not.** A server has one. An app running in a browser or on a
   phone can't keep one, and signs in with PKCE alone. The secret is shown once,
@@ -101,6 +102,23 @@ progress.
 
 Merging account B into account A ends B's sign-ins in every app: B's codes,
 refresh tokens and consents go with B. A's `sub` doesn't change.
+
+## Asking about a member's training
+
+An app that checks training at each use, such as POP before a print, asks with
+its own token instead of keeping members' tokens to ask with.
+
+1. **Register the app with `training:members`.** It needs a secret, and gets
+   its token through the client-credentials grant
+   (`grant_type=client_credentials&scope=training:members`).
+2. **Ask**: `GET /api/oauth/members/{sub}/tools`, where `sub` is the member's
+   id from their sign-in. The answer is the one `GET /api/oauth/me/tools`
+   gives that member: `{"success": true, "data": [{"id", "external_id",
+   "name", "authorized"}]}`, as it is now.
+
+A member who doesn't exist or is deactivated is `404`. An app holding this
+scope can read every member's training, so grant it only to the space's own
+apps. Taking the scope away, or disabling the app, stops its tokens at once.
 
 ## Messaging members (the notification relay)
 

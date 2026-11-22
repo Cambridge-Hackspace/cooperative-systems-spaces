@@ -284,6 +284,7 @@ pub const ROUTES: &[R] = &[
     R("GET", "/api/oauth/logout", Guard::Public), // oidc::logout
     R("POST", "/api/oauth/end-session", Guard::Public), // oidc::end_session
     R("GET", "/api/oauth/me/tools", Guard::InlineAuth), // oidc::my_tools: an OAuth access token
+    R("GET", "/api/oauth/members/00000000-0000-4000-8000-000000000001/tools", Guard::InlineAuth), // oidc::member_tools: an app token (training:members)
     R("GET", "/api/notify/kinds", Guard::InlineAuth), // notify::list_kinds (#226): an app token
     R("PUT", "/api/notify/kinds", Guard::InlineAuth), // notify::declare_kinds: an app token
     R("POST", "/api/notify/members/00000000-0000-4000-8000-000000000001", Guard::InlineAuth), // notify::notify_member: an app token
