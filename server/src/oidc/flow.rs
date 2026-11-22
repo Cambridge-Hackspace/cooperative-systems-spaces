@@ -19,11 +19,14 @@ pub const SCOPES: &[(&str, &str)] = &[
     // Not a member's to grant: an app holds it itself (client credentials),
     // to message members through their own notification settings (#226).
     ("notify:members", "Send members notifications through CS:S"),
+    // The app asks which tools any member is trained on, at each use, rather
+    // than keeping members' own tokens to ask with.
+    ("training:members", "Which tools any member is trained on"),
 ];
 
 /// Scopes that act for the app itself rather than for a member, so they are
 /// only ever granted through the client-credentials grant.
-pub const APP_SCOPES: &[&str] = &["notify:members"];
+pub const APP_SCOPES: &[&str] = &["notify:members", "training:members"];
 
 /// PKCE (RFC 7636), S256 only: is `verifier` the one `challenge` was made from?
 /// A verifier outside the RFC's alphabet or length is refused outright.

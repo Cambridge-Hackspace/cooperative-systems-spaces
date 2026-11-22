@@ -249,6 +249,8 @@ fn guard_of(src: &str, handler: &str) -> String {
         // keys) read from the Authorization header by `member_token`.
         "userinfo",
         "my_tools",
+        // An app token carrying `training:members`, read by `app_from_token`.
+        "member_tools",
     ];
     if INLINE_AUTH.contains(&handler) && sig.contains("HeaderMap") {
         return "InlineAuth".to_string();
