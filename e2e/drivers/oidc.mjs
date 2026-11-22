@@ -402,6 +402,15 @@ await main(async () => {
   assertEq('oidc/an-app-token-for-notify-cannot-read-training', 403, (await theirs(member.user.id, cc.json?.access_token)).status)
   assertEq('oidc/an-unknown-member-is-404', 404, (await theirs('00000000-0000-4000-8000-000000000001')).status)
   assertEq('oidc/a-malformed-sub-is-404', 404, (await theirs('not-a-uuid')).status)
+  // A deactivated member is 404, and only while deactivated: read first, so
+  // the 404 can't be a member the app never could read.
+  assertEq('oidc/an-active-member-is-readable', 200, (await theirs(outsider.user.id)).status)
+  const off = await PUT(`/api/users/${outsider.user.id}`, { ...T, body: { is_active: false } })
+  assertEq('oidc/a-member-is-deactivated', 200, off.status, off.text.slice(0, 200))
+  assertEq('oidc/a-deactivated-member-is-404', 404, (await theirs(outsider.user.id)).status)
+  const on = await PUT(`/api/users/${outsider.user.id}`, { ...T, body: { is_active: true } })
+  assertEq('oidc/a-member-is-reactivated', 200, on.status, on.text.slice(0, 200))
+  assertEq('oidc/a-reactivated-member-is-readable-again', 200, (await theirs(outsider.user.id)).status)
   const tcPublic = await tokenRequest({ grant_type: 'client_credentials', scope: 'training:members', client_id: spa.client.client_id })
   assertEq('oidc/a-public-app-cannot-read-members-training', 'unauthorized_client', tcPublic.json?.error, tcPublic.text.slice(0, 200))
   const publicHolds = await POST('/api/admin/oauth/clients', {
