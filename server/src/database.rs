@@ -3412,6 +3412,41 @@ impl DatabaseManager {
             .collect())
     }
 
+    /// The resources that require signed messages on the local broker (#249).
+    pub fn signed_resources(&self) -> Result<std::collections::HashSet<uuid::Uuid>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        Ok(resources::table
+            .filter(resources::require_signed.eq(true))
+            .select(resources::id)
+            .load::<uuid::Uuid>(&mut conn)
+            .map_err(DatabaseError::Diesel)?
+            .into_iter()
+            .collect())
+    }
+
+    /// Require signed messages on the local broker for one resource, or stop
+    /// requiring them (#249). Any kind.
+    pub fn update_resource_require_signed(
+        &self,
+        resource_id: uuid::Uuid,
+        require: bool,
+    ) -> Result<Option<crate::models::Resource>, DatabaseError> {
+        use crate::schema::resources;
+
+        let mut conn = self.get_connection()?;
+        diesel::update(resources::table.find(resource_id))
+            .set((
+                resources::require_signed.eq(require),
+                resources::updated_at.eq(chrono::Utc::now()),
+            ))
+            .returning(crate::models::Resource::as_returning())
+            .get_result(&mut conn)
+            .optional()
+            .map_err(DatabaseError::Diesel)
+    }
+
     /// The resources a yes on signs the member in to an app (#241).
     pub fn signing_in_resources(
         &self,
@@ -7248,6 +7283,8 @@ impl DatabaseManager {
             .into_iter()
             .map(|(id, kind, profile)| (id, (kind, profile)))
             .collect();
+        // #249: what the coordinator seals, and refuses unsigned.
+        let signed = self.signed_resources()?;
 
         // BTreeMap so the snapshot is ordered and therefore diffable between
         // builds; an unordered snapshot would churn on every rebuild.
@@ -7270,6 +7307,7 @@ impl DatabaseManager {
             tool_id: id.to_string(),
             external_id: external.get(&id).cloned().flatten(),
             in_use: in_use.contains(&id),
+            require_signed: signed.contains(&id),
             kind: profiles
                 .get(&id)
                 .map(|(kind, _)| kind.clone())

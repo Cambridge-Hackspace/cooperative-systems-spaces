@@ -231,6 +231,75 @@ describe('ResourceWiring', () => {
     await flushPromises()
     expect(w.find('[role="alert"]').exists()).toBe(true)
     expect(w.text()).toContain('identify_member is available for tools only')
+    // Refused, so the switch goes back to what the server holds.
+    expect((w.get('[data-testid="identify-tool-1"]').element as HTMLInputElement).checked).toBe(
+      false
+    )
+  })
+
+  // ── #249: requiring signed messages on the local broker ─────────────────
+
+  it('shows whether a resource requires signed messages, on doors as on tools (#249)', async () => {
+    const snap = snapshot()
+    snap.data.tools.push(doorEntry())
+    toolModules.state.mockResolvedValue(snap)
+    resources.list.mockResolvedValue({
+      success: true,
+      data: [
+        { id: 'tool-1', kind: 'tool', session_profile: 'until_stopped', identify_member: false },
+        {
+          id: 'door-1',
+          kind: 'door',
+          session_profile: 'momentary',
+          identify_member: false,
+          require_signed: true,
+        },
+      ],
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    // A door's strike is what a forged reply opens, so it is offered too.
+    const door = w.get('[data-testid="require-signed-door-1"]')
+    expect((door.element as HTMLInputElement).checked).toBe(true)
+    // Absent from the server means off.
+    const tool = w.get('[data-testid="require-signed-tool-1"]')
+    expect((tool.element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('sends a change of requiring signed messages, and shows what the server says (#249)', async () => {
+    resources.update.mockResolvedValue({
+      success: true,
+      data: {
+        id: 'tool-1',
+        kind: 'tool',
+        session_profile: 'until_stopped',
+        identify_member: false,
+        require_signed: true,
+      },
+    })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    const toggle = w.get('[data-testid="require-signed-tool-1"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(resources.update).toHaveBeenCalledWith('tool-1', { require_signed: true })
+    expect(
+      (w.get('[data-testid="require-signed-tool-1"]').element as HTMLInputElement).checked
+    ).toBe(true)
+  })
+
+  it('shows the refusal when the server declines requiring signed messages (#249)', async () => {
+    resources.update.mockResolvedValue({ success: false, error: 'Resource not found' })
+    const w = mount(ResourceWiring)
+    await flushPromises()
+    await w.get('[data-testid="require-signed-tool-1"]').setValue(true)
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(true)
+    expect(w.text()).toContain('Resource not found')
+    expect(
+      (w.get('[data-testid="require-signed-tool-1"]').element as HTMLInputElement).checked
+    ).toBe(false)
   })
 
   // ── #241: a tap that signs the member in to an app ──────────────────────
@@ -383,6 +452,10 @@ describe('ResourceWiring', () => {
     await flushPromises()
     expect(w.find('[role="alert"]').exists()).toBe(true)
     expect(w.text()).toContain("sign_in_app must be an app that is the space's own")
+    // Refused, so the select goes back to what the server holds: nothing.
+    expect((w.get('[data-testid="sign-in-app-tool-1"]').element as HTMLSelectElement).value).toBe(
+      ''
+    )
   })
 
   it('shows the refusal when the server declines a profile change', async () => {
@@ -393,6 +466,9 @@ describe('ResourceWiring', () => {
     await flushPromises()
     expect(w.find('[role="alert"]').exists()).toBe(true)
     expect(w.text()).toContain('session_profile must be one of')
+    expect((w.get('[data-testid="profile-tool-1"]').element as HTMLSelectElement).value).toBe(
+      'until_stopped'
+    )
   })
 
   it('does not warn about power on a resource that has no power binding', async () => {

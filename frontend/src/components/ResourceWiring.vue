@@ -79,9 +79,29 @@
               class="toggle toggle-xs"
               :checked="identifiesMember(tool)"
               :data-testid="`identify-${tool.tool_id}`"
-              @change="setIdentify(tool, ($event.target as HTMLInputElement).checked)"
+              @change="setIdentify(tool, $event.target as HTMLInputElement)"
             />
             <span>Identify the member on a scan</span>
+          </label>
+
+          <!--
+            #249: every message about this resource on the local broker must be
+            signed. Off until the firmware of the devices bound here signs: on,
+            the edge refuses anything unsigned, so an older device stops working.
+            Any kind -- a door's strike is what a forged reply would open.
+          -->
+          <label class="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              class="toggle toggle-xs"
+              :checked="requiresSigned(tool)"
+              :data-testid="`require-signed-${tool.tool_id}`"
+              @change="setRequireSigned(tool, $event.target as HTMLInputElement)"
+            />
+            <span>Require signed messages</span>
+            <span class="text-base-content/60">
+              (turn on once every device here has firmware that signs; others stop working)
+            </span>
           </label>
 
           <!--
@@ -318,24 +338,45 @@ function identifiesMember(t: ToolModuleStateTool): boolean {
   return settings.value.find((s) => s.id === t.tool_id)?.identify_member ?? false
 }
 
-async function setIdentify(t: ToolModuleStateTool, identify: boolean) {
+async function setIdentify(t: ToolModuleStateTool, box: HTMLInputElement) {
+  const identify = box.checked
   // A sign-in names its member (#241), so turning identifying off turns the
   // sign-in off with it, in the one request the server accepts that in.
   const body: UpdateResourceRequest = { identify_member: identify }
   if (!identify && signInAppOf(t)) body.sign_in_app = ''
-  await saveSetting(t, body, 'Identifying the member was not changed')
+  if (!(await saveSetting(t, body, 'Identifying the member was not changed'))) {
+    // Refused: the switch shows what the server holds, not what was clicked.
+    box.checked = identifiesMember(t)
+  }
+}
+
+/** #249: whether messages about this resource must be signed. */
+function requiresSigned(t: ToolModuleStateTool): boolean {
+  return settings.value.find((s) => s.id === t.tool_id)?.require_signed ?? false
+}
+
+async function setRequireSigned(t: ToolModuleStateTool, box: HTMLInputElement) {
+  const body: UpdateResourceRequest = { require_signed: box.checked }
+  if (!(await saveSetting(t, body, 'Requiring signed messages was not changed'))) {
+    box.checked = requiresSigned(t)
+  }
 }
 
 /** Send a change of a resource's settings, keeping what the server answers. */
-async function saveSetting(t: ToolModuleStateTool, body: UpdateResourceRequest, failed: string) {
+async function saveSetting(
+  t: ToolModuleStateTool,
+  body: UpdateResourceRequest,
+  failed: string
+): Promise<boolean> {
   const r = await resourcesApi.update(t.tool_id, body)
   if (r.success && r.data) {
     const updated = r.data
     settings.value = [...settings.value.filter((s) => s.id !== t.tool_id), updated]
     error.value = ''
-  } else {
-    error.value = r.error || failed
+    return true
   }
+  error.value = r.error || failed
+  return false
 }
 
 /** #241: the app a yes on this tool signs the member in to, if any. */

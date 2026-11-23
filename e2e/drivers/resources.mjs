@@ -423,6 +423,39 @@ main(async () => {
     name: 'door coordinator',
   })
   assertEq('resources/door-coordinator-bound', 201, bindEdge.status, bindEdge.text.slice(0, 200))
+
+  // --- #249: a resource can require signed messages on the local broker ------
+  // Off by default, any kind, and it reaches the coordinator in module-state --
+  // pushed at once, and here read by the poll -- since that is where the edge
+  // seals and checks. The door, because a strike is what a forged reply opens.
+  const doorWiring = async () =>
+    ((await GET('/api/toolguard/module-state', { token: coordinator.token })).json?.tools ?? [])
+      .find((t) => t.tool_id === door.id)
+  assertEq('resources/signed-is-off-by-default', false, (await doorWiring())?.require_signed)
+  const signedOn = await PATCH(`/api/admin/resources/${door.id}`, {
+    token: admin.token,
+    body: { require_signed: true },
+  })
+  assertEq('resources/a-door-can-require-signed', 200, signedOn.status, signedOn.text.slice(0, 200))
+  assertEq('resources/signed-is-reported', true, signedOn.json?.data?.require_signed)
+  const signedListed = await GET('/api/admin/resources', T)
+  const listedRows = signedListed.json?.data ?? []
+  assertEq('resources/the-list-carries-signed', true,
+    listedRows.find((r) => r.id === door.id)?.require_signed, signedListed.text.slice(0, 200))
+  assertEq('resources/signed-is-per-resource', false, listedRows.find((r) => r.id === toolId)?.require_signed)
+  const signedAudit = await GET('/api/admin/audit-logs?event_type=resource_updated&per_page=50', T)
+  ok('resources/signed-change-is-audited',
+    (signedAudit.json?.data ?? []).some((l) =>
+      String(l.event_data?.resource_id ?? '') === door.id && l.event_data?.require_signed === true),
+    JSON.stringify(signedAudit.json?.data ?? signedAudit.text).slice(0, 300))
+  assertEq('resources/the-coordinator-is-told-signed', true, (await doorWiring())?.require_signed)
+  const signedOff = await PATCH(`/api/admin/resources/${door.id}`, {
+    token: admin.token,
+    body: { require_signed: false },
+  })
+  assertEq('resources/signed-can-be-turned-off', false, signedOff.json?.data?.require_signed,
+    signedOff.text.slice(0, 200))
+  assertEq('resources/the-coordinator-is-told-unsigned', false, (await doorWiring())?.require_signed)
   const edgePolicy = await policyFor(coordinator.token)
   assertEq('resources/coordinator-policy-is-200', 200, edgePolicy.status, edgePolicy.text.slice(0, 200))
   const ep = edgePolicy.json ?? {}

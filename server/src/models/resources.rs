@@ -118,6 +118,9 @@ pub struct Resource {
     /// Who must also give a TOTP code at a card sign-in (#241): `off`,
     /// `admins` or `everyone`. Appended last: positional Queryable.
     pub second_factor: String,
+    /// Require signed messages on the local broker (#249). Any kind. Appended
+    /// last: positional Queryable.
+    pub require_signed: bool,
 }
 
 #[derive(Debug, Clone, Insertable)]

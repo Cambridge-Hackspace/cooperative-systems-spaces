@@ -857,6 +857,7 @@ mod tests {
             kind: kind.to_string(),
             session_profile: profile.to_string(),
             in_use: false,
+            require_signed: false,
             modules,
             interlocks: vec![],
             power_fails_safe: true,
