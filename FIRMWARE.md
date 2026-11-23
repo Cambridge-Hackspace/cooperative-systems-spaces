@@ -737,9 +737,11 @@ message = "doors/unlock|6f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0|4200|qr"
 sig     = hex(hmac_sha256(key_bytes, message_bytes))
 ```
 
-`key_bytes` is the key **decoded from hex**, not its ASCII. Getting that wrong
-produces a signature that is stable, plausible, and wrong on every message —
-test against the fixture server before you trust it.
+`key_bytes` is the `command_key` string's **own bytes**, exactly as registration
+gave it: 64 ASCII hex characters, **not** decoded from hex. (This document said
+the opposite until #249; the server and the edge have always used the string's
+bytes.) Getting that wrong produces a signature that is stable, plausible, and
+wrong on every message — test against the fixture server before you trust it.
 
 ---
 
@@ -763,7 +765,9 @@ carries a `seal`, and you act only on one that checks out and is fresh.
 ```
 
 - `sig` is HMAC-SHA256, under **your** `command_key`, of the message's canonical
-  bytes, below. The edge holds the keys of the modules it serves; you hold only
+  bytes, below. The key is the `command_key` string's own bytes, exactly as
+  registration gave it: the same as for [doors](#signed-commands), and never
+  decoded from hex. The edge holds the keys of the modules it serves; you hold only
   your own.
 - `from` is the sender's nonce: 16 random bytes as hex, drawn at every boot.
 - `to` is the receiver's nonce as the sender last heard it, or `""` before it
@@ -833,12 +837,12 @@ sent to every kiosk at once rather than to one device.
 
 ### Worked example
 
-Key `0a0b0c0d`, a lease to `dev-1` from an edge whose nonce is `n-edge`, to a
+Key `0a0b0c0d` (its eight ASCII bytes), a lease to `dev-1` from an edge whose nonce is `n-edge`, to a
 module whose nonce is `n-mod`, the seventh message:
 
 ```
 bytes = 11:css-local/114:resource/lease5:dev-16:n-edge5:n-mod1:75:res-14:true4:30003:u-13:Cal
-sig   = 72e3a622991a939f980a6780ab7818e76e4cfdf08ce6d0fc4de571d738fdcd00
+sig   = 7ae3d8164ad6034d6e8e3950a07adb684b52433806630c547da9d9ae8c56647f
 ```
 
 That is a grant on `res-1` for 3000 ms, for the member `u-1`, named `Cal`.

@@ -9,7 +9,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-const KEY: &[u8] = &[0x0a, 0x0b, 0x0c, 0x0d];
+/// A `command_key` as registration issues it. The key is the string's own
+/// bytes, as the server and the edge already use it for doors (#121): never
+/// decoded from hex.
+const KEY: &[u8] = b"0a0b0c0d";
 
 fn deliver<M: Serialize + DeserializeOwned>(m: &M) -> M {
     serde_json::from_str(&serde_json::to_string(m).unwrap()).unwrap()
@@ -486,7 +489,7 @@ fn absent_and_empty_are_different_messages() {
 //
 //   F = lambda s: f"{len(s.encode())}:{s}"
 //   msg = "".join(F(x) for x in [...]) (+ "~" for an absent value)
-//   hmac.new(bytes.fromhex("0a0b0c0d"), msg.encode(), "sha256").hexdigest()
+//   hmac.new(b"0a0b0c0d", msg.encode(), "sha256").hexdigest()
 
 #[test]
 fn a_lease_signs_the_documented_bytes() {
@@ -510,7 +513,7 @@ fn a_lease_signs_the_documented_bytes() {
     seal_with(KEY, &mut l, "n-edge", "n-mod", 7);
     assert_eq!(
         l.seal.unwrap().sig,
-        "72e3a622991a939f980a6780ab7818e76e4cfdf08ce6d0fc4de571d738fdcd00"
+        "7ae3d8164ad6034d6e8e3950a07adb684b52433806630c547da9d9ae8c56647f"
     );
 }
 
@@ -529,7 +532,7 @@ fn an_absent_value_signs_as_a_tilde() {
     seal_with(KEY, &mut stop, "n-mod", "n-edge", 2);
     assert_eq!(
         stop.seal.unwrap().sig,
-        "afc98d6b5e92d602ad2f2fb1e2b6dd578342e3a306e3a76bab029fd5d1854ad7"
+        "c262df267e667196003fe324654f33dde26a037d55aa4fc4aedfa594f520ad75"
     );
 }
 
@@ -550,7 +553,7 @@ fn a_float_signs_as_its_bits_as_parsed_from_the_json() {
     seal_with(KEY, &mut usage, "n-mod", "n-edge", 3);
     assert_eq!(
         usage.seal.unwrap().sig,
-        "63041bc69198566f46d907be93a33400116bd8838feaea8aa7aea3385b2313a7"
+        "86a06d4a5c8bdabb5841f20f7bf2a9d71241052da49e866f149e0b233fdd2adc"
     );
     let mut power = deliver(&LocalPower {
         resource: "laser".into(),
@@ -566,6 +569,6 @@ fn a_float_signs_as_its_bits_as_parsed_from_the_json() {
     seal_with(KEY, &mut power, "n-mod", "n-edge", 4);
     assert_eq!(
         power.seal.unwrap().sig,
-        "30db447392b41d3a0acd780a40f59d5ceb1850a98de897fb2b6df8f353a9532b"
+        "ec688c3b21786e0fd2f271de5cbd074fb6842d07522d1b9b65f3b859fe4bda7d"
     );
 }
