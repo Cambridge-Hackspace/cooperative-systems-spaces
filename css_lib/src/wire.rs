@@ -481,6 +481,7 @@ mod tests {
             resource: "laser-01".into(),
             condition: "door_open".into(),
             asserted: true,
+            seal: None,
         };
         assert_eq!(
             serde_json::to_value(&r).unwrap(),
@@ -528,6 +529,8 @@ mod tests {
         let v = serde_json::to_value(LocalStop {
             resource: "r".into(),
             card: None,
+            device_id: None,
+            seal: None,
         })
         .unwrap();
         assert!(v.get("card").is_none(), "{v}");
@@ -543,6 +546,8 @@ mod tests {
             grant: true,
             ttl_ms: 3000,
             reason: None,
+            member: None,
+            seal: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["resource"], "t");

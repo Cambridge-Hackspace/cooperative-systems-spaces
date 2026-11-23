@@ -1,6 +1,6 @@
 [package]
 name = "css_wire"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "The edge-module vocabulary on the CS:S local broker: topics, message shapes, and the capabilities a device declares. Defined once, for both ends of the wire."
@@ -13,6 +13,9 @@ description = "The edge-module vocabulary on the CS:S local broker: topics, mess
 # an ESP32 (spaces-firmware depends on this crate by tag), so anything that will
 # not build there does not belong here. Logic that needs more -- the edge's
 # decisions, the server's database -- lives in css_lib and above.
+#
+# Signing the local wire (#249) needs hmac and sha2, so it is in css_wire_sign
+# beside this crate; the seal's shape and canonical bytes are here.
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 

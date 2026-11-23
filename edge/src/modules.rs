@@ -122,6 +122,9 @@ impl From<&LeaseAction> for css_lib::wire::ResourceLeasePayload {
             grant: l.grant,
             ttl_ms: l.ttl_ms,
             reason: l.reason.clone(),
+            // Stage 3 of #249 names the member and seals it.
+            member: None,
+            seal: None,
         }
     }
 }

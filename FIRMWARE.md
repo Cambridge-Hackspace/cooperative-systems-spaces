@@ -42,6 +42,7 @@ Two things you need, and this document covers both:
 - [Authentication](#authentication)
 - [Registration](#registration)
 - [Signed commands](#signed-commands)
+- [Signing the local wire](#signing-the-local-wire)
 - [HTTP endpoints](#http-endpoints)
 - [MQTT](#mqtt)
 - [The lifecycle](#the-lifecycle)
@@ -736,9 +737,123 @@ message = "doors/unlock|6f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0|4200|qr"
 sig     = hex(hmac_sha256(key_bytes, message_bytes))
 ```
 
-`key_bytes` is the key **decoded from hex**, not its ASCII. Getting that wrong
-produces a signature that is stable, plausible, and wrong on every message —
-test against the fixture server before you trust it.
+`key_bytes` is the `command_key` string's **own bytes**, exactly as registration
+gave it: 64 ASCII hex characters, **not** decoded from hex. (This document said
+the opposite until #249; the server and the edge have always used the string's
+bytes.) Getting that wrong produces a signature that is stable, plausible, and
+wrong on every message — test against the fixture server before you trust it.
+
+---
+
+## Signing the local wire
+
+> **Status (#249):** this is the shape, settled in `css_wire` 0.3.0. The edge
+> does not seal or check anything on the local broker yet; that is the next
+> stage of #249, and until it ships every `seal` below is absent and every
+> message is accepted as it is today. Write firmware that seals and checks now,
+> and it works unchanged when the edge starts.
+
+[Signed commands](#signed-commands) cover the **site** broker, server ↔ edge.
+The **local** broker, edge ↔ module, carried nothing signed until #249, so
+anyone who could publish on it could send a lease and power a tool, send a scan
+reply with a `strike` and open a door, or clear an interlock with a condition
+report. With your `command_key`, every message on the local wire to or from you
+carries a `seal`, and you act only on one that checks out and is fresh.
+
+```json
+"seal": { "from": "…sender's nonce…", "to": "…your nonce…", "seq": 7, "sig": "…64 hex…" }
+```
+
+- `sig` is HMAC-SHA256, under **your** `command_key`, of the message's canonical
+  bytes, below. The key is the `command_key` string's own bytes, exactly as
+  registration gave it: the same as for [doors](#signed-commands), and never
+  decoded from hex. The edge holds the keys of the modules it serves; you hold only
+  your own.
+- `from` is the sender's nonce: 16 random bytes as hex, drawn at every boot.
+- `to` is the receiver's nonce as the sender last heard it, or `""` before it
+  has heard one.
+- `seq` starts at 1 at boot and rises by one with every message sealed for that
+  receiver.
+
+Rust firmware gets all of this from the `css_wire_sign` crate beside `css_wire`:
+`Peer::seal` and `Peer::open` are the whole of it.
+
+### Fresh, without a clock
+
+Act on a message only when **all three** hold:
+
+1. the signature checks;
+2. `to` is **your current nonce**;
+3. `seq` is higher than any you have accepted with that `from` since you
+   booted.
+
+A message signed but failing 2 or 3 is **stale**: do not act on it, but take its
+`from` as the sender's nonce, to put in `to` on what you send next. That is how
+two ends meet: each one's first message is refused as stale and teaches the
+other its nonce. So send `resource/request/alive` as soon as you boot, and
+expect the first message each way after either end restarts to be refused.
+
+Keep the last `seq` for a few senders (`css_wire` keeps four). When a fifth
+arrives, draw a new nonce of your own and forget them all: everything sealed to
+the old nonce is stale from then on, so forgetting opens nothing.
+
+What this cannot stop is a message withheld and delivered late, so long as
+nothing newer from that sender reached you first. A withheld lease still
+energizes for at most one `ttl_ms` from when it arrives.
+
+### The canonical bytes
+
+Each value is written as its length in bytes, in decimal, then `:`, then the
+value: `5:hello`. An **absent** optional value is the single byte `~`, so
+absent and empty (`0:`) differ. The bytes are, in order:
+
+```
+"css-local/1"  topic  device_id  from  to  seq  …the message's fields…
+```
+
+`device_id` is the device the message is to or from. A boolean is `true` or
+`false`, an integer is decimal, and a floating-point number is the **hex of its
+IEEE-754 bits**, lower case: 8 digits for the 32-bit fields (`seconds`,
+`active_seconds`, `temperature`), 16 for the 64-bit ones (the power readings).
+Take the bits from the value **as it parses from the JSON you send**, not from a
+value you then print rounded.
+
+| topic | its fields, after `seq` |
+|---|---|
+| `resource/request/scan` | `resource`, `card` |
+| `resource/request/stop` | `resource`, `card` |
+| `resource/request/usage` | `resource`, `card`, `seconds`, `active_seconds`, `temperature` |
+| `resource/request/power` | `resource`, `relay_on`, `draw_now`, `voltage_now`, `max_voltage`, `amperage_limit`, `self_tripped` |
+| `resource/request/alive` | *(none)* |
+| `resource/request/condition` | `resource`, `condition`, `asserted` |
+| `resource/response/scan` | `resource`, `authorized`, `reason`, the strike's `pulse_ms`, the member's `id`, `name`, the sign-in's `kind` and its value (`code`, `ticket` or `reason`) |
+| `resource/lease` | `resource`, `grant`, `ttl_ms`, the member's `id`, `name` |
+
+A lease's `reason` is the one field left out: it is for logs and never to be
+branched on. A missing `strike`, `member` or `sign_in` is `~` for each value it
+would have had. Nothing on the three acks or on `resource/state` is sealed: an
+ack is receipt and nothing more, and `resource/state` is the kiosk's allow-list,
+sent to every kiosk at once rather than to one device.
+
+### Worked example
+
+Key `0a0b0c0d` (its eight ASCII bytes), a lease to `dev-1` from an edge whose nonce is `n-edge`, to a
+module whose nonce is `n-mod`, the seventh message:
+
+```
+bytes = 11:css-local/114:resource/lease5:dev-16:n-edge5:n-mod1:75:res-14:true4:30003:u-13:Cal
+sig   = 7ae3d8164ad6034d6e8e3950a07adb684b52433806630c547da9d9ae8c56647f
+```
+
+That is a grant on `res-1` for 3000 ms, for the member `u-1`, named `Cal`.
+`css_wire`'s tests pin these bytes and this signature, computed separately.
+
+### The rule, in one line each
+
+- **You hold a key:** seal what you send; ignore what arrives unsigned, wrongly
+  signed or stale. Never fall back to acting on it.
+- **You hold no key:** send and act as before. The broker's ACLs are then your
+  only control.
 
 ---
 
@@ -1487,24 +1602,24 @@ be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
 
 | topic | payload |
 |---|---|
-| `resource/request/scan` | `{ "resource", "card" }` — a badge presented to a resource |
-| `resource/request/stop` | `{ "resource", "card"? }` — end the session; a stop needs no badge |
-| `resource/request/usage` | `{ "resource", "card"?, "seconds"?, "active_seconds"?, "temperature"? }` |
-| `resource/request/power` | `{ "resource", "device_id"?, "relay_on"?, "draw_now"?, "voltage_now"?, "max_voltage"?, "amperage_limit"?, "self_tripped"? }` |
-| `resource/request/alive` | `{ "device_id" }` |
-| `resource/request/condition` | `{ "device_id", "resource", "condition", "asserted" }` — a sensor's reading of one interlock condition (#213) |
+| `resource/request/scan` | `{ "resource", "card", "device_id"?, "seal"? }` — a badge presented to a resource |
+| `resource/request/stop` | `{ "resource", "card"?, "device_id"?, "seal"? }` — end the session; a stop needs no badge |
+| `resource/request/usage` | `{ "resource", "card"?, "seconds"?, "active_seconds"?, "temperature"?, "device_id"?, "seal"? }` |
+| `resource/request/power` | `{ "resource", "device_id"?, "relay_on"?, "draw_now"?, "voltage_now"?, "max_voltage"?, "amperage_limit"?, "self_tripped"?, "seal"? }` |
+| `resource/request/alive` | `{ "device_id", "seal"? }` |
+| `resource/request/condition` | `{ "device_id", "resource", "condition", "asserted", "seal"? }` — a sensor's reading of one interlock condition (#213) |
 | `kiosk/refresh` | *(none)* — ask the edge to re-push the allow-list |
 
 **Edge → module** (the edge publishes):
 
 | topic | payload |
 |---|---|
-| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"?, "sign_in"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds; on a yes for a tool set to identify its member, `member` carries who tapped, as an id and a name (#228); on a yes for a tool set to sign in to an app, `sign_in` carries a one-time code, a ticket to redeem with the member's TOTP code, or a refusal, for that app to complete (#241; its shape is under [the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)) |
+| `resource/response/scan` | `{ "resource", "authorized", "reason", "strike"?, "member"?, "sign_in"?, "device_id"?, "seal"? }` — on a yes for a resource with a latch, `strike` carries the pulse length in milliseconds; on a yes for a tool set to identify its member, `member` carries who tapped, as an id and a name (#228); on a yes for a tool set to sign in to an app, `sign_in` carries a one-time code, a ticket to redeem with the member's TOTP code, or a refusal, for that app to complete (#241; its shape is under [the resource path](#the-resource-path-one-vocabulary-for-a-badge-at-anything)) |
 | `resource/response/stop` | `{ "ok": true }` |
 | `resource/response/usage` | `{ "ok": true }` |
 | `resource/response/power` | `{ "ok": true }` — an ack, nothing more |
 | `resource/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
-| `resource/lease` | `{ "resource", "device_id", "grant", "ttl_ms", "reason" }` — see [the lease](#authorization-is-a-lease-not-a-command) |
+| `resource/lease` | `{ "resource", "device_id", "grant", "ttl_ms", "reason", "member"?, "seal"? }` — see [the lease](#authorization-is-a-lease-not-a-command); `member` is who the lease is for, under the same rule as a scan reply's (#249) |
 
 Three things about this table that cost time if you learn them the hard way:
 
