@@ -139,7 +139,11 @@ const BUDGET: &[(&str, usize)] = &[
     // 17 -> 16: #36 collapsed the two separate "check steps"/"check completion"
     // DB calls (each mapped to a 500) in the tool-on gate into one
     // `user_is_authorized_for_tool` call, mapped once.
-    ("toolguard.rs", 16),
+    // 16 -> 17: #249's module-keys answers 500 for a stored command key that
+    // is not text. Not a database error losing its meaning: the key was
+    // unsealed fine, and registration only ever stores hex, so it is our own
+    // data broken, which is what a 500 is for.
+    ("toolguard.rs", 17),
     ("tools.rs", 0),
     ("training.rs", 0),
     // 3, not 2: `change_own_password` (the self-service path, added with the

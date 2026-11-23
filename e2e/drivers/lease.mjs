@@ -231,6 +231,49 @@ async function setup() {
     'the whole stage is about the policy that must not be granted while silent'
   )
 
+  // #249: the keys an edge is given to seal the local wire for its modules.
+  // Exactly the modules it coordinates -- here, the plug -- and the key is the
+  // very string the plug was issued. Never the edge's own key, never a key for
+  // a device that asks without coordinating anything.
+  const keysFor = (token) => GET('/api/toolguard/module-keys', token ? { token } : {})
+  const keyOf = (r, id) => (r.json?.keys ?? []).find((k) => k.device_id === id)?.command_key
+  const edgeKeys = await keysFor(edge.token)
+  assertEq('lease/module-keys-answers-an-edge', 200, edgeKeys.status, edgeKeys.text.slice(0, 200))
+  ok('lease/the-plug-holds-a-key', !!plug.commandKey, 'registration must hand the plug its command key')
+  assertEq(
+    'lease/an-edge-is-given-its-modules-key',
+    plug.commandKey,
+    keyOf(edgeKeys, plug.id),
+    'the key must be the one the plug was issued, as issued'
+  )
+  ok(
+    'lease/an-edge-is-not-given-its-own-key',
+    keyOf(edgeKeys, edge.id) === undefined,
+    JSON.stringify(edgeKeys.json)
+  )
+  ok(
+    'lease/an-edge-is-not-given-a-strangers-key',
+    keyOf(edgeKeys, stranger.id) === undefined,
+    JSON.stringify(edgeKeys.json)
+  )
+  // The stranger holds no `edge` binding, so module-state sends it the whole
+  // site -- asserted first, because that fallback is what the keys must not
+  // follow, and without it an empty answer proves nothing.
+  const strangerState = await GET('/api/toolguard/module-state', { token: stranger.token })
+  ok(
+    'lease/a-stranger-is-sent-the-whole-site',
+    (strangerState.json?.tools ?? []).some((t) => t.tool_id === toolId),
+    `module-state -> ${strangerState.status}`
+  )
+  const strangerKeys = await keysFor(stranger.token)
+  assertEq('lease/module-keys-answers-a-stranger', 200, strangerKeys.status)
+  assertEq('lease/a-stranger-is-given-no-keys', 0, (strangerKeys.json?.keys ?? []).length, strangerKeys.text)
+  // Bound on the tool, but as power: a module, not a coordinator.
+  const plugKeys = await keysFor(plug.token)
+  assertEq('lease/a-module-is-given-no-keys', 0, (plugKeys.json?.keys ?? []).length, plugKeys.text)
+  const anonymous = await keysFor(null)
+  assertEq('lease/module-keys-wants-a-device-token', 401, anonymous.status)
+
   // #170: two more roles on the same tool, each taking the server's own default.
   //
   // A READER has no power to report, so under the old rules it could never be

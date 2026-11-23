@@ -55,6 +55,9 @@ const EXPECTED: &[(&str, Auth)] = &[
     // #83 tool module bindings + interlocks: the edge polls the wiring snapshot
     // it coordinates from, device-authed exactly like power_state.
     ("module_state", Auth::Required),
+    // #249: the keys of the modules an edge coordinates. Device-authed like
+    // module_state, and scoped to the caller's `edge` bindings inside it.
+    ("module_keys", Auth::Required),
     // #170 liveness pulse: a device says it is alive -- for itself, or as the
     // coordinator of a tool the named device is bound to in any role.
     // Device-authed like everything else here.

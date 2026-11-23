@@ -1412,6 +1412,27 @@ Field by field:
   you to do, and note `enforcement: firmware` means the trip is **yours** to
   execute.
 
+### `GET /api/toolguard/module-keys`
+
+**Edges only** (#249). The `command_key` of every device bound, in any role
+but `edge`, on a resource where you hold an `edge` binding: the modules you
+coordinate, whose messages on the local broker you seal and check (see
+[signing the local wire](#signing-the-local-wire)).
+
+```json
+{ "keys": [ { "device_id": "…uuid…", "command_key": "…64 hex chars…" } ] }
+```
+
+- **A device holding no `edge` binding gets `{"keys": []}`**, even though
+  `module-state` sends such a device the whole site. Keys do not follow that
+  fallback.
+- A module with no key (registered before #121) is left out: talk to it
+  unsigned, as before.
+- **Fetch it here, over HTTPS, and nowhere else.** It is never broadcast on
+  the site broker, and you should never publish it on the local one. Keep the
+  keys as you keep your own, and fetch again when `module-state` changes, since
+  a binding added or removed changes the list.
+
 ### `POST /api/toolguard/power-trip`
 
 Body: `circuit_id` (UUID, required), optional `reason`. A device token is the

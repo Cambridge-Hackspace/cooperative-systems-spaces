@@ -219,6 +219,51 @@ impl ToolModuleStatePayload {
             },
         )
     }
+
+    /// The devices whose `command_key` an edge is given (#249): every device
+    /// bound, in any role but `edge`, on a resource where `edge_device_id`
+    /// holds an `edge` binding. These are the modules it speaks for on the
+    /// local wire, so the ones whose messages it must seal and check.
+    ///
+    /// **Nothing for an edge with no `edge` binding.** [`Self::scoped_to_edge`]
+    /// sends such a device the whole site, so a site that predates #214 keeps
+    /// working; a key is not a thing to send on that fallback, since it would
+    /// hand every module's key to any device that asked. Never the edge
+    /// itself, and never another edge bound on the same resource: an edge
+    /// seals only for the modules it coordinates.
+    pub fn devices_coordinated_by(
+        &self,
+        edge_device_id: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let coordinates = |t: &&ToolModuleTool| {
+            t.modules
+                .iter()
+                .any(|m| m.role == "edge" && m.device_id == edge_device_id)
+        };
+        self.tools
+            .iter()
+            .filter(coordinates)
+            .flat_map(|t| t.modules.iter())
+            .filter(|m| m.role != "edge" && m.device_id != edge_device_id)
+            .map(|m| m.device_id.clone())
+            .collect()
+    }
+}
+
+/// `GET /api/toolguard/module-keys` (#249): the `command_key` of each device
+/// the calling edge coordinates, for it to seal and check the local wire.
+/// Sent over HTTPS only, never on a broker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleKeysPayload {
+    pub keys: Vec<ModuleKey>,
+}
+
+/// One device's key, as registration issued it to that device: the string,
+/// whose own bytes are the HMAC key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleKey {
+    pub device_id: String,
+    pub command_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,6 +512,58 @@ mod tests {
         let (p, scope) = site().scoped_to_edge("plug-a");
         assert_eq!(scope, EdgeScope::Legacy);
         assert_eq!(ids(&p), vec!["A", "B", "C"]);
+    }
+
+    // ── module keys go only to a coordinator (#249) ────────────────────────
+
+    fn set(ids: &[&str]) -> std::collections::BTreeSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn an_edge_is_given_the_keys_of_exactly_the_modules_it_coordinates() {
+        // A has a reader and a second edge besides plug-a, and plug-a is bound
+        // twice; B is edge Y's. The mutants: every module on the site, the
+        // edge's own key, another edge's key, a duplicate.
+        let mut s = site();
+        s.tools[0].modules.push(binding("reader-a", "reader"));
+        s.tools[0].modules.push(binding("plug-a", "strike"));
+        s.tools[0].modules.push(binding("edge-w", "edge"));
+        // The edge is also A's reader, as a combined box would be. It is not
+        // given its own key back as a module's.
+        s.tools[0].modules.push(binding("edge-x", "reader"));
+        assert_eq!(
+            s.devices_coordinated_by("edge-x"),
+            set(&["plug-a", "reader-a"])
+        );
+        assert_eq!(s.devices_coordinated_by("edge-y"), set(&["plug-b"]));
+    }
+
+    #[test]
+    fn a_device_with_no_edge_binding_is_given_no_keys_at_all() {
+        // The fallback that sends such a device the whole site must not send it
+        // every key on the site. Precondition first: it IS the legacy case.
+        assert_eq!(site().scoped_to_edge("edge-z").1, EdgeScope::Legacy);
+        assert_eq!(site().devices_coordinated_by("edge-z"), set(&[]));
+        // A module bound on A, but not as edge, coordinates nothing: not even
+        // the reader beside it on A.
+        let mut s = site();
+        s.tools[0].modules.push(binding("reader-a", "reader"));
+        assert_eq!(s.devices_coordinated_by("plug-a"), set(&[]));
+    }
+
+    #[test]
+    fn module_keys_are_a_list_of_device_and_key() {
+        let p = ModuleKeysPayload {
+            keys: vec![ModuleKey {
+                device_id: "plug-a".into(),
+                command_key: "0a0b".into(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            json!({ "keys": [{ "device_id": "plug-a", "command_key": "0a0b" }] })
+        );
     }
 
     // ── a condition report (#213) ──────────────────────────────────────────

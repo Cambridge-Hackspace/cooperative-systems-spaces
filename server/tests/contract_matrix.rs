@@ -361,7 +361,9 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // an app's own access token, checked the same way.
     // 19 with members/{sub}/tools: any member's training, to an app's own token
     // carrying training:members.
-    assert_eq!(device_routes, 19, "device-authenticated routes");
+    // 20 with #249's module-keys poll: an edge's device token, like
+    // module-state beside it.
+    assert_eq!(device_routes, 20, "device-authenticated routes");
     // The six cmi5 LRS routes: statements (PUT/POST/GET) and the State API
     // (GET/PUT/DELETE), all authenticated by the session credential. Like the
     // device surface, only their shape checks are reachable offline; their
@@ -413,19 +415,19 @@ async fn the_offline_device_surface_is_exactly_this_narrow() {
     // changed (Auth).
     assert_eq!(jwt_routes, 234, "JWT-authenticated routes");
     assert_eq!(CREDS.iter().filter(|c| c.shape_only).count(), 3);
-    assert_eq!(asserted_pairs(), 234 * 7 + (19 + 6) * 3);
+    assert_eq!(asserted_pairs(), 234 * 7 + (20 + 6) * 3);
 
     // And the rows that are *not* asserted here have somewhere to be. They are
     // the live-database tier's: a device or session token can only be rejected
     // on its contents by looking it up.
     let deferred = (device_routes + cmi5_session_routes) * (CREDS.len() - 3);
-    // 100 = (19 device + 6 cmi5) routes x 4 content-rejected credentials (#182
+    // 104 = (20 device + 6 cmi5) routes x 4 content-rejected credentials (#182
     // moved this from 68 with the three resource routes, #191 to 84 with the
     // policy poll, #192 to 72 with the three aliases gone, #225 to 84 with its
     // three OAuth bearer routes, #226 to 96 with its three relay routes, and
-    // members/{sub}/tools to 100).
+    // members/{sub}/tools to 100, #249's module-keys to 104).
     assert_eq!(
-        deferred, 100,
+        deferred, 104,
         "{deferred} route/credential pairs are deferred to the live-database \
          tier and are not covered by any assertion in this file"
     );

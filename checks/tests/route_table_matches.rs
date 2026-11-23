@@ -236,6 +236,8 @@ fn guard_of(src: &str, handler: &str) -> String {
         // #83: the module bindings + interlock snapshot, authenticated by the
         // same `authorize_toolguard` call as its power-state sibling.
         "module_state",
+        // #249: the keys of the modules an edge coordinates, by the same call.
+        "module_keys",
         // #170: the alive pulse, authenticated by `authorize_alive`.
         "alive",
         // #182: the resource-shaped device path (api/resources.rs), authenticated
