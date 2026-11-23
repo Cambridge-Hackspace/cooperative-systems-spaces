@@ -3103,10 +3103,21 @@ dependencies = [
 
 [[package]]
 name = "css_wire"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "css_wire_sign"
+version = "0.1.0"
+dependencies = [
+ "css_wire",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -1,0 +1,20 @@
+[package]
+name = "css_wire_sign"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Signing and checking the CS:S local wire (#249): the cryptographic half of css_wire's seal, for the edge and for firmware that signs."
+
+# MIT, like css_wire, for the same reason: firmware and other programs outside
+# this repository depend on it by tag. See LICENSE beside this file.
+#
+# hmac and sha2, pure Rust, build for an ESP32. Nothing else: css_wire for the
+# shapes, and no source of randomness, which the caller supplies.
+[dependencies]
+css_wire = { path = "../css_wire" }
+hmac = "0.12"
+sha2 = "0.10"
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

@@ -32,6 +32,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
+pub mod seal;
 
 /// A device saying it is alive, on [`local::RESOURCE_ALIVE_REQUEST`] (#170).
 ///
@@ -63,6 +64,10 @@ pub struct LocalAliveRequest {
     /// The device's own id, from registration. The edge resolves it to every
     /// binding the device holds; firmware cannot know a binding id.
     pub device_id: String,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// `resource/request/condition` (#213): a device's reading of one of a
@@ -90,6 +95,10 @@ pub struct LocalCondition {
     /// One of the server's condition vocabulary: `door_open`, `flow_ok`, ...
     pub condition: String,
     pub asserted: bool,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// `resource/request/scan`: a card presented to a resource (#182).
@@ -105,6 +114,14 @@ pub struct LocalCondition {
 pub struct LocalScan {
     pub resource: String,
     pub card: String,
+    /// The device that sent it (#249): signed into its seal, so a signed
+    /// request names who made it. Absent from firmware that predates #249.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// `resource/request/stop`: end the session on a resource (#182). `card` is
@@ -115,6 +132,14 @@ pub struct LocalStop {
     pub resource: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card: Option<String>,
+    /// The device that sent it (#249): signed into its seal, so a signed
+    /// request names who made it. Absent from firmware that predates #249.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// `resource/request/usage`: usage to bill or record (#182).
@@ -151,6 +176,14 @@ pub struct LocalUsage {
     pub active_seconds: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// The device that sent it (#249): signed into its seal, so a signed
+    /// request names who made it. Absent from firmware that predates #249.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// `resource/request/power`: a power module's reading (#182), the local twin
@@ -175,6 +208,10 @@ pub struct LocalPower {
     pub amperage_limit: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_tripped: Option<bool>,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// What a device holding a `strike` binding may do on a yes: release the latch
@@ -214,6 +251,15 @@ pub struct LocalScanReply {
     /// the reader's host, that app, completes. Never on a refusal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in: Option<LocalSignIn>,
+    /// The device this reply is for (#249). A signed reply is sealed for one
+    /// device, so the edge sends one per device that has to act on it. Absent
+    /// on an unsigned wire, where the reply is for everyone on the resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
 }
 
 /// A card tap's sign-in to the space's own app (#241), on a
@@ -269,6 +315,8 @@ impl LocalScanReply {
             },
             member: None,
             sign_in: None,
+            device_id: None,
+            seal: None,
         }
     }
 
@@ -305,6 +353,146 @@ pub struct ResourceLeasePayload {
     /// Why the lease was refused. For logs and humans only -- never branch on
     /// it. The vocabulary is not part of the contract and will change.
     pub reason: Option<String>,
+    /// Who the lease is for (#249), under the same rule as a scan reply's
+    /// `member` (#228): only for a resource set to identify its member, and
+    /// never on a refusal. So the device doing the work can greet them, or
+    /// sign them in to an app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<LocalMember>,
+    /// The signature and freshness of this message, on a wire where the
+    /// device holds a key (#249). Absent on an unsigned wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
+}
+
+impl ResourceLeasePayload {
+    /// Name the member on this lease (#249). A refusal is never given one,
+    /// whatever is passed, as a scan reply's refusal is never given one.
+    pub fn with_member(mut self, member: Option<LocalMember>) -> Self {
+        self.member = if self.grant { member } else { None };
+        self
+    }
+}
+
+// ── what each message signs (#249) ─────────────────────────────────────────
+//
+// Everything that decides what the receiver does, or is shown to a person.
+// Left out, on purpose: a lease's `reason`, which is for logs and is never to be
+// branched on. Nothing else is left out.
+
+macro_rules! sealed {
+    ($ty:ty, $topic:expr, |$m:ident| $device:expr, |$c:ident| $body:block) => {
+        impl seal::Sealed for $ty {
+            const TOPIC: &'static str = $topic;
+            fn device(&self) -> Option<&str> {
+                let $m = self;
+                $device
+            }
+            fn canon(&self, $c: &mut seal::Canon) {
+                let $m = self;
+                $body
+            }
+            fn seal(&self) -> Option<&seal::Seal> {
+                self.seal.as_ref()
+            }
+            fn set_seal(&mut self, seal: Option<seal::Seal>) {
+                self.seal = seal;
+            }
+        }
+    };
+}
+
+sealed!(
+    LocalAliveRequest,
+    local::RESOURCE_ALIVE_REQUEST,
+    |m| Some(&m.device_id),
+    |c| {
+        let _ = (m, c);
+    }
+);
+sealed!(
+    LocalCondition,
+    local::CONDITION_REQUEST,
+    |m| Some(&m.device_id),
+    |c| {
+        c.str(&m.resource).str(&m.condition).bool(m.asserted);
+    }
+);
+sealed!(
+    LocalScan,
+    local::SCAN_REQUEST,
+    |m| m.device_id.as_deref(),
+    |c| {
+        c.str(&m.resource).str(&m.card);
+    }
+);
+sealed!(
+    LocalStop,
+    local::STOP_REQUEST,
+    |m| m.device_id.as_deref(),
+    |c| {
+        c.str(&m.resource).opt_str(m.card.as_deref());
+    }
+);
+sealed!(
+    LocalUsage,
+    local::USAGE_REQUEST,
+    |m| m.device_id.as_deref(),
+    |c| {
+        c.str(&m.resource)
+            .opt_str(m.card.as_deref())
+            .opt_f32(m.seconds)
+            .opt_f32(m.active_seconds)
+            .opt_f32(m.temperature);
+    }
+);
+sealed!(
+    LocalPower,
+    local::POWER_REPORT_REQUEST,
+    |m| m.device_id.as_deref(),
+    |c| {
+        c.str(&m.resource)
+            .opt_bool(m.relay_on)
+            .opt_f64(m.draw_now)
+            .opt_f64(m.voltage_now)
+            .opt_f64(m.max_voltage)
+            .opt_f64(m.amperage_limit)
+            .opt_bool(m.self_tripped);
+    }
+);
+sealed!(
+    LocalScanReply,
+    local::SCAN_RESPONSE,
+    |m| m.device_id.as_deref(),
+    |c| {
+        c.str(&m.resource)
+            .bool(m.authorized)
+            .str(&m.reason)
+            .opt_int(m.strike.as_ref().map(|s| i64::from(s.pulse_ms)));
+        member_canon(c, m.member.as_ref());
+        match &m.sign_in {
+            None => c.absent().absent(),
+            Some(LocalSignIn::Code { code }) => c.str("code").str(code),
+            Some(LocalSignIn::Totp { ticket }) => c.str("totp").str(ticket),
+            Some(LocalSignIn::Refused { reason }) => c.str("refused").str(reason),
+        };
+    }
+);
+sealed!(
+    ResourceLeasePayload,
+    local::RESOURCE_LEASE,
+    |m| Some(&m.device_id),
+    |c| {
+        c.str(&m.resource).bool(m.grant).int(m.ttl_ms);
+        member_canon(c, m.member.as_ref());
+    }
+);
+
+fn member_canon(c: &mut seal::Canon, member: Option<&LocalMember>) {
+    match member {
+        Some(m) => c.str(&m.id).str(&m.name),
+        None => c.absent().absent(),
+    };
 }
 
 pub mod local {
