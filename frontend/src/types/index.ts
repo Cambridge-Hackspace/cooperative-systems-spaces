@@ -1005,6 +1005,8 @@ export interface UpdateResourceRequest {
   sign_in_app?: string
   /** #241: who also gives a TOTP code at a card sign-in. */
   second_factor?: SecondFactor
+  /** #249: require signed messages on the local broker. Any kind. */
+  require_signed?: boolean
 }
 
 /** #241: who must also give a TOTP code when a card tap signs them in. */
@@ -1020,6 +1022,8 @@ export interface ResourceSummary {
   sign_in_app?: string | null
   /** #241: absent from a server that predates it, which means off. */
   second_factor?: SecondFactor
+  /** #249: absent from a server that predates it, which means off. */
+  require_signed?: boolean
 }
 
 // ── CS:S as an OpenID Connect provider (#225) ──────────────────────────────

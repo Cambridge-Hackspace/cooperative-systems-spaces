@@ -192,6 +192,7 @@ diesel::table! {
         identify_member -> Bool,
         sign_in_app -> Nullable<Uuid>,
         second_factor -> Text,
+        require_signed -> Bool,
     }
 }
 

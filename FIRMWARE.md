@@ -747,11 +747,13 @@ wrong on every message — test against the fixture server before you trust it.
 
 ## Signing the local wire
 
-> **Status (#249):** this is the shape, settled in `css_wire` 0.3.0. The edge
-> does not seal or check anything on the local broker yet; that is the next
-> stage of #249, and until it ships every `seal` below is absent and every
-> message is accepted as it is today. Write firmware that seals and checks now,
-> and it works unchanged when the edge starts.
+> **Status (#249):** this is the shape, settled in `css_wire` 0.3.0. An
+> administrator can already set a resource to **Require signed messages**
+> (`require_signed` in module-state), but the edge does not seal or check
+> anything on the local broker yet; that is the next stage of #249. Until it
+> ships, every `seal` below is absent and every message is accepted as it is
+> today. Write firmware that seals and checks now, and it works unchanged when
+> the edge starts.
 
 [Signed commands](#signed-commands) cover the **site** broker, server ↔ edge.
 The **local** broker, edge ↔ module, carried nothing signed until #249, so
@@ -1399,6 +1401,12 @@ Field by field:
   badge opened and nothing has yet ended — a stop, the sweep, an administrator
   under Resource Wiring. The coordinator reconciles its own sessions against
   it; a module does nothing with it. Absent on a server that predates it.
+- **`require_signed`** — every message about this resource on the local
+  broker must be signed (#249): an administrator's switch under Resource
+  Wiring, off unless turned on, for doors as for tools. On, the coordinator
+  seals what it sends the resource's devices and refuses anything unsigned or
+  stale about it; see [signing the local wire](#signing-the-local-wire).
+  Absent on a server that predates it, which means off.
 - **`pulse_ms`**, **`hold_open_access`** — a `strike` binding's profile: how
   long the latch is released on a yes (what arrives as `strike.pulse_ms` in a
   scan reply and as `duration_ms` / `unlock_duration_ms` on the door topics),

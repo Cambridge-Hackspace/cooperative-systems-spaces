@@ -290,6 +290,12 @@ pub struct ToolModuleTool {
     /// it. Absent on a server that predates it.
     #[serde(default)]
     pub in_use: bool,
+    /// Every message about this resource on the local broker must be signed
+    /// (#249): the coordinator seals what it sends its devices and refuses
+    /// anything unsigned. Off unless an administrator turns it on, once the
+    /// devices' firmware signs. Absent on a server that predates it.
+    #[serde(default)]
+    pub require_signed: bool,
     pub modules: Vec<DeviceBinding>,
     pub interlocks: Vec<ToolInterlockRule>,
     /// Whether every power module bound to this tool reaches a safe state on its
@@ -452,6 +458,7 @@ mod tests {
             kind: "tool".into(),
             session_profile: String::new(),
             in_use: false,
+            require_signed: false,
             modules: bindings.iter().map(|(d, r)| binding(d, r)).collect(),
             interlocks: vec![],
             power_fails_safe: false,

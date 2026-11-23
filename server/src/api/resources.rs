@@ -86,6 +86,9 @@ pub struct UpdateResourceRequest {
     /// `admins` or `everyone`.
     #[serde(default)]
     pub second_factor: Option<String>,
+    /// Require signed messages on the local broker (#249). Any kind.
+    #[serde(default)]
+    pub require_signed: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,6 +99,7 @@ pub struct ResourceSummary {
     pub identify_member: bool,
     pub sign_in_app: Option<Uuid>,
     pub second_factor: String,
+    pub require_signed: bool,
 }
 
 impl From<crate::models::Resource> for ResourceSummary {
@@ -107,6 +111,7 @@ impl From<crate::models::Resource> for ResourceSummary {
             identify_member: r.identify_member,
             sign_in_app: r.sign_in_app,
             second_factor: r.second_factor,
+            require_signed: r.require_signed,
         }
     }
 }
@@ -142,9 +147,10 @@ async fn update_resource(
         && req.identify_member.is_none()
         && req.sign_in_app.is_none()
         && req.second_factor.is_none()
+        && req.require_signed.is_none()
     {
         return Err(ApiError::BadRequest(
-            "nothing to change: send session_profile, identify_member, sign_in_app or second_factor"
+            "nothing to change: send session_profile, identify_member, sign_in_app, second_factor or require_signed"
                 .to_string(),
         ));
     }
@@ -232,6 +238,12 @@ async fn update_resource(
         };
         updated = u;
     }
+    if let Some(require) = req.require_signed {
+        let Some(u) = state.db.update_resource_require_signed(id, require)? else {
+            return Err(ApiError::NotFound("Resource not found".to_string()));
+        };
+        updated = u;
+    }
 
     let log = NewAuditLog {
         event_type: AuditEventType::ResourceUpdated.as_str().to_string(),
@@ -244,6 +256,7 @@ async fn update_resource(
             "identify_member": updated.identify_member,
             "sign_in_app": updated.sign_in_app,
             "second_factor": updated.second_factor,
+            "require_signed": updated.require_signed,
         }),
         ip_address: None,
         user_agent: None,
