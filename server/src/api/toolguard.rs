@@ -193,6 +193,7 @@ pub fn toolguard_routes() -> Router<AppState> {
         .route("/power-report", post(power_report))
         .route("/power-state", get(power_state))
         .route("/module-state", get(module_state))
+        .route("/module-keys", get(module_keys))
         .route("/power-trip", post(power_trip))
         .route("/alive", post(alive))
 }
@@ -957,6 +958,50 @@ async fn module_state(
         );
     }
     Ok(Json(payload))
+}
+
+/// GET /api/toolguard/module-keys (#249) - the `command_key` of each device the
+/// calling edge coordinates, so it can seal and check the local wire for them.
+///
+/// Scoped by [`css_lib::wire::ToolModuleStatePayload::devices_coordinated_by`]:
+/// the devices bound, other than as `edge`, on the resources where the caller
+/// holds an `edge` binding, and nothing at all for a caller holding none.
+/// Here, over HTTPS on the device's own token, and never in the module-state
+/// broadcast, which goes out on the site broker: a broker anyone can read is
+/// exactly what these keys exist to make harmless.
+///
+/// A device with no key (registered before #121, or with no cipher to mint
+/// one) is left out, and the edge talks to it unsigned, as today.
+async fn module_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<css_lib::wire::ModuleKeysPayload>, ApiError> {
+    let edge_id = authorize_toolguard(&state, &headers, "").await?;
+    let mut keys = Vec::new();
+    if let Some(cipher) = state.card_cipher.as_deref() {
+        let snapshot = state.db.module_state_snapshot().map_err(ApiError::from)?;
+        for device_id in snapshot.devices_coordinated_by(&edge_id.to_string()) {
+            let Ok(id) = Uuid::parse_str(&device_id) else {
+                continue;
+            };
+            let Some(key) = state
+                .db
+                .device_command_key(id, cipher)
+                .map_err(ApiError::from)?
+            else {
+                continue;
+            };
+            let command_key = String::from_utf8(key).map_err(|_| {
+                ApiError::InternalServerError(format!("device {id}'s command key is not text"))
+            })?;
+            keys.push(css_lib::wire::ModuleKey {
+                device_id,
+                command_key,
+            });
+        }
+    }
+    tracing::info!(edge = %edge_id, keys = keys.len(), "module-keys: sent");
+    Ok(Json(css_lib::wire::ModuleKeysPayload { keys }))
 }
 
 /// A circuit overload the edge detected locally (#48). Fields optional so an
