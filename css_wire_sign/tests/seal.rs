@@ -414,6 +414,13 @@ fn every_request_signs_everything() {
         &[],
     );
     every_field_is_signed(
+        LocalHello {
+            device_id: "dev-1".into(),
+            seal: None,
+        },
+        &[],
+    );
+    every_field_is_signed(
         LocalCondition {
             device_id: "dev-1".into(),
             resource: "laser".into(),

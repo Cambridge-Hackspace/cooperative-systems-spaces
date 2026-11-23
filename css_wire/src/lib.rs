@@ -70,6 +70,20 @@ pub struct LocalAliveRequest {
     pub seal: Option<seal::Seal>,
 }
 
+/// `resource/hello` (#249): the edge naming its nonce to one device, sealed
+/// for it. Sent when a message from that device was signed correctly but was
+/// stale -- the first after either end restarted -- so a device that only ever
+/// sends, a reader or a sensor, learns the nonce to name and can say it again.
+/// A device that receives one should resend what it last sent, if that went
+/// unanswered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalHello {
+    /// The device it is for.
+    pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal: Option<seal::Seal>,
+}
+
 /// `resource/request/condition` (#213): a device's reading of one of a
 /// resource's interlock conditions -- `door_open: true` means the door is
 /// open. The plain truth of the named condition; the edge knows which
@@ -410,6 +424,9 @@ sealed!(
         let _ = (m, c);
     }
 );
+sealed!(LocalHello, local::HELLO, |m| Some(&m.device_id), |c| {
+    let _ = (m, c);
+});
 sealed!(
     LocalCondition,
     local::CONDITION_REQUEST,
@@ -537,6 +554,9 @@ pub mod local {
     /// A module does not ask for a lease; the coordinator offers one, and the
     /// offer ceasing is the instruction to stop.
     pub const RESOURCE_LEASE: &str = "resource/lease";
+    /// [`super::LocalHello`]: the edge's nonce, sealed for one device that
+    /// sent a stale message (#249).
+    pub const HELLO: &str = "resource/hello";
 
     /// A kiosk asking the edge to re-push its state. No payload.
     pub const KIOSK_REFRESH_REQUEST: &str = "kiosk/refresh";

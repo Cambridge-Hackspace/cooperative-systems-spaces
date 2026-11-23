@@ -747,13 +747,13 @@ wrong on every message — test against the fixture server before you trust it.
 
 ## Signing the local wire
 
-> **Status (#249):** this is the shape, settled in `css_wire` 0.3.0. An
-> administrator can already set a resource to **Require signed messages**
-> (`require_signed` in module-state), but the edge does not seal or check
-> anything on the local broker yet; that is the next stage of #249. Until it
-> ships, every `seal` below is absent and every message is accepted as it is
-> today. Write firmware that seals and checks now, and it works unchanged when
-> the edge starts.
+> **Status (#249):** the edge seals and checks the local wire on every
+> resource an administrator has set to **Require signed messages** (under
+> Resource Wiring; `require_signed` in module-state), and nowhere else. On such
+> a resource it seals what it sends each device bound there with that device's
+> key, sends nothing to a device it holds no key for, and acts on nothing about
+> the resource that is not sealed, fresh, and from a device bound to it. Turn
+> it on once every device bound there has firmware that does the same.
 
 [Signed commands](#signed-commands) cover the **site** broker, server ↔ edge.
 The **local** broker, edge ↔ module, carried nothing signed until #249, so
@@ -792,8 +792,18 @@ Act on a message only when **all three** hold:
 A message signed but failing 2 or 3 is **stale**: do not act on it, but take its
 `from` as the sender's nonce, to put in `to` on what you send next. That is how
 two ends meet: each one's first message is refused as stale and teaches the
-other its nonce. So send `resource/request/alive` as soon as you boot, and
-expect the first message each way after either end restarts to be refused.
+other its nonce.
+
+The edge answers a stale message from you with **`resource/hello`**
+`{ "device_id", "seal" }`, sealed for you, at most once a second: it carries
+nothing but the edge's nonce, which you learn from it like any other message.
+A reader or a sensor hears nothing else from the edge until it acts on
+something you sent, so without the hello you could never name its nonce. So:
+
+- send `resource/request/alive` as soon as you boot, and expect it to be
+  refused and answered with a hello;
+- when a hello arrives, resend what you last sent if it went unanswered — a
+  scan, say — since that was refused as stale too.
 
 Keep the last `seq` for a few senders (`css_wire` keeps four). When a fifth
 arrives, draw a new nonce of your own and forget them all: everything sealed to
@@ -830,6 +840,7 @@ value you then print rounded.
 | `resource/request/condition` | `resource`, `condition`, `asserted` |
 | `resource/response/scan` | `resource`, `authorized`, `reason`, the strike's `pulse_ms`, the member's `id`, `name`, the sign-in's `kind` and its value (`code`, `ticket` or `reason`) |
 | `resource/lease` | `resource`, `grant`, `ttl_ms`, the member's `id`, `name` |
+| `resource/hello` | *(none)* |
 
 A lease's `reason` is the one field left out: it is for logs and never to be
 branched on. A missing `strike`, `member` or `sign_in` is `~` for each value it
@@ -1648,6 +1659,7 @@ be flashed before this release is deployed; `spaces-firmware` ≥ v0.4.0 and
 | `resource/response/usage` | `{ "ok": true }` |
 | `resource/response/power` | `{ "ok": true }` — an ack, nothing more |
 | `resource/state` | the allow-list; the local twin of `GET /api/toolguard/sync` |
+| `resource/hello` | `{ "device_id", "seal" }` — the edge's nonce, sealed for one device whose signed message was stale (#249); see [signing the local wire](#signing-the-local-wire) |
 | `resource/lease` | `{ "resource", "device_id", "grant", "ttl_ms", "reason", "member"?, "seal"? }` — see [the lease](#authorization-is-a-lease-not-a-command); `member` is who the lease is for, under the same rule as a scan reply's (#249) |
 
 Three things about this table that cost time if you learn them the hard way:
