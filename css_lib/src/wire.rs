@@ -424,8 +424,8 @@ pub struct PowerStateTool {
 /// `css_wire` (#219), which the firmware depends on too; re-exported here so
 /// every `css_lib::wire::...` import in this workspace stays as it was.
 pub use css_wire::{
-    LocalAliveRequest, LocalCondition, LocalMember, LocalPower, LocalScan, LocalScanReply,
-    LocalSignIn, LocalStop, LocalStrike, LocalUsage, ResourceLeasePayload, local,
+    LocalAliveRequest, LocalCondition, LocalHello, LocalMember, LocalPower, LocalScan,
+    LocalScanReply, LocalSignIn, LocalStop, LocalStrike, LocalUsage, ResourceLeasePayload, local,
 };
 
 #[cfg(test)]

@@ -406,6 +406,9 @@ pub struct LocalMqttClient {
     /// The one cache (#182): what a badge at anything is decided against, and
     /// where every session this edge opens lives.
     cache: Arc<ResourceCache>,
+    /// #249: the keys of the modules this edge coordinates, and its peers
+    /// with them, for the resources that require signed messages.
+    seals: Arc<crate::seal::LocalSeals>,
 }
 
 impl LocalMqttClient {
@@ -420,6 +423,7 @@ impl LocalMqttClient {
         module_state: Arc<crate::modules::ModuleState>,
         command_key: Option<Vec<u8>>,
         cache: Arc<ResourceCache>,
+        seals: Arc<crate::seal::LocalSeals>,
     ) -> Result<(Self, mqtt::Receiver<Option<mqtt::Message>>)> {
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(&mqtt_config.mqtt_instance_url)
@@ -466,6 +470,7 @@ impl LocalMqttClient {
                 module_state,
                 command_key,
                 cache,
+                seals,
             },
             rx,
         ))
@@ -506,6 +511,7 @@ impl LocalMqttClient {
         // and exactly one name it arrives under (#192).
         if topic == local::SCAN_REQUEST {
             match serde_json::from_slice::<LocalScan>(payload) {
+                Ok(req) if !self.admitted(topic, Some(req.resource.as_str()), &req) => {}
                 Ok(req) => self.handle_scan(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
@@ -513,6 +519,7 @@ impl LocalMqttClient {
         }
         if topic == local::STOP_REQUEST {
             match serde_json::from_slice::<LocalStop>(payload) {
+                Ok(req) if !self.admitted(topic, Some(req.resource.as_str()), &req) => {}
                 Ok(req) => self.handle_stop(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
@@ -520,6 +527,7 @@ impl LocalMqttClient {
         }
         if topic == local::USAGE_REQUEST {
             match serde_json::from_slice::<LocalUsage>(payload) {
+                Ok(req) if !self.admitted(topic, Some(req.resource.as_str()), &req) => {}
                 Ok(req) => self.handle_usage(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
@@ -527,6 +535,7 @@ impl LocalMqttClient {
         }
         if topic == local::POWER_REPORT_REQUEST {
             match serde_json::from_slice::<LocalPower>(payload) {
+                Ok(req) if !self.admitted(topic, Some(req.resource.as_str()), &req) => {}
                 Ok(req) => self.handle_power(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
@@ -534,6 +543,7 @@ impl LocalMqttClient {
         }
         if topic == local::RESOURCE_ALIVE_REQUEST {
             match serde_json::from_slice::<LocalAliveRequest>(payload) {
+                Ok(req) if !self.admitted(topic, None, &req) => {}
                 Ok(req) => self.handle_alive(req).await,
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
@@ -541,6 +551,7 @@ impl LocalMqttClient {
         }
         if topic == local::CONDITION_REQUEST {
             match serde_json::from_slice::<LocalCondition>(payload) {
+                Ok(req) if !self.admitted(topic, Some(req.resource.as_str()), &req) => {}
                 Ok(req) => self.handle_condition(req),
                 Err(e) => warn!("Failed to parse {} : {}", topic, e),
             }
@@ -550,6 +561,64 @@ impl LocalMqttClient {
             "Ignoring a message on an unsubscribed local topic: {}",
             topic
         );
+    }
+
+    /// #249: whether to act on a message from a module. About a resource that
+    /// requires signed messages, only one sealed and fresh, by a keyed device
+    /// bound to that resource; anything else, as before. `resource` is `None`
+    /// for an alive pulse, which names only its device, and must be sealed
+    /// when that device is bound to any resource that requires it.
+    fn admitted<M: css_wire::seal::Sealed>(
+        &self,
+        topic: &str,
+        resource: Option<&str>,
+        msg: &M,
+    ) -> bool {
+        let required = match resource {
+            Some(r) => self.module_state.requires_signed(r),
+            None => msg
+                .device()
+                .is_some_and(|d| self.module_state.on_a_signed_resource(d)),
+        };
+        if !required {
+            return true;
+        }
+        let bound = |d: &str| resource.is_none_or(|r| self.module_state.is_bound(r, d));
+        match self.seals.admit(msg, bound) {
+            Ok(()) => true,
+            // The first message each way after either end restarts: expected,
+            // and it taught this edge the module's nonce.
+            Err(crate::seal::NotAdmitted::Seal(css_wire_sign::Refused::Stale)) => {
+                info!(
+                    "Not acting on a stale signed {} from {:?} about {:?}; saying hello",
+                    topic,
+                    msg.device(),
+                    resource
+                );
+                // Signed correctly, so it is the device, out of step: tell it
+                // this edge's nonce, so its next message is believed.
+                if let Some(hello) = msg
+                    .device()
+                    .and_then(|d| self.seals.hello_for(d, std::time::Instant::now()))
+                {
+                    match serde_json::to_value(&hello) {
+                        Ok(v) => self.publish_local(local::HELLO, &v),
+                        Err(e) => warn!("Failed to serialize hello: {}", e),
+                    }
+                }
+                false
+            }
+            Err(why) => {
+                warn!(
+                    "Refused {} from {:?} about {:?}: {:?} (signed messages are required)",
+                    topic,
+                    msg.device(),
+                    resource,
+                    why
+                );
+                false
+            }
+        }
     }
 
     /// Tell the server what happened at a door (audit log, webhook, etc.): the
@@ -628,9 +697,33 @@ impl LocalMqttClient {
         let reply = LocalScanReply::new(resource, authorized, reason, pulse_ms)
             .with_member(member)
             .with_sign_in(sign_in);
-        match serde_json::to_value(&reply) {
-            Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
-            Err(e) => warn!("Failed to serialize scan reply: {}", e),
+        // #249: on a resource that requires signed messages, one copy per
+        // device bound to it, each sealed for that device and naming it. A
+        // device this edge holds no key for gets nothing: it could not check
+        // a seal, and an unsigned reply is what a forger would send.
+        let replies: Vec<LocalScanReply> = if self.module_state.requires_signed(resource) {
+            self.module_state
+                .devices_on(resource)
+                .into_iter()
+                .filter_map(|device| {
+                    let mut copy = reply.clone();
+                    copy.device_id = Some(device.clone());
+                    if self.seals.seal(&device, &mut copy) {
+                        Some(copy)
+                    } else {
+                        debug!("No key for {}: no reply sent it about {}", device, resource);
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![reply]
+        };
+        for reply in replies {
+            match serde_json::to_value(&reply) {
+                Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
+                Err(e) => warn!("Failed to serialize scan reply: {}", e),
+            }
         }
     }
 
@@ -694,7 +787,7 @@ impl LocalMqttClient {
             authorized,
             &reason,
             strike_ms,
-            member,
+            member.clone(),
             sign_in,
         );
 
@@ -707,7 +800,9 @@ impl LocalMqttClient {
         if authorized {
             // The session this edge just opened is what a lease is for (#179),
             // and the resource's profile says how long it lasts (#182).
-            self.cache.open_session(&req.resource, now);
+            // #249: and who it is for, when the yes named them, so a lease
+            // for it can say.
+            self.cache.open_session(&req.resource, now, member);
         }
 
         match kind {
@@ -778,7 +873,20 @@ impl LocalMqttClient {
     }
 
     pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
-        match serde_json::to_value(ResourceLeasePayload::from(action)) {
+        let mut lease = ResourceLeasePayload::from(action);
+        // #249: sealed for its device on a resource that requires it, and not
+        // sent at all to a device this edge holds no key for -- which is
+        // de-energized by its own watchdog, as by any lease that stops.
+        if self.module_state.requires_signed(&lease.resource)
+            && !self.seals.seal(&action.device_id, &mut lease)
+        {
+            debug!(
+                "No key for {}: no lease sent it for {}",
+                action.device_id, lease.resource
+            );
+            return;
+        }
+        match serde_json::to_value(lease) {
             Ok(v) => self.publish_local(local::RESOURCE_LEASE, &v),
             Err(e) => warn!("Failed to serialize resource lease: {}", e),
         }

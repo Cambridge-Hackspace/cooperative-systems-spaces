@@ -112,6 +112,11 @@ pub struct LeaseAction {
     pub ttl_ms: i64,
     /// Why the lease was refused: a [`Denial`] rendered for the log line.
     pub reason: Option<String>,
+    /// Who the session this lease is for was opened for (#249), when this
+    /// edge opened it on a yes that named them: a resource set to identify
+    /// its member. `None` for a session the server reported, a run-on after
+    /// the session ended, and every refusal.
+    pub member: Option<css_lib::wire::LocalMember>,
 }
 
 impl From<&LeaseAction> for css_lib::wire::ResourceLeasePayload {
@@ -122,10 +127,11 @@ impl From<&LeaseAction> for css_lib::wire::ResourceLeasePayload {
             grant: l.grant,
             ttl_ms: l.ttl_ms,
             reason: l.reason.clone(),
-            // Stage 3 of #249 names the member and seals it.
             member: None,
             seal: None,
         }
+        // Dropped on a refusal whatever the action carries, as on a scan reply.
+        .with_member(l.member.clone())
     }
 }
 
@@ -136,7 +142,7 @@ impl Decision {
 }
 
 /// A session this edge opened on a resource (#179, #182).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Session {
     /// When it opened -- the basis for the grace a local session outranks a
     /// stale sync by.
@@ -145,6 +151,9 @@ struct Session {
     /// end. `None` for an `until_stopped` resource, whose session lasts until a
     /// stop or the server says it is over.
     ends_at: Option<DateTime<Utc>>,
+    /// Who it was opened for, when the yes named them (#249): what a lease
+    /// for it carries.
+    member: Option<css_lib::wire::LocalMember>,
 }
 
 /// What this edge holds about a resource's wiring, resolved by either name
@@ -255,13 +264,89 @@ impl ModuleState {
         self.inner.write().expect("module lock").local_session_grace = grace;
     }
 
+    // ── #249: what the local wire's seal needs to know of the wiring ────────
+
+    /// Whether an administrator set this resource to require signed messages.
+    /// `false` for a resource this edge has no wiring for.
+    pub fn requires_signed(&self, resource: &str) -> bool {
+        let inner = self.inner.read().expect("module lock");
+        inner
+            .snapshot
+            .as_ref()
+            .and_then(|s| Self::resolve(s, resource))
+            .is_some_and(|t| t.require_signed)
+    }
+
+    /// Whether `device` holds a binding on `resource`, in any role.
+    pub fn is_bound(&self, resource: &str, device: &str) -> bool {
+        let inner = self.inner.read().expect("module lock");
+        inner
+            .snapshot
+            .as_ref()
+            .and_then(|s| Self::resolve(s, resource))
+            .is_some_and(|t| t.modules.iter().any(|m| m.device_id == device))
+    }
+
+    /// The devices bound to `resource` other than as its coordinator: the
+    /// ones a reply about it is sealed for, one copy each. Sorted, and each
+    /// once however many roles it holds.
+    pub fn devices_on(&self, resource: &str) -> Vec<String> {
+        let inner = self.inner.read().expect("module lock");
+        let mut out: Vec<String> = inner
+            .snapshot
+            .as_ref()
+            .and_then(|s| Self::resolve(s, resource))
+            .map(|t| {
+                t.modules
+                    .iter()
+                    .filter(|m| m.role != ROLE_EDGE)
+                    .map(|m| m.device_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Every device bound, other than as coordinator, to a resource that
+    /// requires signed messages: the ones that stop working without a key.
+    pub fn devices_on_signed_resources(&self) -> std::collections::BTreeSet<String> {
+        let inner = self.inner.read().expect("module lock");
+        inner
+            .snapshot
+            .as_ref()
+            .map(|s| {
+                s.tools
+                    .iter()
+                    .filter(|t| t.require_signed)
+                    .flat_map(|t| t.modules.iter())
+                    .filter(|m| m.role != ROLE_EDGE)
+                    .map(|m| m.device_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether `device` is bound to any resource that requires signed
+    /// messages: an alive pulse names no resource, so this is what says it
+    /// must be sealed.
+    pub fn on_a_signed_resource(&self, device: &str) -> bool {
+        let inner = self.inner.read().expect("module lock");
+        inner.snapshot.as_ref().is_some_and(|s| {
+            s.tools
+                .iter()
+                .any(|t| t.require_signed && t.modules.iter().any(|m| m.device_id == device))
+        })
+    }
+
     /// A session opened or closed on this edge's own say-so: a `tool-on` it
     /// answered yes to, or a `tool-off` it relayed (#179). Closing also drops
     /// the server's synced claim for the tool, so a lease ends with the stop
     /// rather than a sync interval later.
     pub fn note_session(&self, tool: &str, open: bool, now: DateTime<Utc>) {
         if open {
-            self.open_session(tool, now, None);
+            self.open_session(tool, now, None, None);
         } else {
             self.close_session(tool, now);
         }
@@ -271,7 +356,13 @@ impl ModuleState {
     /// `until_stopped` resource and the strike pulse's end for a `momentary`
     /// one, whose session is over when the pulse is -- a lease on its power
     /// bindings, if it has any, lasts exactly that long.
-    pub fn open_session(&self, resource: &str, now: DateTime<Utc>, ends_at: Option<DateTime<Utc>>) {
+    pub fn open_session(
+        &self,
+        resource: &str,
+        now: DateTime<Utc>,
+        ends_at: Option<DateTime<Utc>>,
+        member: Option<css_lib::wire::LocalMember>,
+    ) {
         let mut inner = self.inner.write().expect("module lock");
         let key = Self::tool_key(&inner, resource);
         inner.local_stops.remove(&key);
@@ -280,6 +371,7 @@ impl ModuleState {
             Session {
                 opened: now,
                 ends_at,
+                member,
             },
         );
     }
@@ -901,13 +993,25 @@ impl ModuleState {
                 .collect();
             sensors.sort_by(|a, b| a.name.cmp(&b.name));
             let ttl_ms = ttl.num_milliseconds().max(0);
-            let lease = |device_id: &str, grant: bool, reason: Option<String>| LeaseAction {
-                tool_id: tool.clone(),
-                device_id: device_id.to_string(),
-                grant,
-                ttl_ms,
-                reason,
-            };
+            // #249: the member this edge opened the session for, if the yes
+            // named one. Only on a grant for the session itself: a run-on
+            // outlives the session, and a refusal names nobody.
+            let member = inner
+                .local_sessions
+                .get(&tool_key)
+                .and_then(|s| s.member.clone());
+            let lease =
+                |device_id: &str,
+                 grant: bool,
+                 reason: Option<String>,
+                 member: Option<css_lib::wire::LocalMember>| LeaseAction {
+                    tool_id: tool.clone(),
+                    device_id: device_id.to_string(),
+                    grant,
+                    ttl_ms,
+                    reason,
+                    member,
+                };
 
             match &decision {
                 Decision::Allow => {
@@ -947,12 +1051,12 @@ impl ModuleState {
                             continue;
                         }
                         inner.granted_since.entry(b.id.clone()).or_insert(now);
-                        out.push(lease(&b.device_id, true, None));
+                        out.push(lease(&b.device_id, true, None, member.clone()));
                     }
                     // Sensors: leased outright. Nothing above applies to a
                     // device that switches nothing.
                     for b in &sensors {
-                        out.push(lease(&b.device_id, true, None));
+                        out.push(lease(&b.device_id, true, None, member.clone()));
                     }
                 }
                 Decision::Deny(denial) => {
@@ -973,16 +1077,26 @@ impl ModuleState {
                             .get(&b.id)
                             .is_some_and(|until| now < *until);
                         if running_on {
-                            out.push(lease(&b.device_id, true, None));
+                            out.push(lease(&b.device_id, true, None, None));
                         } else {
                             inner.run_on_until.remove(&b.id);
                             inner.granted_since.remove(&b.id);
-                            out.push(lease(&b.device_id, false, Some(format!("{denial:?}"))));
+                            out.push(lease(
+                                &b.device_id,
+                                false,
+                                Some(format!("{denial:?}")),
+                                None,
+                            ));
                         }
                     }
                     // Sensors: refused at once, run-on or not.
                     for b in &sensors {
-                        out.push(lease(&b.device_id, false, Some(format!("{denial:?}"))));
+                        out.push(lease(
+                            &b.device_id,
+                            false,
+                            Some(format!("{denial:?}")),
+                            None,
+                        ));
                     }
                 }
             }
@@ -1880,6 +1994,101 @@ mod tests {
         // then: establish it, so the arms can confirm "after the allow".
         ticked(&s, t0());
         s
+    }
+
+    // ── who a lease is for (#249) ──────────────────────────────────────────
+
+    fn alex() -> css_lib::wire::LocalMember {
+        css_lib::wire::LocalMember {
+            id: "6f1c0b8e-0000-4000-8000-000000000001".to_string(),
+            name: "Alex Doe".to_string(),
+        }
+    }
+
+    fn on_wire(l: &LeaseAction) -> Option<css_lib::wire::LocalMember> {
+        css_lib::wire::ResourceLeasePayload::from(l).member
+    }
+
+    #[test]
+    fn a_session_opened_for_a_member_names_them_on_every_grant_and_nowhere_else() {
+        let mut sensor = binding("sensor-1", ROLE_SENSOR, "ignore");
+        sensor.device_id = "dev-s".to_string();
+        let s = state_nobody_on(vec![plug("a", 0, 0, 2_000), sensor], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.open_session("tool-1", t0(), None, Some(alex()));
+        let out = ticked(&s, t0());
+        assert_eq!(grant_for(&out, "a"), Some(true));
+        assert_eq!(
+            on_wire(for_dev(&out, "a").unwrap()),
+            Some(alex()),
+            "{out:?}"
+        );
+        assert_eq!(
+            on_wire(for_dev(&out, "s").unwrap()),
+            Some(alex()),
+            "a sensor's grant too"
+        );
+        // The member signs off: the plug runs on, but for nobody.
+        s.close_session("tool-1", t0() + ms(500));
+        let run_on = ticked(&s, t0() + ms(600));
+        assert_eq!(grant_for(&run_on, "a"), Some(true), "{run_on:?}");
+        assert_eq!(
+            on_wire(for_dev(&run_on, "a").unwrap()),
+            None,
+            "a run-on outlives the session"
+        );
+        assert_eq!(
+            on_wire(for_dev(&run_on, "s").unwrap()),
+            None,
+            "a refusal names nobody"
+        );
+        let refused = ticked(&s, t0() + ms(3_000));
+        assert_eq!(grant_for(&refused, "a"), Some(false));
+        assert_eq!(on_wire(for_dev(&refused, "a").unwrap()), None);
+    }
+
+    #[test]
+    fn a_run_on_names_nobody_even_while_the_session_is_open() {
+        // Denied by silence, not by a stop: the session is still open, and the
+        // plug runs on. A run-on is a denial's tail, and a denial names nobody.
+        let s = state_nobody_on(vec![plug("a", 0, 0, 60_000)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.open_session("tool-1", t0(), None, Some(alex()));
+        assert_eq!(
+            on_wire(for_dev(&ticked(&s, t0()), "a").unwrap()),
+            Some(alex())
+        );
+        let later = t0() + timeout() + Duration::seconds(1);
+        assert!(
+            !s.evaluate("tool-1", later, timeout()).is_allowed(),
+            "the precondition: denied"
+        );
+        let out = ticked(&s, later);
+        assert_eq!(grant_for(&out, "a"), Some(true), "running on: {out:?}");
+        assert_eq!(on_wire(for_dev(&out, "a").unwrap()), None, "{out:?}");
+    }
+
+    #[test]
+    fn a_session_reopened_without_a_member_forgets_the_last_one() {
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.open_session("tool-1", t0(), None, Some(alex()));
+        s.close_session("tool-1", t0() + ms(100));
+        s.open_session("tool-1", t0() + ms(200), None, None);
+        let out = ticked(&s, t0() + ms(300));
+        assert_eq!(grant_for(&out, "a"), Some(true));
+        assert_eq!(on_wire(for_dev(&out, "a").unwrap()), None, "{out:?}");
+    }
+
+    #[test]
+    fn a_session_the_server_reported_names_nobody() {
+        // This edge did not see the tap, so it has nobody to name.
+        let s = state_nobody_on(vec![plug("a", 0, 0, 0)], vec![]);
+        s.note_device_seen("dev-a", t0());
+        s.reconcile_sessions(&["tool-1".to_string()], &["tool-1".to_string()], t0(), t0());
+        let out = ticked(&s, t0());
+        assert_eq!(grant_for(&out, "a"), Some(true), "{out:?}");
+        assert_eq!(on_wire(for_dev(&out, "a").unwrap()), None);
     }
 
     #[test]

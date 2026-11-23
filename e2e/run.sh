@@ -2578,6 +2578,11 @@ stage_lease() {
   # policy sync carries it. Asserted by edgesignin.mjs after the scan below.
   run_node edgesignin.mjs setup >"${OUT}/logs/edgesignin-setup.log" 2>&1 || true
   absorb_driver_cases || true
+  # #249: a tool bound to this edge that requires signed messages, with a
+  # reader and a plug whose keys the driver keeps. Before the edge starts, so
+  # its first module-state and module-keys polls carry them.
+  run_node signedwire.mjs setup >"${OUT}/logs/signedwire-setup.log" 2>&1 || true
+  absorb_driver_cases || true
 
   # A cluster that cannot store an emoji invite code cannot register a device,
   # so there is nothing to bind and nothing to coordinate. The driver records
@@ -2883,6 +2888,42 @@ stage_lease() {
     wait "${signin_lease_sub}" || true
   fi
 
+  # ---- the local wire, signed (#249) -----------------------------------------
+  #
+  # The driver plays the tool's reader. Its first sealed message names no edge
+  # nonce, so the edge answers with a hello; from that the driver writes three
+  # scans with the member's card, each published in its own window, with the
+  # replies and the plug's leases captured: unsigned, sealed, and the sealed one
+  # again. Subscribe before publish, as above. Asserted by signedwire.mjs.
+  if [[ -s "${STACK_DIR}/signedwire-tool" ]]; then
+    run_node signedwire.mjs alive >"${OUT}/logs/signedwire-alive.log" 2>&1 || true
+    absorb_driver_cases || true
+    mqtt_sub "resource/hello" 4 "${STACK_DIR}/signedwire-hello.txt" &
+    local sw_hello=$!
+    sleep 1
+    mqtt_pub "resource/request/alive" "$(cat "${STACK_DIR}/signedwire-alive.json")" || true
+    wait "${sw_hello}" || true
+    run_node signedwire.mjs scans >"${OUT}/logs/signedwire-scans.log" 2>&1 || true
+    absorb_driver_cases || true
+    local sw_kind sw_reply sw_lease
+    for sw_kind in unsigned sealed; do
+      mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/signedwire-${sw_kind}-reply.txt" &
+      sw_reply=$!
+      mqtt_sub "resource/lease" 4 "${STACK_DIR}/signedwire-${sw_kind}-leases.txt" &
+      sw_lease=$!
+      sleep 1
+      mqtt_pub "resource/request/scan" \
+        "$(cat "${STACK_DIR}/signedwire-scan-${sw_kind}.json")" || true
+      wait "${sw_reply}" || true
+      wait "${sw_lease}" || true
+    done
+    mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/signedwire-replay-reply.txt" &
+    sw_reply=$!
+    sleep 1
+    mqtt_pub "resource/request/scan" "$(cat "${STACK_DIR}/signedwire-scan-sealed.json")" || true
+    wait "${sw_reply}" || true
+  fi
+
   stop_edge
 
   # Window 3: the absence, with time allowed to pass. Opened after the edge is
@@ -2897,6 +2938,9 @@ stage_lease() {
   # this is a claim about the tool-on envelope and not about the lease, and
   # putting it in lease.mjs would bury it under a name nobody greps for it by.
   run_node toolonreply.mjs assert >"${OUT}/logs/toolonreply.log" 2>&1 || true
+  absorb_driver_cases || true
+
+  run_node signedwire.mjs assert >"${OUT}/logs/signedwire.log" 2>&1 || true
   absorb_driver_cases || true
 
   run_node edgesignin.mjs assert >"${OUT}/logs/edgesignin.log" 2>&1 || true

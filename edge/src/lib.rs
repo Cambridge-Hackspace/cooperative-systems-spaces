@@ -19,6 +19,7 @@ pub mod mqtt;
 pub mod power;
 pub mod registration;
 pub mod resources;
+pub mod seal;
 pub mod static_files;
 pub mod system_info;
 pub mod tls;

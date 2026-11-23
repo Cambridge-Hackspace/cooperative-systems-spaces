@@ -36,6 +36,9 @@ rust-embed = "8.0"
 include_dir = "0.7.4"
 
 css_lib = {path = "../css_lib"}
+# Sealing and checking the local wire (#249).
+css_wire = {path = "../css_wire"}
+css_wire_sign = {path = "../css_wire_sign"}
 hex = "0.4"
 
 # WebSocket transport (alternative to MQTT)

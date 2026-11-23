@@ -2996,6 +2996,8 @@ dependencies = [
  "chrono",
  "clap",
  "css_lib",
+ "css_wire",
+ "css_wire_sign",
  "futures-util",
  "get_if_addrs",
  "hex",

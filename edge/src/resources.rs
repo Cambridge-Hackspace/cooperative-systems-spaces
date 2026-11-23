@@ -697,7 +697,12 @@ impl ResourceCache {
     /// bindings -- if it has any -- for exactly that long. A momentary resource
     /// with no pulse has a session of no length, which is the door with no
     /// strike and no power binding: nothing to hold on.
-    pub fn open_session(&self, name: &str, now: DateTime<Utc>) {
+    pub fn open_session(
+        &self,
+        name: &str,
+        now: DateTime<Utc>,
+        member: Option<css_lib::wire::LocalMember>,
+    ) {
         let resolved = self.resolve(name);
         let ends_at = match resolved.as_ref().map(|r| r.profile) {
             Some(SessionProfile::Momentary) => Some(
@@ -711,7 +716,7 @@ impl ResourceCache {
             ),
             _ => None,
         };
-        self.wiring.open_session(name, now, ends_at);
+        self.wiring.open_session(name, now, ends_at, member);
     }
 
     /// End a session on a resource: a stop, from anything bound to it.
@@ -1534,7 +1539,7 @@ mod tests {
             c.decide(&door, CARD, t0()),
             ScanDecision::Allow { .. }
         ));
-        c.open_session(&door, t0());
+        c.open_session(&door, t0(), None);
         let during = c.tick(t0() + Duration::seconds(1), ttl, timeout, refresh);
         assert_eq!(leases_for(&during, "dev-room-plug"), vec![true]);
         let after = c.tick(t0() + Duration::seconds(5), ttl, timeout, refresh);
@@ -1553,7 +1558,7 @@ mod tests {
         let timeout = Duration::seconds(120);
         let refresh = Duration::seconds(30);
         let door = door();
-        c.open_session(&door, t0());
+        c.open_session(&door, t0(), None);
         let during = c.tick(t0() + Duration::seconds(1), ttl, timeout, refresh);
         assert_eq!(leases_for(&during, "dev-room-plug"), vec![true]);
         // Well past any pulse and any grace, and a sync that says nothing about
@@ -1581,7 +1586,7 @@ mod tests {
         let ttl = Duration::seconds(3);
         let timeout = Duration::seconds(120);
         let refresh = Duration::seconds(30);
-        c.open_session("laser", t0());
+        c.open_session("laser", t0(), None);
         assert_eq!(
             leases_for(
                 &c.tick(t0() + Duration::seconds(1), ttl, timeout, refresh),

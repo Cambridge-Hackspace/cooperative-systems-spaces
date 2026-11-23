@@ -341,8 +341,13 @@ async fn main() -> Result<()> {
             // which means every tool it governs stays dark. Fail-safe, and
             // useless. `interval` fires its first tick immediately, so the
             // snapshot arrives at boot rather than one period later.
+            // #249: the keys of the modules this edge coordinates, fetched beside
+            // the wiring they belong to, and held for the local client to seal
+            // and check with.
+            let seals = Arc::new(css_edge::seal::LocalSeals::new());
             {
                 let modules = Arc::clone(&module_state);
+                let seals = Arc::clone(&seals);
                 let instance_url = remote_instance_url.clone();
                 let auth_token = remote_auth_token.clone();
                 tokio::spawn(async move {
@@ -378,6 +383,33 @@ async fn main() -> Result<()> {
                             Ok(resp) => warn!("Module-state poll returned HTTP {}", resp.status()),
                             Err(e) => warn!("Module-state poll request failed: {}", e),
                         }
+                        // #249. A failure keeps the keys already held: a key
+                        // does not go stale, and dropping them would stop every
+                        // module on a signed resource for a network blip.
+                        let url = format!("{}/api/toolguard/module-keys", instance_url);
+                        match client.get(&url).bearer_auth(&auth_token).send().await {
+                            Ok(resp) if resp.status().is_success() => {
+                                match resp.json::<css_lib::wire::ModuleKeysPayload>().await {
+                                    Ok(payload) => {
+                                        seals.set_keys(payload);
+                                        let keyless: Vec<String> = modules
+                                            .devices_on_signed_resources()
+                                            .into_iter()
+                                            .filter(|d| !seals.has_key(d))
+                                            .collect();
+                                        if !keyless.is_empty() {
+                                            warn!(
+                                                "No key for {:?}, bound to a resource that requires signed messages: nothing is sent them and nothing from them is acted on",
+                                                keyless
+                                            );
+                                        }
+                                    }
+                                    Err(e) => warn!("Failed to parse module-keys response: {}", e),
+                                }
+                            }
+                            Ok(resp) => warn!("Module-keys poll returned HTTP {}", resp.status()),
+                            Err(e) => warn!("Module-keys poll request failed: {}", e),
+                        }
                     }
                 });
             }
@@ -405,6 +437,7 @@ async fn main() -> Result<()> {
                         .as_ref()
                         .map(|s| s.clone().into_bytes()),
                     Arc::clone(&resource_cache),
+                    Arc::clone(&seals),
                 )
                 .await
                 {
