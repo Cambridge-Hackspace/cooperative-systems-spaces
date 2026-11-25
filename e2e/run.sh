@@ -2902,6 +2902,8 @@ stage_lease() {
     local sw_hello=$!
     sleep 1
     mqtt_pub "resource/request/alive" "$(cat "${STACK_DIR}/signedwire-alive.json")" || true
+    # The open tool's reader, bound to no signed resource: said hello too.
+    mqtt_pub "resource/request/alive" "$(cat "${STACK_DIR}/signedwire-alive-open.json")" || true
     wait "${sw_hello}" || true
     run_node signedwire.mjs scans >"${OUT}/logs/signedwire-scans.log" 2>&1 || true
     absorb_driver_cases || true
@@ -2922,6 +2924,15 @@ stage_lease() {
     sleep 1
     mqtt_pub "resource/request/scan" "$(cat "${STACK_DIR}/signedwire-scan-sealed.json")" || true
     wait "${sw_reply}" || true
+    # The open tool, which requires nothing: its reader's sealed scan.
+    mqtt_sub "resource/response/scan" 4 "${STACK_DIR}/signedwire-open-reply.txt" &
+    sw_reply=$!
+    mqtt_sub "resource/lease" 4 "${STACK_DIR}/signedwire-open-leases.txt" &
+    sw_lease=$!
+    sleep 1
+    mqtt_pub "resource/request/scan" "$(cat "${STACK_DIR}/signedwire-scan-open.json")" || true
+    wait "${sw_reply}" || true
+    wait "${sw_lease}" || true
   fi
 
   stop_edge

@@ -747,13 +747,23 @@ wrong on every message — test against the fixture server before you trust it.
 
 ## Signing the local wire
 
-> **Status (#249):** the edge seals and checks the local wire on every
-> resource an administrator has set to **Require signed messages** (under
-> Resource Wiring; `require_signed` in module-state), and nowhere else. On such
-> a resource it seals what it sends each device bound there with that device's
-> key, sends nothing to a device it holds no key for, and acts on nothing about
-> the resource that is not sealed, fresh, and from a device bound to it. Turn
-> it on once every device bound there has firmware that does the same.
+> **Status (#249):** the edge seals everything it sends a device whose key it
+> holds -- leases, scan replies, hellos -- on **every** resource, and checks
+> every sealed message it receives from one. What an administrator's
+> **Require signed messages** (under Resource Wiring; `require_signed` in
+> module-state) adds is what the edge *demands*: on such a resource it sends
+> nothing to a device it holds no key for, and acts on nothing about the
+> resource that is not sealed, fresh, and from a device bound to it. Elsewhere
+> it still acts on an unsealed message, and still sends each scan reply
+> unsigned as well, for a device that holds no key.
+>
+> So firmware that signs can ship before the switch is thrown: it is sealed
+> for wherever it is. Turn the switch on once every device bound to the
+> resource signs.
+>
+> The edge keeps the keys it is given in `module-keys.json` beside its
+> config, owner-only, so a restart while the server is out of reach still
+> speaks to every module that signs.
 
 [Signed commands](#signed-commands) cover the **site** broker, server ↔ edge.
 The **local** broker, edge ↔ module, carried nothing signed until #249, so
@@ -864,7 +874,10 @@ That is a grant on `res-1` for 3000 ms, for the member `u-1`, named `Cal`.
 ### The rule, in one line each
 
 - **You hold a key:** seal what you send; ignore what arrives unsigned, wrongly
-  signed or stale. Never fall back to acting on it.
+  signed or stale. Never fall back to acting on it. This holds on every
+  resource, signed or not: the edge seals for you everywhere, so an unsigned
+  lease or reply is never one it sent you. A scan reply with a `device_id`
+  other than yours is another device's copy; ignore it too.
 - **You hold no key:** send and act as before. The broker's ACLs are then your
   only control.
 

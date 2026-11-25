@@ -344,7 +344,12 @@ async fn main() -> Result<()> {
             // #249: the keys of the modules this edge coordinates, fetched beside
             // the wiring they belong to, and held for the local client to seal
             // and check with.
-            let seals = Arc::new(css_edge::seal::LocalSeals::new());
+            // Kept beside the config, which is as secret: an edge restarted
+            // while the server is out of reach still speaks to its modules,
+            // each of which believes nothing unsealed once it holds a key.
+            let seals = Arc::new(css_edge::seal::LocalSeals::cached_at(
+                std::path::Path::new(&args.config).with_file_name("module-keys.json"),
+            ));
             {
                 let modules = Arc::clone(&module_state);
                 let seals = Arc::clone(&seals);

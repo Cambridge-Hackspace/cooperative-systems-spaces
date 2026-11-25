@@ -27,6 +27,15 @@
 //     naming the member;
 //   - the same sealed scan again is not: no reply.
 //
+// And on a second tool that requires NOTHING, with its own reader and plug,
+// both holding keys (#249: the edge seals for every device it holds a key for,
+// since a device with a key believes nothing unsealed):
+//   - that reader's sealed first message is answered with a hello too, though
+//     it is bound to no signed resource -- the claim that it is checked at all;
+//   - a sealed scan there is a yes, with a reply sealed for each keyed device
+//     AND the unsigned reply as before, for a device that holds no key;
+//   - every lease to that plug is sealed with its key, refusals included.
+//
 // WHAT THIS DOES NOT PROVE: a forged message from a device not bound to the
 // tool, or with another device's key. Those arms are edge/src/seal.rs's, unit
 // tested; here every refusal looks alike from outside -- silence.
@@ -161,25 +170,57 @@ async function setup() {
   assertEq('signedwire/plug-bound', 201, (await bind(plug.id, 'power', { on_disconnect: 'ignore' })).status)
   const set = await PATCH(`/api/admin/resources/${toolId}`, { ...T, body: { identify_member: true, require_signed: true } })
   assertEq('signedwire/tool-requires-signed', 200, set.status, set.text.slice(0, 200))
+
+  // The second tool: signed messages NOT required, its own keyed devices.
+  const openExt = `open-wire-${RUN_TAG}`
+  const openTool = await POST('/api/tools', {
+    ...T,
+    body: {
+      name: `E2E open wire ${RUN_TAG}`, category: 'other', requires_training: false, external_id: openExt,
+      usage_flat_fee: null, usage_rate_per_min: null, usage_max_session_minutes: null,
+    },
+  })
+  const openId = openTool.json?.data?.id
+  ok('signedwire/open-tool-created', !!openId, openTool.text.slice(0, 200))
+  const bindOpen = (device_id, role, extra = {}) => POST('/api/admin/device-bindings', {
+    ...T, body: { resource_id: openId, device_id, role, name: `open ${role} ${RUN_TAG}`, ...extra },
+  })
+  assertEq('signedwire/open-edge-bound', 201, (await bindOpen(lease.edgeId, 'edge')).status)
+  const openReader = await claim(admin.token, `open-reader-${RUN_TAG}`, 'reader', '02:00:00:00:f2:03')
+  const openPlug = await claim(admin.token, `open-plug-${RUN_TAG}`, 'power', '02:00:00:00:f2:04')
+  ok('signedwire/the-open-devices-hold-keys', !!openReader.key && !!openPlug.key, `${openReader.text}; ${openPlug.text}`)
+  assertEq('signedwire/open-reader-bound', 201, (await bindOpen(openReader.id, 'reader')).status)
+  assertEq('signedwire/open-plug-bound', 201, (await bindOpen(openPlug.id, 'power', { on_disconnect: 'ignore' })).status)
+  const openSet = await PATCH(`/api/admin/resources/${openId}`, { ...T, body: { identify_member: true } })
+  assertEq('signedwire/open-tool-identifies', 200, openSet.status, openSet.text.slice(0, 200))
+  ok('signedwire/open-tool-requires-nothing', openSet.json?.data?.require_signed !== true, openSet.text.slice(0, 200))
+
   save({
     toolId, ext, card: lease.card, member: lease.memberId,
     reader: { id: reader.id, key: reader.key, nonce: crypto.randomBytes(16).toString('hex'), seq: 0 },
     plug: { id: plug.id, key: plug.key },
+    open: {
+      toolId: openId, ext: openExt,
+      reader: { id: openReader.id, key: openReader.key, nonce: crypto.randomBytes(16).toString('hex'), seq: 0 },
+      plug: { id: openPlug.id, key: openPlug.key },
+    },
   })
   fs.writeFileSync(path.join(STACK_DIR, 'signedwire-tool'), ext)
 }
 
-/** The reader's next sealed message, naming the edge's nonce as last heard. */
-function next(s, topic, m) {
-  s.reader.seq += 1
-  return seal(topic, m, s.reader.key, s.reader.nonce, s.reader.edge ?? '', s.reader.seq)
+/** A reader's next sealed message, naming the edge's nonce as last heard. */
+function next(s, topic, m, reader = s.reader) {
+  reader.seq += 1
+  return seal(topic, m, reader.key, reader.nonce, reader.edge ?? '', reader.seq)
 }
 
 async function alive() {
   const s = load()
   const msg = next(s, 'resource/request/alive', { device_id: s.reader.id })
+  const openMsg = next(s, 'resource/request/alive', { device_id: s.open.reader.id }, s.open.reader)
   save(s)
   fs.writeFileSync(path.join(STACK_DIR, 'signedwire-alive.json'), JSON.stringify(msg))
+  fs.writeFileSync(path.join(STACK_DIR, 'signedwire-alive-open.json'), JSON.stringify(openMsg))
 }
 
 /** Every JSON object on its own line in a mosquitto_sub capture. */
@@ -217,6 +258,23 @@ async function scans() {
   fs.writeFileSync(path.join(STACK_DIR, 'signedwire-scan-unsigned.json'), JSON.stringify(body))
   const sealed = next(s, 'resource/request/scan', body)
   fs.writeFileSync(path.join(STACK_DIR, 'signedwire-scan-sealed.json'), JSON.stringify(sealed))
+
+  // The open tool's reader: bound to no signed resource, and said hello to
+  // all the same, because what it sealed was checked.
+  const o = s.open
+  const openHellos = captured('signedwire-hello.txt').filter((x) => x.device_id === o.reader.id)
+  if (openHellos.length === 0) {
+    record('signedwire/a-device-on-no-signed-resource-is-said-hello', 'fail',
+      'no resource/hello for the open tool\'s reader: its seals are not checked, so it can never name the edge')
+  } else {
+    record('signedwire/a-device-on-no-signed-resource-is-said-hello', 'ok', `${openHellos.length} hello(s)`)
+    ok('signedwire/the-open-hello-is-sealed-with-its-readers-key',
+      verifies('resource/hello', openHellos[0], o.reader.key), JSON.stringify(openHellos[0]).slice(0, 300))
+    assertEq('signedwire/the-open-hello-names-its-readers-nonce', o.reader.nonce, openHellos[0].seal?.to)
+    o.reader.edge = openHellos[0].seal?.from
+  }
+  const openScan = next(s, 'resource/request/scan', { resource: o.ext, card: s.card, device_id: o.reader.id }, o.reader)
+  fs.writeFileSync(path.join(STACK_DIR, 'signedwire-scan-open.json'), JSON.stringify(openScan))
   save(s)
 }
 
@@ -275,6 +333,34 @@ async function assertWire() {
   // ── the same sealed scan again: a replay, refused ──────────────────────────
   assertEq('signedwire/a-replayed-scan-gets-no-reply', 0, mine('signedwire-replay-reply.txt').length,
     JSON.stringify(mine('signedwire-replay-reply.txt')).slice(0, 300))
+
+  // ── the open tool: sealed for every keyed device, unsigned as well ─────────
+  const o = s.open
+  const openReplies = captured('signedwire-open-reply.txt').filter((x) => x.resource === o.ext || x.resource === o.toolId)
+  const openToReader = openReplies.filter((x) => x.device_id === o.reader.id)
+  const openToPlug = openReplies.filter((x) => x.device_id === o.plug.id)
+  const openUnsigned = openReplies.filter((x) => !x.device_id && !x.seal)
+  assertEq('signedwire/an-open-scan-gets-a-sealed-reply-per-keyed-device-and-one-unsigned', '1,1,1',
+    `${openToReader.length},${openToPlug.length},${openUnsigned.length}`, JSON.stringify(openReplies).slice(0, 500))
+  ok('signedwire/the-open-readers-reply-is-sealed-with-its-key',
+    verifies('resource/response/scan', openToReader[0], o.reader.key), JSON.stringify(openToReader[0] ?? null).slice(0, 300))
+  ok('signedwire/the-open-plugs-reply-is-sealed-with-its-key',
+    verifies('resource/response/scan', openToPlug[0], o.plug.key), JSON.stringify(openToPlug[0] ?? null).slice(0, 300))
+  assertEq('signedwire/the-open-reply-names-its-readers-nonce', o.reader.nonce, openToReader[0]?.seal?.to)
+  assertEq('signedwire/an-open-sealed-scan-is-a-yes', 'true,true',
+    `${openToReader[0]?.authorized},${openUnsigned[0]?.authorized}`, JSON.stringify(openReplies).slice(0, 300))
+  const openLeases = captured('signedwire-open-leases.txt').filter((l) => l.device_id === o.plug.id)
+  const openGrants = openLeases.filter((l) => l.grant === true)
+  if (openGrants.length === 0) {
+    record('signedwire/the-open-scan-leases-its-plug', 'fail',
+      `no grant to the open plug after its scan: ${JSON.stringify(openLeases).slice(0, 300)}`)
+  } else {
+    record('signedwire/the-open-scan-leases-its-plug', 'ok', `${openGrants.length} grant(s) of ${openLeases.length}`)
+    ok('signedwire/every-open-lease-is-sealed-with-its-plugs-key',
+      openLeases.every((l) => verifies('resource/lease', l, o.plug.key)),
+      JSON.stringify(openLeases.find((l) => !verifies('resource/lease', l, o.plug.key)) ?? null).slice(0, 300))
+    assertEq('signedwire/the-open-lease-names-the-member', s.member, openGrants[0].member?.id)
+  }
 }
 
 main(async () => {
