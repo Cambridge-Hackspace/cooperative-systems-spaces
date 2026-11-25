@@ -565,9 +565,20 @@ impl LocalMqttClient {
 
     /// #249: whether to act on a message from a module. About a resource that
     /// requires signed messages, only one sealed and fresh, by a keyed device
-    /// bound to that resource; anything else, as before. `resource` is `None`
-    /// for an alive pulse, which names only its device, and must be sealed
-    /// when that device is bound to any resource that requires it.
+    /// bound to that resource. `resource` is `None` for an alive pulse, which
+    /// names only its device, and must be sealed when that device is bound to
+    /// any resource that requires it.
+    ///
+    /// **A sealed message is checked wherever it arrives**, not only about a
+    /// signed resource. This edge seals for every device it holds a key for
+    /// (see [`Self::publish_tool_lease`]), so a device with a key believes
+    /// nothing unsealed; its seals reach this edge on every resource, and
+    /// checking them is how this edge learns its nonce. A sealed message that
+    /// does not check out is not acted on even where nothing is required: it
+    /// is a device out of step, which the hello puts right, or a forgery. An
+    /// unsealed one about a resource that requires nothing is acted on, as
+    /// before, and so is a sealed one from a device this edge holds no key
+    /// for there, since it could check nothing.
     fn admitted<M: css_wire::seal::Sealed>(
         &self,
         topic: &str,
@@ -581,9 +592,16 @@ impl LocalMqttClient {
                 .is_some_and(|d| self.module_state.on_a_signed_resource(d)),
         };
         if !required {
-            return true;
+            let checkable =
+                msg.seal().is_some() && msg.device().is_some_and(|d| self.seals.has_key(d));
+            if !checkable {
+                return true;
+            }
         }
-        let bound = |d: &str| resource.is_none_or(|r| self.module_state.is_bound(r, d));
+        // Bindings are a signed resource's rule. Elsewhere a device unbound to
+        // what it names was always heard, and a seal does not change that.
+        let bound =
+            |d: &str| !required || resource.is_none_or(|r| self.module_state.is_bound(r, d));
         match self.seals.admit(msg, bound) {
             Ok(()) => true,
             // The first message each way after either end restarts: expected,
@@ -701,24 +719,31 @@ impl LocalMqttClient {
         // device bound to it, each sealed for that device and naming it. A
         // device this edge holds no key for gets nothing: it could not check
         // a seal, and an unsigned reply is what a forger would send.
-        let replies: Vec<LocalScanReply> = if self.module_state.requires_signed(resource) {
-            self.module_state
-                .devices_on(resource)
-                .into_iter()
-                .filter_map(|device| {
-                    let mut copy = reply.clone();
-                    copy.device_id = Some(device.clone());
-                    if self.seals.seal(&device, &mut copy) {
-                        Some(copy)
-                    } else {
+        //
+        // On every other resource, the same sealed copy for each bound device
+        // this edge holds a key for -- a device with a key believes nothing
+        // unsealed -- and the unsigned reply as before, for everything else.
+        let required = self.module_state.requires_signed(resource);
+        let mut replies: Vec<LocalScanReply> = self
+            .module_state
+            .devices_on(resource)
+            .into_iter()
+            .filter_map(|device| {
+                let mut copy = reply.clone();
+                copy.device_id = Some(device.clone());
+                if self.seals.seal(&device, &mut copy) {
+                    Some(copy)
+                } else {
+                    if required {
                         debug!("No key for {}: no reply sent it about {}", device, resource);
-                        None
                     }
-                })
-                .collect()
-        } else {
-            vec![reply]
-        };
+                    None
+                }
+            })
+            .collect();
+        if !required {
+            replies.push(reply);
+        }
         for reply in replies {
             match serde_json::to_value(&reply) {
                 Ok(v) => self.publish_local(local::SCAN_RESPONSE, &v),
@@ -874,11 +899,14 @@ impl LocalMqttClient {
 
     pub fn publish_tool_lease(&self, action: &crate::modules::LeaseAction) {
         let mut lease = ResourceLeasePayload::from(action);
-        // #249: sealed for its device on a resource that requires it, and not
-        // sent at all to a device this edge holds no key for -- which is
-        // de-energized by its own watchdog, as by any lease that stops.
-        if self.module_state.requires_signed(&lease.resource)
-            && !self.seals.seal(&action.device_id, &mut lease)
+        // #249: sealed for its device whenever this edge holds its key, on
+        // every resource -- a device with a key believes nothing unsealed, so
+        // the toggle cannot be what decides it. On a resource that requires
+        // signed messages, not sent at all to a device this edge holds no key
+        // for, which is de-energized by its own watchdog, as by any lease that
+        // stops. Elsewhere such a device is leased unsigned, as before.
+        if !self.seals.seal(&action.device_id, &mut lease)
+            && self.module_state.requires_signed(&lease.resource)
         {
             debug!(
                 "No key for {}: no lease sent it for {}",
